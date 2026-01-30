@@ -240,28 +240,63 @@ class TaggingProvider(Protocol):
 class ProviderRegistry:
     """
     Registry for discovering and instantiating providers.
-    
+
     Providers are registered by name and can be instantiated from configuration.
     This allows the store configuration (TOML) to specify providers by name
     rather than requiring code changes.
-    
+
     Example:
         registry = ProviderRegistry()
         registry.register_embedding("sentence-transformers", SentenceTransformerEmbedding)
         registry.register_embedding("openai", OpenAIEmbedding)
-        
+
         # Later, from config:
         provider = registry.create_embedding("sentence-transformers", {"model": "all-MiniLM-L6-v2"})
     """
-    
+
     def __init__(self):
         self._embedding_providers: dict[str, type] = {}
         self._summarization_providers: dict[str, type] = {}
         self._tagging_providers: dict[str, type] = {}
         self._document_providers: dict[str, type] = {}
+        self._lazy_loaded = False
     
+    def _ensure_providers_loaded(self) -> None:
+        """Lazily load all provider modules."""
+        if self._lazy_loaded:
+            return
+
+        self._lazy_loaded = True
+
+        # Import provider modules to trigger registration
+        # These imports are safe - they only register classes, don't instantiate
+        try:
+            from . import documents
+        except ImportError:
+            pass  # Document provider might not be available
+
+        try:
+            from . import embeddings
+        except ImportError:
+            pass  # Embedding providers might not be available
+
+        try:
+            from . import summarization
+        except ImportError:
+            pass  # Summarization providers might not be available
+
+        try:
+            from . import llm
+        except ImportError:
+            pass  # LLM providers might not be available
+
+        try:
+            from . import mlx
+        except ImportError:
+            pass  # MLX providers might not be available
+
     # Registration methods
-    
+
     def register_embedding(self, name: str, provider_class: type) -> None:
         """Register an embedding provider class."""
         self._embedding_providers[name] = provider_class
@@ -279,30 +314,78 @@ class ProviderRegistry:
         self._document_providers[name] = provider_class
     
     # Factory methods
-    
+
     def create_embedding(self, name: str, params: dict | None = None) -> EmbeddingProvider:
         """Create an embedding provider instance."""
+        self._ensure_providers_loaded()
         if name not in self._embedding_providers:
-            raise ValueError(f"Unknown embedding provider: {name}")
-        return self._embedding_providers[name](**(params or {}))
+            available = ", ".join(self._embedding_providers.keys()) or "none"
+            raise ValueError(
+                f"Unknown embedding provider: '{name}'. "
+                f"Available providers: {available}. "
+                f"Install missing dependencies or check provider name."
+            )
+        try:
+            return self._embedding_providers[name](**(params or {}))
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create embedding provider '{name}': {e}\n"
+                f"Make sure required dependencies are installed."
+            ) from e
     
     def create_summarization(self, name: str, params: dict | None = None) -> SummarizationProvider:
         """Create a summarization provider instance."""
+        self._ensure_providers_loaded()
         if name not in self._summarization_providers:
-            raise ValueError(f"Unknown summarization provider: {name}")
-        return self._summarization_providers[name](**(params or {}))
+            available = ", ".join(self._summarization_providers.keys()) or "none"
+            raise ValueError(
+                f"Unknown summarization provider: '{name}'. "
+                f"Available providers: {available}. "
+                f"Install missing dependencies or check provider name."
+            )
+        try:
+            return self._summarization_providers[name](**(params or {}))
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create summarization provider '{name}': {e}\n"
+                f"Make sure required dependencies are installed."
+            ) from e
     
     def create_tagging(self, name: str, params: dict | None = None) -> TaggingProvider:
         """Create a tagging provider instance."""
+        self._ensure_providers_loaded()
         if name not in self._tagging_providers:
-            raise ValueError(f"Unknown tagging provider: {name}")
-        return self._tagging_providers[name](**(params or {}))
+            available = ", ".join(self._tagging_providers.keys()) or "none"
+            raise ValueError(
+                f"Unknown tagging provider: '{name}'. "
+                f"Available providers: {available}. "
+                f"Install missing dependencies or check provider name."
+            )
+        try:
+            return self._tagging_providers[name](**(params or {}))
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create tagging provider '{name}': {e}\n"
+                f"Make sure required dependencies are installed."
+            ) from e
     
     def create_document(self, name: str, params: dict | None = None) -> DocumentProvider:
         """Create a document provider instance."""
+        self._ensure_providers_loaded()
         if name not in self._document_providers:
-            raise ValueError(f"Unknown document provider: {name}")
-        return self._document_providers[name](**(params or {}))
+            available = ", ".join(self._document_providers.keys()) or "none"
+            raise ValueError(
+                f"Unknown document provider: '{name}'. "
+                f"Available providers: {available}. "
+                f"Install missing dependencies or check provider name."
+            )
+        try:
+            return self._document_providers[name](**(params or {}))
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create document provider '{name}': {e}\n"
+                f"Make sure required dependencies are installed."
+            ) from e
     
     # Introspection
     

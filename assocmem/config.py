@@ -73,15 +73,9 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
         os.environ.get("OPENAI_API_KEY")
     )
     
-    # Embedding: prefer MLX on Apple Silicon, then sentence-transformers
-    if is_apple_silicon:
-        try:
-            import mlx  # noqa
-            providers["embedding"] = ProviderConfig("mlx", {"model": "mlx-community/bge-small-en-v1.5"})
-        except ImportError:
-            providers["embedding"] = ProviderConfig("sentence-transformers")
-    else:
-        providers["embedding"] = ProviderConfig("sentence-transformers")
+    # Embedding: prefer sentence-transformers for maximum compatibility
+    # MLX is available but requires model downloads which can be slow/require auth
+    providers["embedding"] = ProviderConfig("sentence-transformers")
     
     # Summarization: prefer MLX on Apple Silicon, then OpenAI if key available
     if is_apple_silicon:

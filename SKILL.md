@@ -1,3 +1,9 @@
+---
+name: assocmem
+description: Semantic memory with vector similarity search for persistent agent context across sessions
+metadata: {"openclaw": {"emoji": "🧠", "requires": {"bins": ["uv"], "anyBins": ["python", "python3"]}, "install": [{"kind": "uv", "package": "assocmem[local]", "label": "Install AssociativeMemory with local providers (uv)"}], "primaryEnv": "ASSOCMEM_STORE_PATH"}}
+---
+
 # Associative Memory
 
 This skill provides access to a persistent associative store, and guidance on how to use it.
@@ -55,8 +61,8 @@ python -m assocmem tag project myapp
 **Default store location:** `.assocmem/` at the git repository root (created automatically). Override with `ASSOCMEM_STORE_PATH` or explicit path argument. Add `.assocmem/` to `.gitignore` if the store should not be committed.
 
 **Patterns documentation:**
-- [patterns/domains.md](patterns/domains.md) — domain-specific organization (software dev, research, etc.)
-- [patterns/conversations.md](patterns/conversations.md) — process knowledge: how work proceeds
+- [docs/patterns/domains.md](docs/patterns/domains.md) — domain-specific organization (software dev, research, etc.)
+- [docs/patterns/conversations.md](docs/patterns/conversations.md) — process knowledge: how work proceeds
 
 **When to use:**
 - Call `update()` whenever you reference a file or URL worth remembering
@@ -335,9 +341,9 @@ The `_system:routing` document can be updated to change what routes privately. T
 
 ## Domain Patterns
 
-See [patterns/domains.md](patterns/domains.md) for suggested collection and tag organization for common use cases:
+See [docs/patterns/domains.md](docs/patterns/domains.md) for suggested collection and tag organization for common use cases:
 - Software Development
-- Market Research  
+- Market Research
 - Personal Reflection & Growth
 - Healthcare Tracking
 
@@ -375,12 +381,12 @@ system_docs = mem.query_tag("_system", "true")
 mem.remember(
     content="""
     Code Review Guidance (updated based on research):
-    
+
     - Review for correctness first, style second
     - Small PRs (<400 lines) get better reviews
     - Use checklist: security, error handling, tests, docs
     - Prefer synchronous review for complex changes
-    
+
     Source: Team retrospective + industry research.
     """,
     id="_system:guidance:code_review",

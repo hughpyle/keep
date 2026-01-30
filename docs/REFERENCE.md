@@ -124,5 +124,5 @@ Private items cannot be seen from the shared store — physical separation, not 
 Routing rules live in `_system:routing` document (shared store). Update it to customize.
 
 ## Domain Patterns
-See `patterns/domains.md` for organization templates.
-See `patterns/conversations.md` for process knowledge.
+See [patterns/domains.md](../patterns/domains.md) for organization templates.
+See [patterns/conversations.md](../patterns/conversations.md) for process knowledge.

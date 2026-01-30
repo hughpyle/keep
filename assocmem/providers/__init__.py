@@ -8,7 +8,8 @@ Providers are configured at store initialization and handle the heavy lifting of
 - Tagging (for structured navigation)
 - Document fetching (for URI resolution)
 
-Concrete providers are auto-registered when this module is imported.
+Concrete providers are lazily loaded when first requested via the registry.
+This avoids import-time failures when optional dependencies are missing.
 """
 
 from .base import (
@@ -21,12 +22,8 @@ from .base import (
     get_registry,
 )
 
-# Import concrete providers to trigger registration
-from . import documents
-from . import embeddings
-from . import summarization  # Default summarizers
-from . import llm
-from . import mlx  # Only registers on Apple Silicon
+# Providers are now loaded lazily by ProviderRegistry._ensure_providers_loaded()
+# This avoids import-time failures when optional dependencies are missing
 
 __all__ = [
     # Protocols

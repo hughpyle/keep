@@ -149,7 +149,7 @@ class AssociativeMemory:
         # Add system tags
         tags["_source"] = "uri"
         if doc.content_type:
-            tags["_mime_type"] = doc.content_type
+            tags["_content_type"] = doc.content_type
         
         # Store
         self._store.upsert(
@@ -340,25 +340,43 @@ class AssociativeMemory:
     
     def query_tag(
         self,
+        key: Optional[str] = None,
+        value: Optional[str] = None,
+        *,
         limit: int = 100,
         collection: Optional[str] = None,
         **tags: str
     ) -> list[Item]:
         """
         Find items by tag(s).
-        
-        Usage: 
-            query_tag(tradition="buddhist")
+
+        Usage:
+            # Simple: single key-value pair
+            query_tag("project", "myapp")
+            query_tag("tradition", "buddhist")
+
+            # Advanced: multiple tags via kwargs
             query_tag(tradition="buddhist", source="mn22")
         """
         coll = self._resolve_collection(collection)
-        
-        if not tags:
+
+        # Build tag filter from positional or keyword args
+        tag_filter = {}
+
+        if key is not None:
+            if value is None:
+                raise ValueError(f"Value required when querying by key '{key}'")
+            tag_filter[key] = value
+
+        if tags:
+            tag_filter.update(tags)
+
+        if not tag_filter:
             raise ValueError("At least one tag must be specified")
-        
-        # Build where clause for multiple tags
-        where = {k: v for k, v in tags.items()}
-        
+
+        # Build where clause
+        where = {k: v for k, v in tag_filter.items()}
+
         results = self._store.query_metadata(coll, where, limit=limit)
         return [r.to_item() for r in results]
     

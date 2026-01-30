@@ -38,3 +38,16 @@ assocmem = "assocmem.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["assocmem"]
+artifacts = [
+    "SKILL.md",
+    "patterns/**/*.md",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/assocmem",
+    "/SKILL.md",
+    "/patterns",
+    "/README.md",
+    "/LICENSE",
+]
