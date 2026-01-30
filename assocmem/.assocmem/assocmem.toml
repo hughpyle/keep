@@ -1,0 +1,12 @@
+[store]
+version = 1
+created = "2026-01-30T19:47:34.659993+00:00"
+
+[embedding]
+name = "sentence-transformers"
+
+[summarization]
+name = "passthrough"
+
+[document]
+name = "composite"
