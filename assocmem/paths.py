@@ -1,0 +1,60 @@
+"""
+Utility functions for locating paths.
+"""
+
+import os
+from pathlib import Path
+from typing import Optional
+
+
+def find_git_root(start_path: Optional[Path] = None) -> Optional[Path]:
+    """
+    Find the root of the git repository containing the given path.
+    
+    Args:
+        start_path: Path to start searching from. Defaults to cwd.
+    
+    Returns:
+        Path to git root, or None if not in a git repository.
+    """
+    if start_path is None:
+        start_path = Path.cwd()
+    
+    current = start_path.resolve()
+    
+    while current != current.parent:
+        if (current / ".git").exists():
+            return current
+        current = current.parent
+    
+    # Check root as well
+    if (current / ".git").exists():
+        return current
+    
+    return None
+
+
+def get_default_store_path() -> Path:
+    """
+    Get the default store path.
+    
+    Priority:
+    1. ASSOCMEM_STORE_PATH environment variable
+    2. .assocmem/ directory at git repository root
+    3. .assocmem/ in current working directory (if not in a repo)
+    
+    Returns:
+        Path to the store directory (may not exist yet).
+    """
+    # Check environment variable first
+    env_path = os.environ.get("ASSOCMEM_STORE_PATH")
+    if env_path:
+        return Path(env_path).resolve()
+    
+    # Try to find git root
+    git_root = find_git_root()
+    if git_root:
+        return git_root / ".assocmem"
+    
+    # Fall back to current directory
+    return Path.cwd() / ".assocmem"
