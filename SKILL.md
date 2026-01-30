@@ -1,447 +1,108 @@
 ---
 name: assocmem
-description: Semantic memory with vector similarity search for persistent agent context across sessions
-metadata: {"openclaw": {"emoji": "🧠", "requires": {"bins": ["uv"], "anyBins": ["python", "python3"]}, "install": [{"kind": "uv", "package": "assocmem[local]", "label": "Install AssociativeMemory with local providers (uv)"}], "primaryEnv": "ASSOCMEM_STORE_PATH"}}
+description: Semantic memory - remember and search documents by meaning, not keywords
+metadata: {"openclaw":{"emoji":"🧠","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"kind":"uv","package":"assocmem[local]","label":"Install assocmem with local models"}],"primaryEnv":"ASSOCMEM_STORE_PATH"}}
 ---
 
-# Associative Memory
+# 🧠 Associative Memory
 
-This skill provides access to a persistent associative store, and guidance on how to use it.
+*Remember everything. Find by meaning.*
 
-**Key principle:** The schema is data. Routing rules, domain patterns, process knowledge — all are documents in the store, queryable and updateable. An agent can be asked "research X and update how you handle X" and the changes persist.
+Persistent semantic memory for documents and notes. Index files, remember insights, search by meaning.
 
-## Quick Start (Agent Reference)
+## Setup
 
-```python
-from assocmem import AssociativeMemory, Item
-
-# Initialize (defaults to .assocmem/ at git repo root)
-mem = AssociativeMemory()
-
-# Index a document from URI (fetches, embeds, summarizes, tags automatically)
-item = mem.update("file:///project/readme.md", source_tags={"project": "myapp"})
-
-# Remember inline content (conversations, notes, insights)
-mem.remember(
-    content="User prefers OAuth2 with PKCE for auth. Discussed tradeoffs.",
-    id="conversation:2026-01-30:auth",
-    source_tags={"topic": "authentication"}
-)
-
-# Semantic search
-results: list[Item] = mem.find("authentication flow", limit=5)
-for item in results:
-    print(f"{item.score:.2f} {item.id}")
-    print(f"  {item.summary}")
-
-# Find similar to existing item
-similar = mem.find_similar("file:///project/readme.md", limit=3)
-
-# Tag-based lookup (including system tags for temporal queries)
-docs = mem.query_tag("project", "myapp")
-today = mem.query_tag("_updated_date", "2026-01-30")
-
-# Check if indexed
-if mem.exists("file:///project/readme.md"):
-    item = mem.get("file:///project/readme.md")
-```
-
-**CLI equivalent:**
 ```bash
-# Uses .assocmem/ at repo root by default
-python -m assocmem update "file:///project/readme.md" -t project=myapp
-python -m assocmem find "authentication flow" --limit 5 --json
-python -m assocmem tag project myapp
+uv pip install 'assocmem[local]'
 ```
 
-**Item fields:** `id` (URI or custom), `summary` (str), `tags` (dict), `score` (float, search results only). Timestamps are in tags: `item.created` and `item.updated` are property accessors.
+Verify: `python -m assocmem init` (creates `.assocmem/` store at repo root)
 
-**Prerequisites:** Python 3.11+, `pip install assocmem[local]` (preferably in a venv)
+## Quick Start
 
-**Default store location:** `.assocmem/` at the git repository root (created automatically). Override with `ASSOCMEM_STORE_PATH` or explicit path argument. Add `.assocmem/` to `.gitignore` if the store should not be committed.
-
-**Patterns documentation:**
-- [docs/patterns/domains.md](docs/patterns/domains.md) — domain-specific organization (software dev, research, etc.)
-- [docs/patterns/conversations.md](docs/patterns/conversations.md) — process knowledge: how work proceeds
-
-**When to use:**
-- Call `update()` whenever you reference a file or URL worth remembering
-- Call `remember()` to capture conversation insights, decisions, or notes
-- Call `find()` before filesystem search — the answer may already be indexed
-- Call `top_of_mind()` at session start to get current context
-- Call `set_context()` when focus changes to help future agents
-
----
-
-## Working Session Pattern
-
-Use `set_context()` as a scratchpad to track where you are in the work. This isn't enforced structure — it's a convention that helps you (and future agents) maintain perspective.
-
-**Recommended metadata fields:**
-
-| Field | Purpose | Example |
-|-------|---------|---------|
-| `conversation_type` | What kind of work is this? | `"bug_diagnosis"`, `"feature_request"`, `"research"` |
-| `state` | Where are we in the flow? | `"gathering_info"`, `"investigating"`, `"implementing"`, `"awaiting_confirmation"` |
-| `commitments` | What have I promised? | `[{"what": "fix the flaky test", "to": "user"}]` |
-| `completion_criteria` | What does "done" look like? | `"test passes reliably in CI"` |
-| `hypothesis` | Current working theory | `"timing assertion too tight for CI latency"` |
-| `blocked_on` | What's preventing progress? | `"need CI logs from user"` |
-
-**Session lifecycle:**
-
-```python
-# 1. Starting work — record what we're doing
-mem.set_context(
-    summary="Diagnosing flaky test in auth module.",
-    topics=["auth", "testing"],
-    metadata={
-        "conversation_type": "bug_diagnosis",
-        "state": "gathering_info",
-        "commitments": []
-    }
-)
-
-# 2. Mid-work — update as understanding evolves
-mem.set_context(
-    summary="Investigating test_token_refresh. Likely timing issue.",
-    active_items=["file:///tests/test_oauth_flow.py"],
-    topics=["auth", "testing", "timing"],
-    metadata={
-        "conversation_type": "bug_diagnosis",
-        "state": "investigating",
-        "hypothesis": "hardcoded 100ms timeout too tight for CI",
-        "commitments": []
-    }
-)
-
-# 3. Committing — I've promised to do something
-mem.set_context(
-    summary="Implementing mock timer fix for test_token_refresh.",
-    active_items=["file:///tests/test_oauth_flow.py"],
-    metadata={
-        "conversation_type": "bug_fix",
-        "state": "implementing",
-        "commitments": [{"what": "mock timer fix", "to": "user"}],
-        "completion_criteria": "test passes reliably, no timing dependency"
-    }
-)
-
-# 4. Completing — record the learning
-mem.remember(
-    content="Flaky timing in CI → mock time instead of real assertions.",
-    source_tags={"type": "learning", "domain": "testing"}
-)
-mem.set_context(
-    summary="Completed flaky test fix.",
-    metadata={"state": "completed", "commitments": []}
-)
+1. **Remember something:**
+```bash
+python -m assocmem remember "User prefers OAuth2 with PKCE for auth" -t topic=auth
 ```
 
-**Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first:
-
-```python
-ctx = mem.get_context()
-# ctx.metadata["state"] tells you where you left off
-# ctx.metadata["commitments"] tells you what's still owed
-# ctx.active_items tells you what to look at
+2. **Index a file:**
+```bash
+python -m assocmem update "file://$PWD/docs/api.md" -t project=myapp
 ```
 
----
-
-## Hierarchical Context Model
-
-The store supports O(log(log(N))) context retrieval through a hierarchy:
-
-```
-Level 3:  [  Working Context  ]           ← "What are we doing?" (~100 tokens)
-Level 2:  [ Topic Summaries   ]           ← "What about X?" (~5-10 topics)
-Level 1:  [ Cluster Summaries ]           ← √N aggregated summaries
-Level 0:  [ Source Items      ]           ← N indexed documents
+3. **Find by meaning:**
+```bash
+python -m assocmem find "how does authentication work?" --limit 5
 ```
 
-**Agent handoff pattern:**
-```python
-# New agent/session starts
-ctx = mem.get_context()           # Instant: what are we working on?
-recent = mem.top_of_mind(limit=5) # Associative: what's relevant now?
-
-# ... work happens ...
-
-# Before ending session, update context for next agent
-mem.set_context(
-    summary="Completed OAuth2 flow. Token refresh working. Next: add tests.",
-    active_items=["file:///src/auth.py", "file:///src/oauth_client.py"],
-    topics=["authentication", "testing"]
-)
+4. **Find by tag:**
+```bash
+python -m assocmem tag topic auth
 ```
 
-**Top-of-mind retrieval:**
-```python
-# Combines: recency + context similarity + topic relevance + session
-items = mem.top_of_mind()                    # What's relevant right now?
-items = mem.top_of_mind("authentication")    # What's relevant about auth?
-items = mem.recent(limit=10)                 # Just the latest items
-items = mem.recent(since="2026-01-30")       # Items from today
+5. **Get specific item:**
+```bash
+python -m assocmem get "file://$PWD/docs/api.md"
 ```
 
-**Topic summaries (Level 2):**
-```python
-topics = mem.list_topics()                   # ["authentication", "database", ...]
-summary = mem.get_topic_summary("authentication")
-# → TopicSummary with aggregate overview, item count, key items
+## When to Use
+
+- **Before searching files** → `find "error handling"` — may already be indexed
+- **After reading important docs** → `update file://...` — remember for later
+- **To capture decisions** → `remember "Chose X because Y" -t type=decision`
+- **To find related items** → `similar "file://..."` — nearest neighbors
+
+## Commands Reference
+
+| Command | Purpose | Example |
+|---------|---------|---------|
+| `remember` | Store inline content | `remember "note" -t key=value` |
+| `update` | Index document from URI | `update "file:///path" -t key=value` |
+| `find` | Semantic search | `find "query" --limit 10` |
+| `similar` | Find similar to item | `similar "id" --limit 5` |
+| `search` | Full-text search | `search "exact phrase"` |
+| `tag` | Query by tag | `tag key value` |
+| `get` | Retrieve by ID | `get "id"` |
+| `exists` | Check if indexed | `exists "id"` |
+| `collections` | List collections | `collections` |
+| `init` | Initialize store | `init` |
+
+## Output Format
+
+Add `--json` for structured output:
+
+```bash
+python -m assocmem find "auth" --json
 ```
 
----
-
-## Data Model
-
-An item has
-* A unique identifier (URI or custom ID for inline content)
-* A `created` timestamp (when first indexed)
-* A `updated` timestamp (when last indexed)
-* A summary of the content, generated when indexed
-* A collection of tags (`{key: value, ...}`)
-
-The full original document is not stored in this service.
-
-The services that implement embedding, summarization and tagging are configured at initialization time. This skill itself is provider-agnostic.
-
-## Use Cases
-
-* Keep track of every document or file that is referenced during any task.
-* Remember conversation insights, decisions, and notes inline.
-* Retrieve by semantic similarity, full-text search, or tags.
-* Transfer context between agents or sessions seamlessly.
-
-The data is partitioned by *collection*. Collection names are lowercase ASCII with underscores.
-
-## Functionality
-
-within a collection:
-
-`update(id: URI, source_tags: dict)` - inserts or updates the document at `URI` into the store.  This process delegates the work of embedding, summarization and tagging, then updates the store.  Any `source_tags` are stored alongside the "derived tags" produced by the tagging service.
-
-> NOTE: update tasks are serialized to avoid any concurrency issues.
-
-> NOTE: there is no `delete` operation.
-
-`find(query: str)` - locate items using a semantic-similarity query for any text
-
-`find_similar(id: URI)` - locate nearest neighbors of an existing item using a semantic-similarity query
-
-`query_fulltext(query: str)` - locate using a fulltext search of the *summary* text
-
-`query_tag(key: str, value: str = None)` - locate items that have a given tag, and optionally that have the given value for that tag
-
-### Tagging
-
-There are three domains of tags:
-
-1. **Source tags.**  Key/value pairs provided when calling `update()` or `remember()`.  For example, an object from an AWS bucket has a URI, and also a collection of tags that were applied in AWS.
-
-2. **System tags.**  These have special meaning for this service and are managed automatically.
-   * System tags have keys that begin with underscore (`_`).
-   * **Source tags and generated tags cannot set system tag values** — any tag starting with `_` in source_tags is filtered out before storage.
-   * The tagging provider does not produce system tags.
-
-   | System Tag | Description | Example |
-   |------------|-------------|---------|
-   |------------|-------------|---------|
-   | `_created` | ISO timestamp when first indexed | `2026-01-30T14:22:00Z` |
-   | `_updated` | ISO timestamp when last indexed | `2026-01-30T15:30:00Z` |
-   | `_updated_date` | Date portion for easier queries | `2026-01-30` |
-   | `_content_type` | MIME type if known | `text/markdown` |
-   | `_source` | How content was obtained | `uri`, `inline` |
-   | `_session` | Session that last touched this item | `2026-01-30:abc123` |
-
-3. **Generated tags.**  Produced by the tagging provider based on content analysis at index time.
-
-**Temporal queries using system tags:**
-```python
-# Find items updated today
-mem.query_tag("_updated_date", "2026-01-30")
-
-# Find all inline content (from remember())
-mem.query_tag("_source", "inline")
+```json
+[
+  {
+    "id": "file:///path/to/doc.md",
+    "summary": "OAuth2 authentication flow with PKCE...",
+    "score": 0.847,
+    "tags": {"topic": "auth", "_updated": "2026-01-30T14:00:00Z"}
+  }
+]
 ```
 
----
+## Tags
 
-## Visibility Conventions
+- **Source tags**: You provide via `-t key=value`
+- **System tags**: Auto-managed, prefixed with `_` (`_created`, `_updated`, `_source`)
 
-Knowledge has an interior/exterior dimension. Some items are working notes; others are settled knowledge ready to share. This is signaled through **convention**, not enforcement.
+Query system tags: `python -m assocmem tag _updated_date 2026-01-30`
 
-**Suggested source tags for visibility:**
+## Store Location
 
-| Tag | Values | Meaning |
-|-----|--------|---------|
-| `_visibility` | `draft`, `private`, `shared`, `public` | Intent for who should see this |
-| `_for` | `self`, `team`, `anyone` | Intended audience |
-| `_reviewed` | `true`, `false` | Has this been checked before sharing? |
+- Default: `.assocmem/` at git repo root
+- Override: `ASSOCMEM_STORE_PATH=/path/to/store`
+- Add `.assocmem/` to `.gitignore`
 
-**Example usage:**
-```python
-# Working hypothesis — routes to private store
-mem.remember(
-    "I think the bug is in token refresh, but need to verify.",
-    source_tags={"_visibility": "draft", "_for": "self"}
-)
+## Detailed Guide
 
-# Confirmed learning — routes to shared store
-mem.remember(
-    "Token refresh fails when clock skew exceeds 30s. Fix: use server time.",
-    source_tags={"_visibility": "shared", "_for": "team", "_reviewed": "true"}
-)
-```
-
-**Why this matters:**
-
-The shared layer protects the private. When items route to the private store:
-- They are physically separate — cannot be seen or deduced from outside
-- Working notes, drafts, dead ends stay truly interior
-- Settled knowledge graduates to shared through explicit re-tagging
-
-### Physical Separation via Routing
-
-Private isn't just convention — it's enforced by routing to a separate store.
-
-```
-AssociativeMemory (facade)
-    │
-    ├── reads: _system:routing (document in shared store)
-    │         ├── summary: "Items tagged draft/private route separately"
-    │         └── private_patterns: [{"_visibility": "draft"}, {"_for": "self"}, ...]
-    │
-    ├── Private Store (physically separate)
-    │   └── items matching private_patterns
-    │   └── invisible from shared store queries
-    │
-    └── Shared Store
-        └── everything else
-        └── includes the _system:routing document itself
-```
-
-The routing context is itself a document with:
-- **summary**: Natural language description of the privacy model
-- **private_patterns**: Tag patterns that route to private (e.g., `{"_visibility": "draft"}`)
-- **metadata**: Additional configuration as needed
-
-The facade reads the routing document and makes physical routing decisions. Queries against the shared store cannot see private items — not by convention, but by physical separation.
-
-**Default private patterns:**
-- `{"_visibility": "draft"}`
-- `{"_visibility": "private"}`
-- `{"_for": "self"}`
-
-**Customizing routing:**
-The `_system:routing` document can be updated to change what routes privately. The patterns are associative — described in the document, not hardcoded.
-
----
-
-## Domain Patterns
-
-See [docs/patterns/domains.md](docs/patterns/domains.md) for suggested collection and tag organization for common use cases:
-- Software Development
-- Market Research
-- Personal Reflection & Growth
-- Healthcare Tracking
-
----
-
-## System Documents
-
-The store's guiding metadata is itself stored as documents — like Oracle's data dictionary stored in tables. This enables agents to query and update the system's behavior.
-
-**Well-known system documents:**
-
-| ID | Purpose | Updatable |
-|----|---------|-----------|
-| `_system:routing` | Private/shared routing patterns | Yes |
-| `_system:context` | Current working context | Yes |
-| `_system:guidance` | Local behavioral guidance | Yes |
-
-**Querying system documents:**
-```python
-# Read the routing configuration
-routing = mem.get("_system:routing")
-print(routing.summary)  # Natural language description
-print(routing.tags)     # Includes private_patterns
-
-# Find all system documents
-system_docs = mem.query_tag("_system", "true")
-```
-
-**Updating behavior through documents:**
-```python
-# User says: "Research best practices for code review and update guidance"
-
-# 1. Agent researches (web, existing patterns, etc.)
-# 2. Agent updates the guidance document
-mem.remember(
-    content="""
-    Code Review Guidance (updated based on research):
-
-    - Review for correctness first, style second
-    - Small PRs (<400 lines) get better reviews
-    - Use checklist: security, error handling, tests, docs
-    - Prefer synchronous review for complex changes
-
-    Source: Team retrospective + industry research.
-    """,
-    id="_system:guidance:code_review",
-    source_tags={"_system": "true", "domain": "code_review"}
-)
-
-# 3. Future sessions read this guidance when doing code review
-```
-
-**The pattern:** Agents evolve the system by writing documents, not changing code. This includes:
-- Routing rules (what's private vs shared)
-- Domain patterns (how to organize for this project)
-- Process knowledge (how to do tasks well)
-- Local preferences (user-specific guidance)
-
-All queryable. All updateable. All associative.
-
----
-
-## Implementation Overview
-
-Components:
-* A configuration file (toml) for details of the database settings and supporting services (embeddings, summarization, tagging).  This configuration file is written at initialization time.  It contains everything necessary to open the datastore for querying any collection.
-* A vector database (ChromaDb).
-* An embeddings provider that produces a vectorization of the original content.  This enables associative recall and similarity search.
-* A summarization provider that produces accurate short summaries of the original content.  This enables consistent fast recall of summary information.
-* A tagging provider that produces structured identifiers that describe the original content.  This enables traditional indexing and navigation strategies.
-* A document provider that fetches content from URIs (file://, https://, etc.)
-
-### Provider Options
-
-| Type | Local (Apple Silicon) | Local (other) | API-based |
-|------|----------------------|---------------|-----------|
-| Embedding | `mlx` | `sentence-transformers` | `openai` |
-| Summarization | `mlx` | `passthrough` | `openai`, `ollama` |
-| Tagging | `mlx` | `noop` | `openai`, `ollama` |
-
-Providers are auto-detected at initialization based on platform and available API keys.
-
-## Error Handling
-
-| Situation | Behavior |
-|-----------|----------|
-| Store path doesn't exist | Created automatically |
-| Collection doesn't exist | Created on first `update()` |
-| URI unreachable | `IOError` raised from `update()` |
-| Item not found | `get()` returns `None`, `find_similar()` raises `KeyError` |
-| No results | Empty list returned |
-
-## Initialization
-
-See [initialize.md](initialize.md) for details.
-
-```python
-from assocmem import AssociativeMemory
-
-mem = AssociativeMemory("/path/to/store")
-```
+See [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) for:
+- Working session patterns
+- Tagging strategies
+- Python API reference
+- Provider configuration

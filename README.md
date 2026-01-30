@@ -73,12 +73,12 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for more examples.
 
 ## Documentation
 
-- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Installation, basic usage, CLI, configuration
-- **[SKILL.md](SKILL.md)** — Agent patterns, working sessions, context management
+- **[SKILL.md](SKILL.md)** — OpenClaw skill reference (CLI commands)
+- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Installation, basic usage, configuration
+- **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Detailed agent patterns, Python API
 - **[docs/REFERENCE.md](docs/REFERENCE.md)** — Complete API reference
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — How it works under the hood
-- **[patterns/domains.md](patterns/domains.md)** — Organization patterns for different domains
-- **[patterns/conversations.md](patterns/conversations.md)** — Process knowledge patterns
+- **[docs/patterns/](docs/patterns/)** — Domain and conversation patterns
 
 ---
 
