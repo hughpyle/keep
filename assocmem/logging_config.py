@@ -8,6 +8,14 @@ import os
 import sys
 import warnings
 
+# Set environment variables BEFORE any imports to suppress warnings early
+if not os.environ.get("ASSOCMEM_VERBOSE"):
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 
 def configure_quiet_mode(quiet: bool = True):
     """
