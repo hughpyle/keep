@@ -38,12 +38,12 @@ def find_git_root(start_path: Optional[Path] = None) -> Optional[Path]:
 def get_default_store_path() -> Path:
     """
     Get the default store path.
-    
+
     Priority:
     1. KEEP_STORE_PATH environment variable
     2. .keep/ directory at git repository root
-    3. .keep/ in current working directory (if not in a repo)
-    
+    3. ~/.keep/ in user's home directory (if not in a repo)
+
     Returns:
         Path to the store directory (may not exist yet).
     """
@@ -57,11 +57,11 @@ def get_default_store_path() -> Path:
     if git_root:
         return git_root / ".keep"
 
-    # Fall back to current directory with warning
-    cwd = Path.cwd()
+    # Fall back to home directory with warning
+    home = Path.home()
     warnings.warn(
-        f"Not in a git repository. Using {cwd / '.keep'} for storage. "
+        f"Not in a git repository. Using {home / '.keep'} for storage. "
         f"Set KEEP_STORE_PATH to specify a different location.",
         stacklevel=2,
     )
-    return cwd / ".keep"
+    return home / ".keep"
