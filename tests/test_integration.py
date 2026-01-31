@@ -122,12 +122,49 @@ class TestEndToEnd:
     def test_count(self, memory: AssociativeMemory) -> None:
         """count() returns number of items."""
         assert memory.count() == 0
-        
+
         memory.remember("One")
         memory.remember("Two")
         memory.remember("Three")
-        
+
         assert memory.count() == 3
+
+    def test_update_merges_tags(self, memory: AssociativeMemory) -> None:
+        """update() with existing item merges tags, replaces summary."""
+        # First remember with initial tags
+        item1 = memory.remember(
+            "Original content about meditation.",
+            id="test:meditation",
+            source_tags={"topic": "meditation", "tradition": "zen", "level": "beginner"}
+        )
+
+        assert item1.tags["topic"] == "meditation"
+        assert item1.tags["tradition"] == "zen"
+        assert item1.tags["level"] == "beginner"
+
+        # Update with new content and partial tags
+        item2 = memory.remember(
+            "Updated content about advanced meditation practice.",
+            id="test:meditation",
+            source_tags={"level": "advanced", "practice": "shikantaza"}  # level changes, practice is new
+        )
+
+        # Summary should be replaced
+        assert "advanced" in item2.summary.lower()
+
+        # Tags should be merged: old preserved, new added, collision uses new value
+        assert item2.tags["topic"] == "meditation"  # preserved from first call
+        assert item2.tags["tradition"] == "zen"  # preserved from first call
+        assert item2.tags["level"] == "advanced"  # updated (was "beginner")
+        assert item2.tags["practice"] == "shikantaza"  # new tag added
+
+        # Verify via get()
+        retrieved = memory.get("test:meditation")
+        assert retrieved is not None
+        assert retrieved.tags["topic"] == "meditation"
+        assert retrieved.tags["tradition"] == "zen"
+        assert retrieved.tags["level"] == "advanced"
+        assert retrieved.tags["practice"] == "shikantaza"
 
 
 class TestMultipleCollections:
