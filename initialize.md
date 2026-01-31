@@ -33,10 +33,10 @@ mem = AssociativeMemory()
 
 ```bash
 # Initialize and verify
-python -m assocmem init
+assocmem init
 
 # Or specify store explicitly
-python -m assocmem init --store /path/to/store
+assocmem init --store /path/to/store
 ```
 
 ## Configuration

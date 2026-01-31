@@ -100,7 +100,7 @@ mem.set_context(
 
 ## CLI
 ```bash
-python -m assocmem <cmd> [args]
+assocmem <cmd> [args]
 # Commands: find, similar, search, tag, update, get, exists, collections, init
 ```
 

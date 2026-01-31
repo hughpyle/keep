@@ -63,7 +63,7 @@ pip install assocmem
 **After installation:**
 
 ```bash
-python -m assocmem init
+assocmem init
 # ⚠️  Remember to add .assocmem/ to .gitignore
 ```
 
@@ -103,7 +103,7 @@ pip install 'assocmem[clawdbot]'
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # Initialize (auto-detects ~/.clawdbot/clawdbot.json)
-python -m assocmem init
+assocmem init
 # ✓ Detected providers:
 #   Embedding: sentence-transformers (local)
 #   Summarization: anthropic (claude-sonnet-4)

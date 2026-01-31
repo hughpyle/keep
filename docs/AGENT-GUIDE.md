@@ -51,9 +51,9 @@ if mem.exists("file:///project/readme.md"):
 **CLI equivalent:**
 ```bash
 # Uses .assocmem/ at repo root by default
-python -m assocmem update "file:///project/readme.md" -t project=myapp
-python -m assocmem find "authentication flow" --limit 5 --json
-python -m assocmem tag project myapp
+assocmem update "file:///project/readme.md" -t project=myapp
+assocmem find "authentication flow" --limit 5 --json
+assocmem tag project myapp
 ```
 
 **Item fields:** `id` (URI or custom), `summary` (str), `tags` (dict), `score` (float, search results only). Timestamps are in tags: `item.created` and `item.updated` are property accessors.
