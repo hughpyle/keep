@@ -3,6 +3,7 @@ Utility functions for locating paths.
 """
 
 import os
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +56,12 @@ def get_default_store_path() -> Path:
     git_root = find_git_root()
     if git_root:
         return git_root / ".keep"
-    
-    # Fall back to current directory
-    return Path.cwd() / ".keep"
+
+    # Fall back to current directory with warning
+    cwd = Path.cwd()
+    warnings.warn(
+        f"Not in a git repository. Using {cwd / '.keep'} for storage. "
+        f"Set KEEP_STORE_PATH to specify a different location.",
+        stacklevel=2,
+    )
+    return cwd / ".keep"
