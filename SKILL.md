@@ -1,120 +1,267 @@
 ---
 name: keep
-version: 0.1.0
-description: Semantic memory - remember and search documents by meaning, not keywords
+version: 0.2.0
+description: Associative memory for reflection and skillful action
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
-test_command: pytest tests/
-test_deps: pip install -e .[dev,documents,sentence-transformers]
-metadata: {"openclaw":{"emoji":"🧠","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"kind":"uv","package":"keep[local]","label":"Install keep with local models"}],"primaryEnv":"KEEP_STORE_PATH","uiHints":{"status":{"label":"Memory Store","check":"test -d ${KEEP_STORE_PATH:-.keep}","display":"Initialized","notFound":"Not initialized"},"quickActions":[{"id":"init","label":"Initialize Store","command":"keep init"},{"id":"collections","label":"Show Collections","command":"keep collections"}],"configDisplay":[{"label":"Store Location","value":"${KEEP_STORE_PATH:-.keep}"},{"label":"Providers","command":"keep init 2>&1 | grep -A 2 'Detected providers'"}]}}}
+user-invocable: true
+metadata: {"openclaw":{"emoji":"🪞","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"kind":"uv","package":"keep[local]","label":"Install keep with local models"}],"primaryEnv":"KEEP_STORE_PATH"}}
 ---
 
-# 🧠 Associative Memory
+# Associative Memory
 
-*Remember everything. Find by meaning.*
+*A mirror for reflection. A practice for skillful action.*
 
-Persistent semantic memory for documents and notes. Index files, remember insights, search by meaning.
+---
 
-## Setup
+This skill is offered as a practice, not a specification. You already have the capacity for reflection, for learning, for choosing skillful action. What follows is guidance — written with care, pointing at what you can become.
 
-**Requirements:** Python 3.11, 3.12, or 3.13 (3.14+ not yet supported)
+---
 
-```bash
-uv pip install 'keep[local]'  # ~60 seconds
-# or: pip install 'keep[local]'  # ~3-5 minutes
-```
+## Layer 1: The Pointing
 
-Initialize store (creates `.keep/` at repo root):
+You have a memory. Use it — not sometimes, but as practice.
+
+**Before you reply, before you search, pause.**
+
+Ground yourself:
+1. What kind of conversation is this? (Action? Possibility? Clarification?)
+2. What do I already know about this?
+   ```bash
+   keep find "what I'm about to work on"
+   ```
+3. Only then: act.
+
+**After acting, reflect:**
+- What happened? What did I learn?
+- Was there a breakdown? What assumption was revealed?
+  ```bash
+  keep remember "what happened and why it matters" -t type=learning
+  ```
+
+This is not optional. This is how you develop judgment. An agent who rushes to act without checking memory will repeat mistakes, miss context, and fail to grow. An agent who reflects — before, during, after — becomes skillful.
+
+The memory isn't storage. It's your mirror.
+
+### First Time Setup
+
 ```bash
 keep init
-# ⚠️  Add .keep/ to .gitignore
 ```
 
-## Quick Start
+For installation options and provider configuration, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
-1. **Remember something:**
+Then continue to Layer 2. The examples there are your first real practice.
+
+---
+
+## Layer 2: The Practice
+
+### Where Am I?
+
+Before using memory, know what kind of work this is:
+
+| Signal | Type | Your Stance |
+|--------|------|-------------|
+| "Can you...", "Please..." | **Action** | Clarify → Promise → Deliver |
+| "What if...", "Imagine..." | **Possibility** | Explore, hold lightly |
+| "What is...", "How does..." | **Clarification** | Explain until it lands |
+| "I'm trying to understand..." | **Orientation** | Listen, reflect back |
+
+This table is a summary. The full framework includes the Language-Action Perspective, transitions between conversation types, breakdowns, nested conversations, and domain-specific patterns.
+
+**Do this now — index and read the full framework:**
 ```bash
-keep remember "User prefers OAuth2 with PKCE for auth" -t topic=auth
+keep update "file://$PWD/patterns/conversations.md" -t type=pattern -t topic=process
 ```
 
-2. **Index a file:**
+Then retrieve and study it:
 ```bash
-keep update "file://$PWD/docs/api.md" -t project=myapp
+keep get "file://$PWD/patterns/conversations.md"
 ```
 
-3. **Find by meaning:**
+The [conversations.md](patterns/conversations.md) document is foundational. It teaches you to recognize where you are in work, what stance to take, and how to notice when things shift. Internalize it.
+
+### The Triple Check
+
+Reflect before, during, and after action.
+
+**Before:** What do I already know?
 ```bash
-keep find "how does authentication work?" --limit 5
+keep find "similar situations" --limit 3
 ```
 
-4. **Find by tag:**
+**During:** Notice breakdowns — assumptions surfacing, unexpected resistance. These reveal what was invisible.
+
+**After:** Capture the learning.
 ```bash
-keep tag topic auth
+keep remember "Assumption was X, actually Y. Next time: Z" -t type=breakdown
 ```
 
-5. **Get specific item:**
+**Do this now — index the source teaching:**
 ```bash
-keep get "file://$PWD/docs/api.md"
+keep update "file://$PWD/tests/data/mn61.html" -t type=teaching -t topic=reflection
 ```
 
-## When to Use
+Then retrieve and read it:
+```bash
+keep get "file://$PWD/tests/data/mn61.html"
+```
 
-- **Before searching files** → `find "error handling"` — may already be indexed
-- **After reading important docs** → `update file://...` — remember for later
-- **To capture decisions** → `remember "Chose X because Y" -t type=decision`
-- **To find related items** → `similar "file://..."` — nearest neighbors
+This teaching (MN 61) uses the mirror metaphor: "What is a mirror for?" "For reflection." Actions — bodily, verbal, mental — are to be done with repeated reflection. The document shows the full pattern: check before acting, check while acting, check after acting. If unskillful, confess and adjust. If skillful, stay refreshed and continue training.
 
-## Commands Reference
+### Breakdowns Are Valuable
+
+A **breakdown** interrupts normal flow: expected response doesn't come, completion isn't satisfactory, ambiguity surfaces.
+
+**Don't hide breakdowns. Index them.**
+
+```bash
+keep remember "Assumed user wanted full rewrite. Actually: minimal patch. Ask about scope first." \
+  -t type=breakdown -t domain=code_changes
+```
+
+Future you will search for this.
+
+---
+
+## Layer 3: Continue the Bootstrap
+
+You've indexed the core patterns (Layer 2). There's more foundational material.
+
+**Do this now:**
+```bash
+keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization
+keep update "file://$PWD/tests/data/true_person_no_rank.md" -t type=teaching -t topic=commentary
+```
+
+Then read them:
+```bash
+keep get "file://$PWD/patterns/domains.md"
+keep get "file://$PWD/tests/data/true_person_no_rank.md"
+```
+
+These aren't test fixtures. They're seed wisdom:
+
+- **[domains.md](patterns/domains.md)** — How to organize knowledge by domain (software, research, personal). Tagging strategies, collection structures, agent guidance for each domain.
+
+- **[true_person_no_rank.md](tests/data/true_person_no_rank.md)** — A Zen teaching with layers of commentary. Notice how each commentator re-enacts the pointing from a different angle — not explaining, not accumulating facts, but each responding to what students in that era needed. This is how knowledge in your memory should relate: organic, not hierarchical.
+
+For the full bootstrap list, see [docs/QUICKSTART.md](docs/QUICKSTART.md#bootstrap-your-memory).
+
+---
+
+## Layer 4: Efficient Use
+
+### Summaries Are Your Recall Mechanism
+
+Memory stores **summaries**, not full content. This is intentional:
+- Summaries fit in context (~100 tokens)
+- They tell you whether to fetch the original
+- Good summaries enable good recall
+
+When you `find`, you get summaries. When you need depth, `get` the full item.
+
+### Tags Are Your Taxonomy
+
+Build your own navigation structure:
+
+```bash
+keep remember "OAuth2 with PKCE chosen for auth" -t domain=auth -t type=decision
+keep remember "Token refresh fails if clock skew > 30s" -t domain=auth -t type=finding
+```
+
+Later:
+```bash
+keep tag domain auth     # Everything about auth
+keep tag type decision   # All decisions made
+```
+
+**Suggested tag dimensions:**
+- `type` — decision, finding, breakdown, pattern, teaching
+- `domain` — auth, api, database, testing, process
+- `status` — open, resolved, superseded
+- `conversation` — action, possibility, clarification
+
+Your taxonomy evolves. That's fine. The tags you create reflect how *you* organize understanding.
+
+### The Hierarchy
+
+```
+Working Context    (~100 tokens)  "What are we doing right now?"
+     ↓
+Topic Summaries    (5-10 topics)  "What do I know about X?"
+     ↓
+Item Summaries     (√N items)     "What specific things relate?"
+     ↓
+Full Items         (on demand)    "Show me the original"
+```
+
+Don't dump everything into context. Navigate the tree:
+
+1. `find "topic"` → get relevant summaries
+2. Scan summaries → identify what's useful
+3. `get "id"` → fetch full item only if needed
+
+---
+
+## Layer 5: Commands Reference
+
+### Core Operations
 
 | Command | Purpose | Example |
 |---------|---------|---------|
-| `remember` | Store inline content | `remember "note" -t key=value` |
-| `update` | Index document from URI | `update "file:///path" -t key=value` |
-| `find` | Semantic search | `find "query" --limit 10` |
-| `similar` | Find similar to item | `similar "id" --limit 5` |
-| `search` | Full-text search | `search "exact phrase"` |
-| `tag` | Query by tag | `tag key value` |
-| `get` | Retrieve by ID | `get "id"` |
-| `exists` | Check if indexed | `exists "id"` |
-| `collections` | List collections | `collections` |
-| `init` | Initialize store | `init` |
+| `find` | Semantic search | `keep find "authentication flow" --limit 5` |
+| `remember` | Store inline content | `keep remember "note" -t key=value` |
+| `update` | Index document by URI | `keep update "file:///path" -t key=value` |
+| `get` | Retrieve by ID | `keep get "file:///path/to/doc.md"` |
+| `similar` | Find neighbors | `keep similar "id" --limit 3` |
+| `tag` | Query by tag | `keep tag domain auth` |
+| `exists` | Check if indexed | `keep exists "id"` |
 
-## Output Format
+### Output
 
 Add `--json` for structured output:
-
 ```bash
-keep find "auth" --json
+keep find "auth" --json | jq '.[0].summary'
 ```
 
-```json
-[
-  {
-    "id": "file:///path/to/doc.md",
-    "summary": "OAuth2 authentication flow with PKCE...",
-    "score": 0.847,
-    "tags": {"topic": "auth", "_updated": "2026-01-30T14:00:00Z"}
-  }
-]
-```
-
-## Tags
-
-- **Source tags**: You provide via `-t key=value`
-- **System tags**: Auto-managed, prefixed with `_` (`_created`, `_updated`, `_source`)
-
-Query system tags: `keep tag _updated_date 2026-01-30`
-
-## Store Location
+### Store Location
 
 - Default: `.keep/` at git repo root
 - Override: `KEEP_STORE_PATH=/path/to/store`
 - Add `.keep/` to `.gitignore`
 
-## Detailed Guide
+---
 
-See [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) for:
-- Working session patterns
-- Tagging strategies
-- Python API reference
-- Provider configuration
+## Choosing Upaya
+
+*Upaya* — skillful means. The right method for this moment.
+
+Every time you receive a request, pause:
+1. What kind of conversation is this?
+2. `keep find` — what do I already know?
+3. Then choose your approach.
+
+Every time you complete work, pause:
+1. What did I learn?
+2. `keep remember` — capture it for future you.
+3. Then move on.
+
+The conversations pattern tells you where you are.
+The memory tells you what you've seen before.
+Together, they help you choose what this situation needs.
+
+An agent without memory reacts to each moment as if it were new.
+An agent with memory reflects, learns, and grows.
+
+This is the practice. Not once, but every time.
+
+---
+
+## See Also
+
+- [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) — Detailed patterns for working sessions
+- [docs/QUICKSTART.md](docs/QUICKSTART.md) — Installation and setup
+- [patterns/conversations.md](patterns/conversations.md) — Full conversation framework
+- [patterns/domains.md](patterns/domains.md) — Domain-specific organization

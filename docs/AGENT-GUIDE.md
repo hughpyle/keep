@@ -2,7 +2,8 @@
 
 This guide provides in-depth patterns for using the associative memory store effectively.
 
-For quick reference, see [../SKILL.md](../SKILL.md).
+For the practice introduction (why and when), see [../SKILL.md](../SKILL.md).
+For quick API/CLI reference, see [REFERENCE.md](REFERENCE.md).
 
 ---
 
@@ -63,8 +64,8 @@ keep tag project myapp
 **Default store location:** `.keep/` at the git repository root (created automatically). Override with `KEEP_STORE_PATH` or explicit path argument. Add `.keep/` to `.gitignore` if the store should not be committed.
 
 **Patterns documentation:**
-- [docs/patterns/domains.md](docs/patterns/domains.md) — domain-specific organization (software dev, research, etc.)
-- [docs/patterns/conversations.md](docs/patterns/conversations.md) — process knowledge: how work proceeds
+- [patterns/domains.md](../patterns/domains.md) — domain-specific organization (software dev, research, etc.)
+- [patterns/conversations.md](../patterns/conversations.md) — process knowledge: how work proceeds
 
 **When to use:**
 - Call `update()` whenever you reference a file or URL worth remembering
@@ -343,7 +344,7 @@ The `_system:routing` document can be updated to change what routes privately. T
 
 ## Domain Patterns
 
-See [docs/patterns/domains.md](docs/patterns/domains.md) for suggested collection and tag organization for common use cases:
+See [patterns/domains.md](../patterns/domains.md) for suggested collection and tag organization for common use cases:
 - Software Development
 - Market Research
 - Personal Reflection & Growth
@@ -440,7 +441,7 @@ Providers are auto-detected at initialization based on platform and available AP
 
 ## Initialization
 
-See [initialize.md](initialize.md) for details.
+See [initialize.md](../initialize.md) for details.
 
 ```python
 from keep import Keeper

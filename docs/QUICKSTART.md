@@ -263,8 +263,39 @@ results = kp.query_fulltext("PostgreSQL")
 - Reduce collection size or increase decay rate
 - Consider batch operations
 
+## Bootstrap Your Memory
+
+After `keep init`, seed your memory with foundational material. These documents teach how to use memory well:
+
+```bash
+# The practice frameworks
+keep update "file://$PWD/patterns/conversations.md" -t type=pattern -t topic=process
+keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization
+
+# Seed wisdom (from tests/data/)
+keep update "file://$PWD/tests/data/mn61.html" -t type=teaching -t topic=reflection
+keep update "file://$PWD/tests/data/true_person_no_rank.md" -t type=teaching -t topic=commentary
+keep update "file://$PWD/tests/data/impermanence_verse.txt" -t type=teaching -t topic=impermanence
+```
+
+**What these teach:**
+- **conversations.md** — How to recognize where you are in work (action, possibility, clarification)
+- **domains.md** — How to organize knowledge by domain
+- **mn61.html** — The triple-check practice: reflect before, during, and after action
+- **true_person_no_rank.md** — How perspectives layer organically, not cumulatively
+- **impermanence_verse.txt** — Brief reminders. "Wake up!"
+
+Now try:
+```bash
+keep find "how to reflect on actions"
+keep find "what kind of conversation is this"
+```
+
+See [SKILL.md](../SKILL.md) for the full practice framework.
+
 ## Next Steps
 
-- See [SKILL.md](../SKILL.md) for agent-focused patterns
+- See [SKILL.md](../SKILL.md) for agent-focused patterns and the reflective practice
+- See [AGENT-GUIDE.md](AGENT-GUIDE.md) for detailed working session patterns
 - See [ARCHITECTURE.md](ARCHITECTURE.md) for internals
 - See [REFERENCE.md](REFERENCE.md) for complete API
