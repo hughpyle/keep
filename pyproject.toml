@@ -18,6 +18,11 @@ dependencies = [
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.18.0"]
 sentence-transformers = ["sentence-transformers>=2.2"]
+documents = [
+    # Document text extraction (PDF, HTML)
+    "pypdf>=5.0",
+    "beautifulsoup4>=4.9",
+]
 mlx = [
     "mlx>=0.10",
     "mlx-lm>=0.10",
@@ -28,6 +33,9 @@ local = [
     "mlx-lm>=0.10; platform_system == 'Darwin' and platform_machine == 'arm64'",
     # Fallback: sentence-transformers for embedding
     "sentence-transformers>=2.2",
+    # Document extraction
+    "pypdf>=5.0",
+    "beautifulsoup4>=4.9",
 ]
 clawdbot = [
     # For Clawdbot integration: use configured models
