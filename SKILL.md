@@ -12,11 +12,18 @@ Persistent semantic memory for documents and notes. Index files, remember insigh
 
 ## Setup
 
+**Requirements:** Python 3.11, 3.12, or 3.13 (3.14+ not yet supported)
+
 ```bash
-uv pip install 'assocmem[local]'
+uv pip install 'assocmem[local]'  # ~60 seconds
+# or: pip install 'assocmem[local]'  # ~3-5 minutes
 ```
 
-Verify: `python -m assocmem init` (creates `.assocmem/` store at repo root)
+Initialize store (creates `.assocmem/` at repo root):
+```bash
+python -m assocmem init
+# ⚠️  Add .assocmem/ to .gitignore
+```
 
 ## Quick Start
 

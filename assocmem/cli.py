@@ -311,8 +311,25 @@ def init(
     Initialize or verify the store is ready.
     """
     mem = _get_memory(store, collection)
-    typer.echo(f"Store ready: {store or '(default)'}")
-    typer.echo(f"Collections: {mem.list_collections()}")
+    
+    # Show actual store path
+    actual_path = mem._store_path if hasattr(mem, '_store_path') else Path(store or ".assocmem")
+    typer.echo(f"✓ Store ready: {actual_path}")
+    typer.echo(f"✓ Collections: {mem.list_collections()}")
+    
+    # Show detected providers
+    try:
+        if hasattr(mem, '_config'):
+            config = mem._config
+            typer.echo(f"\n✓ Detected providers:")
+            typer.echo(f"  Embedding: {config.embedding.name}")
+            typer.echo(f"  Summarization: {config.summarization.name}")
+            typer.echo(f"\nTo customize, edit {actual_path}/assocmem.toml")
+    except Exception:
+        pass  # Don't fail if provider detection doesn't work
+    
+    # .gitignore reminder
+    typer.echo(f"\n⚠️  Remember to add .assocmem/ to .gitignore")
 
 
 @app.command("system")
@@ -346,6 +363,15 @@ def show_routing(
         typer.echo(f"Summary: {routing.summary}")
         typer.echo(f"Private patterns: {routing.private_patterns}")
         typer.echo(f"Updated: {routing.updated}")
+
+
+@app.command()
+def version():
+    """
+    Show assocmem version.
+    """
+    from . import __version__
+    typer.echo(f"assocmem {__version__}")
 
 
 # -----------------------------------------------------------------------------

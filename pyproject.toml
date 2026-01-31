@@ -7,7 +7,7 @@ name = "assocmem"
 version = "0.1.0"
 description = "Associative memory with semantic search"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "chromadb>=0.4",
     "typer>=0.9",
@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.18.0"]
 sentence-transformers = ["sentence-transformers>=2.2"]
 mlx = [
     "mlx>=0.10",
@@ -27,6 +28,10 @@ local = [
     "mlx-lm>=0.10; platform_system == 'Darwin' and platform_machine == 'arm64'",
     # Fallback: sentence-transformers for embedding
     "sentence-transformers>=2.2",
+]
+clawdbot = [
+    # For Clawdbot integration: use configured models
+    "anthropic>=0.18.0",
 ]
 dev = [
     "pytest>=7.0",

@@ -39,12 +39,32 @@ results = mem.find("how should we handle auth?")
 
 ## Quick Start
 
+### Requirements
+
+- **Python:** 3.11, 3.12, or 3.13 (3.14+ not yet supported due to dependency constraints)
+- **Installation time:** 3-5 minutes (ChromaDB dependency resolution + embedding model downloads)
+
+### Installation
+
 ```bash
 # Recommended: Install with local models
 pip install 'assocmem[local]'
 
+# Faster alternative (recommended):
+uv pip install 'assocmem[local]'  # ~60 seconds vs ~300 seconds
+
+# Clawdbot integration (uses configured models):
+pip install 'assocmem[clawdbot]'
+
 # Or minimal install (configure providers manually)
 pip install assocmem
+```
+
+**After installation:**
+
+```bash
+python -m assocmem init
+# ⚠️  Remember to add .assocmem/ to .gitignore
 ```
 
 ```python
@@ -71,9 +91,38 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for more examples.
 
 ---
 
+## Clawdbot Integration
+
+If you have [Clawdbot](https://openclaw.dev) configured, assocmem automatically uses your configured models:
+
+```bash
+# Install with Clawdbot support
+pip install 'assocmem[clawdbot]'
+
+# Set your Anthropic API key (if using Claude models)
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Initialize (auto-detects ~/.clawdbot/clawdbot.json)
+python -m assocmem init
+# ✓ Detected providers:
+#   Embedding: sentence-transformers (local)
+#   Summarization: anthropic (claude-sonnet-4)
+```
+
+**Benefits:**
+- 🔄 Unified model configuration (DRY principle)
+- 🧠 Best of both: local embeddings + smart summarization
+- 🔒 Privacy-preserving (embeddings stay local)
+- 💰 Cost-effective (~$0.0001/document)
+
+See [docs/CLAWDBOT-INTEGRATION.md](docs/CLAWDBOT-INTEGRATION.md) for details.
+
+---
+
 ## Documentation
 
 - **[SKILL.md](SKILL.md)** — OpenClaw skill reference (CLI commands)
+- **[docs/CLAWDBOT-INTEGRATION.md](docs/CLAWDBOT-INTEGRATION.md)** — Clawdbot integration guide
 - **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Installation, basic usage, configuration
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Detailed agent patterns, Python API
 - **[docs/REFERENCE.md](docs/REFERENCE.md)** — Complete API reference

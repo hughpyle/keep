@@ -13,6 +13,69 @@ from .base import SummarizationProvider, TaggingProvider, get_registry
 # Summarization Providers
 # -----------------------------------------------------------------------------
 
+class AnthropicSummarization:
+    """
+    Summarization provider using Anthropic's Claude API.
+    
+    Requires: ANTHROPIC_API_KEY environment variable.
+    Optionally reads from Clawdbot config via CLAWDBOT_CONFIG env var.
+    """
+    
+    SYSTEM_PROMPT = """You are a precise summarization assistant. 
+Create a concise summary of the provided document that captures:
+- The main purpose or topic
+- Key points or functionality
+- Important details that would help someone decide if this document is relevant
+
+Be factual and specific. Do not include phrases like "This document" - just state the content directly."""
+    
+    def __init__(
+        self,
+        model: str = "claude-3-5-haiku-20241022",
+        api_key: str | None = None,
+        max_tokens: int = 200,
+    ):
+        try:
+            from anthropic import Anthropic
+        except ImportError:
+            raise RuntimeError("AnthropicSummarization requires 'anthropic' library")
+        
+        self.model = model
+        self.max_tokens = max_tokens
+        
+        # Try environment variable first, then Clawdbot config
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            # Try to read from Clawdbot config (OAuth tokens stored separately)
+            # For now, just require explicit API key
+            raise ValueError("ANTHROPIC_API_KEY environment variable required")
+        
+        self.client = Anthropic(api_key=key)
+    
+    def summarize(self, content: str) -> str:
+        """Generate summary using Anthropic Claude."""
+        # Truncate very long content
+        truncated = content[:50000] if len(content) > 50000 else content
+        
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=self.SYSTEM_PROMPT,
+                messages=[
+                    {"role": "user", "content": truncated}
+                ],
+            )
+            
+            # Extract text from response
+            if response.content and len(response.content) > 0:
+                return response.content[0].text
+            return truncated[:500]  # Fallback
+        except Exception as e:
+            # Fallback to truncation on error
+            return truncated[:500]
+
+
 class OpenAISummarization:
     """
     Summarization provider using OpenAI's chat API.
@@ -124,6 +187,65 @@ class PassthroughSummarization:
 # -----------------------------------------------------------------------------
 # Tagging Providers
 # -----------------------------------------------------------------------------
+
+class AnthropicTagging:
+    """
+    Tagging provider using Anthropic's Claude API with JSON output.
+    """
+    
+    SYSTEM_PROMPT = """Analyze the document and generate relevant tags as a JSON object.
+
+Generate tags for these categories when applicable:
+- content_type: The type of content (e.g., "documentation", "code", "article", "config")
+- language: Programming language if code (e.g., "python", "javascript")
+- domain: Subject domain (e.g., "authentication", "database", "api", "testing")
+- framework: Framework or library if relevant (e.g., "react", "django", "fastapi")
+
+Only include tags that clearly apply. Values should be lowercase.
+
+Respond with a JSON object only, no explanation."""
+    
+    def __init__(
+        self,
+        model: str = "claude-3-5-haiku-20241022",
+        api_key: str | None = None,
+    ):
+        try:
+            from anthropic import Anthropic
+        except ImportError:
+            raise RuntimeError("AnthropicTagging requires 'anthropic' library")
+        
+        self.model = model
+        
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable required")
+        
+        self._client = Anthropic(api_key=key)
+    
+    def tag(self, content: str) -> dict[str, str]:
+        """Generate tags using Anthropic Claude."""
+        truncated = content[:20000] if len(content) > 20000 else content
+        
+        try:
+            response = self._client.messages.create(
+                model=self.model,
+                max_tokens=200,
+                temperature=0.2,
+                system=self.SYSTEM_PROMPT,
+                messages=[
+                    {"role": "user", "content": truncated}
+                ],
+            )
+            
+            # Parse JSON from response
+            if response.content and len(response.content) > 0:
+                tags = json.loads(response.content[0].text)
+                return {str(k): str(v) for k, v in tags.items()}
+            return {}
+        except (json.JSONDecodeError, Exception):
+            return {}
+
 
 class OpenAITagging:
     """
@@ -239,9 +361,11 @@ class NoopTagging:
 
 # Register providers
 _registry = get_registry()
+_registry.register_summarization("anthropic", AnthropicSummarization)
 _registry.register_summarization("openai", OpenAISummarization)
 _registry.register_summarization("ollama", OllamaSummarization)
 _registry.register_summarization("passthrough", PassthroughSummarization)
+_registry.register_tagging("anthropic", AnthropicTagging)
 _registry.register_tagging("openai", OpenAITagging)
 _registry.register_tagging("ollama", OllamaTagging)
 _registry.register_tagging("noop", NoopTagging)

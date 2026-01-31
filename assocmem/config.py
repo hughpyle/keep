@@ -53,11 +53,47 @@ class StoreConfig:
         return self.config_path.exists()
 
 
+def read_clawdbot_config() -> dict | None:
+    """
+    Read Clawdbot configuration if available.
+    
+    Checks:
+    1. CLAWDBOT_CONFIG environment variable
+    2. ~/.clawdbot/clawdbot.json (default location)
+    
+    Returns None if not found or invalid.
+    """
+    import json
+    
+    # Try environment variable first
+    config_path_str = os.environ.get("CLAWDBOT_CONFIG")
+    if config_path_str:
+        config_file = Path(config_path_str)
+    else:
+        # Default location
+        config_file = Path.home() / ".clawdbot" / "clawdbot.json"
+    
+    if not config_file.exists():
+        return None
+    
+    try:
+        with open(config_file) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return None
+
+
 def detect_default_providers() -> dict[str, ProviderConfig]:
     """
     Detect the best default providers for the current environment.
     
-    Returns provider configs for: embedding, summarization, tagging
+    Priority:
+    1. Clawdbot integration (if configured and ANTHROPIC_API_KEY available)
+    2. MLX (Apple Silicon local-first)
+    3. OpenAI (if API key available)
+    4. Fallback: sentence-transformers + passthrough/truncate
+    
+    Returns provider configs for: embedding, summarization, document
     """
     providers = {}
     
@@ -67,18 +103,48 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
         platform.machine() == "arm64"
     )
     
-    # Check for OpenAI API key
+    # Check for API keys
+    has_anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     has_openai_key = bool(
         os.environ.get("ASSOCMEM_OPENAI_API_KEY") or 
         os.environ.get("OPENAI_API_KEY")
     )
     
-    # Embedding: prefer sentence-transformers for maximum compatibility
-    # MLX is available but requires model downloads which can be slow/require auth
-    providers["embedding"] = ProviderConfig("sentence-transformers")
+    # Check for Clawdbot config
+    clawdbot_config = read_clawdbot_config()
+    clawdbot_model = None
+    if clawdbot_config:
+        model_str = (clawdbot_config.get("agents", {})
+                     .get("defaults", {})
+                     .get("model", {})
+                     .get("primary", ""))
+        if model_str:
+            clawdbot_model = model_str
     
-    # Summarization: prefer MLX on Apple Silicon, then OpenAI if key available
+    # Embedding: always local (sentence-transformers for compatibility, MLX optional)
+    # Embeddings should stay local for privacy and cost
     if is_apple_silicon:
+        # Prefer sentence-transformers even on M1 for stability
+        providers["embedding"] = ProviderConfig("sentence-transformers")
+    else:
+        providers["embedding"] = ProviderConfig("sentence-transformers")
+    
+    # Summarization: priority order based on availability
+    # 1. Clawdbot + Anthropic (if configured and key available)
+    if clawdbot_model and clawdbot_model.startswith("anthropic/") and has_anthropic_key:
+        # Extract model name from "anthropic/claude-sonnet-4-5" format
+        model_name = clawdbot_model.split("/", 1)[1] if "/" in clawdbot_model else "claude-3-5-haiku-20241022"
+        # Map Clawdbot model names to actual Anthropic model names
+        model_mapping = {
+            "claude-sonnet-4": "claude-sonnet-4-20250514",
+            "claude-sonnet-4-5": "claude-sonnet-4-20250514",
+            "claude-sonnet-3-5": "claude-3-5-sonnet-20241022",
+            "claude-haiku-3-5": "claude-3-5-haiku-20241022",
+        }
+        actual_model = model_mapping.get(model_name, "claude-3-5-haiku-20241022")
+        providers["summarization"] = ProviderConfig("anthropic", {"model": actual_model})
+    # 2. MLX on Apple Silicon (local-first)
+    elif is_apple_silicon:
         try:
             import mlx_lm  # noqa
             providers["summarization"] = ProviderConfig("mlx", {"model": "mlx-community/Llama-3.2-3B-Instruct-4bit"})
@@ -87,8 +153,10 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
                 providers["summarization"] = ProviderConfig("openai")
             else:
                 providers["summarization"] = ProviderConfig("passthrough")
+    # 3. OpenAI (if key available)
     elif has_openai_key:
         providers["summarization"] = ProviderConfig("openai")
+    # 4. Fallback: truncate
     else:
         providers["summarization"] = ProviderConfig("truncate")
     
