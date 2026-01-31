@@ -9,8 +9,11 @@ import platform
 # Check if we're on Apple Silicon
 is_apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
 
+# Get path relative to this test file
+DATA_DIR = Path(__file__).parent / "data"
+
 # Read test content - use clean prose (Chinese sutra text)
-test_file = Path("data/fortytwo_chapters.txt")
+test_file = DATA_DIR / "fortytwo_chapters.txt"
 content = test_file.read_text()[:3000]  # First 3000 chars
 
 print(f"Testing with {len(content)} chars from {test_file.name}")

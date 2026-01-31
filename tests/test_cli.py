@@ -52,8 +52,9 @@ class TestCliBasics:
     def test_no_args_shows_help(self, cli):
         """CLI shows help when called with no arguments."""
         result = cli()
-        assert result.returncode == 0
-        assert "Usage" in result.stdout or "usage" in result.stdout.lower()
+        # Typer returns exit code 2 for missing required command
+        assert result.returncode == 2
+        assert "Usage" in result.stdout or "usage" in result.stderr.lower()
     
     def test_command_help(self, cli):
         """Individual commands have help."""
