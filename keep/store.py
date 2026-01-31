@@ -185,7 +185,43 @@ class ChromaStore:
         
         coll.delete(ids=[id])
         return True
-    
+
+    def update_summary(self, collection: str, id: str, summary: str) -> bool:
+        """
+        Update just the summary of an existing item.
+
+        Used by lazy summarization to replace placeholder summaries
+        with real generated summaries.
+
+        Args:
+            collection: Collection name
+            id: Item identifier
+            summary: New summary text
+
+        Returns:
+            True if item was updated, False if not found
+        """
+        coll = self._get_collection(collection)
+
+        # Get existing item
+        existing = coll.get(ids=[id], include=["metadatas"])
+        if not existing["ids"]:
+            return False
+
+        # Update metadata with new timestamp
+        metadata = existing["metadatas"][0] or {}
+        now = datetime.now(timezone.utc).isoformat()
+        metadata["_updated"] = now
+        metadata["_updated_date"] = now[:10]
+
+        # Update just the document (summary) and metadata
+        coll.update(
+            ids=[id],
+            documents=[summary],
+            metadatas=[metadata],
+        )
+        return True
+
     # -------------------------------------------------------------------------
     # Read Operations
     # -------------------------------------------------------------------------

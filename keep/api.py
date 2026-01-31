@@ -13,8 +13,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import os
+import signal
+import subprocess
+import sys
+
 from .config import load_or_create_config, StoreConfig
 from .paths import get_default_store_path
+from .pending_summaries import PendingSummaryQueue
 from .providers import get_registry
 from .providers.base import (
     DocumentProvider,
@@ -24,6 +30,13 @@ from .providers.base import (
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .store import ChromaStore
 from .types import Item, filter_non_system_tags
+
+
+# Default max length for truncated placeholder summaries
+TRUNCATE_LENGTH = 500
+
+# Maximum attempts before giving up on a pending summary
+MAX_SUMMARY_ATTEMPTS = 5
 
 
 # Collection name validation: lowercase ASCII and underscores only
@@ -97,7 +110,11 @@ class Keeper:
             self._config.summarization.name,
             self._config.summarization.params,
         )
-        
+
+        # Initialize pending summary queue
+        queue_path = self._store_path / "pending_summaries.db"
+        self._pending_queue = PendingSummaryQueue(queue_path)
+
         # Initialize store
         self._store = ChromaStore(
             self._store_path,
@@ -121,7 +138,8 @@ class Keeper:
         id: str,
         source_tags: Optional[dict[str, str]] = None,
         *,
-        collection: Optional[str] = None
+        collection: Optional[str] = None,
+        lazy: bool = False
     ) -> Item:
         """
         Insert or update a document in the store.
@@ -138,6 +156,9 @@ class Keeper:
             id: URI of document to fetch and index
             source_tags: User-provided tags to merge with existing tags
             collection: Target collection (uses default if None)
+            lazy: If True, use truncated placeholder summary and queue for
+                  background processing. Use `process_pending()` to generate
+                  real summaries later.
 
         Returns:
             The stored Item with merged tags and new summary
@@ -157,8 +178,17 @@ class Keeper:
         # Generate embedding
         embedding = self._embedding_provider.embed(doc.content)
 
-        # Generate summary
-        summary = self._summarization_provider.summarize(doc.content)
+        # Generate summary (or queue for later if lazy)
+        if lazy:
+            # Truncated placeholder
+            if len(doc.content) > TRUNCATE_LENGTH:
+                summary = doc.content[:TRUNCATE_LENGTH] + "..."
+            else:
+                summary = doc.content
+            # Queue for background processing
+            self._pending_queue.enqueue(id, coll, doc.content)
+        else:
+            summary = self._summarization_provider.summarize(doc.content)
 
         # Build tags: existing + new (new overrides on collision)
         tags = {**existing_tags}
@@ -181,6 +211,10 @@ class Keeper:
             tags=tags,
         )
 
+        # Spawn background processor if lazy
+        if lazy:
+            self._spawn_processor()
+
         # Return the stored item
         result = self._store.get(coll, id)
         return result.to_item()
@@ -191,7 +225,8 @@ class Keeper:
         *,
         id: Optional[str] = None,
         source_tags: Optional[dict[str, str]] = None,
-        collection: Optional[str] = None
+        collection: Optional[str] = None,
+        lazy: bool = False
     ) -> Item:
         """
         Store inline content directly (without fetching from a URI).
@@ -209,6 +244,9 @@ class Keeper:
             id: Optional custom ID (auto-generated if None)
             source_tags: User-provided tags to merge with existing tags
             collection: Target collection (uses default if None)
+            lazy: If True, use truncated placeholder summary and queue for
+                  background processing. Use `process_pending()` to generate
+                  real summaries later.
 
         Returns:
             The stored Item with merged tags and new summary
@@ -230,8 +268,17 @@ class Keeper:
         # Generate embedding
         embedding = self._embedding_provider.embed(content)
 
-        # Generate summary
-        summary = self._summarization_provider.summarize(content)
+        # Generate summary (or queue for later if lazy)
+        if lazy:
+            # Truncated placeholder
+            if len(content) > TRUNCATE_LENGTH:
+                summary = content[:TRUNCATE_LENGTH] + "..."
+            else:
+                summary = content
+            # Queue for background processing
+            self._pending_queue.enqueue(id, coll, content)
+        else:
+            summary = self._summarization_provider.summarize(content)
 
         # Build tags: existing + new (new overrides on collision)
         tags = {**existing_tags}
@@ -251,11 +298,15 @@ class Keeper:
             summary=summary,
             tags=tags,
         )
-        
+
+        # Spawn background processor if lazy
+        if lazy:
+            self._spawn_processor()
+
         # Return the stored item
         result = self._store.get(coll, id)
         return result.to_item()
-    
+
     # -------------------------------------------------------------------------
     # Query Operations
     # -------------------------------------------------------------------------
@@ -480,16 +531,147 @@ class Keeper:
             return self._embedding_provider.stats()
         return {"enabled": False}
 
+    # -------------------------------------------------------------------------
+    # Pending Summaries
+    # -------------------------------------------------------------------------
+
+    def process_pending(self, limit: int = 10) -> int:
+        """
+        Process pending summaries queued by lazy update/remember.
+
+        Generates real summaries for items that were indexed with
+        truncated placeholders. Updates the stored items in place.
+
+        Items that fail MAX_SUMMARY_ATTEMPTS times are removed from
+        the queue (the truncated placeholder remains in the store).
+
+        Args:
+            limit: Maximum number of items to process in this batch
+
+        Returns:
+            Number of items successfully processed
+        """
+        items = self._pending_queue.dequeue(limit=limit)
+        processed = 0
+
+        for item in items:
+            # Skip items that have failed too many times
+            # (attempts was already incremented by dequeue, so check >= MAX)
+            if item.attempts >= MAX_SUMMARY_ATTEMPTS:
+                # Give up - remove from queue, keep truncated placeholder
+                self._pending_queue.complete(item.id, item.collection)
+                continue
+
+            try:
+                # Generate real summary
+                summary = self._summarization_provider.summarize(item.content)
+
+                # Update the stored item's summary
+                self._store.update_summary(item.collection, item.id, summary)
+
+                # Remove from queue
+                self._pending_queue.complete(item.id, item.collection)
+                processed += 1
+
+            except Exception:
+                # Leave in queue for retry (attempt counter already incremented)
+                pass
+
+        return processed
+
+    def pending_count(self) -> int:
+        """Get count of pending summaries awaiting processing."""
+        return self._pending_queue.count()
+
+    def pending_stats(self) -> dict:
+        """
+        Get pending summary queue statistics.
+
+        Returns dict with: pending, collections, max_attempts, oldest, queue_path
+        """
+        return self._pending_queue.stats()
+
+    @property
+    def _processor_pid_path(self) -> Path:
+        """Path to the processor PID file."""
+        return self._store_path / "processor.pid"
+
+    def _is_processor_running(self) -> bool:
+        """Check if a processor is already running."""
+        pid_path = self._processor_pid_path
+        if not pid_path.exists():
+            return False
+
+        try:
+            pid = int(pid_path.read_text().strip())
+            # Check if process is alive by sending signal 0
+            os.kill(pid, 0)
+            return True
+        except (ValueError, ProcessLookupError, PermissionError):
+            # PID file invalid, process dead, or permission issue
+            # Clean up stale PID file
+            try:
+                pid_path.unlink()
+            except OSError:
+                pass
+            return False
+
+    def _spawn_processor(self) -> bool:
+        """
+        Spawn a background processor if not already running.
+
+        Returns True if a new processor was spawned, False if one was
+        already running or spawn failed.
+        """
+        if self._is_processor_running():
+            return False
+
+        try:
+            # Spawn detached process
+            # Use sys.executable to ensure we use the same Python
+            cmd = [
+                sys.executable, "-m", "keep.cli",
+                "process-pending",
+                "--daemon",
+                "--store", str(self._store_path),
+            ]
+
+            # Platform-specific detachment
+            kwargs: dict = {
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "stdin": subprocess.DEVNULL,
+            }
+
+            if sys.platform != "win32":
+                # Unix: start new session to fully detach
+                kwargs["start_new_session"] = True
+            else:
+                # Windows: use CREATE_NEW_PROCESS_GROUP
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+            subprocess.Popen(cmd, **kwargs)
+            return True
+
+        except Exception:
+            # Spawn failed - not critical, queue will be processed later
+            return False
+
     def close(self) -> None:
         """
-        Close resources (embedding cache connection, etc.).
+        Close resources (embedding cache connection, pending queue, etc.).
 
         Good practice to call when done, though Python's GC will clean up eventually.
         """
         # Close embedding cache if it exists
-        if isinstance(self._embedding_provider, CachingEmbeddingProvider):
-            if hasattr(self._embedding_provider._cache, 'close'):
-                self._embedding_provider._cache.close()
+        if hasattr(self._embedding_provider, '_cache'):
+            cache = self._embedding_provider._cache
+            if hasattr(cache, 'close'):
+                cache.close()
+
+        # Close pending summary queue
+        if hasattr(self, '_pending_queue'):
+            self._pending_queue.close()
 
     def __enter__(self):
         """Context manager entry."""

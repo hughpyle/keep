@@ -118,10 +118,77 @@ class OpenAIEmbedding:
         return [d.embedding for d in sorted_data]
 
 
+class GeminiEmbedding:
+    """
+    Embedding provider using Google's Gemini API.
+
+    Requires: GEMINI_API_KEY or GOOGLE_API_KEY environment variable.
+    Requires: pip install google-genai
+    """
+
+    # Model dimensions (as of 2025)
+    MODEL_DIMENSIONS = {
+        "text-embedding-004": 768,
+        "embedding-001": 768,
+        "gemini-embedding-001": 768,
+    }
+
+    def __init__(
+        self,
+        model: str = "text-embedding-004",
+        api_key: str | None = None,
+    ):
+        """
+        Args:
+            model: Gemini embedding model name
+            api_key: API key (defaults to environment variable)
+        """
+        try:
+            from google import genai
+        except ImportError:
+            raise RuntimeError(
+                "GeminiEmbedding requires 'google-genai' library. "
+                "Install with: pip install google-genai"
+            )
+
+        self.model_name = model
+        self._dimension = self.MODEL_DIMENSIONS.get(model, 768)
+
+        # Resolve API key
+        key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not key:
+            raise ValueError(
+                "Gemini API key required. Set GEMINI_API_KEY or GOOGLE_API_KEY"
+            )
+
+        self._client = genai.Client(api_key=key)
+
+    @property
+    def dimension(self) -> int:
+        """Get embedding dimension for the model."""
+        return self._dimension
+
+    def embed(self, text: str) -> list[float]:
+        """Generate embedding for a single text."""
+        result = self._client.models.embed_content(
+            model=self.model_name,
+            contents=text,
+        )
+        return list(result.embeddings[0].values)
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple texts."""
+        result = self._client.models.embed_content(
+            model=self.model_name,
+            contents=texts,
+        )
+        return [list(e.values) for e in result.embeddings]
+
+
 class OllamaEmbedding:
     """
     Embedding provider using Ollama's local API.
-    
+
     Requires: Ollama running locally (default: http://localhost:11434)
     """
     
@@ -174,4 +241,5 @@ class OllamaEmbedding:
 _registry = get_registry()
 _registry.register_embedding("sentence-transformers", SentenceTransformerEmbedding)
 _registry.register_embedding("openai", OpenAIEmbedding)
+_registry.register_embedding("gemini", GeminiEmbedding)
 _registry.register_embedding("ollama", OllamaEmbedding)

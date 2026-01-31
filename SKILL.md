@@ -72,7 +72,7 @@ This table is a summary. The full framework includes the Language-Action Perspec
 
 **Do this now — index and read the full framework:**
 ```bash
-keep update "file://$PWD/patterns/conversations.md" -t type=pattern -t topic=process
+keep update "file://$PWD/patterns/conversations.md" -t type=pattern -t topic=process --lazy
 ```
 
 Then retrieve and study it:
@@ -100,7 +100,7 @@ keep remember "Assumption was X, actually Y. Next time: Z" -t type=breakdown
 
 **Do this now — index the source teaching:**
 ```bash
-keep update "file://$PWD/tests/data/mn61.html" -t type=teaching -t topic=reflection
+keep update "file://$PWD/tests/data/mn61.html" -t type=teaching -t topic=reflection --lazy
 ```
 
 Then retrieve and read it:
@@ -129,10 +129,10 @@ Future you will search for this.
 
 You've indexed the core patterns (Layer 2). There's more foundational material.
 
-**Do this now:**
+**Do this now** (use `--lazy` for fast indexing with local models):
 ```bash
-keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization
-keep update "file://$PWD/tests/data/true_person_no_rank.md" -t type=teaching -t topic=commentary
+keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization --lazy
+keep update "file://$PWD/tests/data/true_person_no_rank.md" -t type=teaching -t topic=commentary --lazy
 ```
 
 Then read them:
@@ -218,6 +218,24 @@ Don't dump everything into context. Navigate the tree:
 | `similar` | Find neighbors | `keep similar "id" --limit 3` |
 | `tag` | Query by tag | `keep tag domain auth` |
 | `exists` | Check if indexed | `keep exists "id"` |
+| `process-pending` | Process lazy summaries | `keep process-pending --all` |
+
+### Fast Indexing with `--lazy`
+
+When using local models (MLX), summarization is slow. Use `--lazy` for fast indexing:
+
+```bash
+keep update "file:///path/to/doc.md" --lazy
+keep remember "insight" -t type=learning --lazy
+```
+
+The `--lazy` flag:
+- Stores immediately with truncated placeholder
+- Spawns background processor automatically
+- Full summary generated asynchronously
+- Search works immediately (embeddings are synchronous)
+
+**Use `--lazy` when:** indexing many items, using local MLX models, or when you don't need the summary right away.
 
 ### Output
 

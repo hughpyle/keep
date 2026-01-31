@@ -84,6 +84,38 @@ keep collections
 keep find "auth" --json
 ```
 
+## Lazy Summarization
+
+When using local models (MLX) for summarization, indexing can be slow. Use `--lazy` for fast indexing:
+
+```bash
+# Fast indexing: uses truncated placeholder, summarizes in background
+keep update file:///path/to/doc.md --lazy
+
+# Background processor starts automatically
+# Check pending count:
+keep process-pending --json
+# {"processed": 0, "remaining": 1}
+
+# Or process manually:
+keep process-pending --all
+```
+
+**How it works:**
+- `--lazy` stores immediately with a truncated placeholder summary
+- A background processor spawns automatically (singleton, exits when done)
+- Full summaries are generated asynchronously
+- Search works immediately (embeddings are computed synchronously)
+
+**When to use `--lazy`:**
+- Local MLX summarization (slow but private)
+- Batch indexing many documents
+- When you don't need the summary immediately
+
+**When NOT to use `--lazy`:**
+- API-based summarization (OpenAI, Anthropic) — already fast
+- When you need the summary for immediate display
+
 ## Configuration
 
 First run auto-detects best providers and creates `.keep/keep.toml`:
@@ -224,23 +256,27 @@ results = kp.query_fulltext("PostgreSQL")
 
 ### Summarization Providers
 
-**truncate** (default)
+**truncate** (default fallback)
 - Fast, zero dependencies
 - Simple text truncation
 
-**first_paragraph**
-- Extracts first meaningful chunk
-- Better for structured docs
-
-**MLX** (Apple Silicon)
-- LLM-based, local
+**MLX** (Apple Silicon default)
+- LLM-based, local, private
 - Requires: `pip install mlx-lm`
 - Model: Llama-3.2-3B-Instruct-4bit
+- **Recommended: use `--lazy` flag** (slow but runs in background)
 
 **OpenAI**
 - LLM-based, API
 - Requires key
 - Model: gpt-4o-mini
+- Fast, no need for `--lazy`
+
+**Anthropic** (via OpenClaw integration)
+- LLM-based, API
+- Requires ANTHROPIC_API_KEY
+- Model: claude-3-5-haiku or configured model
+- Fast, no need for `--lazy`
 
 ## Troubleshooting
 
@@ -265,17 +301,22 @@ results = kp.query_fulltext("PostgreSQL")
 
 ## Bootstrap Your Memory
 
-After `keep init`, seed your memory with foundational material. These documents teach how to use memory well:
+After `keep init`, seed your memory with foundational material. These documents teach how to use memory well.
+
+Use `--lazy` for fast indexing (recommended with local MLX models):
 
 ```bash
 # The practice frameworks
-keep update "file://$PWD/patterns/conversations.md" -t type=pattern -t topic=process
-keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization
+keep update "file://$PWD/patterns/conversations.md" -t type=pattern -t topic=process --lazy
+keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization --lazy
 
 # Seed wisdom (from tests/data/)
-keep update "file://$PWD/tests/data/mn61.html" -t type=teaching -t topic=reflection
-keep update "file://$PWD/tests/data/true_person_no_rank.md" -t type=teaching -t topic=commentary
-keep update "file://$PWD/tests/data/impermanence_verse.txt" -t type=teaching -t topic=impermanence
+keep update "file://$PWD/tests/data/mn61.html" -t type=teaching -t topic=reflection --lazy
+keep update "file://$PWD/tests/data/true_person_no_rank.md" -t type=teaching -t topic=commentary --lazy
+keep update "file://$PWD/tests/data/impermanence_verse.txt" -t type=teaching -t topic=impermanence --lazy
+
+# Summaries generate in background - check progress:
+keep process-pending --json
 ```
 
 **What these teach:**

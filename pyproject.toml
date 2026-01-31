@@ -16,7 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
-anthropic = ["anthropic>=0.18.0"]
+anthropic = ["anthropic>=0.40.0"]
+gemini = ["google-genai>=1.0.0"]
 sentence-transformers = ["sentence-transformers>=2.2"]
 documents = [
     # Document text extraction (PDF, HTML)
@@ -40,6 +41,7 @@ local = [
 openclaw = [
     # For OpenClaw integration: use configured models
     "anthropic>=0.18.0",
+    "google-genai>=1.0.0",
 ]
 dev = [
     "pytest>=7.0",

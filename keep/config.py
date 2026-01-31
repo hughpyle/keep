@@ -56,15 +56,15 @@ class StoreConfig:
 def read_openclaw_config() -> dict | None:
     """
     Read OpenClaw configuration if available.
-    
+
     Checks:
     1. OPENCLAW_CONFIG environment variable
     2. ~/.openclaw/openclaw.json (default location)
-    
+
     Returns None if not found or invalid.
     """
     import json
-    
+
     # Try environment variable first
     config_path_str = os.environ.get("OPENCLAW_CONFIG")
     if config_path_str:
@@ -72,10 +72,10 @@ def read_openclaw_config() -> dict | None:
     else:
         # Default location
         config_file = Path.home() / ".openclaw" / "openclaw.json"
-    
+
     if not config_file.exists():
         return None
-    
+
     try:
         with open(config_file) as f:
             return json.load(f)
@@ -83,33 +83,66 @@ def read_openclaw_config() -> dict | None:
         return None
 
 
+def get_openclaw_memory_search_config(openclaw_config: dict | None) -> dict | None:
+    """
+    Extract memorySearch config from OpenClaw config.
+
+    Returns the memorySearch settings or None if not configured.
+
+    Example structure:
+        {
+            "provider": "openai" | "gemini" | "local" | "auto",
+            "model": "text-embedding-3-small",
+            "remote": {
+                "apiKey": "sk-...",
+                "baseUrl": "https://..."
+            }
+        }
+    """
+    if not openclaw_config:
+        return None
+
+    return (openclaw_config
+            .get("agents", {})
+            .get("defaults", {})
+            .get("memorySearch", None))
+
+
 def detect_default_providers() -> dict[str, ProviderConfig]:
     """
     Detect the best default providers for the current environment.
-    
-    Priority:
-    1. OpenClaw integration (if configured and ANTHROPIC_API_KEY available)
+
+    Priority for embeddings:
+    1. OpenClaw memorySearch config (if configured with provider + API key)
+    2. sentence-transformers (local fallback)
+
+    Priority for summarization:
+    1. OpenClaw model config + Anthropic (if configured and ANTHROPIC_API_KEY available)
     2. MLX (Apple Silicon local-first)
     3. OpenAI (if API key available)
-    4. Fallback: sentence-transformers + passthrough/truncate
-    
+    4. Fallback: truncate
+
     Returns provider configs for: embedding, summarization, document
     """
     providers = {}
-    
+
     # Check for Apple Silicon
     is_apple_silicon = (
-        platform.system() == "Darwin" and 
+        platform.system() == "Darwin" and
         platform.machine() == "arm64"
     )
-    
+
     # Check for API keys
     has_anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     has_openai_key = bool(
-        os.environ.get("KEEP_OPENAI_API_KEY") or 
+        os.environ.get("KEEP_OPENAI_API_KEY") or
         os.environ.get("OPENAI_API_KEY")
     )
-    
+    has_gemini_key = bool(
+        os.environ.get("GEMINI_API_KEY") or
+        os.environ.get("GOOGLE_API_KEY")
+    )
+
     # Check for OpenClaw config
     openclaw_config = read_openclaw_config()
     openclaw_model = None
@@ -120,14 +153,40 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
                      .get("primary", ""))
         if model_str:
             openclaw_model = model_str
-    
-    # Embedding: always local (sentence-transformers for compatibility, MLX optional)
-    # Embeddings should stay local for privacy and cost
-    if is_apple_silicon:
-        # Prefer sentence-transformers even on M1 for stability
-        providers["embedding"] = ProviderConfig("sentence-transformers")
-    else:
-        providers["embedding"] = ProviderConfig("sentence-transformers")
+
+    # Get OpenClaw memorySearch config for embeddings
+    memory_search = get_openclaw_memory_search_config(openclaw_config)
+
+    # Embedding: check OpenClaw memorySearch config first, then fall back to local
+    embedding_provider = None
+    if memory_search:
+        ms_provider = memory_search.get("provider", "auto")
+        ms_model = memory_search.get("model")
+        ms_api_key = memory_search.get("remote", {}).get("apiKey")
+
+        if ms_provider == "openai" or (ms_provider == "auto" and has_openai_key):
+            # Use OpenAI embeddings if configured or auto with key available
+            api_key = ms_api_key or os.environ.get("OPENAI_API_KEY")
+            if api_key:
+                params = {}
+                if ms_model:
+                    params["model"] = ms_model
+                embedding_provider = ProviderConfig("openai", params)
+
+        elif ms_provider == "gemini" or (ms_provider == "auto" and has_gemini_key and not has_openai_key):
+            # Use Gemini embeddings if configured or auto with key available
+            api_key = ms_api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            if api_key:
+                params = {}
+                if ms_model:
+                    params["model"] = ms_model
+                embedding_provider = ProviderConfig("gemini", params)
+
+    # Fall back to sentence-transformers (local, always works)
+    if embedding_provider is None:
+        embedding_provider = ProviderConfig("sentence-transformers")
+
+    providers["embedding"] = embedding_provider
     
     # Summarization: priority order based on availability
     # 1. OpenClaw + Anthropic (if configured and key available)

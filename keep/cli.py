@@ -106,7 +106,7 @@ def _format_items(items: list[Item], as_json: bool = False) -> str:
         return "\n\n".join(_format_item(item, as_json=False) for item in items)
 
 
-def _get_memory(store: Optional[Path], collection: str) -> Keeper:
+def _get_keeper(store: Optional[Path], collection: str) -> Keeper:
     """Initialize memory, handling errors gracefully."""
     # store=None is fine — Keeper will use default (git root/.keep)
     try:
@@ -131,8 +131,8 @@ def find(
     """
     Find items using semantic similarity search.
     """
-    mem = _get_memory(store, collection)
-    results = mem.find(query, limit=limit)
+    kp = _get_keeper(store, collection)
+    results = kp.find(query, limit=limit)
     typer.echo(_format_items(results, as_json=output_json))
 
 
@@ -148,8 +148,8 @@ def similar(
     """
     Find items similar to an existing item.
     """
-    mem = _get_memory(store, collection)
-    results = mem.find_similar(id, limit=limit, include_self=include_self)
+    kp = _get_keeper(store, collection)
+    results = kp.find_similar(id, limit=limit, include_self=include_self)
     typer.echo(_format_items(results, as_json=output_json))
 
 
@@ -164,8 +164,8 @@ def search(
     """
     Search item summaries using full-text search.
     """
-    mem = _get_memory(store, collection)
-    results = mem.query_fulltext(query, limit=limit)
+    kp = _get_keeper(store, collection)
+    results = kp.query_fulltext(query, limit=limit)
     typer.echo(_format_items(results, as_json=output_json))
 
 
@@ -181,8 +181,8 @@ def tag(
     """
     Find items by tag.
     """
-    mem = _get_memory(store, collection)
-    results = mem.query_tag(key, value, limit=limit)
+    kp = _get_keeper(store, collection)
+    results = kp.query_tag(key, value, limit=limit)
     typer.echo(_format_items(results, as_json=output_json))
 
 
@@ -195,13 +195,20 @@ def update(
         "--tag", "-t",
         help="Source tag as key=value (can be repeated)"
     )] = None,
+    lazy: Annotated[bool, typer.Option(
+        "--lazy", "-l",
+        help="Fast mode: use truncated summary, queue for later processing"
+    )] = False,
     output_json: JsonOption = False,
 ):
     """
     Add or update a document in the store.
+
+    Use --lazy for fast indexing when summarization is slow.
+    Run 'keep process-pending' later to generate real summaries.
     """
-    mem = _get_memory(store, collection)
-    
+    kp = _get_keeper(store, collection)
+
     # Parse tags from key=value format
     source_tags = {}
     if tags:
@@ -211,8 +218,8 @@ def update(
                 raise typer.Exit(1)
             k, v = tag.split("=", 1)
             source_tags[k] = v
-    
-    item = mem.update(id, source_tags=source_tags or None)
+
+    item = kp.update(id, source_tags=source_tags or None, lazy=lazy)
     typer.echo(_format_item(item, as_json=output_json))
 
 
@@ -229,13 +236,20 @@ def remember(
         "--tag", "-t",
         help="Source tag as key=value (can be repeated)"
     )] = None,
+    lazy: Annotated[bool, typer.Option(
+        "--lazy", "-l",
+        help="Fast mode: use truncated summary, queue for later processing"
+    )] = False,
     output_json: JsonOption = False,
 ):
     """
     Remember inline content (conversations, notes, insights).
+
+    Use --lazy for fast indexing when summarization is slow.
+    Run 'keep process-pending' later to generate real summaries.
     """
-    mem = _get_memory(store, collection)
-    
+    kp = _get_keeper(store, collection)
+
     # Parse tags from key=value format
     source_tags = {}
     if tags:
@@ -245,8 +259,8 @@ def remember(
                 raise typer.Exit(1)
             k, v = tag.split("=", 1)
             source_tags[k] = v
-    
-    item = mem.remember(content, id=id, source_tags=source_tags or None)
+
+    item = kp.remember(content, id=id, source_tags=source_tags or None, lazy=lazy)
     typer.echo(_format_item(item, as_json=output_json))
 
 
@@ -260,8 +274,8 @@ def get(
     """
     Retrieve a specific item by ID.
     """
-    mem = _get_memory(store, collection)
-    item = mem.get(id)
+    kp = _get_keeper(store, collection)
+    item = kp.get(id)
     
     if item is None:
         typer.echo(f"Not found: {id}", err=True)
@@ -279,8 +293,8 @@ def exists(
     """
     Check if an item exists in the store.
     """
-    mem = _get_memory(store, collection)
-    found = mem.exists(id)
+    kp = _get_keeper(store, collection)
+    found = kp.exists(id)
     
     if found:
         typer.echo(f"Exists: {id}")
@@ -297,8 +311,8 @@ def list_collections(
     """
     List all collections in the store.
     """
-    mem = _get_memory(store, "default")
-    collections = mem.list_collections()
+    kp = _get_keeper(store, "default")
+    collections = kp.list_collections()
     
     if output_json:
         typer.echo(json.dumps(collections))
@@ -318,17 +332,17 @@ def init(
     """
     Initialize or verify the store is ready.
     """
-    mem = _get_memory(store, collection)
+    kp = _get_keeper(store, collection)
     
     # Show actual store path
-    actual_path = mem._store_path if hasattr(mem, '_store_path') else Path(store or ".keep")
+    actual_path = kp._store_path if hasattr(kp, '_store_path') else Path(store or ".keep")
     typer.echo(f"✓ Store ready: {actual_path}")
-    typer.echo(f"✓ Collections: {mem.list_collections()}")
+    typer.echo(f"✓ Collections: {kp.list_collections()}")
     
     # Show detected providers
     try:
-        if hasattr(mem, '_config'):
-            config = mem._config
+        if hasattr(kp, '_config'):
+            config = kp._config
             typer.echo(f"\n✓ Detected providers:")
             typer.echo(f"  Embedding: {config.embedding.name}")
             typer.echo(f"  Summarization: {config.summarization.name}")
@@ -348,8 +362,8 @@ def list_system(
     """
     List all system documents (schema as data).
     """
-    mem = _get_memory(store, "default")
-    docs = mem.list_system_documents()
+    kp = _get_keeper(store, "default")
+    docs = kp.list_system_documents()
     typer.echo(_format_items(docs, as_json=output_json))
 
 
@@ -361,9 +375,9 @@ def show_routing(
     """
     Show the current routing configuration.
     """
-    mem = _get_memory(store, "default")
-    routing = mem.get_routing()
-    
+    kp = _get_keeper(store, "default")
+    routing = kp.get_routing()
+
     if output_json:
         from dataclasses import asdict
         typer.echo(json.dumps(asdict(routing), indent=2))
@@ -371,6 +385,110 @@ def show_routing(
         typer.echo(f"Summary: {routing.summary}")
         typer.echo(f"Private patterns: {routing.private_patterns}")
         typer.echo(f"Updated: {routing.updated}")
+
+
+@app.command("process-pending")
+def process_pending(
+    store: StoreOption = None,
+    limit: Annotated[int, typer.Option(
+        "--limit", "-n",
+        help="Maximum items to process in this batch"
+    )] = 10,
+    all_items: Annotated[bool, typer.Option(
+        "--all", "-a",
+        help="Process all pending items (ignores --limit)"
+    )] = False,
+    daemon: Annotated[bool, typer.Option(
+        "--daemon",
+        hidden=True,
+        help="Run as background daemon (used internally)"
+    )] = False,
+    output_json: JsonOption = False,
+):
+    """
+    Process pending summaries from lazy indexing.
+
+    Items indexed with --lazy use a truncated placeholder summary.
+    This command generates real summaries for those items.
+    """
+    kp = _get_keeper(store, "default")
+
+    # Daemon mode: write PID, process all, remove PID, exit silently
+    if daemon:
+        import signal
+
+        pid_path = kp._processor_pid_path
+        shutdown_requested = False
+
+        def handle_signal(signum, frame):
+            nonlocal shutdown_requested
+            shutdown_requested = True
+
+        # Handle common termination signals gracefully
+        signal.signal(signal.SIGTERM, handle_signal)
+        signal.signal(signal.SIGINT, handle_signal)
+
+        try:
+            # Write PID file
+            pid_path.write_text(str(os.getpid()))
+
+            # Process all items until queue empty or shutdown requested
+            while not shutdown_requested:
+                processed = kp.process_pending(limit=50)
+                if processed == 0:
+                    break
+
+        finally:
+            # Clean up PID file
+            try:
+                pid_path.unlink()
+            except OSError:
+                pass
+            # Close resources
+            kp.close()
+        return
+
+    # Interactive mode
+    pending_before = kp.pending_count()
+
+    if pending_before == 0:
+        if output_json:
+            typer.echo(json.dumps({"processed": 0, "remaining": 0}))
+        else:
+            typer.echo("No pending summaries.")
+        return
+
+    if all_items:
+        # Process all items in batches
+        total_processed = 0
+        while True:
+            processed = kp.process_pending(limit=50)
+            total_processed += processed
+            if processed == 0:
+                break
+            if not output_json:
+                typer.echo(f"  Processed {total_processed}...")
+
+        remaining = kp.pending_count()
+        if output_json:
+            typer.echo(json.dumps({
+                "processed": total_processed,
+                "remaining": remaining
+            }))
+        else:
+            typer.echo(f"✓ Processed {total_processed} items, {remaining} remaining")
+    else:
+        # Process limited batch
+        processed = kp.process_pending(limit=limit)
+        remaining = kp.pending_count()
+
+        if output_json:
+            typer.echo(json.dumps({
+                "processed": processed,
+                "remaining": remaining
+            }))
+        else:
+            typer.echo(f"✓ Processed {processed} items, {remaining} remaining")
 
 
 # -----------------------------------------------------------------------------

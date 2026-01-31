@@ -18,23 +18,34 @@ keep can automatically integrate with OpenClaw's configured models when both are
 
 ### Detection Priority
 
-When you initialize keep, it checks for providers in this order:
+**For embeddings**, keep checks in this order:
+
+1. **OpenClaw `memorySearch.provider`** — if set to `openai` or `gemini` and API key available
+2. **Auto mode** — if `memorySearch.provider` is `auto`, uses OpenAI if key present, else Gemini
+3. **Fallback** — sentence-transformers (local, always works)
+
+**For summarization**, keep checks in this order:
 
 1. **OpenClaw integration** (if `~/.openclaw/openclaw.json` exists and `ANTHROPIC_API_KEY` set)
 2. **MLX** (Apple Silicon local models)
 3. **OpenAI** (if `OPENAI_API_KEY` set)
-4. **Fallback** (sentence-transformers + truncate)
+4. **Fallback** (truncate)
 
 ### What Gets Shared
 
 **From OpenClaw config:**
-- Model selection for summarization (e.g., `anthropic/claude-sonnet-4-5`)
+- **Embedding provider** from `memorySearch.provider` (openai, gemini, or auto)
+- **Embedding model** from `memorySearch.model`
+- **Model selection for summarization** (e.g., `anthropic/claude-sonnet-4-5`)
 - Provider routing (automatically detects Anthropic models)
 
 **Stays local:**
-- **Embeddings** always use sentence-transformers (local, privacy-preserving)
 - **Store** remains in `.keep/` (not shared with OpenClaw)
-- **API keys** must be set via environment variables
+- Falls back to **sentence-transformers** if no API keys available
+
+**API keys** are resolved from:
+1. `memorySearch.remote.apiKey` in config
+2. Environment variables (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`)
 
 ---
 
