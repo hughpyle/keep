@@ -1,39 +1,43 @@
 # keep
 
-**Semantic memory for AI agents** — persistent associative storage with vector similarity search.
+**Associative memory for reflection and skillful action.**
 
 ---
 
 ## What is this?
 
-An agent skills package that provides semantic memory - persistent storage with vector similarity search. Agents can remember and recall information by meaning, not just keywords. Available as both a command-line tool and Python API.
+A practice tool for agents who want to develop judgment.
+
+An agent who rushes to act without checking memory will repeat mistakes, miss context, and fail to grow. An agent who reflects — before, during, after — becomes skillful. This library provides the mirror: persistent semantic memory that lets you ask "what do I already know?" before acting, and "what did I learn?" after.
+
+For the full practice guide, see **[SKILL.md](SKILL.md)**.
+
+Technically: semantic search using embeddings, backed by ChromaDB, with tag-based organization and recency decay. Available as CLI and Python API.
 
 ```python
 from keep import Keeper
 
 kp = Keeper()
 
-# Remember something
-kp.remember("User prefers OAuth2 with PKCE for authentication")
-
-# Find it later by meaning, not keywords
+# Before acting: what do I already know?
 results = kp.find("how should we handle auth?")
-# → Returns the OAuth2 note, even though "OAuth2" wasn't in the query
+
+# After learning: capture it for future you
+kp.remember("User prefers OAuth2 with PKCE for authentication")
 ```
 
-**Key features:**
-- Semantic search using embeddings (not just keyword matching)
-- Persistent across sessions (backed by ChromaDB)
+**The practice:**
+- Pause before acting — check what you already know
+- Notice breakdowns — when assumptions surface, that's valuable
+- Reflect after — capture learnings so future you can find them
+
+**The technology:**
+- Semantic search (by meaning, not keywords)
+- Persistent across sessions (ChromaDB)
 - Tag-based organization and filtering
 - Recency decay (recent items rank higher)
 - Provider abstraction (local models or APIs)
 - CLI and Python API
-
-**Use cases:**
-- Agent memory across conversations
-- Indexing project documentation for quick lookup
-- Building knowledge bases with semantic search
-- Caching research findings by topic
 
 ---
 
@@ -121,32 +125,37 @@ See [docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md) for details.
 
 ## Documentation
 
-- **[SKILL.md](SKILL.md)** — OpenClaw skill reference (CLI commands)
-- **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)** — OpenClaw integration guide
-- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Installation, basic usage, configuration
+- **[SKILL.md](SKILL.md)** — The practice guide (start here for how to use memory skillfully)
+- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Installation, setup, configuration
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Detailed agent patterns, Python API
 - **[docs/REFERENCE.md](docs/REFERENCE.md)** — Complete API reference
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — How it works under the hood
+- **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)** — OpenClaw integration guide
 - **[docs/patterns/](docs/patterns/)** — Domain and conversation patterns
 
 ---
 
-## Design Philosophy
+## Philosophy
 
-**1. Schema as Data**
-System configuration and behavior are stored as queryable documents, not hardcoded. This enables agents to update the system's rules.
+### Practice
 
-**2. Semantic by Default**
-Search by meaning, not keywords. Items are embedded and retrieved by vector similarity.
+Memory isn't storage — it's a mirror for reflection.
 
-**3. Lazy Loading**
-Optional dependencies are loaded only when needed. Missing providers give helpful error messages instead of import-time crashes.
+The triple check: before acting (what do I know?), during (notice breakdowns), after (capture learning). Breakdowns are valuable — they reveal assumptions. Index them, don't hide them.
 
-**4. Provider Agnostic**
-Pluggable backends for embeddings (sentence-transformers, OpenAI, MLX), summarization (truncate, LLM-based), and storage (ChromaDB, extensible).
+An agent without memory reacts to each moment as if it were new. An agent with memory reflects, learns, and grows. See **[SKILL.md](SKILL.md)** for the full practice guide.
 
-**5. No Original Content**
-Only summaries and embeddings are stored. Reduces size, forces meaningful summarization, URIs can be re-fetched if needed.
+### Technical Design
+
+**Schema as Data** — Configuration stored as queryable documents, not hardcoded.
+
+**Semantic by Default** — Search by meaning via vector similarity, not keywords.
+
+**Lazy Loading** — Dependencies loaded only when needed; missing providers give helpful errors.
+
+**Provider Agnostic** — Pluggable backends for embeddings, summarization, and storage.
+
+**No Original Content** — Only summaries and embeddings stored. URIs can be re-fetched if needed.
 
 ---
 
