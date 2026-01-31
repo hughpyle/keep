@@ -8,6 +8,7 @@ Usage:
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -17,6 +18,13 @@ from typing_extensions import Annotated
 
 from .api import AssociativeMemory
 from .types import Item
+from .logging_config import configure_quiet_mode
+
+
+# Configure quiet mode by default (suppress verbose library output)
+# Set ASSOCMEM_VERBOSE=1 to enable verbose mode for debugging
+_verbose = sys.argv and "--verbose" in sys.argv or os.environ.get("ASSOCMEM_VERBOSE") == "1"
+configure_quiet_mode(quiet=not _verbose)
 
 
 app = typer.Typer(
