@@ -1,7 +1,11 @@
 ---
 name: assocmem
+version: 0.1.0
 description: Semantic memory - remember and search documents by meaning, not keywords
 homepage: https://github.com/hughpyle/assocmem
+runtime: python:3.12-slim
+test_command: pytest tests/
+test_deps: pip install -e .[dev,documents,sentence-transformers]
 metadata: {"openclaw":{"emoji":"🧠","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"kind":"uv","package":"assocmem[local]","label":"Install assocmem with local models"}],"primaryEnv":"ASSOCMEM_STORE_PATH","uiHints":{"status":{"label":"Memory Store","check":"test -d ${ASSOCMEM_STORE_PATH:-.assocmem}","display":"Initialized","notFound":"Not initialized"},"quickActions":[{"id":"init","label":"Initialize Store","command":"assocmem init"},{"id":"collections","label":"Show Collections","command":"assocmem collections"}],"configDisplay":[{"label":"Store Location","value":"${ASSOCMEM_STORE_PATH:-.assocmem}"},{"label":"Providers","command":"assocmem init 2>&1 | grep -A 2 'Detected providers'"}]}}}
 ---
 
