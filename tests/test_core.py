@@ -1,5 +1,5 @@
 """
-Test harness for assocmem.
+Test harness for keep.
 
 Sample documents in tests/data/:
 - mn62: Mahārāhulovāda Sutta (Buddha's advice to Rāhula) - English JSON
@@ -14,12 +14,12 @@ Test data files are discovered dynamically to support adding more.
 import pytest
 from pathlib import Path
 
-from assocmem import (
+from keep import (
     Item,
     filter_non_system_tags,
     SYSTEM_TAG_PREFIX,
 )
-from assocmem.types import Item
+from keep.types import Item
 
 
 # -----------------------------------------------------------------------------
@@ -249,7 +249,7 @@ class TestRoutingPatterns:
     
     def test_matches_private_pattern(self):
         """matches_private_pattern correctly identifies private items."""
-        from assocmem.context import matches_private_pattern
+        from keep.context import matches_private_pattern
         
         patterns = [
             {"_visibility": "draft"},
@@ -269,7 +269,7 @@ class TestRoutingPatterns:
     
     def test_pattern_requires_all_keys(self):
         """Pattern match requires ALL key-value pairs to match."""
-        from assocmem.context import matches_private_pattern
+        from keep.context import matches_private_pattern
         
         # Pattern with multiple conditions
         patterns = [{"_visibility": "draft", "_for": "self"}]
@@ -292,7 +292,7 @@ class TestWorkingContext:
     
     def test_working_context_creation(self):
         """WorkingContext can be created with defaults."""
-        from assocmem.context import WorkingContext
+        from keep.context import WorkingContext
         
         ctx = WorkingContext(summary="Testing feature X")
         assert ctx.summary == "Testing feature X"
@@ -304,7 +304,7 @@ class TestWorkingContext:
     
     def test_working_context_full(self):
         """WorkingContext with all fields."""
-        from assocmem.context import WorkingContext
+        from keep.context import WorkingContext
         
         ctx = WorkingContext(
             summary="Implementing OAuth2",
@@ -323,7 +323,7 @@ class TestRoutingContext:
     
     def test_routing_context_defaults(self):
         """RoutingContext has sensible defaults."""
-        from assocmem.context import RoutingContext
+        from keep.context import RoutingContext
         
         ctx = RoutingContext()
         assert "private" in ctx.summary.lower() or "draft" in ctx.summary.lower()
@@ -338,7 +338,7 @@ class TestSessionId:
     
     def test_generate_session_id_format(self):
         """Session ID has date:uuid format."""
-        from assocmem.context import generate_session_id
+        from keep.context import generate_session_id
         
         sid = generate_session_id()
         assert ":" in sid
@@ -348,7 +348,7 @@ class TestSessionId:
     
     def test_generate_session_id_unique(self):
         """Session IDs are unique."""
-        from assocmem.context import generate_session_id
+        from keep.context import generate_session_id
         
         ids = {generate_session_id() for _ in range(100)}
         assert len(ids) == 100  # All unique

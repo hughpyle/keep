@@ -32,8 +32,8 @@ class AssociativeMemory:
     
     Args:
         store_path: Path to the store directory. If None, defaults to
-                    .assocmem/ at the git repository root (or cwd if not
-                    in a repo). Can be overridden with ASSOCMEM_STORE_PATH.
+                    .keep/ at the git repository root (or cwd if not
+                    in a repo). Can be overridden with KEEP_STORE_PATH.
         collection: Default collection name for operations.
                     Must be lowercase ASCII and underscores only.
     
@@ -41,7 +41,7 @@ class AssociativeMemory:
         RuntimeError: If store initialization fails.
     
     Example:
-        # Uses .assocmem/ at repo root by default
+        # Uses .keep/ at repo root by default
         mem = AssociativeMemory()
         
         # Or specify explicitly
@@ -56,7 +56,7 @@ class AssociativeMemory:
         collection: str = "default"
     ) -> None:
         """Initialize or open an existing associative memory store."""
-        # Resolve store path (uses git root/.assocmem by default)
+        # Resolve store path (uses git root/.keep by default)
         if store_path is None:
             self._store_path = get_default_store_path()
         else:

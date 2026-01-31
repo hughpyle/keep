@@ -4,14 +4,14 @@ The store initializes automatically when you create an `AssociativeMemory` insta
 
 ## Default Store Location
 
-The store defaults to `.assocmem/` at the git repository root:
+The store defaults to `.keep/` at the git repository root:
 - Walks up from current directory to find `.git/`
-- Creates `.assocmem/` there if it doesn't exist
-- Falls back to `.assocmem/` in cwd if not in a git repo
+- Creates `.keep/` there if it doesn't exist
+- Falls back to `.keep/` in cwd if not in a git repo
 
-Override with `ASSOCMEM_STORE_PATH` environment variable or explicit path argument.
+Override with `KEEP_STORE_PATH` environment variable or explicit path argument.
 
-**Note:** Add `.assocmem/` to your `.gitignore` if the store should not be committed.
+**Note:** Add `.keep/` to your `.gitignore` if the store should not be committed.
 
 ## Quick Start
 
@@ -19,13 +19,13 @@ Override with `ASSOCMEM_STORE_PATH` environment variable or explicit path argume
 # Install in a venv
 python -m venv .venv
 source .venv/bin/activate
-pip install assocmem[local]
+pip install keep[local]
 ```
 
 ```python
-from assocmem import AssociativeMemory
+from keep import AssociativeMemory
 
-# Uses .assocmem/ at repo root by default
+# Uses .keep/ at repo root by default
 mem = AssociativeMemory()
 ```
 
@@ -33,15 +33,15 @@ mem = AssociativeMemory()
 
 ```bash
 # Initialize and verify
-assocmem init
+keep init
 
 # Or specify store explicitly
-assocmem init --store /path/to/store
+keep init --store /path/to/store
 ```
 
 ## Configuration
 
-On first run, `assocmem.toml` is created in the store directory with auto-detected providers:
+On first run, `keep.toml` is created in the store directory with auto-detected providers:
 
 - **Apple Silicon**: MLX for embedding/summarization/tagging
 - **With OpenAI key**: OpenAI for summarization/tagging, sentence-transformers for embedding

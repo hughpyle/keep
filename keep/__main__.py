@@ -1,5 +1,5 @@
 """
-Entry point for `python -m assocmem`.
+Entry point for `python -m keep`.
 """
 
 from .cli import main

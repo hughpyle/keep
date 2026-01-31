@@ -1,4 +1,4 @@
-# assocmem
+# keep
 
 **Semantic memory for AI agents** — persistent associative storage with vector similarity search.
 
@@ -9,7 +9,7 @@
 A Python library that gives agents the ability to remember and recall information semantically across sessions. Think of it as "long-term memory with search" for AI agents.
 
 ```python
-from assocmem import AssociativeMemory
+from keep import AssociativeMemory
 
 mem = AssociativeMemory()
 
@@ -48,27 +48,27 @@ results = mem.find("how should we handle auth?")
 
 ```bash
 # Recommended: Install with local models
-pip install 'assocmem[local]'
+pip install 'keep[local]'
 
 # Faster alternative (recommended):
-uv pip install 'assocmem[local]'  # ~60 seconds vs ~300 seconds
+uv pip install 'keep[local]'  # ~60 seconds vs ~300 seconds
 
 # Clawdbot integration (uses configured models):
-pip install 'assocmem[clawdbot]'
+pip install 'keep[clawdbot]'
 
 # Or minimal install (configure providers manually)
-pip install assocmem
+pip install keep
 ```
 
 **After installation:**
 
 ```bash
-assocmem init
-# ⚠️  Remember to add .assocmem/ to .gitignore
+keep init
+# ⚠️  Remember to add .keep/ to .gitignore
 ```
 
 ```python
-from assocmem import AssociativeMemory
+from keep import AssociativeMemory
 
 mem = AssociativeMemory()
 
@@ -93,17 +93,17 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for more examples.
 
 ## Clawdbot Integration
 
-If you have [Clawdbot](https://openclaw.dev) configured, assocmem automatically uses your configured models:
+If you have [Clawdbot](https://openclaw.dev) configured, keep automatically uses your configured models:
 
 ```bash
 # Install with Clawdbot support
-pip install 'assocmem[clawdbot]'
+pip install 'keep[clawdbot]'
 
 # Set your Anthropic API key (if using Claude models)
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # Initialize (auto-detects ~/.clawdbot/clawdbot.json)
-assocmem init
+keep init
 # ✓ Detected providers:
 #   Embedding: sentence-transformers (local)
 #   Summarization: anthropic (claude-sonnet-4)

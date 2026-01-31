@@ -4,7 +4,7 @@ Tests for relationship extraction.
 
 import pytest
 
-from assocmem.relationships import (
+from keep.relationships import (
     extract_urls,
     extract_file_paths,
     extract_markdown_links,

@@ -1,7 +1,7 @@
 /**
- * OpenClaw memory plugin shim for assocmem.
+ * OpenClaw memory plugin shim for keep.
  * 
- * Wraps the Python assocmem library via subprocess calls.
+ * Wraps the Python keep library via subprocess calls.
  * For production, consider a long-running Python service with HTTP/gRPC.
  */
 
@@ -19,8 +19,8 @@ interface PluginApi {
 interface PluginConfig {
   plugins?: {
     entries?: {
-      "memory-assocmem"?: {
-        config?: AssocmemConfig;
+      "memory-keep"?: {
+        config?: KeepConfig;
       };
     };
   };
@@ -31,7 +31,7 @@ interface PluginConfig {
   };
 }
 
-interface AssocmemConfig {
+interface KeepConfig {
   pythonPath?: string;
   halfLifeDays?: number;
   indexingMode?: "document" | "chunked" | "hybrid" | "bm25_only";
@@ -76,13 +76,13 @@ interface Service {
 }
 
 // Helper to call Python CLI
-async function callAssocmem(
-  config: AssocmemConfig,
+async function callKeep(
+  config: KeepConfig,
   args: string[],
   workspace?: string
 ): Promise<string> {
   const python = config.pythonPath || "python3";
-  const fullArgs = ["-m", "assocmem", ...args];
+  const fullArgs = ["-m", "keep", ...args];
   
   // Add config flags
   if (config.halfLifeDays) {
@@ -111,7 +111,7 @@ async function callAssocmem(
       if (code === 0) {
         resolve(stdout);
       } else {
-        reject(new Error(`assocmem exited with code ${code}: ${stderr}`));
+        reject(new Error(`keep exited with code ${code}: ${stderr}`));
       }
     });
   });
@@ -119,7 +119,7 @@ async function callAssocmem(
 
 // Plugin entry point
 export default function register(api: PluginApi) {
-  const pluginConfig = api.config.plugins?.entries?.["memory-assocmem"]?.config ?? {};
+  const pluginConfig = api.config.plugins?.entries?.["memory-keep"]?.config ?? {};
   const workspace = api.config.agents?.defaults?.workspace ?? "~/.openclaw/workspace";
   
   // ─────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ export default function register(api: PluginApi) {
       const limit = (params.limit as number) || 5;
       
       try {
-        const output = await callAssocmem(
+        const output = await callKeep(
           pluginConfig,
           ["find", query, "--limit", String(limit), "--json"],
           workspace
@@ -208,7 +208,7 @@ export default function register(api: PluginApi) {
         if (lines) args.push("--lines", String(lines));
         args.push("--json");
         
-        const output = await callAssocmem(pluginConfig, args, workspace);
+        const output = await callKeep(pluginConfig, args, workspace);
         const result = JSON.parse(output);
         
         return {
@@ -248,7 +248,7 @@ export default function register(api: PluginApi) {
           if (opts.deep) args.push("--deep");
           if (opts.index) args.push("--reindex");
           
-          const output = await callAssocmem(pluginConfig, args, workspace);
+          const output = await callKeep(pluginConfig, args, workspace);
           console.log(output);
         } catch (err) {
           console.error(err);
@@ -266,7 +266,7 @@ export default function register(api: PluginApi) {
           const args = ["index"];
           if (opts.verbose) args.push("--verbose");
           
-          const output = await callAssocmem(pluginConfig, args, workspace);
+          const output = await callKeep(pluginConfig, args, workspace);
           console.log(output);
         } catch (err) {
           console.error(err);
@@ -282,7 +282,7 @@ export default function register(api: PluginApi) {
       .action(async (query, opts) => {
         try {
           const args = ["find", query, "--limit", opts.limit];
-          const output = await callAssocmem(pluginConfig, args, workspace);
+          const output = await callKeep(pluginConfig, args, workspace);
           console.log(output);
         } catch (err) {
           console.error(err);
@@ -295,15 +295,15 @@ export default function register(api: PluginApi) {
   // Background service (optional watcher)
   // ─────────────────────────────────────────────────────────────
   api.registerService({
-    id: "memory-assocmem-watcher",
+    id: "memory-keep-watcher",
     start: () => {
-      api.logger.info("assocmem: watcher started (stub)");
+      api.logger.info("keep: watcher started (stub)");
       // TODO: watch workspace for .md changes, trigger reindex
     },
     stop: () => {
-      api.logger.info("assocmem: watcher stopped");
+      api.logger.info("keep: watcher stopped");
     },
   });
   
-  api.logger.info("memory-assocmem plugin loaded");
+  api.logger.info("memory-keep plugin loaded");
 }

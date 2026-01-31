@@ -19,7 +19,7 @@ print("=" * 70)
 # Test 1: Truncate (current default)
 print("\n1. TRUNCATE SUMMARIZER (current default)")
 print("-" * 70)
-from assocmem.providers.summarization import TruncationSummarizer
+from keep.providers.summarization import TruncationSummarizer
 truncate = TruncationSummarizer(max_length=500)
 
 start = time.time()
@@ -33,7 +33,7 @@ print(f"Summary:\n{truncate_summary}")
 # Test 2: First Paragraph (middle ground)
 print("\n2. FIRST_PARAGRAPH SUMMARIZER (middle ground)")
 print("-" * 70)
-from assocmem.providers.summarization import FirstParagraphSummarizer
+from keep.providers.summarization import FirstParagraphSummarizer
 first_para = FirstParagraphSummarizer(max_length=500)
 
 start = time.time()
@@ -49,7 +49,7 @@ if is_apple_silicon:
     print("\n3. MLX SUMMARIZER (proposed default for Apple Silicon)")
     print("-" * 70)
     try:
-        from assocmem.providers.mlx import MLXSummarization
+        from keep.providers.mlx import MLXSummarization
 
         mlx = MLXSummarization()
 

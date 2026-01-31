@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from assocmem.api import AssociativeMemory
+from keep.api import AssociativeMemory
 
 
 class TestEndToEnd:
@@ -250,7 +250,7 @@ class TestRecencyDecay:
     def test_decay_formula_correctness(self, memory: AssociativeMemory) -> None:
         """Verify the decay formula: score × 0.5^(days/half_life)."""
         from datetime import timedelta
-        from assocmem.types import Item
+        from keep.types import Item
         
         # Create items with known scores and timestamps
         now = datetime.now(timezone.utc)

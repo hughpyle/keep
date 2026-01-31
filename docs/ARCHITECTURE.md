@@ -1,8 +1,8 @@
 # Architecture Overview
 
-## What is assocmem?
+## What is keep?
 
-**assocmem** is a semantic memory system providing persistent associative storage with vector similarity search. It's designed as an agent skill for OpenClaw and other agentic environments, enabling agents to remember information across sessions over time.
+**keep** is a semantic memory system providing persistent associative storage with vector similarity search. It's designed as an agent skill for OpenClaw and other agentic environments, enabling agents to remember information across sessions over time.
 
 Think of it as: **ChromaDB + embeddings + summarization + tagging** wrapped in a simple API.
 
@@ -48,28 +48,28 @@ The original document content is **not stored** — only the summary and embeddi
 
 ### Components
 
-**[api.py](assocmem/api.py)** — Main facade
+**[api.py](keep/api.py)** — Main facade
 - `AssociativeMemory` class
 - Coordinates providers and store
 - Implements query operations with recency decay
 
-**[store.py](assocmem/store.py)** — Persistence layer
+**[store.py](keep/store.py)** — Persistence layer
 - `ChromaStore` wraps ChromaDB
 - Handles vector storage, similarity search, metadata queries
 - Automatic timestamp management
 
-**[providers/](assocmem/providers/)** — Pluggable services
+**[providers/](keep/providers/)** — Pluggable services
 - **Document**: Fetch content from URIs (file://, https://)
 - **Embedding**: Generate vectors (sentence-transformers, OpenAI, MLX)
 - **Summarization**: Generate summaries (truncate, LLM-based)
 - **Registry**: Factory for lazy-loading providers
 
-**[config.py](assocmem/config.py)** — Configuration
+**[config.py](keep/config.py)** — Configuration
 - Detects available providers (platform, API keys)
-- Persists choices in `assocmem.toml`
+- Persists choices in `keep.toml`
 - Auto-creates on first use
 
-**[types.py](assocmem/types.py)** — Data model
+**[types.py](keep/types.py)** — Data model
 - `Item`: Immutable result type
 - System tag protection (prefix: `_`)
 
@@ -171,7 +171,7 @@ query text
 
 ```
 store_path/
-├── assocmem.toml           # Provider configuration
+├── keep.toml           # Provider configuration
 ├── chroma/                 # ChromaDB persistence
 │   └── [collection]/       # One collection = one namespace
 │       ├── embeddings
@@ -213,7 +213,7 @@ Fetch content from URIs.
 ## Extension Points
 
 **New Provider**
-1. Implement Protocol from [providers/base.py](assocmem/providers/base.py)
+1. Implement Protocol from [providers/base.py](keep/providers/base.py)
 2. Register with `get_registry().register_X("name", YourClass)`
 3. Reference by name in config
 

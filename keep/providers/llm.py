@@ -80,7 +80,7 @@ class OpenAISummarization:
     """
     Summarization provider using OpenAI's chat API.
     
-    Requires: ASSOCMEM_OPENAI_API_KEY or OPENAI_API_KEY environment variable.
+    Requires: KEEP_OPENAI_API_KEY or OPENAI_API_KEY environment variable.
     """
     
     SYSTEM_PROMPT = """You are a precise summarization assistant. 
@@ -105,7 +105,7 @@ Be factual and specific. Do not include phrases like "This document" - just stat
         self.model = model
         self.max_tokens = max_tokens
         
-        key = api_key or os.environ.get("ASSOCMEM_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        key = api_key or os.environ.get("KEEP_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise ValueError("OpenAI API key required")
         
@@ -276,7 +276,7 @@ Respond with a JSON object only, no explanation."""
         
         self.model = model
         
-        key = api_key or os.environ.get("ASSOCMEM_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        key = api_key or os.environ.get("KEEP_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise ValueError("OpenAI API key required")
         

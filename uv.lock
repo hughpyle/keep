@@ -49,7 +49,7 @@ wheels = [
 ]
 
 [[package]]
-name = "assocmem"
+name = "keep"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

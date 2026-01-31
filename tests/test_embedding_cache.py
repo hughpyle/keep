@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 
-from assocmem.providers.embedding_cache import EmbeddingCache, CachingEmbeddingProvider
+from keep.providers.embedding_cache import EmbeddingCache, CachingEmbeddingProvider
 
 
 class MockEmbeddingProvider:

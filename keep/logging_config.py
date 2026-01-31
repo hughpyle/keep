@@ -1,5 +1,5 @@
 """
-Logging configuration for assocmem.
+Logging configuration for keep.
 
 Suppress verbose library output by default for better UX.
 """
@@ -9,7 +9,7 @@ import sys
 import warnings
 
 # Set environment variables BEFORE any imports to suppress warnings early
-if not os.environ.get("ASSOCMEM_VERBOSE"):
+if not os.environ.get("KEEP_VERBOSE"):
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     os.environ["TRANSFORMERS_VERBOSITY"] = "error"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"

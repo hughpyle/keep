@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Test end-to-end document extraction with AssociativeMemory."""
 from pathlib import Path
-from assocmem import AssociativeMemory
+from keep import AssociativeMemory
 
 # Create temporary memory
 mem = AssociativeMemory(store_path=Path("test_extraction_store"))

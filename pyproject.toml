@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "assocmem"
+name = "keep"
 version = "0.1.0"
-description = "Associative memory with semantic search"
+description = "Semantic memory - remember and search documents by meaning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -47,10 +47,10 @@ dev = [
 ]
 
 [project.scripts]
-assocmem = "assocmem.cli:main"
+keep = "keep.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["assocmem"]
+packages = ["keep"]
 artifacts = [
     "SKILL.md",
     "patterns/**/*.md",
@@ -58,7 +58,7 @@ artifacts = [
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "/assocmem",
+    "/keep",
     "/SKILL.md",
     "/patterns",
     "/README.md",
