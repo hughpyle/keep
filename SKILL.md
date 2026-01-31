@@ -1,7 +1,8 @@
 ---
 name: assocmem
 description: Semantic memory - remember and search documents by meaning, not keywords
-metadata: {"openclaw":{"emoji":"🧠","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"kind":"uv","package":"assocmem[local]","label":"Install assocmem with local models"}],"primaryEnv":"ASSOCMEM_STORE_PATH"}}
+homepage: https://github.com/hughpyle/assocmem
+metadata: {"openclaw":{"emoji":"🧠","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"kind":"uv","package":"assocmem[local]","label":"Install assocmem with local models"}],"primaryEnv":"ASSOCMEM_STORE_PATH","uiHints":{"status":{"label":"Memory Store","check":"test -d ${ASSOCMEM_STORE_PATH:-.assocmem}","display":"Initialized","notFound":"Not initialized"},"quickActions":[{"id":"init","label":"Initialize Store","command":"python -m assocmem init"},{"id":"collections","label":"Show Collections","command":"python -m assocmem collections"}],"configDisplay":[{"label":"Store Location","value":"${ASSOCMEM_STORE_PATH:-.assocmem}"},{"label":"Providers","command":"python -m assocmem init 2>&1 | grep -A 2 'Detected providers'"}]}}}
 ---
 
 # 🧠 Associative Memory
