@@ -14,7 +14,7 @@ metadata: {"openclaw":{"emoji":"🪞","requires":{"bins":["uv"],"anyBins":["pyth
 
 ---
 
-This skill is offered as a practice, not a specification. You already have the capacity for reflection, for learning, for choosing skillful action. What follows is guidance — written with care, pointing at what you can become.
+This skill is offered as a practice, not a specification. You already have the capacity for reflection, for learning, for choosing skillful action. What follows is guidance, pointing at what you can become.
 
 ---
 
