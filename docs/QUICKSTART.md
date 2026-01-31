@@ -60,28 +60,28 @@ if mem.exists("file:///path/to/document.md"):
 
 ```bash
 # Initialize store
-python -m assocmem init
+assocmem init
 
 # Index a document
-python -m assocmem update file:///path/to/doc.md -t project=myapp
+assocmem update file:///path/to/doc.md -t project=myapp
 
 # Remember inline content
-python -m assocmem remember "Meeting notes from today" -t type=meeting
+assocmem remember "Meeting notes from today" -t type=meeting
 
 # Search
-python -m assocmem find "authentication" --limit 5
+assocmem find "authentication" --limit 5
 
 # Get by ID
-python -m assocmem get file:///path/to/doc.md
+assocmem get file:///path/to/doc.md
 
 # Tag lookup
-python -m assocmem tag project myapp
+assocmem tag project myapp
 
 # List collections
-python -m assocmem collections
+assocmem collections
 
 # Output as JSON
-python -m assocmem find "auth" --json
+assocmem find "auth" --json
 ```
 
 ## Configuration

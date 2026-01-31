@@ -2,9 +2,9 @@
 CLI interface for associative memory.
 
 Usage:
-    python -m assocmem find "query text"
-    python -m assocmem update file:///path/to/doc.md
-    python -m assocmem get file:///path/to/doc.md
+    assocmem find "query text"
+    assocmem update file:///path/to/doc.md
+    assocmem get file:///path/to/doc.md
 """
 
 import json
@@ -371,15 +371,6 @@ def show_routing(
         typer.echo(f"Summary: {routing.summary}")
         typer.echo(f"Private patterns: {routing.private_patterns}")
         typer.echo(f"Updated: {routing.updated}")
-
-
-@app.command()
-def version():
-    """
-    Show assocmem version.
-    """
-    from . import __version__
-    typer.echo(f"assocmem {__version__}")
 
 
 # -----------------------------------------------------------------------------

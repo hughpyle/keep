@@ -12,9 +12,9 @@ Quick Start:
     results = mem.find("something similar to this query")
 
 CLI Usage:
-    python -m assocmem find "query text"
-    python -m assocmem update file:///path/to/doc.md -t category=docs
-    python -m assocmem collections --json
+    assocmem find "query text"
+    assocmem update file:///path/to/doc.md -t category=docs
+    assocmem collections --json
 
 Default Store:
     .assocmem/ at the git repository root (created automatically).

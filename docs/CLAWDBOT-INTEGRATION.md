@@ -52,7 +52,7 @@ pip install 'assocmem[clawdbot]'
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # 3. Initialize (auto-detects Clawdbot config)
-python -m assocmem init
+assocmem init
 ```
 
 **Output:**
@@ -73,7 +73,7 @@ Set `CLAWDBOT_CONFIG` to use a different config file:
 
 ```bash
 export CLAWDBOT_CONFIG=/custom/path/to/clawdbot.json
-python -m assocmem init
+assocmem init
 ```
 
 ### Option 3: Disable Integration
@@ -82,7 +82,7 @@ Don't set `ANTHROPIC_API_KEY`, or remove `~/.clawdbot/clawdbot.json`:
 
 ```bash
 # Will fall back to MLX (Apple Silicon) or sentence-transformers
-python -m assocmem init
+assocmem init
 ```
 
 ---
@@ -180,7 +180,7 @@ Clawdbot uses short model names. assocmem maps them to actual Anthropic API name
 ```bash
 pip install 'assocmem[clawdbot]'
 export ANTHROPIC_API_KEY=sk-ant-...
-python -m assocmem init
+assocmem init
 ```
 
 **Result:**
@@ -196,7 +196,7 @@ python -m assocmem init
 **Setup:**
 ```bash
 pip install 'assocmem[local]'  # No API dependencies
-python -m assocmem init
+assocmem init
 ```
 
 **Result (Apple Silicon):**
@@ -219,7 +219,7 @@ python -m assocmem init
 ```bash
 pip install 'assocmem[openai]'
 export OPENAI_API_KEY=sk-...
-python -m assocmem init
+assocmem init
 ```
 
 **Result:**
@@ -259,7 +259,7 @@ Not yet supported. Roadmap feature for v0.2.
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 rm -rf .assocmem  # Delete old config
-python -m assocmem init  # Re-initialize
+assocmem init  # Re-initialize
 ```
 
 ---
@@ -281,7 +281,7 @@ pip install 'assocmem[clawdbot]'
 
 ```bash
 pip install 'assocmem[local]'  # MLX on Apple Silicon
-python -m assocmem init
+assocmem init
 ```
 
 ---
@@ -330,17 +330,17 @@ pip install 'assocmem[clawdbot]'
 export ANTHROPIC_API_KEY=sk-ant-api03-...
 
 # 3. Initialize (detects Clawdbot config automatically)
-python -m assocmem init
+assocmem init
 # ✓ Store ready: /Users/hugh/clawd/.assocmem
 # ✓ Detected providers:
 #   Embedding: sentence-transformers (local)
 #   Summarization: anthropic (claude-sonnet-4)
 
 # 4. Index a document
-python -m assocmem update "file://./README.md" -t type=docs
+assocmem update "file://./README.md" -t type=docs
 
 # 5. Search semantically
-python -m assocmem find "installation instructions" --limit 3
+assocmem find "installation instructions" --limit 3
 
 # 6. Verify costs are reasonable
 # Claude Haiku: ~$0.0001 per summary
