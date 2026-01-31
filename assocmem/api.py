@@ -125,32 +125,53 @@ class AssociativeMemory:
     ) -> Item:
         """
         Insert or update a document in the store.
-        
+
         Fetches the document, generates embeddings and summary, then stores it.
+
+        **Update behavior:**
+        - Summary: Always replaced with newly generated summary
+        - Tags: Merged - existing source tags are preserved, new source_tags override
+          on key collision. System tags (prefixed with _) are always managed by
+          the system.
+
+        Args:
+            id: URI of document to fetch and index
+            source_tags: User-provided tags to merge with existing tags
+            collection: Target collection (uses default if None)
+
+        Returns:
+            The stored Item with merged tags and new summary
         """
         coll = self._resolve_collection(collection)
-        
+
+        # Get existing item to preserve tags
+        existing_tags = {}
+        existing = self._store.get(coll, id)
+        if existing:
+            # Extract existing non-system tags
+            existing_tags = filter_non_system_tags(existing.tags)
+
         # Fetch document
         doc = self._document_provider.fetch(id)
-        
+
         # Generate embedding
         embedding = self._embedding_provider.embed(doc.content)
-        
+
         # Generate summary
         summary = self._summarization_provider.summarize(doc.content)
-        
-        # Build tags
-        tags = {}
-        
-        # Add source tags (filtered to prevent system tag override)
+
+        # Build tags: existing + new (new overrides on collision)
+        tags = {**existing_tags}
+
+        # Merge in new source tags (filtered to prevent system tag override)
         if source_tags:
             tags.update(filter_non_system_tags(source_tags))
-        
+
         # Add system tags
         tags["_source"] = "uri"
         if doc.content_type:
             tags["_content_type"] = doc.content_type
-        
+
         # Store
         self._store.upsert(
             collection=coll,
@@ -159,7 +180,7 @@ class AssociativeMemory:
             summary=summary,
             tags=tags,
         )
-        
+
         # Return the stored item
         result = self._store.get(coll, id)
         return result.to_item()
@@ -174,32 +195,54 @@ class AssociativeMemory:
     ) -> Item:
         """
         Store inline content directly (without fetching from a URI).
-        
+
         Use for conversation snippets, notes, insights.
+
+        **Update behavior (when id already exists):**
+        - Summary: Replaced with newly generated summary from content
+        - Tags: Merged - existing source tags preserved, new source_tags override
+          on key collision. System tags (prefixed with _) are always managed by
+          the system.
+
+        Args:
+            content: Text to store and index
+            id: Optional custom ID (auto-generated if None)
+            source_tags: User-provided tags to merge with existing tags
+            collection: Target collection (uses default if None)
+
+        Returns:
+            The stored Item with merged tags and new summary
         """
         coll = self._resolve_collection(collection)
-        
+
         # Generate ID if not provided
         if id is None:
             timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
             id = f"mem:{timestamp}"
-        
+
+        # Get existing item to preserve tags
+        existing_tags = {}
+        existing = self._store.get(coll, id)
+        if existing:
+            # Extract existing non-system tags
+            existing_tags = filter_non_system_tags(existing.tags)
+
         # Generate embedding
         embedding = self._embedding_provider.embed(content)
-        
+
         # Generate summary
         summary = self._summarization_provider.summarize(content)
-        
-        # Build tags
-        tags = {}
-        
-        # Add source tags (filtered)
+
+        # Build tags: existing + new (new overrides on collision)
+        tags = {**existing_tags}
+
+        # Merge in new source tags (filtered)
         if source_tags:
             tags.update(filter_non_system_tags(source_tags))
-        
+
         # Add system tags
         tags["_source"] = "inline"
-        
+
         # Store
         self._store.upsert(
             collection=coll,
