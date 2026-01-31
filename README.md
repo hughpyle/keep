@@ -57,6 +57,11 @@ pip install 'keep[local]'
 # Faster alternative (recommended):
 uv pip install 'keep[local]'  # ~60 seconds vs ~300 seconds
 
+# Or install as a CLI tool:
+uv tool install 'keep[local]'
+# Then add ~/.local/bin to your PATH if not already:
+# export PATH="$HOME/.local/bin:$PATH"
+
 # OpenClaw integration (uses configured models):
 pip install 'keep[openclaw]'
 
