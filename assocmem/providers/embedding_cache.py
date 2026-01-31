@@ -148,6 +148,25 @@ class EmbeddingCache:
         self._conn.execute("DELETE FROM embedding_cache")
         self._conn.commit()
 
+    def close(self) -> None:
+        """Close the database connection."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def __del__(self) -> None:
+        """Ensure connection is closed on cleanup."""
+        self.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - close connection."""
+        self.close()
+        return False
+
 
 class CachingEmbeddingProvider:
     """

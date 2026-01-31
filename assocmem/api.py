@@ -473,9 +473,33 @@ class AssociativeMemory:
     def embedding_cache_stats(self) -> dict:
         """
         Get embedding cache statistics.
-        
+
         Returns dict with: entries, hits, misses, hit_rate, cache_path
         """
         if isinstance(self._embedding_provider, CachingEmbeddingProvider):
             return self._embedding_provider.stats()
         return {"enabled": False}
+
+    def close(self) -> None:
+        """
+        Close resources (embedding cache connection, etc.).
+
+        Good practice to call when done, though Python's GC will clean up eventually.
+        """
+        # Close embedding cache if it exists
+        if isinstance(self._embedding_provider, CachingEmbeddingProvider):
+            if hasattr(self._embedding_provider._cache, 'close'):
+                self._embedding_provider._cache.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - close resources."""
+        self.close()
+        return False
+
+    def __del__(self):
+        """Cleanup on deletion."""
+        self.close()

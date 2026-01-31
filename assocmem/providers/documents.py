@@ -11,10 +11,11 @@ from .base import Document, DocumentProvider, get_registry
 class FileDocumentProvider:
     """
     Fetches documents from the local filesystem.
-    
+
     Supports file:// URIs and attempts to detect content type from extension.
+    Performs text extraction for PDF and HTML files.
     """
-    
+
     EXTENSION_TYPES = {
         ".md": "text/markdown",
         ".markdown": "text/markdown",
@@ -26,9 +27,11 @@ class FileDocumentProvider:
         ".yaml": "text/yaml",
         ".yml": "text/yaml",
         ".html": "text/html",
+        ".htm": "text/html",
         ".css": "text/css",
         ".xml": "application/xml",
         ".rst": "text/x-rst",
+        ".pdf": "application/pdf",
     }
     
     def supports(self, uri: str) -> bool:
@@ -36,30 +39,37 @@ class FileDocumentProvider:
         return uri.startswith("file://") or uri.startswith("/")
     
     def fetch(self, uri: str) -> Document:
-        """Read file content from the filesystem."""
+        """Read file content from the filesystem with text extraction for PDF/HTML."""
         # Normalize to path
         if uri.startswith("file://"):
             path_str = uri.removeprefix("file://")
         else:
             path_str = uri
-        
+
         path = Path(path_str)
-        
+
         if not path.exists():
             raise IOError(f"File not found: {path}")
-        
+
         if not path.is_file():
             raise IOError(f"Not a file: {path}")
-        
-        # Read content
-        try:
-            content = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            raise IOError(f"Cannot read file as text: {path}")
-        
+
         # Detect content type
-        content_type = self.EXTENSION_TYPES.get(path.suffix.lower(), "text/plain")
-        
+        suffix = path.suffix.lower()
+        content_type = self.EXTENSION_TYPES.get(suffix, "text/plain")
+
+        # Extract text based on file type
+        if suffix == ".pdf":
+            content = self._extract_pdf_text(path)
+        elif suffix in (".html", ".htm"):
+            content = self._extract_html_text(path)
+        else:
+            # Read as plain text
+            try:
+                content = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                raise IOError(f"Cannot read file as text: {path}")
+
         # Gather metadata
         stat = path.stat()
         metadata = {
@@ -67,13 +77,70 @@ class FileDocumentProvider:
             "modified": stat.st_mtime,
             "name": path.name,
         }
-        
+
         return Document(
             uri=f"file://{path.resolve()}",  # Normalize to absolute
             content=content,
             content_type=content_type,
             metadata=metadata,
         )
+
+    def _extract_pdf_text(self, path: Path) -> str:
+        """Extract text from PDF file."""
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise IOError(
+                f"PDF support requires 'pypdf' library. "
+                f"Install with: pip install pypdf\n"
+                f"Cannot read PDF: {path}"
+            )
+
+        try:
+            reader = PdfReader(path)
+            text_parts = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    text_parts.append(text)
+
+            if not text_parts:
+                raise IOError(f"No text extracted from PDF: {path}")
+
+            return "\n\n".join(text_parts)
+        except Exception as e:
+            raise IOError(f"Failed to extract text from PDF {path}: {e}")
+
+    def _extract_html_text(self, path: Path) -> str:
+        """Extract text from HTML file."""
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:
+            raise IOError(
+                f"HTML text extraction requires 'beautifulsoup4' library. "
+                f"Install with: pip install beautifulsoup4\n"
+                f"Cannot extract text from HTML: {path}"
+            )
+
+        try:
+            html_content = path.read_text(encoding="utf-8")
+            soup = BeautifulSoup(html_content, "html.parser")
+
+            # Remove script and style elements
+            for script in soup(["script", "style"]):
+                script.decompose()
+
+            # Get text
+            text = soup.get_text()
+
+            # Clean up whitespace
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = '\n'.join(chunk for chunk in chunks if chunk)
+
+            return text
+        except Exception as e:
+            raise IOError(f"Failed to extract text from HTML {path}: {e}")
 
 
 class HttpDocumentProvider:
@@ -102,40 +169,41 @@ class HttpDocumentProvider:
             import requests
         except ImportError:
             raise RuntimeError("HTTP document fetching requires 'requests' library")
-        
+
         try:
-            response = requests.get(
+            # Use context manager to ensure connection is closed
+            with requests.get(
                 uri,
                 timeout=self.timeout,
                 headers={"User-Agent": "assocmem/0.1"},
                 stream=True,
-            )
-            response.raise_for_status()
+            ) as response:
+                response.raise_for_status()
+
+                # Check size
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > self.max_size:
+                    raise IOError(f"Content too large: {content_length} bytes")
+
+                # Read content with size limit
+                content = response.text[:self.max_size]
+
+                # Get content type
+                content_type = response.headers.get("content-type", "text/plain")
+                if ";" in content_type:
+                    content_type = content_type.split(";")[0].strip()
+
+                return Document(
+                    uri=uri,
+                    content=content,
+                    content_type=content_type,
+                    metadata={
+                        "status_code": response.status_code,
+                        "headers": dict(response.headers),
+                    },
+                )
         except requests.RequestException as e:
             raise IOError(f"Failed to fetch {uri}: {e}")
-        
-        # Check size
-        content_length = response.headers.get("content-length")
-        if content_length and int(content_length) > self.max_size:
-            raise IOError(f"Content too large: {content_length} bytes")
-        
-        # Read content with size limit
-        content = response.text[:self.max_size]
-        
-        # Get content type
-        content_type = response.headers.get("content-type", "text/plain")
-        if ";" in content_type:
-            content_type = content_type.split(";")[0].strip()
-        
-        return Document(
-            uri=uri,
-            content=content,
-            content_type=content_type,
-            metadata={
-                "status_code": response.status_code,
-                "headers": dict(response.headers),
-            },
-        )
 
 
 class CompositeDocumentProvider:
