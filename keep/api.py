@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 import os
-import signal
 import subprocess
 import sys
 
