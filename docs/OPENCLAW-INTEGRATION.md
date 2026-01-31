@@ -1,4 +1,4 @@
-# Clawdbot Integration
+# OpenClaw Integration
 
 **Status:** Available in v0.1.0+
 
@@ -6,11 +6,11 @@
 
 ## Overview
 
-keep can automatically integrate with Clawdbot's configured models when both are present. This enables:
+keep can automatically integrate with OpenClaw's configured models when both are present. This enables:
 
-- **Unified model configuration** — Configure once in Clawdbot, use everywhere
+- **Unified model configuration** — Configure once in OpenClaw, use everywhere
 - **Local-first by default** — Embeddings stay local, summarization can use configured LLM
-- **Seamless fallback** — Works standalone without Clawdbot
+- **Seamless fallback** — Works standalone without OpenClaw
 
 ---
 
@@ -20,20 +20,20 @@ keep can automatically integrate with Clawdbot's configured models when both are
 
 When you initialize keep, it checks for providers in this order:
 
-1. **Clawdbot integration** (if `~/.clawdbot/clawdbot.json` exists and `ANTHROPIC_API_KEY` set)
+1. **OpenClaw integration** (if `~/.openclaw/openclaw.json` exists and `ANTHROPIC_API_KEY` set)
 2. **MLX** (Apple Silicon local models)
 3. **OpenAI** (if `OPENAI_API_KEY` set)
 4. **Fallback** (sentence-transformers + truncate)
 
 ### What Gets Shared
 
-**From Clawdbot config:**
+**From OpenClaw config:**
 - Model selection for summarization (e.g., `anthropic/claude-sonnet-4-5`)
 - Provider routing (automatically detects Anthropic models)
 
 **Stays local:**
 - **Embeddings** always use sentence-transformers (local, privacy-preserving)
-- **Store** remains in `.keep/` (not shared with Clawdbot)
+- **Store** remains in `.keep/` (not shared with OpenClaw)
 - **API keys** must be set via environment variables
 
 ---
@@ -42,16 +42,16 @@ When you initialize keep, it checks for providers in this order:
 
 ### Option 1: Automatic (Recommended)
 
-If you already have Clawdbot configured:
+If you already have OpenClaw configured:
 
 ```bash
 # 1. Install keep with Anthropic support
-pip install 'keep[clawdbot]'
+pip install 'keep[openclaw]'
 
 # 2. Set your Anthropic API key
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# 3. Initialize (auto-detects Clawdbot config)
+# 3. Initialize (auto-detects OpenClaw config)
 keep init
 ```
 
@@ -69,16 +69,16 @@ To customize, edit .keep/keep.toml
 
 ### Option 2: Manual Override
 
-Set `CLAWDBOT_CONFIG` to use a different config file:
+Set `OPENCLAW_CONFIG` to use a different config file:
 
 ```bash
-export CLAWDBOT_CONFIG=/custom/path/to/clawdbot.json
+export OPENCLAW_CONFIG=/custom/path/to/openclaw.json
 keep init
 ```
 
 ### Option 3: Disable Integration
 
-Don't set `ANTHROPIC_API_KEY`, or remove `~/.clawdbot/clawdbot.json`:
+Don't set `ANTHROPIC_API_KEY`, or remove `~/.openclaw/openclaw.json`:
 
 ```bash
 # Will fall back to MLX (Apple Silicon) or sentence-transformers
@@ -89,9 +89,9 @@ keep init
 
 ## Configuration Files
 
-### Clawdbot Config Location
+### OpenClaw Config Location
 
-Default: `~/.clawdbot/clawdbot.json`
+Default: `~/.openclaw/openclaw.json`
 
 **Relevant fields:**
 ```json
@@ -110,7 +110,7 @@ Default: `~/.clawdbot/clawdbot.json`
 
 Created at: `.keep/keep.toml` (workspace root)
 
-**Example (Clawdbot integration active):**
+**Example (OpenClaw integration active):**
 ```toml
 [store]
 version = 1
@@ -131,9 +131,9 @@ name = "composite"
 
 ## Model Mapping
 
-Clawdbot uses short model names. keep maps them to actual Anthropic API names:
+OpenClaw uses short model names. keep maps them to actual Anthropic API names:
 
-| Clawdbot Model | Anthropic API Model |
+| OpenClaw Model | Anthropic API Model |
 |----------------|---------------------|
 | `claude-sonnet-4` | `claude-sonnet-4-20250514` |
 | `claude-sonnet-4-5` | `claude-sonnet-4-20250514` |
@@ -149,7 +149,7 @@ Clawdbot uses short model names. keep maps them to actual Anthropic API names:
 | Variable | Purpose | Required |
 |----------|---------|----------|
 | `ANTHROPIC_API_KEY` | Anthropic API authentication | For Anthropic provider |
-| `CLAWDBOT_CONFIG` | Override default config location | Optional |
+| `OPENCLAW_CONFIG` | Override default config location | Optional |
 | `KEEP_STORE_PATH` | Override store location | Optional |
 
 ---
@@ -174,18 +174,18 @@ Clawdbot uses short model names. keep maps them to actual Anthropic API names:
 
 ## Use Cases
 
-### Scenario 1: Clawdbot User (Local-First + Smart Summarization)
+### Scenario 1: OpenClaw User (Local-First + Smart Summarization)
 
 **Setup:**
 ```bash
-pip install 'keep[clawdbot]'
+pip install 'keep[openclaw]'
 export ANTHROPIC_API_KEY=sk-ant-...
 keep init
 ```
 
 **Result:**
 - Embeddings: Local (sentence-transformers)
-- Summarization: Anthropic Claude (configured in Clawdbot)
+- Summarization: Anthropic Claude (configured in OpenClaw)
 - Cost: ~$0.0001 per document summary
 - Privacy: Embeddings local, only summaries sent to API
 
@@ -213,7 +213,7 @@ keep init
 
 ---
 
-### Scenario 3: OpenAI User (No Clawdbot)
+### Scenario 3: OpenAI User (No OpenClaw)
 
 **Setup:**
 ```bash
@@ -251,7 +251,7 @@ Not yet supported. Roadmap feature for v0.2.
 
 ## Troubleshooting
 
-### "Clawdbot config found but Anthropic provider not used"
+### "OpenClaw config found but Anthropic provider not used"
 
 **Cause:** `ANTHROPIC_API_KEY` not set
 
@@ -270,14 +270,14 @@ keep init  # Re-initialize
 
 **Fix:**
 ```bash
-pip install 'keep[clawdbot]'
+pip install 'keep[openclaw]'
 ```
 
 ---
 
-### "Want to use Clawdbot integration but don't have API key"
+### "Want to use OpenClaw integration but don't have API key"
 
-**Solution:** Use local-first mode. Clawdbot config is ignored if no API key present.
+**Solution:** Use local-first mode. OpenClaw config is ignored if no API key present.
 
 ```bash
 pip install 'keep[local]'  # MLX on Apple Silicon
@@ -313,9 +313,9 @@ Summaries are computed once per document. Using an API:
 ## Future Enhancements
 
 **Planned for v0.2:**
-- [ ] OAuth integration (use Clawdbot's OAuth tokens directly)
+- [ ] OAuth integration (use OpenClaw's OAuth tokens directly)
 - [ ] Per-collection provider config
-- [ ] Automatic model upgrades when Clawdbot config changes
+- [ ] Automatic model upgrades when OpenClaw config changes
 - [ ] Batch summarization for cost optimization
 
 ---
@@ -323,13 +323,13 @@ Summaries are computed once per document. Using an API:
 ## Example: Full Workflow
 
 ```bash
-# 1. Install with Clawdbot integration
-pip install 'keep[clawdbot]'
+# 1. Install with OpenClaw integration
+pip install 'keep[openclaw]'
 
 # 2. Set API key (from Anthropic console)
 export ANTHROPIC_API_KEY=sk-ant-api03-...
 
-# 3. Initialize (detects Clawdbot config automatically)
+# 3. Initialize (detects OpenClaw config automatically)
 keep init
 # ✓ Store ready: /Users/hugh/clawd/.keep
 # ✓ Detected providers:
@@ -351,15 +351,15 @@ keep find "installation instructions" --limit 3
 
 ## Summary
 
-**With Clawdbot integration:**
+**With OpenClaw integration:**
 - 🧠 Best of both worlds: local embeddings + smart summarization
 - 🔄 Unified configuration (DRY principle)
 - 💰 Cost-effective ($0.0001/document vs $0.001 for OpenAI embeddings)
 - 🔒 Privacy-preserving (embeddings + queries stay local)
 
-**Without Clawdbot:**
+**Without OpenClaw:**
 - 🏠 Pure local-first (MLX on Apple Silicon)
 - 💸 Zero cost
 - 🔒 Maximum privacy
 
-**Recommendation:** Use Clawdbot integration if you already have it configured. Otherwise, local-first mode is excellent for privacy and zero cost.
+**Recommendation:** Use OpenClaw integration if you already have it configured. Otherwise, local-first mode is excellent for privacy and zero cost.

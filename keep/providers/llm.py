@@ -18,7 +18,7 @@ class AnthropicSummarization:
     Summarization provider using Anthropic's Claude API.
     
     Requires: ANTHROPIC_API_KEY environment variable.
-    Optionally reads from Clawdbot config via CLAWDBOT_CONFIG env var.
+    Optionally reads from OpenClaw config via OPENCLAW_CONFIG env var.
     """
     
     SYSTEM_PROMPT = """You are a precise summarization assistant. 
@@ -43,10 +43,10 @@ Be factual and specific. Do not include phrases like "This document" - just stat
         self.model = model
         self.max_tokens = max_tokens
         
-        # Try environment variable first, then Clawdbot config
+        # Try environment variable first, then OpenClaw config
         key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not key:
-            # Try to read from Clawdbot config (OAuth tokens stored separately)
+            # Try to read from OpenClaw config (OAuth tokens stored separately)
             # For now, just require explicit API key
             raise ValueError("ANTHROPIC_API_KEY environment variable required")
         

@@ -5,11 +5,11 @@ A persistent semantic memory with similarity search, full-text search,
 and tag-based retrieval. Remember everything, find by meaning.
 
 Quick Start:
-    from keep import AssociativeMemory
+    from keep import Keeper
 
-    mem = AssociativeMemory()  # uses .keep/ at git repo root
-    mem.update("file:///path/to/document.md", source_tags={"project": "myproject"})
-    results = mem.find("something similar to this query")
+    kp = Keeper()  # uses .keep/ at git repo root
+    kp.update("file:///path/to/document.md", source_tags={"project": "myproject"})
+    results = kp.find("something similar to this query")
 
 CLI Usage:
     keep find "query text"
@@ -37,16 +37,16 @@ if not os.environ.get("KEEP_VERBOSE"):
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
-from .api import AssociativeMemory
+from .api import Keeper
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX
 from .context import WorkingContext, TopicSummary, RoutingContext
 
 __version__ = "0.1.0"
 __all__ = [
-    "AssociativeMemory", 
-    "Item", 
-    "WorkingContext", 
-    "TopicSummary", 
+    "Keeper",
+    "Item",
+    "WorkingContext",
+    "TopicSummary",
     "RoutingContext",
     "filter_non_system_tags",
     "SYSTEM_TAG_PREFIX",

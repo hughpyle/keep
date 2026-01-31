@@ -9,15 +9,15 @@
 An agent skills package that provides semantic memory - persistent storage with vector similarity search. Agents can remember and recall information by meaning, not just keywords. Available as both a command-line tool and Python API.
 
 ```python
-from keep import AssociativeMemory
+from keep import Keeper
 
-mem = AssociativeMemory()
+kp = Keeper()
 
 # Remember something
-mem.remember("User prefers OAuth2 with PKCE for authentication")
+kp.remember("User prefers OAuth2 with PKCE for authentication")
 
 # Find it later by meaning, not keywords
-results = mem.find("how should we handle auth?")
+results = kp.find("how should we handle auth?")
 # → Returns the OAuth2 note, even though "OAuth2" wasn't in the query
 ```
 
@@ -53,8 +53,8 @@ pip install 'keep[local]'
 # Faster alternative (recommended):
 uv pip install 'keep[local]'  # ~60 seconds vs ~300 seconds
 
-# Clawdbot integration (uses configured models):
-pip install 'keep[clawdbot]'
+# OpenClaw integration (uses configured models):
+pip install 'keep[openclaw]'
 
 # Or minimal install (configure providers manually)
 pip install keep
@@ -68,41 +68,41 @@ keep init
 ```
 
 ```python
-from keep import AssociativeMemory
+from keep import Keeper
 
-mem = AssociativeMemory()
+kp = Keeper()
 
 # Index a file
-mem.update("file:///path/to/document.md", source_tags={"project": "myapp"})
+kp.update("file:///path/to/document.md", source_tags={"project": "myapp"})
 
 # Remember inline content
-mem.remember("Important: rate limit is 100 req/min", source_tags={"topic": "api"})
+kp.remember("Important: rate limit is 100 req/min", source_tags={"topic": "api"})
 
 # Semantic search
-results = mem.find("what's the rate limit?", limit=5)
+results = kp.find("what's the rate limit?", limit=5)
 for r in results:
     print(f"[{r.score:.2f}] {r.summary}")
 
 # Tag lookup
-api_docs = mem.query_tag("topic", "api")
+api_docs = kp.query_tag("topic", "api")
 ```
 
 See [docs/QUICKSTART.md](docs/QUICKSTART.md) for more examples.
 
 ---
 
-## Clawdbot Integration
+## OpenClaw Integration
 
-If you have [Clawdbot](https://openclaw.dev) configured, keep automatically uses your configured models:
+If you have [OpenClaw](https://openclaw.dev) configured, keep automatically uses your configured models:
 
 ```bash
-# Install with Clawdbot support
-pip install 'keep[clawdbot]'
+# Install with OpenClaw support
+pip install 'keep[openclaw]'
 
 # Set your Anthropic API key (if using Claude models)
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# Initialize (auto-detects ~/.clawdbot/clawdbot.json)
+# Initialize (auto-detects ~/.openclaw/openclaw.json)
 keep init
 # ✓ Detected providers:
 #   Embedding: sentence-transformers (local)
@@ -115,14 +115,14 @@ keep init
 - 🔒 Privacy-preserving (embeddings stay local)
 - 💰 Cost-effective (~$0.0001/document)
 
-See [docs/CLAWDBOT-INTEGRATION.md](docs/CLAWDBOT-INTEGRATION.md) for details.
+See [docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md) for details.
 
 ---
 
 ## Documentation
 
 - **[SKILL.md](SKILL.md)** — OpenClaw skill reference (CLI commands)
-- **[docs/CLAWDBOT-INTEGRATION.md](docs/CLAWDBOT-INTEGRATION.md)** — Clawdbot integration guide
+- **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)** — OpenClaw integration guide
 - **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Installation, basic usage, configuration
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Detailed agent patterns, Python API
 - **[docs/REFERENCE.md](docs/REFERENCE.md)** — Complete API reference

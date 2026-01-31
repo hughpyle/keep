@@ -29,7 +29,7 @@ The original document content is **not stored** — only the summary and embeddi
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  API Layer (api.py)                                          │
-│  - AssociativeMemory class                                   │
+│  - Keeper class                                   │
 │  - High-level operations: update(), remember(), find()       │
 └──────────────────┬──────────────────────────────────────────┘
                    │
@@ -49,7 +49,7 @@ The original document content is **not stored** — only the summary and embeddi
 ### Components
 
 **[api.py](keep/api.py)** — Main facade
-- `AssociativeMemory` class
+- `Keeper` class
 - Coordinates providers and store
 - Implements query operations with recency decay
 
@@ -223,7 +223,7 @@ Fetch content from URIs.
 - Candidates: PostgreSQL+pgvector, SQLite+faiss
 
 **New Query Types**
-- Add methods to `AssociativeMemory`
+- Add methods to `Keeper`
 - Delegate to `ChromaStore` or implement in API layer
 
 ---

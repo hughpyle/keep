@@ -53,25 +53,25 @@ class StoreConfig:
         return self.config_path.exists()
 
 
-def read_clawdbot_config() -> dict | None:
+def read_openclaw_config() -> dict | None:
     """
-    Read Clawdbot configuration if available.
+    Read OpenClaw configuration if available.
     
     Checks:
-    1. CLAWDBOT_CONFIG environment variable
-    2. ~/.clawdbot/clawdbot.json (default location)
+    1. OPENCLAW_CONFIG environment variable
+    2. ~/.openclaw/openclaw.json (default location)
     
     Returns None if not found or invalid.
     """
     import json
     
     # Try environment variable first
-    config_path_str = os.environ.get("CLAWDBOT_CONFIG")
+    config_path_str = os.environ.get("OPENCLAW_CONFIG")
     if config_path_str:
         config_file = Path(config_path_str)
     else:
         # Default location
-        config_file = Path.home() / ".clawdbot" / "clawdbot.json"
+        config_file = Path.home() / ".openclaw" / "openclaw.json"
     
     if not config_file.exists():
         return None
@@ -88,7 +88,7 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
     Detect the best default providers for the current environment.
     
     Priority:
-    1. Clawdbot integration (if configured and ANTHROPIC_API_KEY available)
+    1. OpenClaw integration (if configured and ANTHROPIC_API_KEY available)
     2. MLX (Apple Silicon local-first)
     3. OpenAI (if API key available)
     4. Fallback: sentence-transformers + passthrough/truncate
@@ -110,16 +110,16 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
         os.environ.get("OPENAI_API_KEY")
     )
     
-    # Check for Clawdbot config
-    clawdbot_config = read_clawdbot_config()
-    clawdbot_model = None
-    if clawdbot_config:
-        model_str = (clawdbot_config.get("agents", {})
+    # Check for OpenClaw config
+    openclaw_config = read_openclaw_config()
+    openclaw_model = None
+    if openclaw_config:
+        model_str = (openclaw_config.get("agents", {})
                      .get("defaults", {})
                      .get("model", {})
                      .get("primary", ""))
         if model_str:
-            clawdbot_model = model_str
+            openclaw_model = model_str
     
     # Embedding: always local (sentence-transformers for compatibility, MLX optional)
     # Embeddings should stay local for privacy and cost
@@ -130,11 +130,11 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
         providers["embedding"] = ProviderConfig("sentence-transformers")
     
     # Summarization: priority order based on availability
-    # 1. Clawdbot + Anthropic (if configured and key available)
-    if clawdbot_model and clawdbot_model.startswith("anthropic/") and has_anthropic_key:
+    # 1. OpenClaw + Anthropic (if configured and key available)
+    if openclaw_model and openclaw_model.startswith("anthropic/") and has_anthropic_key:
         # Extract model name from "anthropic/claude-sonnet-4-5" format
-        model_name = clawdbot_model.split("/", 1)[1] if "/" in clawdbot_model else "claude-3-5-haiku-20241022"
-        # Map Clawdbot model names to actual Anthropic model names
+        model_name = openclaw_model.split("/", 1)[1] if "/" in openclaw_model else "claude-3-5-haiku-20241022"
+        # Map OpenClaw model names to actual Anthropic model names
         model_mapping = {
             "claude-sonnet-4": "claude-sonnet-4-20250514",
             "claude-sonnet-4-5": "claude-sonnet-4-20250514",

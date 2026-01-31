@@ -8,36 +8,36 @@
 
 ## Python API
 ```python
-from keep import AssociativeMemory, Item
-mem = AssociativeMemory()  # uses default store
+from keep import Keeper, Item
+kp = Keeper()  # uses default store
 
 # Core indexing
-mem.update(uri, source_tags={})          # Index document from URI → Item
-mem.remember(content, id=None, ...)      # Index inline content → Item
+kp.update(uri, source_tags={})          # Index document from URI → Item
+kp.remember(content, id=None, ...)      # Index inline content → Item
 
 # Search
-mem.find(query, limit=10)                # Semantic search → list[Item]
-mem.find_similar(uri, limit=10)          # Similar items → list[Item]
-mem.query_tag(key, value=None)           # Tag lookup → list[Item]
-mem.query_fulltext(query)                # Text search → list[Item]
+kp.find(query, limit=10)                # Semantic search → list[Item]
+kp.find_similar(uri, limit=10)          # Similar items → list[Item]
+kp.query_tag(key, value=None)           # Tag lookup → list[Item]
+kp.query_fulltext(query)                # Text search → list[Item]
 
 # Item access
-mem.get(id)                              # Fetch by ID → Item | None
-mem.exists(id)                           # Check existence → bool
-mem.list_collections()                   # All collections → list[str]
+kp.get(id)                              # Fetch by ID → Item | None
+kp.exists(id)                           # Check existence → bool
+kp.list_collections()                   # All collections → list[str]
 
 # Context & top-of-mind (for agent handoff)
-mem.set_context(summary, ...)            # Set working context
-mem.get_context()                        # Get working context → WorkingContext
-mem.top_of_mind(hint=None, limit=5)      # Relevance + recency → list[Item]
-mem.recent(limit=10, since=None)         # Just recent items → list[Item]
-mem.list_topics()                        # Active topics → list[str]
-mem.get_topic_summary(topic)             # Topic overview → TopicSummary
+kp.set_context(summary, ...)            # Set working context
+kp.get_context()                        # Get working context → WorkingContext
+kp.top_of_mind(hint=None, limit=5)      # Relevance + recency → list[Item]
+kp.recent(limit=10, since=None)         # Just recent items → list[Item]
+kp.list_topics()                        # Active topics → list[str]
+kp.get_topic_summary(topic)             # Topic overview → TopicSummary
 
 # System documents (schema as data)
-mem.get_routing()                        # Get routing config → RoutingContext
-mem.get_system_document(name)            # Get _system:{name} → Item | None
-mem.list_system_documents()              # All system docs → list[Item]
+kp.get_routing()                        # Get routing config → RoutingContext
+kp.get_system_document(name)            # Get _system:{name} → Item | None
+kp.list_system_documents()              # All system docs → list[Item]
 ```
 
 ## Item Fields
@@ -52,9 +52,9 @@ Timestamps accessed via properties: `item.created`, `item.updated` (read from ta
 **System tags cannot be set by source_tags or generated tags** — they are managed by the system.
 
 ```python
-mem.query_tag("_updated_date", "2026-01-30")  # Temporal query
-mem.query_tag("_source", "inline")            # Find remembered content
-mem.query_tag("_system", "true")              # All system documents
+kp.query_tag("_updated_date", "2026-01-30")  # Temporal query
+kp.query_tag("_source", "inline")            # Find remembered content
+kp.query_tag("_system", "true")              # All system documents
 ```
 
 **Note:** Relevance/focus scores are computed at query time, not stored.
@@ -72,10 +72,10 @@ The schema is data. Behavior is controlled by documents in the store:
 
 ```python
 # Query and update system documents like any item
-guidance = mem.get_system_document("guidance:code_review")
+guidance = kp.get_system_document("guidance:code_review")
 
 # Create/update guidance through remember()
-mem.remember(
+kp.remember(
     content="For code review: check security, tests, docs",
     id="_system:guidance:code_review",
     source_tags={"_system": "true"}
@@ -85,13 +85,13 @@ mem.remember(
 ## Agent Session Pattern
 ```python
 # New session starts
-ctx = mem.get_context()                 # What were we doing?
-items = mem.top_of_mind()               # What's relevant now?
+ctx = kp.get_context()                 # What were we doing?
+items = kp.top_of_mind()               # What's relevant now?
 
 # ... work happens ...
 
 # End of session
-mem.set_context(
+kp.set_context(
     summary="Finished auth flow. Next: tests.",
     active_items=["file:///src/auth.py"],
     topics=["authentication"]

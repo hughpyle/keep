@@ -29,30 +29,30 @@ pip install 'keep[dev]'
 ## Basic Usage
 
 ```python
-from keep import AssociativeMemory
+from keep import Keeper
 
 # Initialize (creates .keep/ at git repo root by default)
-mem = AssociativeMemory()
+kp = Keeper()
 
 # Index a document from URI
-item = mem.update("file:///path/to/document.md")
+item = kp.update("file:///path/to/document.md")
 
 # Remember inline content
-item = mem.remember("Important insight about authentication patterns")
+item = kp.remember("Important insight about authentication patterns")
 
 # Semantic search
-results = mem.find("how does authentication work?", limit=5)
+results = kp.find("how does authentication work?", limit=5)
 for r in results:
     print(f"[{r.score:.2f}] {r.id}: {r.summary}")
 
 # Get specific item
-item = mem.get("file:///path/to/document.md")
+item = kp.get("file:///path/to/document.md")
 
 # Tag-based lookup
-docs = mem.query_tag("project", "myapp")
+docs = kp.query_tag("project", "myapp")
 
 # Check if item exists
-if mem.exists("file:///path/to/document.md"):
+if kp.exists("file:///path/to/document.md"):
     print("Already indexed")
 ```
 
@@ -113,11 +113,11 @@ Collections partition the store into separate namespaces:
 
 ```python
 # Specify collection
-mem = AssociativeMemory(collection="work")
+kp = Keeper(collection="work")
 
 # Or pass at operation time
-mem.remember("Note", collection="personal")
-results = mem.find("query", collection="work")
+kp.remember("Note", collection="personal")
+results = kp.find("query", collection="work")
 ```
 
 ## Recency Decay
@@ -126,10 +126,10 @@ Items decay in relevance over time (ACT-R model):
 
 ```python
 # Configure half-life (default: 30 days)
-mem = AssociativeMemory(decay_half_life_days=7.0)
+kp = Keeper(decay_half_life_days=7.0)
 
 # Disable decay
-mem = AssociativeMemory(decay_half_life_days=0)
+kp = Keeper(decay_half_life_days=0)
 ```
 
 After one half-life, an item's effective score is multiplied by 0.5.
@@ -138,12 +138,12 @@ After one half-life, an item's effective score is multiplied by 0.5.
 
 ```python
 try:
-    item = mem.update("https://unreachable.com/doc")
+    item = kp.update("https://unreachable.com/doc")
 except IOError as e:
     print(f"Failed to fetch: {e}")
 
 try:
-    mem = AssociativeMemory(collection="Invalid-Name!")
+    kp = Keeper(collection="Invalid-Name!")
 except ValueError as e:
     print(f"Invalid collection name: {e}")
 ```
@@ -169,15 +169,15 @@ from pathlib import Path
 
 for file in Path("docs").rglob("*.md"):
     uri = file.as_uri()
-    if not mem.exists(uri):
-        mem.update(uri, source_tags={"type": "documentation"})
+    if not kp.exists(uri):
+        kp.update(uri, source_tags={"type": "documentation"})
 ```
 
 ### Tagging Strategy
 
 ```python
 # Source tags (provided at index time)
-mem.update(uri, source_tags={
+kp.update(uri, source_tags={
     "project": "myapp",
     "module": "auth",
     "language": "python"
@@ -194,13 +194,13 @@ item.tags["_source"]       # "uri" or "inline"
 
 ```python
 # Broad semantic search
-results = mem.find("database connection")
+results = kp.find("database connection")
 
 # Narrow by tags
-results = mem.query_tag("module", "database")
+results = kp.query_tag("module", "database")
 
 # Full-text search in summaries
-results = mem.query_fulltext("PostgreSQL")
+results = kp.query_fulltext("PostgreSQL")
 ```
 
 ## Provider Options
@@ -246,7 +246,7 @@ results = mem.query_fulltext("PostgreSQL")
 
 **Import fails with missing dependency**
 - Providers are lazy-loaded now
-- Only fails when you try to create AssociativeMemory
+- Only fails when you try to create Keeper
 - Error message shows available providers and what's missing
 
 **Model download hangs**

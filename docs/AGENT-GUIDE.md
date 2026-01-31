@@ -15,37 +15,37 @@ The associative memory provides persistent storage with semantic search.
 ## Quick Start (Agent Reference)
 
 ```python
-from keep import AssociativeMemory, Item
+from keep import Keeper, Item
 
 # Initialize (defaults to .keep/ at git repo root)
-mem = AssociativeMemory()
+kp = Keeper()
 
 # Index a document from URI (fetches, embeds, summarizes, tags automatically)
-item = mem.update("file:///project/readme.md", source_tags={"project": "myapp"})
+item = kp.update("file:///project/readme.md", source_tags={"project": "myapp"})
 
 # Remember inline content (conversations, notes, insights)
-mem.remember(
+kp.remember(
     content="User prefers OAuth2 with PKCE for auth. Discussed tradeoffs.",
     id="conversation:2026-01-30:auth",
     source_tags={"topic": "authentication"}
 )
 
 # Semantic search
-results: list[Item] = mem.find("authentication flow", limit=5)
+results: list[Item] = kp.find("authentication flow", limit=5)
 for item in results:
     print(f"{item.score:.2f} {item.id}")
     print(f"  {item.summary}")
 
 # Find similar to existing item
-similar = mem.find_similar("file:///project/readme.md", limit=3)
+similar = kp.find_similar("file:///project/readme.md", limit=3)
 
 # Tag-based lookup (including system tags for temporal queries)
-docs = mem.query_tag("project", "myapp")
-today = mem.query_tag("_updated_date", "2026-01-30")
+docs = kp.query_tag("project", "myapp")
+today = kp.query_tag("_updated_date", "2026-01-30")
 
 # Check if indexed
-if mem.exists("file:///project/readme.md"):
-    item = mem.get("file:///project/readme.md")
+if kp.exists("file:///project/readme.md"):
+    item = kp.get("file:///project/readme.md")
 ```
 
 **CLI equivalent:**
@@ -94,7 +94,7 @@ Use `set_context()` as a scratchpad to track where you are in the work. This isn
 
 ```python
 # 1. Starting work — record what we're doing
-mem.set_context(
+kp.set_context(
     summary="Diagnosing flaky test in auth module.",
     topics=["auth", "testing"],
     metadata={
@@ -105,7 +105,7 @@ mem.set_context(
 )
 
 # 2. Mid-work — update as understanding evolves
-mem.set_context(
+kp.set_context(
     summary="Investigating test_token_refresh. Likely timing issue.",
     active_items=["file:///tests/test_oauth_flow.py"],
     topics=["auth", "testing", "timing"],
@@ -118,7 +118,7 @@ mem.set_context(
 )
 
 # 3. Committing — I've promised to do something
-mem.set_context(
+kp.set_context(
     summary="Implementing mock timer fix for test_token_refresh.",
     active_items=["file:///tests/test_oauth_flow.py"],
     metadata={
@@ -130,11 +130,11 @@ mem.set_context(
 )
 
 # 4. Completing — record the learning
-mem.remember(
+kp.remember(
     content="Flaky timing in CI → mock time instead of real assertions.",
     source_tags={"type": "learning", "domain": "testing"}
 )
-mem.set_context(
+kp.set_context(
     summary="Completed flaky test fix.",
     metadata={"state": "completed", "commitments": []}
 )
@@ -143,7 +143,7 @@ mem.set_context(
 **Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first:
 
 ```python
-ctx = mem.get_context()
+ctx = kp.get_context()
 # ctx.metadata["state"] tells you where you left off
 # ctx.metadata["commitments"] tells you what's still owed
 # ctx.active_items tells you what to look at
@@ -165,13 +165,13 @@ Level 0:  [ Source Items      ]           ← N indexed documents
 **Agent handoff pattern:**
 ```python
 # New agent/session starts
-ctx = mem.get_context()           # Instant: what are we working on?
-recent = mem.top_of_mind(limit=5) # Associative: what's relevant now?
+ctx = kp.get_context()           # Instant: what are we working on?
+recent = kp.top_of_mind(limit=5) # Associative: what's relevant now?
 
 # ... work happens ...
 
 # Before ending session, update context for next agent
-mem.set_context(
+kp.set_context(
     summary="Completed OAuth2 flow. Token refresh working. Next: add tests.",
     active_items=["file:///src/auth.py", "file:///src/oauth_client.py"],
     topics=["authentication", "testing"]
@@ -181,16 +181,16 @@ mem.set_context(
 **Top-of-mind retrieval:**
 ```python
 # Combines: recency + context similarity + topic relevance + session
-items = mem.top_of_mind()                    # What's relevant right now?
-items = mem.top_of_mind("authentication")    # What's relevant about auth?
-items = mem.recent(limit=10)                 # Just the latest items
-items = mem.recent(since="2026-01-30")       # Items from today
+items = kp.top_of_mind()                    # What's relevant right now?
+items = kp.top_of_mind("authentication")    # What's relevant about auth?
+items = kp.recent(limit=10)                 # Just the latest items
+items = kp.recent(since="2026-01-30")       # Items from today
 ```
 
 **Topic summaries (Level 2):**
 ```python
-topics = mem.list_topics()                   # ["authentication", "database", ...]
-summary = mem.get_topic_summary("authentication")
+topics = kp.list_topics()                   # ["authentication", "database", ...]
+summary = kp.get_topic_summary("authentication")
 # → TopicSummary with aggregate overview, item count, key items
 ```
 
@@ -262,10 +262,10 @@ There are three domains of tags:
 **Temporal queries using system tags:**
 ```python
 # Find items updated today
-mem.query_tag("_updated_date", "2026-01-30")
+kp.query_tag("_updated_date", "2026-01-30")
 
 # Find all inline content (from remember())
-mem.query_tag("_source", "inline")
+kp.query_tag("_source", "inline")
 ```
 
 ---
@@ -285,13 +285,13 @@ Knowledge has an interior/exterior dimension. Some items are working notes; othe
 **Example usage:**
 ```python
 # Working hypothesis — routes to private store
-mem.remember(
+kp.remember(
     "I think the bug is in token refresh, but need to verify.",
     source_tags={"_visibility": "draft", "_for": "self"}
 )
 
 # Confirmed learning — routes to shared store
-mem.remember(
+kp.remember(
     "Token refresh fails when clock skew exceeds 30s. Fix: use server time.",
     source_tags={"_visibility": "shared", "_for": "team", "_reviewed": "true"}
 )
@@ -309,7 +309,7 @@ The shared layer protects the private. When items route to the private store:
 Private isn't just convention — it's enforced by routing to a separate store.
 
 ```
-AssociativeMemory (facade)
+Keeper (facade)
     │
     ├── reads: _system:routing (document in shared store)
     │         ├── summary: "Items tagged draft/private route separately"
@@ -366,12 +366,12 @@ The store's guiding metadata is itself stored as documents — like Oracle's dat
 **Querying system documents:**
 ```python
 # Read the routing configuration
-routing = mem.get("_system:routing")
+routing = kp.get("_system:routing")
 print(routing.summary)  # Natural language description
 print(routing.tags)     # Includes private_patterns
 
 # Find all system documents
-system_docs = mem.query_tag("_system", "true")
+system_docs = kp.query_tag("_system", "true")
 ```
 
 **Updating behavior through documents:**
@@ -380,7 +380,7 @@ system_docs = mem.query_tag("_system", "true")
 
 # 1. Agent researches (web, existing patterns, etc.)
 # 2. Agent updates the guidance document
-mem.remember(
+kp.remember(
     content="""
     Code Review Guidance (updated based on research):
 
@@ -443,7 +443,7 @@ Providers are auto-detected at initialization based on platform and available AP
 See [initialize.md](initialize.md) for details.
 
 ```python
-from keep import AssociativeMemory
+from keep import Keeper
 
-mem = AssociativeMemory("/path/to/store")
+kp = Keeper("/path/to/store")
 ```

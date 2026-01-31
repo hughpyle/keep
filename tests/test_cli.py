@@ -307,31 +307,31 @@ class TestApiCliEquivalence:
     """Tests verifying CLI maps to Python API."""
     
     def test_find_maps_to_api_find(self, cli):
-        """'find' command maps to AssociativeMemory.find()."""
+        """'find' command maps to Keeper.find()."""
         result = cli("find", "--help")
         assert "semantic" in result.stdout.lower() or "similar" in result.stdout.lower()
         # The CLI find uses mem.find(query, limit=limit)
     
     def test_update_maps_to_api_update(self, cli):
-        """'update' command maps to AssociativeMemory.update()."""
+        """'update' command maps to Keeper.update()."""
         result = cli("update", "--help")
         assert "URI" in result.stdout or "document" in result.stdout.lower()
         # The CLI update uses mem.update(id, source_tags=...)
     
     def test_remember_maps_to_api_remember(self, cli):
-        """'remember' command maps to AssociativeMemory.remember()."""
+        """'remember' command maps to Keeper.remember()."""
         result = cli("remember", "--help")
         assert "content" in result.stdout.lower()
         # The CLI remember uses mem.remember(content, id=id, source_tags=...)
     
     def test_get_maps_to_api_get(self, cli):
-        """'get' command maps to AssociativeMemory.get()."""
+        """'get' command maps to Keeper.get()."""
         result = cli("get", "--help")
         assert "ID" in result.stdout or "id" in result.stdout.lower()
         # The CLI get uses mem.get(id)
     
     def test_tag_maps_to_api_query_tag(self, cli):
-        """'tag' command maps to AssociativeMemory.query_tag()."""
+        """'tag' command maps to Keeper.query_tag()."""
         result = cli("tag", "--help")
         assert "key" in result.stdout.lower()
         # The CLI tag uses mem.query_tag(key, value, limit=limit)

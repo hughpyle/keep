@@ -210,7 +210,7 @@ class CompositeDocumentProvider:
     """
     Combines multiple document providers, delegating to the appropriate one.
     
-    This is the default provider used by AssociativeMemory.
+    This is the default provider used by Keeper.
     """
     
     def __init__(self, providers: list[DocumentProvider] | None = None):

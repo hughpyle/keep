@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Test end-to-end document extraction with AssociativeMemory."""
+"""Test end-to-end document extraction with Keeper."""
 from pathlib import Path
-from keep import AssociativeMemory
+from keep import Keeper
 
 # Create temporary memory
-mem = AssociativeMemory(store_path=Path("test_extraction_store"))
+mem = Keeper(store_path=Path("test_extraction_store"))
 
 print("Testing PDF indexing...")
 pdf_uri = f"file://{Path('data/ancrenewisse.pdf').resolve()}"

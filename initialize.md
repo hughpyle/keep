@@ -1,6 +1,6 @@
 # Initialization
 
-The store initializes automatically when you create an `AssociativeMemory` instance.
+The store initializes automatically when you create an `Keeper` instance.
 
 ## Default Store Location
 
@@ -23,10 +23,10 @@ pip install keep[local]
 ```
 
 ```python
-from keep import AssociativeMemory
+from keep import Keeper
 
 # Uses .keep/ at repo root by default
-mem = AssociativeMemory()
+kp = Keeper()
 ```
 
 ## CLI

@@ -10,18 +10,18 @@ from pathlib import Path
 
 import pytest
 
-from keep.api import AssociativeMemory
+from keep.api import Keeper
 
 
 class TestEndToEnd:
     """Test the complete store → find cycle."""
 
     @pytest.fixture
-    def memory(self, tmp_path: Path) -> AssociativeMemory:
-        """Create an AssociativeMemory with a temp store."""
-        return AssociativeMemory(store_path=tmp_path)
+    def memory(self, tmp_path: Path) -> Keeper:
+        """Create an Keeper with a temp store."""
+        return Keeper(store_path=tmp_path)
 
-    def test_remember_and_get(self, memory: AssociativeMemory) -> None:
+    def test_remember_and_get(self, memory: Keeper) -> None:
         """remember() stores an item, get() retrieves it."""
         item = memory.remember(
             "The dharma is like a raft for crossing over.",
@@ -38,7 +38,7 @@ class TestEndToEnd:
         assert retrieved.id == item.id
         assert retrieved.summary == item.summary
 
-    def test_remember_and_find(self, memory: AssociativeMemory) -> None:
+    def test_remember_and_find(self, memory: Keeper) -> None:
         """remember() stores, find() retrieves by semantic similarity."""
         # Store some items
         memory.remember(
@@ -63,7 +63,7 @@ class TestEndToEnd:
         # Results should have similarity scores
         assert results[0].score is not None
 
-    def test_find_similar(self, memory: AssociativeMemory) -> None:
+    def test_find_similar(self, memory: Keeper) -> None:
         """find_similar() finds items similar to an existing item."""
         # Store related items
         item1 = memory.remember("The lotus grows from muddy water.")
@@ -78,7 +78,7 @@ class TestEndToEnd:
         assert any("flower" in r.summary.lower() or "bloom" in r.summary.lower() 
                    for r in similar)
 
-    def test_query_tag(self, memory: AssociativeMemory) -> None:
+    def test_query_tag(self, memory: Keeper) -> None:
         """query_tag() filters by tag values."""
         memory.remember("Buddhist text one.", source_tags={"tradition": "buddhist"})
         memory.remember("Buddhist text two.", source_tags={"tradition": "buddhist"})
@@ -89,7 +89,7 @@ class TestEndToEnd:
         assert len(buddhist) == 2
         assert all(r.tags.get("tradition") == "buddhist" for r in buddhist)
 
-    def test_query_fulltext(self, memory: AssociativeMemory) -> None:
+    def test_query_fulltext(self, memory: Keeper) -> None:
         """query_fulltext() searches content."""
         memory.remember("The quick brown fox jumps over.")
         memory.remember("A lazy dog sleeps under the tree.")
@@ -100,7 +100,7 @@ class TestEndToEnd:
         assert len(results) == 1
         assert "fox" in results[0].summary
 
-    def test_exists_and_delete(self, memory: AssociativeMemory) -> None:
+    def test_exists_and_delete(self, memory: Keeper) -> None:
         """exists() checks presence, delete() removes items."""
         item = memory.remember("Temporary content.", id="to-delete")
         
@@ -111,7 +111,7 @@ class TestEndToEnd:
         assert memory.exists("to-delete") is False
         assert memory.get("to-delete") is None
 
-    def test_list_collections(self, memory: AssociativeMemory) -> None:
+    def test_list_collections(self, memory: Keeper) -> None:
         """list_collections() shows available collections."""
         # Default collection
         memory.remember("Something in default.")
@@ -119,7 +119,7 @@ class TestEndToEnd:
         collections = memory.list_collections()
         assert "default" in collections
 
-    def test_count(self, memory: AssociativeMemory) -> None:
+    def test_count(self, memory: Keeper) -> None:
         """count() returns number of items."""
         assert memory.count() == 0
 
@@ -129,7 +129,7 @@ class TestEndToEnd:
 
         assert memory.count() == 3
 
-    def test_update_merges_tags(self, memory: AssociativeMemory) -> None:
+    def test_update_merges_tags(self, memory: Keeper) -> None:
         """update() with existing item merges tags, replaces summary."""
         # First remember with initial tags
         item1 = memory.remember(
@@ -171,10 +171,10 @@ class TestMultipleCollections:
     """Test working with multiple collections."""
 
     @pytest.fixture
-    def memory(self, tmp_path: Path) -> AssociativeMemory:
-        return AssociativeMemory(store_path=tmp_path)
+    def memory(self, tmp_path: Path) -> Keeper:
+        return Keeper(store_path=tmp_path)
 
-    def test_separate_collections(self, memory: AssociativeMemory) -> None:
+    def test_separate_collections(self, memory: Keeper) -> None:
         """Items in different collections are separate."""
         memory.remember("Work note", collection="work")
         memory.remember("Personal note", collection="personal")
@@ -193,10 +193,10 @@ class TestSummarizationDefault:
     """Test that summarization works with truncation."""
 
     @pytest.fixture
-    def memory(self, tmp_path: Path) -> AssociativeMemory:
-        return AssociativeMemory(store_path=tmp_path)
+    def memory(self, tmp_path: Path) -> Keeper:
+        return Keeper(store_path=tmp_path)
 
-    def test_long_content_truncated_for_summary(self, memory: AssociativeMemory) -> None:
+    def test_long_content_truncated_for_summary(self, memory: Keeper) -> None:
         """Long content gets a truncated summary."""
         long_content = " ".join(["word"] * 500)  # 500 words
         
@@ -215,23 +215,23 @@ class TestRecencyDecay:
     """Test ACT-R style memory decay."""
 
     @pytest.fixture
-    def memory(self, tmp_path: Path) -> AssociativeMemory:
-        return AssociativeMemory(store_path=tmp_path, decay_half_life_days=30.0)
+    def memory(self, tmp_path: Path) -> Keeper:
+        return Keeper(store_path=tmp_path, decay_half_life_days=30.0)
 
     def test_decay_parameter_accepted(self, tmp_path: Path) -> None:
         """Can configure decay half-life."""
-        mem = AssociativeMemory(store_path=tmp_path, decay_half_life_days=7.0)
+        mem = Keeper(store_path=tmp_path, decay_half_life_days=7.0)
         assert mem._decay_half_life_days == 7.0
 
     def test_decay_disabled_with_zero(self, tmp_path: Path) -> None:
         """Decay can be disabled by setting half-life to 0 or negative."""
-        mem = AssociativeMemory(store_path=tmp_path, decay_half_life_days=0)
+        mem = Keeper(store_path=tmp_path, decay_half_life_days=0)
         assert mem._decay_half_life_days == 0
         
-        mem2 = AssociativeMemory(store_path=tmp_path / "sub", decay_half_life_days=-1)
+        mem2 = Keeper(store_path=tmp_path / "sub", decay_half_life_days=-1)
         assert mem2._decay_half_life_days == -1
 
-    def test_recent_items_have_higher_effective_score(self, memory: AssociativeMemory) -> None:
+    def test_recent_items_have_higher_effective_score(self, memory: Keeper) -> None:
         """Items are returned with scores; decay applies at query time."""
         # Store an item
         memory.remember("The dharma is like a raft for crossing over.")
@@ -247,7 +247,7 @@ class TestRecencyDecay:
         # For a fresh item with 0 days elapsed, decay factor ≈ 1.0
         # So effective score should be close to raw similarity
 
-    def test_decay_formula_correctness(self, memory: AssociativeMemory) -> None:
+    def test_decay_formula_correctness(self, memory: Keeper) -> None:
         """Verify the decay formula: score × 0.5^(days/half_life)."""
         from datetime import timedelta
         from keep.types import Item
@@ -291,16 +291,16 @@ class TestEmbeddingCacheIntegration:
     """Test that embedding cache is actually used by the API."""
 
     @pytest.fixture
-    def memory(self, tmp_path: Path) -> AssociativeMemory:
-        return AssociativeMemory(store_path=tmp_path)
+    def memory(self, tmp_path: Path) -> Keeper:
+        return Keeper(store_path=tmp_path)
 
-    def test_cache_enabled_by_default(self, memory: AssociativeMemory) -> None:
+    def test_cache_enabled_by_default(self, memory: Keeper) -> None:
         """Embedding cache is enabled by default."""
         stats = memory.embedding_cache_stats()
         assert "entries" in stats
         assert "hit_rate" in stats
 
-    def test_repeated_queries_use_cache(self, memory: AssociativeMemory) -> None:
+    def test_repeated_queries_use_cache(self, memory: Keeper) -> None:
         """Repeated find() queries use cached embeddings."""
         # Store something to search
         memory.remember("The quick brown fox jumps over the lazy dog.")
@@ -319,12 +319,12 @@ class TestEmbeddingCacheIntegration:
     def test_cache_persists_across_sessions(self, tmp_path: Path) -> None:
         """Cache persists when memory is reopened."""
         # First session
-        mem1 = AssociativeMemory(store_path=tmp_path)
+        mem1 = Keeper(store_path=tmp_path)
         mem1.remember("Persistent content")
         mem1.find("persistent")
         
         # Second session (new instance, same store)
-        mem2 = AssociativeMemory(store_path=tmp_path)
+        mem2 = Keeper(store_path=tmp_path)
         mem2.find("persistent")
         
         stats = mem2.embedding_cache_stats()

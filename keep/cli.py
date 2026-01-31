@@ -16,7 +16,7 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from .api import AssociativeMemory
+from .api import Keeper
 from .types import Item
 from .logging_config import configure_quiet_mode
 
@@ -106,11 +106,11 @@ def _format_items(items: list[Item], as_json: bool = False) -> str:
         return "\n\n".join(_format_item(item, as_json=False) for item in items)
 
 
-def _get_memory(store: Optional[Path], collection: str) -> AssociativeMemory:
+def _get_memory(store: Optional[Path], collection: str) -> Keeper:
     """Initialize memory, handling errors gracefully."""
-    # store=None is fine — AssociativeMemory will use default (git root/.keep)
+    # store=None is fine — Keeper will use default (git root/.keep)
     try:
-        return AssociativeMemory(store, collection=collection)
+        return Keeper(store, collection=collection)
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)

@@ -37,8 +37,8 @@ local = [
     "pypdf>=5.0",
     "beautifulsoup4>=4.9",
 ]
-clawdbot = [
-    # For Clawdbot integration: use configured models
+openclaw = [
+    # For OpenClaw integration: use configured models
     "anthropic>=0.18.0",
 ]
 dev = [

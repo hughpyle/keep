@@ -30,14 +30,14 @@ from .types import Item, filter_non_system_tags
 COLLECTION_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-class AssociativeMemory:
+class Keeper:
     """
-    Persistent associative memory with semantic search capabilities.
-    
+    Semantic memory keeper - persistent storage with similarity search.
+
     Example:
-        mem = AssociativeMemory()
-        mem.update("file:///path/to/readme.md")
-        results = mem.find("installation instructions")
+        kp = Keeper()
+        kp.update("file:///path/to/readme.md")
+        results = kp.find("installation instructions")
     """
     
     def __init__(
