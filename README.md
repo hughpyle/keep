@@ -6,7 +6,7 @@
 
 ## What is this?
 
-A Python library that gives agents the ability to remember and recall information semantically across sessions. Think of it as "long-term memory with search" for AI agents.
+An agent skills package that provides semantic memory - persistent storage with vector similarity search. Agents can remember and recall information by meaning, not just keywords. Available as both a command-line tool and Python API.
 
 ```python
 from keep import AssociativeMemory
