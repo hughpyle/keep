@@ -12,7 +12,7 @@ import pytest
 # Skip all tests if chromadb not installed
 chromadb = pytest.importorskip("chromadb")
 
-from assocmem.store import ChromaStore, StoreResult
+from keep.store import ChromaStore, StoreResult
 
 
 # -----------------------------------------------------------------------------

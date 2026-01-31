@@ -6,7 +6,7 @@
 
 ## Overview
 
-assocmem can automatically integrate with Clawdbot's configured models when both are present. This enables:
+keep can automatically integrate with Clawdbot's configured models when both are present. This enables:
 
 - **Unified model configuration** — Configure once in Clawdbot, use everywhere
 - **Local-first by default** — Embeddings stay local, summarization can use configured LLM
@@ -18,7 +18,7 @@ assocmem can automatically integrate with Clawdbot's configured models when both
 
 ### Detection Priority
 
-When you initialize assocmem, it checks for providers in this order:
+When you initialize keep, it checks for providers in this order:
 
 1. **Clawdbot integration** (if `~/.clawdbot/clawdbot.json` exists and `ANTHROPIC_API_KEY` set)
 2. **MLX** (Apple Silicon local models)
@@ -33,7 +33,7 @@ When you initialize assocmem, it checks for providers in this order:
 
 **Stays local:**
 - **Embeddings** always use sentence-transformers (local, privacy-preserving)
-- **Store** remains in `.assocmem/` (not shared with Clawdbot)
+- **Store** remains in `.keep/` (not shared with Clawdbot)
 - **API keys** must be set via environment variables
 
 ---
@@ -45,26 +45,26 @@ When you initialize assocmem, it checks for providers in this order:
 If you already have Clawdbot configured:
 
 ```bash
-# 1. Install assocmem with Anthropic support
-pip install 'assocmem[clawdbot]'
+# 1. Install keep with Anthropic support
+pip install 'keep[clawdbot]'
 
 # 2. Set your Anthropic API key
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # 3. Initialize (auto-detects Clawdbot config)
-assocmem init
+keep init
 ```
 
 **Output:**
 ```
-✓ Store ready: /path/to/workspace/.assocmem
+✓ Store ready: /path/to/workspace/.keep
 ✓ Collections: ['default']
 
 ✓ Detected providers:
   Embedding: sentence-transformers (local)
   Summarization: anthropic (claude-sonnet-4)
 
-To customize, edit .assocmem/assocmem.toml
+To customize, edit .keep/keep.toml
 ```
 
 ### Option 2: Manual Override
@@ -73,7 +73,7 @@ Set `CLAWDBOT_CONFIG` to use a different config file:
 
 ```bash
 export CLAWDBOT_CONFIG=/custom/path/to/clawdbot.json
-assocmem init
+keep init
 ```
 
 ### Option 3: Disable Integration
@@ -82,7 +82,7 @@ Don't set `ANTHROPIC_API_KEY`, or remove `~/.clawdbot/clawdbot.json`:
 
 ```bash
 # Will fall back to MLX (Apple Silicon) or sentence-transformers
-assocmem init
+keep init
 ```
 
 ---
@@ -106,9 +106,9 @@ Default: `~/.clawdbot/clawdbot.json`
 }
 ```
 
-### assocmem Config Location
+### keep Config Location
 
-Created at: `.assocmem/assocmem.toml` (workspace root)
+Created at: `.keep/keep.toml` (workspace root)
 
 **Example (Clawdbot integration active):**
 ```toml
@@ -131,7 +131,7 @@ name = "composite"
 
 ## Model Mapping
 
-Clawdbot uses short model names. assocmem maps them to actual Anthropic API names:
+Clawdbot uses short model names. keep maps them to actual Anthropic API names:
 
 | Clawdbot Model | Anthropic API Model |
 |----------------|---------------------|
@@ -150,7 +150,7 @@ Clawdbot uses short model names. assocmem maps them to actual Anthropic API name
 |----------|---------|----------|
 | `ANTHROPIC_API_KEY` | Anthropic API authentication | For Anthropic provider |
 | `CLAWDBOT_CONFIG` | Override default config location | Optional |
-| `ASSOCMEM_STORE_PATH` | Override store location | Optional |
+| `KEEP_STORE_PATH` | Override store location | Optional |
 
 ---
 
@@ -161,7 +161,7 @@ Clawdbot uses short model names. assocmem maps them to actual Anthropic API name
 ✅ **Embeddings** — Always computed locally (sentence-transformers)  
 ✅ **Vector database** — ChromaDB runs locally  
 ✅ **Embedding cache** — Cached embeddings never leave your machine  
-✅ **Configuration** — Stored in `.assocmem/` locally
+✅ **Configuration** — Stored in `.keep/` locally
 
 ### What Uses API (Optional)
 
@@ -178,9 +178,9 @@ Clawdbot uses short model names. assocmem maps them to actual Anthropic API name
 
 **Setup:**
 ```bash
-pip install 'assocmem[clawdbot]'
+pip install 'keep[clawdbot]'
 export ANTHROPIC_API_KEY=sk-ant-...
-assocmem init
+keep init
 ```
 
 **Result:**
@@ -195,8 +195,8 @@ assocmem init
 
 **Setup:**
 ```bash
-pip install 'assocmem[local]'  # No API dependencies
-assocmem init
+pip install 'keep[local]'  # No API dependencies
+keep init
 ```
 
 **Result (Apple Silicon):**
@@ -217,9 +217,9 @@ assocmem init
 
 **Setup:**
 ```bash
-pip install 'assocmem[openai]'
+pip install 'keep[openai]'
 export OPENAI_API_KEY=sk-...
-assocmem init
+keep init
 ```
 
 **Result:**
@@ -234,7 +234,7 @@ assocmem init
 
 ### Override Provider After Init
 
-Edit `.assocmem/assocmem.toml`:
+Edit `.keep/keep.toml`:
 
 ```toml
 [summarization]
@@ -258,8 +258,8 @@ Not yet supported. Roadmap feature for v0.2.
 **Fix:**
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-rm -rf .assocmem  # Delete old config
-assocmem init  # Re-initialize
+rm -rf .keep  # Delete old config
+keep init  # Re-initialize
 ```
 
 ---
@@ -270,7 +270,7 @@ assocmem init  # Re-initialize
 
 **Fix:**
 ```bash
-pip install 'assocmem[clawdbot]'
+pip install 'keep[clawdbot]'
 ```
 
 ---
@@ -280,8 +280,8 @@ pip install 'assocmem[clawdbot]'
 **Solution:** Use local-first mode. Clawdbot config is ignored if no API key present.
 
 ```bash
-pip install 'assocmem[local]'  # MLX on Apple Silicon
-assocmem init
+pip install 'keep[local]'  # MLX on Apple Silicon
+keep init
 ```
 
 ---
@@ -324,23 +324,23 @@ Summaries are computed once per document. Using an API:
 
 ```bash
 # 1. Install with Clawdbot integration
-pip install 'assocmem[clawdbot]'
+pip install 'keep[clawdbot]'
 
 # 2. Set API key (from Anthropic console)
 export ANTHROPIC_API_KEY=sk-ant-api03-...
 
 # 3. Initialize (detects Clawdbot config automatically)
-assocmem init
-# ✓ Store ready: /Users/hugh/clawd/.assocmem
+keep init
+# ✓ Store ready: /Users/hugh/clawd/.keep
 # ✓ Detected providers:
 #   Embedding: sentence-transformers (local)
 #   Summarization: anthropic (claude-sonnet-4)
 
 # 4. Index a document
-assocmem update "file://./README.md" -t type=docs
+keep update "file://./README.md" -t type=docs
 
 # 5. Search semantically
-assocmem find "installation instructions" --limit 3
+keep find "installation instructions" --limit 3
 
 # 6. Verify costs are reasonable
 # Claude Haiku: ~$0.0001 per summary

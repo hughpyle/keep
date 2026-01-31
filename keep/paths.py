@@ -39,22 +39,22 @@ def get_default_store_path() -> Path:
     Get the default store path.
     
     Priority:
-    1. ASSOCMEM_STORE_PATH environment variable
-    2. .assocmem/ directory at git repository root
-    3. .assocmem/ in current working directory (if not in a repo)
+    1. KEEP_STORE_PATH environment variable
+    2. .keep/ directory at git repository root
+    3. .keep/ in current working directory (if not in a repo)
     
     Returns:
         Path to the store directory (may not exist yet).
     """
     # Check environment variable first
-    env_path = os.environ.get("ASSOCMEM_STORE_PATH")
+    env_path = os.environ.get("KEEP_STORE_PATH")
     if env_path:
         return Path(env_path).resolve()
     
     # Try to find git root
     git_root = find_git_root()
     if git_root:
-        return git_root / ".assocmem"
+        return git_root / ".keep"
     
     # Fall back to current directory
-    return Path.cwd() / ".assocmem"
+    return Path.cwd() / ".keep"

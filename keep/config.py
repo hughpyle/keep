@@ -20,7 +20,7 @@ except ImportError:
     tomli_w = None  # type: ignore
 
 
-CONFIG_FILENAME = "assocmem.toml"
+CONFIG_FILENAME = "keep.toml"
 CONFIG_VERSION = 1
 
 
@@ -106,7 +106,7 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
     # Check for API keys
     has_anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     has_openai_key = bool(
-        os.environ.get("ASSOCMEM_OPENAI_API_KEY") or 
+        os.environ.get("KEEP_OPENAI_API_KEY") or 
         os.environ.get("OPENAI_API_KEY")
     )
     

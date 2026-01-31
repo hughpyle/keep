@@ -4,7 +4,7 @@ Tests for tagging providers.
 
 import pytest
 
-from assocmem.providers.tagging import (
+from keep.providers.tagging import (
     KeywordTagger,
     EmbeddingDomainTagger,
     PassthroughTagger,

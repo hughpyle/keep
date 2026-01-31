@@ -15,9 +15,9 @@ The associative memory provides persistent storage with semantic search.
 ## Quick Start (Agent Reference)
 
 ```python
-from assocmem import AssociativeMemory, Item
+from keep import AssociativeMemory, Item
 
-# Initialize (defaults to .assocmem/ at git repo root)
+# Initialize (defaults to .keep/ at git repo root)
 mem = AssociativeMemory()
 
 # Index a document from URI (fetches, embeds, summarizes, tags automatically)
@@ -50,17 +50,17 @@ if mem.exists("file:///project/readme.md"):
 
 **CLI equivalent:**
 ```bash
-# Uses .assocmem/ at repo root by default
-assocmem update "file:///project/readme.md" -t project=myapp
-assocmem find "authentication flow" --limit 5 --json
-assocmem tag project myapp
+# Uses .keep/ at repo root by default
+keep update "file:///project/readme.md" -t project=myapp
+keep find "authentication flow" --limit 5 --json
+keep tag project myapp
 ```
 
 **Item fields:** `id` (URI or custom), `summary` (str), `tags` (dict), `score` (float, search results only). Timestamps are in tags: `item.created` and `item.updated` are property accessors.
 
-**Prerequisites:** Python 3.11+, `pip install assocmem[local]` (preferably in a venv)
+**Prerequisites:** Python 3.11+, `pip install keep[local]` (preferably in a venv)
 
-**Default store location:** `.assocmem/` at the git repository root (created automatically). Override with `ASSOCMEM_STORE_PATH` or explicit path argument. Add `.assocmem/` to `.gitignore` if the store should not be committed.
+**Default store location:** `.keep/` at the git repository root (created automatically). Override with `KEEP_STORE_PATH` or explicit path argument. Add `.keep/` to `.gitignore` if the store should not be committed.
 
 **Patterns documentation:**
 - [docs/patterns/domains.md](docs/patterns/domains.md) — domain-specific organization (software dev, research, etc.)
@@ -443,7 +443,7 @@ Providers are auto-detected at initialization based on platform and available AP
 See [initialize.md](initialize.md) for details.
 
 ```python
-from assocmem import AssociativeMemory
+from keep import AssociativeMemory
 
 mem = AssociativeMemory("/path/to/store")
 ```

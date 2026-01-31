@@ -1,6 +1,6 @@
 # Test Data
 
-This directory contains public domain texts for testing assocmem functionality.
+This directory contains public domain texts for testing keep functionality.
 
 ---
 
@@ -103,7 +103,7 @@ This directory contains public domain texts for testing assocmem functionality.
 
 ## Usage for Testing
 
-These texts provide diverse test cases for assocmem:
+These texts provide diverse test cases for keep:
 
 1. **Different languages:** English, Chinese (Classical and modern romanization), Japanese, Middle English, Pali (via translation)
 2. **Different formats:** PDF, plain text, JSON, Markdown, HTML (with markup)

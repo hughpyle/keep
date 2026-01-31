@@ -58,5 +58,5 @@ coverage.xml
 *~
 
 # Project specific
-.assocmem/
+.keep/
 test_extraction_store/

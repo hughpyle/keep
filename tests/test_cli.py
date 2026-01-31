@@ -25,7 +25,7 @@ def cli():
     """Run CLI command and return result."""
     def run(*args: str, input: str | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, "-m", "assocmem", *args],
+            [sys.executable, "-m", "keep", *args],
             capture_output=True,
             text=True,
             input=input,
@@ -45,7 +45,7 @@ class TestCliBasics:
         """CLI shows help with --help."""
         result = cli("--help")
         assert result.returncode == 0
-        assert "assocmem" in result.stdout.lower()
+        assert "keep" in result.stdout.lower()
         assert "find" in result.stdout
         assert "update" in result.stdout
     
@@ -88,8 +88,8 @@ class TestJsonOutput:
     def test_json_output_has_required_fields(self):
         """JSON item output includes id, summary, tags, score."""
         # Test the format helper directly
-        from assocmem.cli import _format_item
-        from assocmem.types import Item
+        from keep.cli import _format_item
+        from keep.types import Item
         
         item = Item(
             id="test:1",
@@ -108,8 +108,8 @@ class TestJsonOutput:
     
     def test_json_list_output(self):
         """JSON list output is a valid array."""
-        from assocmem.cli import _format_items
-        from assocmem.types import Item
+        from keep.cli import _format_items
+        from keep.types import Item
         
         items = [
             Item(id="test:1", summary="First", tags={}, score=0.9),
@@ -126,7 +126,7 @@ class TestJsonOutput:
     
     def test_json_empty_list(self):
         """Empty results produce empty JSON array."""
-        from assocmem.cli import _format_items
+        from keep.cli import _format_items
         
         output = _format_items([], as_json=True)
         parsed = json.loads(output)
@@ -143,8 +143,8 @@ class TestHumanOutput:
     
     def test_human_item_format(self):
         """Human-readable item shows id and summary."""
-        from assocmem.cli import _format_item
-        from assocmem.types import Item
+        from keep.cli import _format_item
+        from keep.types import Item
         
         item = Item(id="file:///doc.md", summary="A document about testing")
         output = _format_item(item, as_json=False)
@@ -154,8 +154,8 @@ class TestHumanOutput:
     
     def test_human_item_with_score(self):
         """Human-readable item shows score when present."""
-        from assocmem.cli import _format_item
-        from assocmem.types import Item
+        from keep.cli import _format_item
+        from keep.types import Item
         
         item = Item(id="test:1", summary="Test", score=0.95)
         output = _format_item(item, as_json=False)
@@ -164,15 +164,15 @@ class TestHumanOutput:
     
     def test_human_list_empty(self):
         """Empty list shows user-friendly message."""
-        from assocmem.cli import _format_items
+        from keep.cli import _format_items
         
         output = _format_items([], as_json=False)
         assert "No results" in output
     
     def test_human_list_separates_items(self):
         """Items are separated for easy reading."""
-        from assocmem.cli import _format_items
-        from assocmem.types import Item
+        from keep.cli import _format_items
+        from keep.types import Item
         
         items = [
             Item(id="test:1", summary="First"),
@@ -244,8 +244,8 @@ class TestUnixComposability:
     
     def test_json_output_pipeable(self):
         """JSON output can be processed with standard tools."""
-        from assocmem.cli import _format_items
-        from assocmem.types import Item
+        from keep.cli import _format_items
+        from keep.types import Item
         
         items = [
             Item(id="doc:1", summary="First doc", tags={"project": "alpha"}, score=0.9),
@@ -254,20 +254,20 @@ class TestUnixComposability:
         
         json_output = _format_items(items, as_json=True)
         
-        # Simulate: assocmem find "query" --json | jq '.[0].id'
+        # Simulate: keep find "query" --json | jq '.[0].id'
         parsed = json.loads(json_output)
         first_id = parsed[0]["id"]
         assert first_id == "doc:1"
         
-        # Simulate: assocmem find "query" --json | jq '.[] | select(.score > 0.85)'
+        # Simulate: keep find "query" --json | jq '.[] | select(.score > 0.85)'
         high_score = [item for item in parsed if item["score"] > 0.85]
         assert len(high_score) == 1
         assert high_score[0]["id"] == "doc:1"
     
     def test_line_oriented_for_wc(self):
         """Human output is countable with wc -l."""
-        from assocmem.cli import _format_items
-        from assocmem.types import Item
+        from keep.cli import _format_items
+        from keep.types import Item
         
         items = [
             Item(id=f"doc:{i}", summary=f"Doc {i}") 
@@ -283,8 +283,8 @@ class TestUnixComposability:
     
     def test_ids_extractable_from_json(self):
         """IDs can be extracted for use in other commands."""
-        from assocmem.cli import _format_items
-        from assocmem.types import Item
+        from keep.cli import _format_items
+        from keep.types import Item
         
         items = [
             Item(id="file:///a.md", summary="A"),
@@ -294,7 +294,7 @@ class TestUnixComposability:
         json_output = _format_items(items, as_json=True)
         parsed = json.loads(json_output)
         
-        # Simulate: assocmem find "query" --json | jq -r '.[].id' | xargs -I{} assocmem get {}
+        # Simulate: keep find "query" --json | jq -r '.[].id' | xargs -I{} keep get {}
         ids = [item["id"] for item in parsed]
         assert ids == ["file:///a.md", "file:///b.md"]
 

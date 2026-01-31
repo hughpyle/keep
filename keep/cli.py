@@ -2,9 +2,9 @@
 CLI interface for associative memory.
 
 Usage:
-    assocmem find "query text"
-    assocmem update file:///path/to/doc.md
-    assocmem get file:///path/to/doc.md
+    keepfind "query text"
+    keepupdate file:///path/to/doc.md
+    keepget file:///path/to/doc.md
 """
 
 import json
@@ -22,13 +22,13 @@ from .logging_config import configure_quiet_mode
 
 
 # Configure quiet mode by default (suppress verbose library output)
-# Set ASSOCMEM_VERBOSE=1 to enable verbose mode for debugging
-_verbose = sys.argv and "--verbose" in sys.argv or os.environ.get("ASSOCMEM_VERBOSE") == "1"
+# Set KEEP_VERBOSE=1 to enable verbose mode for debugging
+_verbose = sys.argv and "--verbose" in sys.argv or os.environ.get("KEEP_VERBOSE") == "1"
 configure_quiet_mode(quiet=not _verbose)
 
 
 app = typer.Typer(
-    name="assocmem",
+    name="keep",
     help="Associative memory with semantic search.",
     no_args_is_help=True,
 )
@@ -42,8 +42,8 @@ StoreOption = Annotated[
     Optional[Path],
     typer.Option(
         "--store", "-s",
-        envvar="ASSOCMEM_STORE_PATH",
-        help="Path to the store directory (default: .assocmem/ at repo root)"
+        envvar="KEEP_STORE_PATH",
+        help="Path to the store directory (default: .keep/ at repo root)"
     )
 ]
 
@@ -108,7 +108,7 @@ def _format_items(items: list[Item], as_json: bool = False) -> str:
 
 def _get_memory(store: Optional[Path], collection: str) -> AssociativeMemory:
     """Initialize memory, handling errors gracefully."""
-    # store=None is fine — AssociativeMemory will use default (git root/.assocmem)
+    # store=None is fine — AssociativeMemory will use default (git root/.keep)
     try:
         return AssociativeMemory(store, collection=collection)
     except Exception as e:
@@ -321,7 +321,7 @@ def init(
     mem = _get_memory(store, collection)
     
     # Show actual store path
-    actual_path = mem._store_path if hasattr(mem, '_store_path') else Path(store or ".assocmem")
+    actual_path = mem._store_path if hasattr(mem, '_store_path') else Path(store or ".keep")
     typer.echo(f"✓ Store ready: {actual_path}")
     typer.echo(f"✓ Collections: {mem.list_collections()}")
     
@@ -332,12 +332,12 @@ def init(
             typer.echo(f"\n✓ Detected providers:")
             typer.echo(f"  Embedding: {config.embedding.name}")
             typer.echo(f"  Summarization: {config.summarization.name}")
-            typer.echo(f"\nTo customize, edit {actual_path}/assocmem.toml")
+            typer.echo(f"\nTo customize, edit {actual_path}/keep.toml")
     except Exception:
         pass  # Don't fail if provider detection doesn't work
     
     # .gitignore reminder
-    typer.echo(f"\n⚠️  Remember to add .assocmem/ to .gitignore")
+    typer.echo(f"\n⚠️  Remember to add .keep/ to .gitignore")
 
 
 @app.command("system")

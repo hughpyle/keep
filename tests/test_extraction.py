@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Test PDF and HTML text extraction."""
 from pathlib import Path
-from assocmem.providers.documents import FileDocumentProvider
+from keep.providers.documents import FileDocumentProvider
 
 provider = FileDocumentProvider()
 

@@ -5,16 +5,16 @@
 ```bash
 # Recommended: Install with local models (sentence-transformers)
 # Includes sentence-transformers + MLX on Apple Silicon
-pip install 'assocmem[local]'
+pip install 'keep[local]'
 
 # Minimal: Core only (you'll need to configure providers manually)
-pip install assocmem
+pip install keep
 
 # API-based: Use OpenAI for embeddings (requires OPENAI_API_KEY)
-pip install 'assocmem[openai]'
+pip install 'keep[openai]'
 
 # Development: Include test tools
-pip install 'assocmem[dev]'
+pip install 'keep[dev]'
 ```
 
 **What gets installed:**
@@ -29,9 +29,9 @@ pip install 'assocmem[dev]'
 ## Basic Usage
 
 ```python
-from assocmem import AssociativeMemory
+from keep import AssociativeMemory
 
-# Initialize (creates .assocmem/ at git repo root by default)
+# Initialize (creates .keep/ at git repo root by default)
 mem = AssociativeMemory()
 
 # Index a document from URI
@@ -60,33 +60,33 @@ if mem.exists("file:///path/to/document.md"):
 
 ```bash
 # Initialize store
-assocmem init
+keep init
 
 # Index a document
-assocmem update file:///path/to/doc.md -t project=myapp
+keep update file:///path/to/doc.md -t project=myapp
 
 # Remember inline content
-assocmem remember "Meeting notes from today" -t type=meeting
+keep remember "Meeting notes from today" -t type=meeting
 
 # Search
-assocmem find "authentication" --limit 5
+keep find "authentication" --limit 5
 
 # Get by ID
-assocmem get file:///path/to/doc.md
+keep get file:///path/to/doc.md
 
 # Tag lookup
-assocmem tag project myapp
+keep tag project myapp
 
 # List collections
-assocmem collections
+keep collections
 
 # Output as JSON
-assocmem find "auth" --json
+keep find "auth" --json
 ```
 
 ## Configuration
 
-First run auto-detects best providers and creates `.assocmem/assocmem.toml`:
+First run auto-detects best providers and creates `.keep/keep.toml`:
 
 ```toml
 [store]
@@ -152,12 +152,12 @@ except ValueError as e:
 
 ```bash
 # Store location
-export ASSOCMEM_STORE_PATH=/path/to/store
+export KEEP_STORE_PATH=/path/to/store
 
 # OpenAI API key (if using openai provider)
 export OPENAI_API_KEY=sk-...
 # or
-export ASSOCMEM_OPENAI_API_KEY=sk-...
+export KEEP_OPENAI_API_KEY=sk-...
 ```
 
 ## Common Patterns
@@ -255,8 +255,8 @@ results = mem.query_fulltext("PostgreSQL")
 - Models cached in `~/.cache/huggingface/` or `~/.cache/mlx/`
 
 **ChromaDB errors**
-- Delete `.assocmem/chroma/` to reset
-- Embedding cache can be deleted: `.assocmem/embedding_cache.db`
+- Delete `.keep/chroma/` to reset
+- Embedding cache can be deleted: `.keep/embedding_cache.db`
 
 **Slow queries**
 - Check embedding dimension (lower is faster)

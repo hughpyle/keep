@@ -53,7 +53,7 @@ class OpenAIEmbedding:
     """
     Embedding provider using OpenAI's API.
     
-    Requires: ASSOCMEM_OPENAI_API_KEY or OPENAI_API_KEY environment variable.
+    Requires: KEEP_OPENAI_API_KEY or OPENAI_API_KEY environment variable.
     Requires: pip install openai
     """
     
@@ -86,10 +86,10 @@ class OpenAIEmbedding:
         self._dimension = self.MODEL_DIMENSIONS.get(model, 1536)
         
         # Resolve API key
-        key = api_key or os.environ.get("ASSOCMEM_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        key = api_key or os.environ.get("KEEP_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise ValueError(
-                "OpenAI API key required. Set ASSOCMEM_OPENAI_API_KEY or OPENAI_API_KEY"
+                "OpenAI API key required. Set KEEP_OPENAI_API_KEY or OPENAI_API_KEY"
             )
         
         self._client = OpenAI(api_key=key)

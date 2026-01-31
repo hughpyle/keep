@@ -175,7 +175,7 @@ class HttpDocumentProvider:
             with requests.get(
                 uri,
                 timeout=self.timeout,
-                headers={"User-Agent": "assocmem/0.1"},
+                headers={"User-Agent": "keep/0.1"},
                 stream=True,
             ) as response:
                 response.raise_for_status()

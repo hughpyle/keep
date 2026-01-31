@@ -1,8 +1,8 @@
 {
-  "id": "memory-assocmem",
+  "id": "memory-keep",
   "kind": "memory",
-  "name": "Associative Memory",
-  "description": "ACT-R decay + vector search memory with summarization",
+  "name": "Keep",
+  "description": "Semantic memory - remember everything, find by meaning",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",

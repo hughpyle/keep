@@ -2,13 +2,13 @@
 
 **Purpose:** Persistent memory for documents with semantic search.
 
-**Default store:** `.assocmem/` at git repo root (auto-created)
+**Default store:** `.keep/` at git repo root (auto-created)
 
 **Key principle:** The schema is data. System documents control behavior and can be queried/updated.
 
 ## Python API
 ```python
-from assocmem import AssociativeMemory, Item
+from keep import AssociativeMemory, Item
 mem = AssociativeMemory()  # uses default store
 
 # Core indexing
@@ -100,7 +100,7 @@ mem.set_context(
 
 ## CLI
 ```bash
-assocmem <cmd> [args]
+keep <cmd> [args]
 # Commands: find, similar, search, tag, update, get, exists, collections, init
 ```
 
