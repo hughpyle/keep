@@ -1,12 +1,14 @@
 """
 Test harness for assocmem.
 
-Sample documents:
+Sample documents in tests/data/:
 - mn62: Mahārāhulovāda Sutta (Buddha's advice to Rāhula) - English JSON
-- heartsutra: 佛說四十二章經 (Sutra in 42 Sections) - Chinese text
+- fortytwo_chapters: 佛說四十二章經 (Sutra in 42 Sections) - Chinese text
 - ancrenewisse: Ancrene Wisse (Anchoresses' Guide) - PDF
+- mumford_sticks_and_stones: Lewis Mumford on American architecture - English text
 
 These represent diverse content: languages, formats, traditions.
+Test data files are discovered dynamically to support adding more.
 """
 
 import pytest
@@ -37,9 +39,15 @@ def mn62_path(data_dir: Path) -> Path:
 
 
 @pytest.fixture
-def heartsutra_path(data_dir: Path) -> Path:
+def fortytwo_chapters_path(data_dir: Path) -> Path:
     """Sutra in 42 Sections - Chinese text."""
-    return data_dir / "heartsutra.txt"
+    return data_dir / "fortytwo_chapters.txt"
+
+
+@pytest.fixture
+def mumford_path(data_dir: Path) -> Path:
+    """Sticks and Stones - English text."""
+    return data_dir / "mumford_sticks_and_stones.txt"
 
 
 @pytest.fixture
@@ -142,42 +150,66 @@ class TestSystemTagProtection:
 # -----------------------------------------------------------------------------
 
 class TestDataFiles:
-    """Verify test data files are present and readable."""
-    
-    def test_mn62_exists(self, mn62_path: Path):
-        """Mahārāhulovāda Sutta file exists."""
-        assert mn62_path.exists()
-        assert mn62_path.suffix == ".json"
-    
+    """Verify test data files are present and readable.
+
+    Uses dynamic discovery to ensure all files in tests/data/ are tested.
+    """
+
+    def test_all_data_files_exist(self, data_dir: Path):
+        """All test data files (non-README) exist and are readable."""
+        files = list(data_dir.glob("*"))
+        data_files = [f for f in files if f.is_file() and f.name != "README.md"]
+
+        assert len(data_files) >= 4, f"Expected at least 4 data files, found {len(data_files)}"
+
+        for f in data_files:
+            assert f.exists(), f"File {f.name} should exist"
+            assert f.stat().st_size > 0, f"File {f.name} should not be empty"
+
+    def test_all_text_files_readable(self, data_dir: Path):
+        """All .txt files are readable as UTF-8."""
+        for txt_file in data_dir.glob("*.txt"):
+            content = txt_file.read_text(encoding="utf-8")
+            assert len(content) > 100, f"{txt_file.name} should have substantial content"
+
+    def test_all_json_files_valid(self, data_dir: Path):
+        """All .json files are valid JSON."""
+        import json
+        for json_file in data_dir.glob("*.json"):
+            data = json.loads(json_file.read_text())
+            assert isinstance(data, (dict, list)), f"{json_file.name} should parse as dict or list"
+
+    def test_all_pdf_files_valid(self, data_dir: Path):
+        """All .pdf files have valid PDF header."""
+        for pdf_file in data_dir.glob("*.pdf"):
+            content = pdf_file.read_bytes()
+            assert content.startswith(b"%PDF"), f"{pdf_file.name} should be a valid PDF"
+
+    # Specific content tests for known files
+
     def test_mn62_content(self, mn62_path: Path):
         """Mahārāhulovāda Sutta contains expected content."""
         import json
         data = json.loads(mn62_path.read_text())
-        # Check for key identifying content
         assert "mn62:0.2" in data
         assert "Rāhula" in data["mn62:0.2"]
-    
-    def test_heartsutra_exists(self, heartsutra_path: Path):
-        """Heart Sutra file exists."""
-        assert heartsutra_path.exists()
-        assert heartsutra_path.suffix == ".txt"
-    
-    def test_heartsutra_content(self, heartsutra_path: Path):
-        """Heart Sutra contains Chinese text."""
-        content = heartsutra_path.read_text()
-        # Check for Chinese characters
+
+    def test_fortytwo_chapters_content(self, fortytwo_chapters_path: Path):
+        """Sutra of Forty-Two Chapters contains Chinese text."""
+        content = fortytwo_chapters_path.read_text()
         assert "佛" in content  # Buddha
         assert "沙門" in content  # śramaṇa
-    
-    def test_ancrenewisse_exists(self, ancrenewisse_path: Path):
-        """Ancrene Wisse PDF file exists."""
-        assert ancrenewisse_path.exists()
-        assert ancrenewisse_path.suffix == ".pdf"
-    
+
     def test_ancrenewisse_is_pdf(self, ancrenewisse_path: Path):
         """Ancrene Wisse is a valid PDF."""
         content = ancrenewisse_path.read_bytes()
         assert content.startswith(b"%PDF")
+
+    def test_mumford_content(self, mumford_path: Path):
+        """Mumford text contains expected content."""
+        content = mumford_path.read_text()
+        assert "architecture" in content.lower()
+        assert "medieval" in content.lower()
 
 
 # -----------------------------------------------------------------------------
