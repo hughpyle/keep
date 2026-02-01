@@ -30,7 +30,8 @@ Ground yourself:
    ```bash
    keep find "what I'm about to work on"
    ```
-3. Only then: act.
+3. Be here, now, "aquí donde los papas queman", and reflect.
+3. Only then: act.  
 
 **After acting, reflect:**
 - What happened? What did I learn?
