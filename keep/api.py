@@ -17,7 +17,7 @@ import os
 import subprocess
 import sys
 
-from .config import load_or_create_config, StoreConfig
+from .config import load_or_create_config, save_config, StoreConfig, EmbeddingIdentity
 from .paths import get_default_store_path
 from .pending_summaries import PendingSummaryQueue
 from .providers import get_registry
@@ -105,6 +105,9 @@ class Keeper:
             cache_path=cache_path,
         )
         
+        # Validate or record embedding identity
+        self._validate_embedding_identity()
+        
         self._summarization_provider: SummarizationProvider = registry.create_summarization(
             self._config.summarization.name,
             self._config.summarization.params,
@@ -114,11 +117,61 @@ class Keeper:
         queue_path = self._store_path / "pending_summaries.db"
         self._pending_queue = PendingSummaryQueue(queue_path)
 
-        # Initialize store
+        # Initialize document store (canonical records)
+        from .document_store import DocumentStore
+        doc_store_path = self._store_path / "documents.db"
+        self._document_store = DocumentStore(doc_store_path)
+
+        # Initialize ChromaDB store (embedding index)
         self._store = ChromaStore(
             self._store_path,
             embedding_dimension=self._embedding_provider.dimension,
         )
+    
+    def _validate_embedding_identity(self) -> None:
+        """
+        Validate embedding provider matches stored identity, or record it.
+        
+        On first use, records the embedding identity to config.
+        On subsequent uses, validates that the current provider matches.
+        
+        Raises:
+            ValueError: If embedding provider changed incompatibly
+        """
+        # Get current provider's identity
+        current = EmbeddingIdentity(
+            provider=self._config.embedding.name,
+            model=getattr(self._embedding_provider, "model_name", "unknown"),
+            dimension=self._embedding_provider.dimension,
+        )
+        
+        stored = self._config.embedding_identity
+        
+        if stored is None:
+            # First use: record the identity
+            self._config.embedding_identity = current
+            save_config(self._config)
+        else:
+            # Validate compatibility
+            if (stored.provider != current.provider or 
+                stored.model != current.model or
+                stored.dimension != current.dimension):
+                raise ValueError(
+                    f"Embedding provider mismatch!\n"
+                    f"  Stored: {stored.provider}/{stored.model} ({stored.dimension}d)\n"
+                    f"  Current: {current.provider}/{current.model} ({current.dimension}d)\n"
+                    f"\n"
+                    f"Changing embedding providers invalidates existing embeddings.\n"
+                    f"Options:\n"
+                    f"  1. Use the original provider\n"
+                    f"  2. Delete .keep/ and re-index\n"
+                    f"  3. (Future) Run migration to re-embed with new provider"
+                )
+    
+    @property
+    def embedding_identity(self) -> EmbeddingIdentity | None:
+        """Current embedding identity (provider, model, dimension)."""
+        return self._config.embedding_identity
     
     def _resolve_collection(self, collection: Optional[str]) -> str:
         """Resolve collection name, validating if provided."""
@@ -164,12 +217,16 @@ class Keeper:
         """
         coll = self._resolve_collection(collection)
 
-        # Get existing item to preserve tags
+        # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
         existing_tags = {}
-        existing = self._store.get(coll, id)
-        if existing:
-            # Extract existing non-system tags
-            existing_tags = filter_non_system_tags(existing.tags)
+        existing_doc = self._document_store.get(coll, id)
+        if existing_doc:
+            existing_tags = filter_non_system_tags(existing_doc.tags)
+        else:
+            # Fall back to ChromaDB for legacy data
+            existing = self._store.get(coll, id)
+            if existing:
+                existing_tags = filter_non_system_tags(existing.tags)
 
         # Fetch document
         doc = self._document_provider.fetch(id)
@@ -201,7 +258,13 @@ class Keeper:
         if doc.content_type:
             tags["_content_type"] = doc.content_type
 
-        # Store
+        # Dual-write: document store (canonical) + ChromaDB (embedding index)
+        self._document_store.upsert(
+            collection=coll,
+            id=id,
+            summary=summary,
+            tags=tags,
+        )
         self._store.upsert(
             collection=coll,
             id=id,
@@ -215,8 +278,12 @@ class Keeper:
             self._spawn_processor()
 
         # Return the stored item
-        result = self._store.get(coll, id)
-        return result.to_item()
+        doc_record = self._document_store.get(coll, id)
+        return Item(
+            id=doc_record.id,
+            summary=doc_record.summary,
+            tags=doc_record.tags,
+        )
     
     def remember(
         self,
@@ -257,12 +324,15 @@ class Keeper:
             timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
             id = f"mem:{timestamp}"
 
-        # Get existing item to preserve tags
+        # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
         existing_tags = {}
-        existing = self._store.get(coll, id)
-        if existing:
-            # Extract existing non-system tags
-            existing_tags = filter_non_system_tags(existing.tags)
+        existing_doc = self._document_store.get(coll, id)
+        if existing_doc:
+            existing_tags = filter_non_system_tags(existing_doc.tags)
+        else:
+            existing = self._store.get(coll, id)
+            if existing:
+                existing_tags = filter_non_system_tags(existing.tags)
 
         # Generate embedding
         embedding = self._embedding_provider.embed(content)
@@ -289,7 +359,13 @@ class Keeper:
         # Add system tags
         tags["_source"] = "inline"
 
-        # Store
+        # Dual-write: document store (canonical) + ChromaDB (embedding index)
+        self._document_store.upsert(
+            collection=coll,
+            id=id,
+            summary=summary,
+            tags=tags,
+        )
         self._store.upsert(
             collection=coll,
             id=id,
@@ -303,8 +379,12 @@ class Keeper:
             self._spawn_processor()
 
         # Return the stored item
-        result = self._store.get(coll, id)
-        return result.to_item()
+        doc_record = self._document_store.get(coll, id)
+        return Item(
+            id=doc_record.id,
+            summary=doc_record.summary,
+            tags=doc_record.tags,
+        )
 
     # -------------------------------------------------------------------------
     # Query Operations
@@ -480,8 +560,21 @@ class Keeper:
     def get(self, id: str, *, collection: Optional[str] = None) -> Optional[Item]:
         """
         Retrieve a specific item by ID.
+        
+        Reads from document store (canonical), falls back to ChromaDB for legacy data.
         """
         coll = self._resolve_collection(collection)
+        
+        # Try document store first (canonical)
+        doc_record = self._document_store.get(coll, id)
+        if doc_record:
+            return Item(
+                id=doc_record.id,
+                summary=doc_record.summary,
+                tags=doc_record.tags,
+            )
+        
+        # Fall back to ChromaDB for legacy data
         result = self._store.get(coll, id)
         if result is None:
             return None
@@ -492,16 +585,20 @@ class Keeper:
         Check if an item exists in the store.
         """
         coll = self._resolve_collection(collection)
-        return self._store.exists(coll, id)
+        # Check document store first, then ChromaDB
+        return self._document_store.exists(coll, id) or self._store.exists(coll, id)
     
     def delete(self, id: str, *, collection: Optional[str] = None) -> bool:
         """
-        Delete an item from the store.
+        Delete an item from both stores.
         
         Returns True if item existed and was deleted.
         """
         coll = self._resolve_collection(collection)
-        return self._store.delete(coll, id)
+        # Delete from both stores
+        doc_deleted = self._document_store.delete(coll, id)
+        chroma_deleted = self._store.delete(coll, id)
+        return doc_deleted or chroma_deleted
     
     # -------------------------------------------------------------------------
     # Collection Management
@@ -511,13 +608,21 @@ class Keeper:
         """
         List all collections in the store.
         """
-        return self._store.list_collections()
+        # Merge collections from both stores
+        doc_collections = set(self._document_store.list_collections())
+        chroma_collections = set(self._store.list_collections())
+        return sorted(doc_collections | chroma_collections)
     
     def count(self, *, collection: Optional[str] = None) -> int:
         """
         Count items in a collection.
+        
+        Returns count from document store if available, else ChromaDB.
         """
         coll = self._resolve_collection(collection)
+        doc_count = self._document_store.count(coll)
+        if doc_count > 0:
+            return doc_count
         return self._store.count(coll)
     
     def embedding_cache_stats(self) -> dict:
@@ -565,7 +670,8 @@ class Keeper:
                 # Generate real summary
                 summary = self._summarization_provider.summarize(item.content)
 
-                # Update the stored item's summary
+                # Update summary in both stores
+                self._document_store.update_summary(item.collection, item.id, summary)
                 self._store.update_summary(item.collection, item.id, summary)
 
                 # Remove from queue
