@@ -1,8 +1,8 @@
 """
 Test harness for keep.
 
-Sample documents in tests/data/:
-- mn62: Mahārāhulovāda Sutta (Buddha's advice to Rāhula) - English JSON
+Sample documents in docs/library/:
+- an5.57: Upajjhāyasutta (Five Remembrances) - English JSON
 - fortytwo_chapters: 佛說四十二章經 (Sutra in 42 Sections) - Chinese text
 - ancrenewisse: Ancrene Wisse (Anchoresses' Guide) - PDF
 - mumford_sticks_and_stones: Lewis Mumford on American architecture - English text
@@ -29,13 +29,13 @@ from keep.types import Item
 @pytest.fixture
 def data_dir() -> Path:
     """Path to test data directory."""
-    return Path(__file__).parent / "data"
+    return Path(__file__).parent.parent / "docs" / "library"
 
 
 @pytest.fixture
-def mn62_path(data_dir: Path) -> Path:
-    """Mahārāhulovāda Sutta - English JSON."""
-    return data_dir / "mn62_translation-en-sujato.json"
+def an5_57_path(data_dir: Path) -> Path:
+    """Upajjhāyasutta (Five Remembrances) - English JSON."""
+    return data_dir / "an5.57_translation-en-sujato.json"
 
 
 @pytest.fixture
@@ -152,13 +152,13 @@ class TestSystemTagProtection:
 class TestDataFiles:
     """Verify test data files are present and readable.
 
-    Uses dynamic discovery to ensure all files in tests/data/ are tested.
+    Uses dynamic discovery to ensure all files in docs/library/ are tested.
     """
 
     def test_all_data_files_exist(self, data_dir: Path):
         """All test data files (non-README) exist and are readable."""
         files = list(data_dir.glob("*"))
-        data_files = [f for f in files if f.is_file() and f.name != "README.md"]
+        data_files = [f for f in files if f.is_file() and f.name != "INDEX.md"]
 
         assert len(data_files) >= 4, f"Expected at least 4 data files, found {len(data_files)}"
 
@@ -187,12 +187,12 @@ class TestDataFiles:
 
     # Specific content tests for known files
 
-    def test_mn62_content(self, mn62_path: Path):
-        """Mahārāhulovāda Sutta contains expected content."""
+    def test_an5_57_content(self, an5_57_path: Path):
+        """Upajjhāyasutta (Five Remembrances) contains expected content."""
         import json
-        data = json.loads(mn62_path.read_text())
-        assert "mn62:0.2" in data
-        assert "Rāhula" in data["mn62:0.2"]
+        data = json.loads(an5_57_path.read_text())
+        assert "an5.57:0.3" in data
+        assert "Reviewing" in data["an5.57:0.3"]
 
     def test_fortytwo_chapters_content(self, fortytwo_chapters_path: Path):
         """Sutra of Forty-Two Chapters contains Chinese text."""

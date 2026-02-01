@@ -223,7 +223,7 @@ The data is partitioned by *collection*. Collection names are lowercase ASCII wi
 
 within a collection:
 
-`update(id: URI, source_tags: dict)` - inserts or updates the document at `URI` into the store.  This process delegates the work of embedding, summarization and tagging, then updates the store.  Any `source_tags` are stored alongside the "derived tags" produced by the tagging service.
+`update(id: URI, source_tags: dict)` - inserts or updates the document at `URI` into the store.  This process delegates the work of embedding, summarization and tagging, then updates the store.  Any `source_tags` are merged with existing tags (overlay, not replace) and stored alongside the "derived tags" produced by the tagging service.
 
 > NOTE: update tasks are serialized to avoid any concurrency issues.
 

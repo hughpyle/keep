@@ -10,7 +10,7 @@ import platform
 is_apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
 
 # Get path relative to this test file
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "docs" / "library"
 
 # Read test content - use clean prose (Chinese sutra text)
 test_file = DATA_DIR / "fortytwo_chapters.txt"

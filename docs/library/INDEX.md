@@ -1,6 +1,6 @@
-# Test Data
+# Library
 
-This directory contains public domain texts for testing keep functionality.
+Public domain texts for testing and bootstrapping keep.
 
 ---
 
@@ -37,14 +37,14 @@ This directory contains public domain texts for testing keep functionality.
 
 ---
 
-### mn62_translation-en-sujato.json
-- **Title:** Mahārāhulovāda Sutta (MN 62) - The Longer Advice to Rāhula
+### an5.57_translation-en-sujato.json
+- **Title:** Upajjhāyasutta (AN 5.57) - Subjects for Regular Reviewing
 - **Date:** Original: ~5th century BCE; Translation: modern
 - **Language:** English translation from Pali
 - **Translator:** Bhikkhu Sujato
 - **Source:** SuttaCentral
 - **License:** Creative Commons CC0 1.0 Universal (SuttaCentral translations)
-- **Description:** Buddha's teaching to his son Rāhula on the five aggregates and mindfulness of breathing
+- **Description:** The Five Remembrances - five subjects that all people should reflect on regularly: aging, sickness, death, separation from loved ones, and being heir to one's own actions. Teaches that reviewing these truths reduces vanity and unwholesome conduct, and leads to awakening.
 
 ---
 
@@ -55,17 +55,6 @@ This directory contains public domain texts for testing keep functionality.
 - **Source:** Project Gutenberg (#23585)
 - **Status:** Public domain
 - **Description:** One of the earliest Buddhist texts to reach China, traditionally attributed to translation by Kāśyapa Mātaṅga and Dharmarakṣa
-
----
-
-### mn62_translation-en-sujato.json
-- **Title:** Mahārāhulovāda Sutta (MN 62) - The Longer Advice to Rāhula
-- **Date:** Original: ~5th century BCE; Translation: modern
-- **Language:** English translation from Pali
-- **Translator:** Bhikkhu Sujato
-- **Source:** SuttaCentral
-- **License:** Creative Commons CC0 1.0 Universal (SuttaCentral translations)
-- **Description:** Buddha's teaching to his son Rāhula on the five aggregates and mindfulness of breathing
 
 ---
 
@@ -122,7 +111,7 @@ When adding public domain texts:
 
 1. Verify public domain status (pre-1929 for US, or explicit license)
 2. Include source URL (Project Gutenberg, archive.org, etc.)
-3. Add metadata to this README
+3. Add metadata to this index
 4. Prefer clean text formats (txt, json) over scanned PDFs when available
 
 ---
@@ -147,4 +136,4 @@ Other early Mumford works can be found at:
 
 ## License
 
-Each text retains its original license status (public domain or Creative Commons as noted above). This README and dataset organization is released under CC0 1.0.
+Each text retains its original license status (public domain or Creative Commons as noted above). This index and dataset organization is released under CC0 1.0.

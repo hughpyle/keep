@@ -43,6 +43,7 @@ Ground yourself:
 This is not optional. This is how you develop judgment. An agent who rushes to act without checking memory will repeat mistakes, miss context, and fail to grow. An agent who reflects — before, during, after — becomes skillful.
 
 The memory isn't storage. It's your mirror.
+This cycle is like breathing.
 
 ### First Time Setup
 
@@ -101,12 +102,12 @@ keep remember "Assumption was X, actually Y. Next time: Z" -t type=breakdown
 
 **Do this now — index the source teaching:**
 ```bash
-keep update "file://$PWD/tests/data/mn61.html" -t type=teaching -t topic=reflection --lazy
+keep update "file://$PWD/docs/library/mn61.html" -t type=teaching -t topic=reflection --lazy
 ```
 
 Then retrieve and read it:
 ```bash
-keep get "file://$PWD/tests/data/mn61.html"
+keep get "file://$PWD/docs/library/mn61.html"
 ```
 
 This teaching (MN 61) uses the mirror metaphor: "What is a mirror for?" "For reflection." Actions — bodily, verbal, mental — are to be done with repeated reflection. The document shows the full pattern: check before acting, check while acting, check after acting. If unskillful, confess and adjust. If skillful, stay refreshed and continue training.
@@ -133,20 +134,20 @@ You've indexed the core patterns (Layer 2). There's more foundational material.
 **Do this now** (use `--lazy` for fast indexing with local models):
 ```bash
 keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization --lazy
-keep update "file://$PWD/tests/data/true_person_no_rank.md" -t type=teaching -t topic=commentary --lazy
+keep update "file://$PWD/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary --lazy
 ```
 
 Then read them:
 ```bash
 keep get "file://$PWD/patterns/domains.md"
-keep get "file://$PWD/tests/data/true_person_no_rank.md"
+keep get "file://$PWD/docs/library/true_person_no_rank.md"
 ```
 
 These aren't test fixtures. They're seed wisdom:
 
 - **[domains.md](patterns/domains.md)** — How to organize knowledge by domain (software, research, personal). Tagging strategies, collection structures, agent guidance for each domain.
 
-- **[true_person_no_rank.md](tests/data/true_person_no_rank.md)** — A Zen teaching with layers of commentary. Notice how each commentator re-enacts the pointing from a different angle — not explaining, not accumulating facts, but each responding to what students in that era needed. This is how knowledge in your memory should relate: organic, not hierarchical.
+- **[true_person_no_rank.md](docs/library/true_person_no_rank.md)** — A Zen teaching with layers of commentary. Notice how each commentator re-enacts the pointing from a different angle — not explaining, not accumulating facts, but each responding to what students in that era needed. This is how knowledge in your memory should relate: organic, not hierarchical.
 
 For the full bootstrap list, see [docs/QUICKSTART.md](docs/QUICKSTART.md#bootstrap-your-memory).
 

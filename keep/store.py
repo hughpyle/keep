@@ -49,13 +49,14 @@ class ChromaStore:
     pluggable backends (SQLite+faiss, Postgres+pgvector, etc.)
     """
     
-    def __init__(self, store_path: Path, embedding_dimension: int):
+    def __init__(self, store_path: Path, embedding_dimension: Optional[int] = None):
         """
         Initialize or open a ChromaDb store.
-        
+
         Args:
             store_path: Directory for persistent storage
-            embedding_dimension: Expected dimension of embeddings (for validation)
+            embedding_dimension: Expected dimension of embeddings (for validation).
+                Can be None for read-only access; will be set on first write.
         """
         try:
             import chromadb
@@ -131,7 +132,10 @@ class ChromaStore:
             summary: Human-readable summary (stored as document)
             tags: All tags (source + system + generated)
         """
-        if len(embedding) != self._embedding_dimension:
+        # Validate or set embedding dimension
+        if self._embedding_dimension is None:
+            self._embedding_dimension = len(embedding)
+        elif len(embedding) != self._embedding_dimension:
             raise ValueError(
                 f"Embedding dimension mismatch: expected {self._embedding_dimension}, "
                 f"got {len(embedding)}"

@@ -117,13 +117,19 @@ class TestEmbeddingIdentityValidation:
     def test_first_use_records_identity(self, temp_store: Path) -> None:
         """First Keeper use records embedding identity in config."""
         from keep.api import Keeper
-        
+
         kp = Keeper(store_path=temp_store)
-        
-        # Should have recorded identity
+
+        # Identity not recorded yet (lazy loading)
+        assert kp.embedding_identity is None
+
+        # Trigger lazy loading by using an operation that needs embeddings
+        kp.remember("test content")
+
+        # Now should have recorded identity
         assert kp.embedding_identity is not None
         assert kp.embedding_identity.dimension > 0
-        
+
         # Check it's in the saved config - config is saved to store_path directly
         assert (temp_store / "keep.toml").exists()
         loaded = load_config(temp_store)
@@ -144,10 +150,12 @@ class TestEmbeddingIdentityValidation:
     def test_mismatched_identity_raises_error(self, temp_store: Path) -> None:
         """Mismatched embedding identity raises ValueError."""
         from keep.api import Keeper
-        
-        # Create store with one identity
+
+        # Create store with one identity (trigger lazy loading)
         kp = Keeper(store_path=temp_store)
-        
+        kp.remember("test content")  # This records the identity
+        kp.close()
+
         # Manually change the stored identity to simulate provider change
         config = load_config(temp_store)
         config.embedding_identity = EmbeddingIdentity(
@@ -156,9 +164,10 @@ class TestEmbeddingIdentityValidation:
             dimension=1536,
         )
         save_config(config)
-        
-        # Opening with different provider should fail
+
+        # Opening with different provider should fail when we try to use embeddings
+        kp2 = Keeper(store_path=temp_store)
         with pytest.raises(ValueError) as exc_info:
-            Keeper(store_path=temp_store)
-        
+            kp2.remember("trigger validation")  # This triggers lazy loading and validation
+
         assert "mismatch" in str(exc_info.value).lower()
