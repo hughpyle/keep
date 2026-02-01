@@ -57,7 +57,7 @@ If you already have OpenClaw configured:
 
 ```bash
 # 1. Install keep with Anthropic support
-pip install 'keep[openclaw]'
+pip install 'keep-skill[openclaw]'
 
 # 2. Set your Anthropic API key
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -189,7 +189,7 @@ OpenClaw uses short model names. keep maps them to actual Anthropic API names:
 
 **Setup:**
 ```bash
-pip install 'keep[openclaw]'
+pip install 'keep-skill[openclaw]'
 export ANTHROPIC_API_KEY=sk-ant-...
 keep init
 ```
@@ -206,7 +206,7 @@ keep init
 
 **Setup:**
 ```bash
-pip install 'keep[local]'  # No API dependencies
+pip install 'keep-skill[local]'  # No API dependencies
 keep init
 ```
 
@@ -228,7 +228,7 @@ keep init
 
 **Setup:**
 ```bash
-pip install 'keep[openai]'
+pip install 'keep-skill[openai]'
 export OPENAI_API_KEY=sk-...
 keep init
 ```
@@ -281,7 +281,7 @@ keep init  # Re-initialize
 
 **Fix:**
 ```bash
-pip install 'keep[openclaw]'
+pip install 'keep-skill[openclaw]'
 ```
 
 ---
@@ -291,7 +291,7 @@ pip install 'keep[openclaw]'
 **Solution:** Use local-first mode. OpenClaw config is ignored if no API key present.
 
 ```bash
-pip install 'keep[local]'  # MLX on Apple Silicon
+pip install 'keep-skill[local]'  # MLX on Apple Silicon
 keep init
 ```
 
@@ -335,7 +335,7 @@ Summaries are computed once per document. Using an API:
 
 ```bash
 # 1. Install with OpenClaw integration
-pip install 'keep[openclaw]'
+pip install 'keep-skill[openclaw]'
 
 # 2. Set API key (from Anthropic console)
 export ANTHROPIC_API_KEY=sk-ant-api03-...

@@ -19,7 +19,7 @@ Override with `KEEP_STORE_PATH` environment variable or explicit path argument.
 # Install in a venv
 python -m venv .venv
 source .venv/bin/activate
-pip install keep[local]
+pip install 'keep-skill[local]'
 ```
 
 ```python

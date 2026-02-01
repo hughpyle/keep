@@ -54,11 +54,11 @@ kp.remember("User prefers OAuth2 with PKCE for authentication")
 
 ```bash
 # With pip:
-pip install 'keep[local]'
+pip install 'keep-skill[local]'
 
 # Or with uv (faster, auto-manages isolated environment):
 # Install uv first: https://docs.astral.sh/uv/getting-started/installation/
-uv tool install 'keep[local]'
+uv tool install 'keep-skill[local]'
 ```
 
 #### For developers (working on keep itself)
@@ -82,10 +82,10 @@ uv pip install -e '.[local,dev]'
 
 ```bash
 # OpenClaw integration (uses your configured models):
-pip install 'keep[openclaw]'
+pip install 'keep-skill[openclaw]'
 
 # Minimal install (configure providers manually):
-pip install keep
+pip install keep-skill
 ```
 
 **After installation:**
@@ -125,7 +125,7 @@ If you have [OpenClaw](https://openclaw.dev) configured, keep automatically uses
 
 ```bash
 # Install with OpenClaw support
-pip install 'keep[openclaw]'
+pip install 'keep-skill[openclaw]'
 
 # Set your Anthropic API key (if using Claude models)
 export ANTHROPIC_API_KEY=sk-ant-...
