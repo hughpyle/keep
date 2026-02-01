@@ -5,26 +5,26 @@
 ```bash
 # Recommended: Install with local models (sentence-transformers)
 # Includes sentence-transformers + MLX on Apple Silicon
-pip install 'keep[local]'
+pip install 'keep-skill[local]'
 
 # Minimal: Core only (you'll need to configure providers manually)
-pip install keep
+pip install keep-skill
 
 # API-based: Use OpenAI for embeddings (requires OPENAI_API_KEY)
-pip install 'keep[openai]'
+pip install 'keep-skill[openai]'
 
 # Development: Include test tools
-pip install 'keep[dev]'
+pip install 'keep-skill[dev]'
 ```
 
 **What gets installed:**
 
 | Extra | Dependencies | Use case |
 |-------|--------------|----------|
-| `[local]` | sentence-transformers, MLX (Apple Silicon only) | Best default - works offline |
-| `[openai]` | openai SDK | API-based, requires key, high quality |
-| `[dev]` | pytest, pytest-cov | For running tests |
-| (none) | chromadb, typer, tomli-w | Minimal - configure providers yourself |
+| `keep-skill[local]` | sentence-transformers, MLX (Apple Silicon only) | Best default - works offline |
+| `keep-skill[openai]` | openai SDK | API-based, requires key, high quality |
+| `keep-skill[dev]` | pytest, pytest-cov | For running tests |
+| `keep-skill` | chromadb, typer, tomli-w | Minimal - configure providers yourself |
 
 ## Basic Usage
 

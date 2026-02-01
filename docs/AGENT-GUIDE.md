@@ -59,7 +59,7 @@ keep tag project myapp
 
 **Item fields:** `id` (URI or custom), `summary` (str), `tags` (dict), `score` (float, search results only). Timestamps are in tags: `item.created` and `item.updated` are property accessors.
 
-**Prerequisites:** Python 3.11+, `pip install keep[local]` (preferably in a venv)
+**Prerequisites:** Python 3.11+, `pip install 'keep-skill[local]'` (preferably in a venv)
 
 **Default store location:** `.keep/` at the git repository root (created automatically). Override with `KEEP_STORE_PATH` or explicit path argument. Add `.keep/` to `.gitignore` if the store should not be committed.
 

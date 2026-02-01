@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "keep"
+name = "keep-skill"
 version = "0.1.0"
 description = "Semantic memory - remember and search documents by meaning"
 readme = "README.md"
