@@ -50,22 +50,41 @@ kp.remember("User prefers OAuth2 with PKCE for authentication")
 
 ### Installation
 
+#### For users (just want the `keep` command)
+
 ```bash
-# Recommended: Install with local models
+# With pip:
 pip install 'keep[local]'
 
-# Faster alternative (recommended):
-uv pip install 'keep[local]'  # ~60 seconds vs ~300 seconds
-
-# Or install as a CLI tool:
+# Or with uv (faster, auto-manages isolated environment):
+# Install uv first: https://docs.astral.sh/uv/getting-started/installation/
 uv tool install 'keep[local]'
-# Then add ~/.local/bin to your PATH if not already:
-# export PATH="$HOME/.local/bin:$PATH"
+```
 
-# OpenClaw integration (uses configured models):
+#### For developers (working on keep itself)
+
+```bash
+git clone https://github.com/hughpyle/keep
+cd keep
+
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install in editable mode with local models
+pip install -e '.[local,dev]'
+
+# Or with uv (faster):
+uv pip install -e '.[local,dev]'
+```
+
+#### Optional extras
+
+```bash
+# OpenClaw integration (uses your configured models):
 pip install 'keep[openclaw]'
 
-# Or minimal install (configure providers manually)
+# Minimal install (configure providers manually):
 pip install keep
 ```
 

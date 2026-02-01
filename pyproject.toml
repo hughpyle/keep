@@ -23,14 +23,15 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 
-[project.urls]
-Homepage = "https://github.com/hughpyle/keep"
-Repository = "https://github.com/hughpyle/keep"
 dependencies = [
     "chromadb>=0.4",
     "typer>=0.9",
     "tomli-w>=1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/hughpyle/keep"
+Repository = "https://github.com/hughpyle/keep"
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
