@@ -11,7 +11,7 @@ import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 # tomli_w for writing TOML (tomllib is read-only)
 try:
@@ -21,7 +21,7 @@ except ImportError:
 
 
 CONFIG_FILENAME = "keep.toml"
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2  # Bumped for embedding identity tracking
 
 
 @dataclass
@@ -29,6 +29,43 @@ class ProviderConfig:
     """Configuration for a single provider."""
     name: str
     params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class EmbeddingIdentity:
+    """
+    Identity of an embedding model for compatibility checking.
+    
+    Two embeddings are compatible only if they have the same identity.
+    Different models, even with the same dimension, produce incompatible vectors.
+    """
+    provider: str  # e.g., "sentence-transformers", "openai"
+    model: str     # e.g., "all-MiniLM-L6-v2", "text-embedding-3-small"
+    dimension: int # e.g., 384, 1536
+    
+    @property
+    def key(self) -> str:
+        """
+        Short key for collection naming.
+        
+        Format: {provider}_{model_slug}
+        e.g., "st_MiniLM_L6_v2", "openai_3_small"
+        """
+        # Simplify model name for use in collection names
+        model_slug = self.model.replace("-", "_").replace(".", "_")
+        # Remove common prefixes
+        for prefix in ["all_", "text_embedding_"]:
+            if model_slug.lower().startswith(prefix):
+                model_slug = model_slug[len(prefix):]
+        # Shorten provider names
+        provider_short = {
+            "sentence-transformers": "st",
+            "openai": "openai",
+            "gemini": "gemini",
+            "ollama": "ollama",
+        }.get(self.provider, self.provider[:6])
+        
+        return f"{provider_short}_{model_slug}"
 
 
 @dataclass
@@ -42,6 +79,9 @@ class StoreConfig:
     embedding: ProviderConfig = field(default_factory=lambda: ProviderConfig("sentence-transformers"))
     summarization: ProviderConfig = field(default_factory=lambda: ProviderConfig("truncate"))
     document: ProviderConfig = field(default_factory=lambda: ProviderConfig("composite"))
+    
+    # Embedding identity (set after first use, used for validation)
+    embedding_identity: Optional[EmbeddingIdentity] = None
     
     @property
     def config_path(self) -> Path:
@@ -272,7 +312,20 @@ def load_config(store_path: Path) -> StoreConfig:
         embedding=parse_provider(data.get("embedding", {"name": "sentence-transformers"})),
         summarization=parse_provider(data.get("summarization", {"name": "truncate"})),
         document=parse_provider(data.get("document", {"name": "composite"})),
+        embedding_identity=parse_embedding_identity(data.get("embedding_identity")),
     )
+
+
+def parse_embedding_identity(data: dict | None) -> EmbeddingIdentity | None:
+    """Parse embedding identity from config data."""
+    if data is None:
+        return None
+    provider = data.get("provider")
+    model = data.get("model")
+    dimension = data.get("dimension")
+    if provider and model and dimension:
+        return EmbeddingIdentity(provider=provider, model=model, dimension=dimension)
+    return None
 
 
 def save_config(config: StoreConfig) -> None:
@@ -302,6 +355,14 @@ def save_config(config: StoreConfig) -> None:
         "summarization": provider_to_dict(config.summarization),
         "document": provider_to_dict(config.document),
     }
+    
+    # Add embedding identity if set
+    if config.embedding_identity:
+        data["embedding_identity"] = {
+            "provider": config.embedding_identity.provider,
+            "model": config.embedding_identity.model,
+            "dimension": config.embedding_identity.dimension,
+        }
     
     with open(config.config_path, "wb") as f:
         tomli_w.dump(data, f)

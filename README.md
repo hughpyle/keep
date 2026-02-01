@@ -223,7 +223,11 @@ MIT
 
 ## Contributing
 
-This is an early draft. Issues and PRs welcome, especially for:
+This project is published on [PyPI as `keep-skill`](https://pypi.org/project/keep-skill/).
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on versioning and backward compatibility.
+
+Issues and PRs welcome, especially for:
 - Additional provider implementations
 - Performance improvements
 - Documentation clarity
