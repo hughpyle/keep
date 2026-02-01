@@ -4,7 +4,7 @@ from pathlib import Path
 from keep import Keeper
 
 # Get path relative to this test file
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "docs" / "library"
 
 # Create temporary memory
 mem = Keeper(store_path=Path(__file__).parent / "test_extraction_store")

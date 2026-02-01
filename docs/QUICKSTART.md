@@ -310,10 +310,10 @@ Use `--lazy` for fast indexing (recommended with local MLX models):
 keep update "file://$PWD/patterns/conversations.md" -t type=pattern -t topic=process --lazy
 keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization --lazy
 
-# Seed wisdom (from tests/data/)
-keep update "file://$PWD/tests/data/mn61.html" -t type=teaching -t topic=reflection --lazy
-keep update "file://$PWD/tests/data/true_person_no_rank.md" -t type=teaching -t topic=commentary --lazy
-keep update "file://$PWD/tests/data/impermanence_verse.txt" -t type=teaching -t topic=impermanence --lazy
+# Seed wisdom (from docs/library/)
+keep update "file://$PWD/docs/library/mn61.html" -t type=teaching -t topic=reflection --lazy
+keep update "file://$PWD/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary --lazy
+keep update "file://$PWD/docs/library/impermanence_verse.txt" -t type=teaching -t topic=impermanence --lazy
 
 # Summaries generate in background - check progress:
 keep process-pending --json

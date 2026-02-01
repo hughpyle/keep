@@ -85,33 +85,17 @@ class Keeper:
         
         # Load or create configuration
         self._config: StoreConfig = load_or_create_config(self._store_path)
-        
-        # Initialize providers
+
+        # Initialize document provider (needed for most operations)
         registry = get_registry()
-        
         self._document_provider: DocumentProvider = registry.create_document(
             self._config.document.name,
             self._config.document.params,
         )
-        
-        # Create embedding provider with caching
-        base_embedding_provider = registry.create_embedding(
-            self._config.embedding.name,
-            self._config.embedding.params,
-        )
-        cache_path = self._store_path / "embedding_cache.db"
-        self._embedding_provider: EmbeddingProvider = CachingEmbeddingProvider(
-            base_embedding_provider,
-            cache_path=cache_path,
-        )
-        
-        # Validate or record embedding identity
-        self._validate_embedding_identity()
-        
-        self._summarization_provider: SummarizationProvider = registry.create_summarization(
-            self._config.summarization.name,
-            self._config.summarization.params,
-        )
+
+        # Lazy-loaded providers (created on first use to avoid network access for read-only ops)
+        self._embedding_provider: Optional[EmbeddingProvider] = None
+        self._summarization_provider: Optional[SummarizationProvider] = None
 
         # Initialize pending summary queue
         queue_path = self._store_path / "pending_summaries.db"
@@ -123,37 +107,78 @@ class Keeper:
         self._document_store = DocumentStore(doc_store_path)
 
         # Initialize ChromaDB store (embedding index)
+        # Use dimension from stored identity if available (allows offline read-only access)
+        embedding_dim = None
+        if self._config.embedding_identity:
+            embedding_dim = self._config.embedding_identity.dimension
         self._store = ChromaStore(
             self._store_path,
-            embedding_dimension=self._embedding_provider.dimension,
+            embedding_dimension=embedding_dim,
         )
     
-    def _validate_embedding_identity(self) -> None:
+    def _get_embedding_provider(self) -> EmbeddingProvider:
+        """
+        Get embedding provider, creating it lazily on first use.
+
+        This allows read-only operations to work offline without loading
+        the embedding model (which may try to reach HuggingFace).
+        """
+        if self._embedding_provider is None:
+            registry = get_registry()
+            base_provider = registry.create_embedding(
+                self._config.embedding.name,
+                self._config.embedding.params,
+            )
+            cache_path = self._store_path / "embedding_cache.db"
+            self._embedding_provider = CachingEmbeddingProvider(
+                base_provider,
+                cache_path=cache_path,
+            )
+            # Validate or record embedding identity
+            self._validate_embedding_identity(self._embedding_provider)
+            # Update store's embedding dimension if it wasn't known at init
+            if self._store._embedding_dimension is None:
+                self._store._embedding_dimension = self._embedding_provider.dimension
+        return self._embedding_provider
+
+    def _get_summarization_provider(self) -> SummarizationProvider:
+        """
+        Get summarization provider, creating it lazily on first use.
+        """
+        if self._summarization_provider is None:
+            registry = get_registry()
+            self._summarization_provider = registry.create_summarization(
+                self._config.summarization.name,
+                self._config.summarization.params,
+            )
+        return self._summarization_provider
+
+    def _validate_embedding_identity(self, provider: EmbeddingProvider) -> None:
         """
         Validate embedding provider matches stored identity, or record it.
-        
+
         On first use, records the embedding identity to config.
         On subsequent uses, validates that the current provider matches.
-        
+
         Raises:
             ValueError: If embedding provider changed incompatibly
         """
         # Get current provider's identity
         current = EmbeddingIdentity(
             provider=self._config.embedding.name,
-            model=getattr(self._embedding_provider, "model_name", "unknown"),
-            dimension=self._embedding_provider.dimension,
+            model=getattr(provider, "model_name", "unknown"),
+            dimension=provider.dimension,
         )
-        
+
         stored = self._config.embedding_identity
-        
+
         if stored is None:
             # First use: record the identity
             self._config.embedding_identity = current
             save_config(self._config)
         else:
             # Validate compatibility
-            if (stored.provider != current.provider or 
+            if (stored.provider != current.provider or
                 stored.model != current.model or
                 stored.dimension != current.dimension):
                 raise ValueError(
@@ -167,7 +192,7 @@ class Keeper:
                     f"  2. Delete .keep/ and re-index\n"
                     f"  3. (Future) Run migration to re-embed with new provider"
                 )
-    
+
     @property
     def embedding_identity(self) -> EmbeddingIdentity | None:
         """Current embedding identity (provider, model, dimension)."""
@@ -232,7 +257,7 @@ class Keeper:
         doc = self._document_provider.fetch(id)
 
         # Generate embedding
-        embedding = self._embedding_provider.embed(doc.content)
+        embedding = self._get_embedding_provider().embed(doc.content)
 
         # Generate summary (or queue for later if lazy)
         if lazy:
@@ -244,7 +269,7 @@ class Keeper:
             # Queue for background processing
             self._pending_queue.enqueue(id, coll, doc.content)
         else:
-            summary = self._summarization_provider.summarize(doc.content)
+            summary = self._get_summarization_provider().summarize(doc.content)
 
         # Build tags: existing + new (new overrides on collision)
         tags = {**existing_tags}
@@ -335,7 +360,7 @@ class Keeper:
                 existing_tags = filter_non_system_tags(existing.tags)
 
         # Generate embedding
-        embedding = self._embedding_provider.embed(content)
+        embedding = self._get_embedding_provider().embed(content)
 
         # Generate summary (or queue for later if lazy)
         if lazy:
@@ -347,7 +372,7 @@ class Keeper:
             # Queue for background processing
             self._pending_queue.enqueue(id, coll, content)
         else:
-            summary = self._summarization_provider.summarize(content)
+            summary = self._get_summarization_provider().summarize(content)
 
         # Build tags: existing + new (new overrides on collision)
         tags = {**existing_tags}
@@ -452,7 +477,7 @@ class Keeper:
         coll = self._resolve_collection(collection)
         
         # Embed query
-        embedding = self._embedding_provider.embed(query)
+        embedding = self._get_embedding_provider().embed(query)
         
         # Search (fetch extra to account for re-ranking)
         fetch_limit = limit * 2 if self._decay_half_life_days > 0 else limit
@@ -483,7 +508,7 @@ class Keeper:
             raise KeyError(f"Item not found: {id}")
         
         # Search using the summary's embedding
-        embedding = self._embedding_provider.embed(item.summary)
+        embedding = self._get_embedding_provider().embed(item.summary)
         actual_limit = limit + 1 if not include_self else limit
         results = self._store.query_embedding(coll, embedding, limit=actual_limit)
         
@@ -630,7 +655,10 @@ class Keeper:
         Get embedding cache statistics.
 
         Returns dict with: entries, hits, misses, hit_rate, cache_path
+        Returns {"loaded": False} if embedding provider hasn't been loaded yet.
         """
+        if self._embedding_provider is None:
+            return {"loaded": False}
         if isinstance(self._embedding_provider, CachingEmbeddingProvider):
             return self._embedding_provider.stats()
         return {"enabled": False}
@@ -668,7 +696,7 @@ class Keeper:
 
             try:
                 # Generate real summary
-                summary = self._summarization_provider.summarize(item.content)
+                summary = self._get_summarization_provider().summarize(item.content)
 
                 # Update summary in both stores
                 self._document_store.update_summary(item.collection, item.id, summary)
@@ -768,11 +796,12 @@ class Keeper:
 
         Good practice to call when done, though Python's GC will clean up eventually.
         """
-        # Close embedding cache if it exists
-        if hasattr(self._embedding_provider, '_cache'):
-            cache = self._embedding_provider._cache
-            if hasattr(cache, 'close'):
-                cache.close()
+        # Close embedding cache if it was loaded
+        if self._embedding_provider is not None:
+            if hasattr(self._embedding_provider, '_cache'):
+                cache = self._embedding_provider._cache
+                if hasattr(cache, 'close'):
+                    cache.close()
 
         # Close pending summary queue
         if hasattr(self, '_pending_queue'):

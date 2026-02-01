@@ -4,7 +4,7 @@ from pathlib import Path
 from keep.providers.documents import FileDocumentProvider
 
 # Get path relative to this test file
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "docs" / "library"
 
 provider = FileDocumentProvider()
 
