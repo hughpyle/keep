@@ -60,3 +60,4 @@ coverage.xml
 # Project specific
 .keep/
 test_extraction_store/
+.DS_Store
