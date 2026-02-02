@@ -75,7 +75,7 @@ packages = ["keep"]
 artifacts = [
     "SKILL.md",
     "patterns/**/*.md",
-    "docs/builtin/**/*.md",
+    "docs/system/**/*.md",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -83,7 +83,7 @@ include = [
     "/keep",
     "/SKILL.md",
     "/patterns",
-    "/docs/builtin",
+    "/docs/system",
     "/README.md",
     "/LICENSE",
 ]

@@ -245,7 +245,7 @@ class TestVisibilityPatterns:
 # -----------------------------------------------------------------------------
 
 class TestNowdoc:
-    """Tests for nowdoc constants and builtin content."""
+    """Tests for nowdoc constants and system content."""
 
     def test_nowdoc_id_constant(self):
         """NOWDOC_ID is exported and has expected format."""
@@ -254,11 +254,11 @@ class TestNowdoc:
         assert NOWDOC_ID == "_now:default"
         assert NOWDOC_ID.startswith("_")  # System-managed ID
 
-    def test_builtin_now_md_exists(self):
-        """Builtin now.md file exists in docs/builtin/ with frontmatter."""
-        from keep.api import _load_builtin
+    def test_system_now_md_exists(self):
+        """System now.md file exists in docs/system/ with frontmatter."""
+        from keep.api import _load_system
 
-        content, tags = _load_builtin("now.md")
+        content, tags = _load_system("now.md")
         assert "# Now" in content
         assert "keep find" in content
         assert "keep remember" in content
@@ -266,10 +266,10 @@ class TestNowdoc:
         assert isinstance(tags, dict)
         assert len(tags) > 0  # Has at least one tag from frontmatter
 
-    def test_load_builtin_missing_file(self):
-        """_load_builtin raises FileNotFoundError for missing files."""
-        from keep.api import _load_builtin
+    def test_load_system_missing_file(self):
+        """_load_system raises FileNotFoundError for missing files."""
+        from keep.api import _load_system
         import pytest
 
         with pytest.raises(FileNotFoundError):
-            _load_builtin("nonexistent.md")
+            _load_system("nonexistent.md")

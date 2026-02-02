@@ -1,5 +1,26 @@
+* what is the "warning" for HF
 
-* "now" and "projects", "topics" tags
+* tags themselves should have summaries and full descriptions
+    i.e. somewhere in the "system" store is a docuemnt that describes a tag
+    of course it's optional, you can just tag things in an open-ended way
+    but sure would be useful for convention, as well as maintenance, if tags are documented by whoever uses them.
+    
+    * these are "system" documents, which is kinda a new thing
+      (nowdoc is also a system document because it has specific behavior, but that has hard-coded id)
+      (these could have ids such as `_tag:foo`)
+    * then: provide a set of predefined tag-descriptions as files in `docs/system` that get loaded on `init`
+      and include in there: a description of the "project" tag, a description of the "topic" tag
+      (and whatever else we decide to pre-load... bearing in mind that pre-loaded content is for convention not specification!)
+    * "project" and "topic" are the first two
+      - placeholder descriptions for these are fine initially
+      - load from 'docs/system'
+
+    then when displaying a tag, mark it up with an asterisk if exists a definition-for-that-tag doc
+    and give a shortcut `keep tag --describe` or something
+
+
+* enable multiple "now" docs by allowing "one for each tag"
+    - with "projects", "topics" tags
     - this replaces all the "top-of-mind" stuff in `later/` (except for "recent")
         - the later thing for "topics" is more explicit than using tasks/projects, but same goal
         - actually "topics" is a much better word than "tasks" because this is not really a task-focused skill
@@ -31,18 +52,6 @@
     - on update, save previous version before overwriting
     - requires: version storage mechanism, history retrieval API
     - needs more design work
-
-* tags themselves should have summaries and full descriptions
-    i.e. somewhere in the "system" store is a docuemnt that describes a tag
-    of course it's optional, you can just tag things in an open-ended way
-    but sure would be useful for convention, as well as maintenance, if tags are documented by whoever uses them.
-    doesn't really need to be in the "system" namespace but yeah it kihda does
-
-    * then: provide a set of predefined things as files in `docs/system` that get loaded on `init`
-      and include in there: a description of the "project" tag, a description of the "topic" tag
-      (and whatever else we decide to pre-load... bearing in mind that pre-loaded content is for convention not specification!)
-    * "project" and "topic" are the first two
-      - placeholder descriptions for these are fine initially
 
 * tag-by-model
     - is there a model-supported tagging? what would that need to be useful? (specific domains??)
@@ -179,5 +188,8 @@ Done:
 . `keep` with no args shows current working context (the "now")
 . `keep now` command to get/set current context
 . get_now() and set_now() API methods with auto-create on first access
-. default "now" content in docs/builtin/now.md (pre-loaded content pattern)
+. default "now" content in docs/system/now.md (pre-loaded content pattern)
 . unified output format: ID [tag1=val1, tag2=val2, ...] with all tags shown
+. renamed 'builtin' to 'system' (docs/builtin → docs/system, _load_builtin → _load_system)
+. `keep tag xyz` lists VALUES for key (not documents)
+. `keep tag xyz=foo` lists DOCUMENTS with that tag
