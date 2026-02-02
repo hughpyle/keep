@@ -256,20 +256,20 @@ class TestNowdoc:
 
     def test_system_now_md_exists(self):
         """System now.md file exists in docs/system/ with frontmatter."""
-        from keep.api import _load_system
+        from keep.api import _load_frontmatter, SYSTEM_DOC_DIR
 
-        content, tags = _load_system("now.md")
+        content, tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
         assert "# Now" in content
         assert "keep find" in content
-        assert "keep remember" in content
+        assert "keep update" in content
         # Frontmatter should be parsed into tags
         assert isinstance(tags, dict)
         assert len(tags) > 0  # Has at least one tag from frontmatter
 
-    def test_load_system_missing_file(self):
-        """_load_system raises FileNotFoundError for missing files."""
-        from keep.api import _load_system
+    def test_load_frontmatter_missing_file(self):
+        """_load_frontmatter raises FileNotFoundError for missing files."""
+        from keep.api import _load_frontmatter, SYSTEM_DOC_DIR
         import pytest
 
         with pytest.raises(FileNotFoundError):
-            _load_system("nonexistent.md")
+            _load_frontmatter(SYSTEM_DOC_DIR / "nonexistent.md")

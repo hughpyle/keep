@@ -6,6 +6,48 @@
 
 **Key principle:** Lightweight but extremely flexible functionality.  A minimal and extensible metaschema.
 
+## Global Flags
+
+```bash
+keep --json <cmd>   # Output as JSON
+keep --ids <cmd>    # Output only IDs (for piping to xargs)
+keep -v <cmd>       # Enable debug logging to stderr
+```
+
+## Output Formats
+
+Default output uses YAML frontmatter:
+```yaml
+---
+id: file:///path/to/doc.md
+summary: Document summary here...
+tags:
+  project: myapp
+  status: reviewed
+score: 0.823
+---
+```
+
+With `--json`:
+```json
+{"id": "...", "summary": "...", "tags": {...}, "score": 0.823}
+```
+
+With `--ids` (one ID per line, for piping):
+```
+file:///path/to/doc.md
+mem:2026-01-15T10:30:00
+```
+
+### Pipe Composition
+
+```bash
+keep --ids system | xargs keep get
+keep --ids find "auth" | xargs keep get
+keep --ids tag project=foo | xargs keep tag-update --tag status=done
+keep --json --ids find "query"  # JSON array of IDs: ["id1", "id2"]
+```
+
 ## CLI
 ```bash
 keep                                 # Show current working context
@@ -85,14 +127,14 @@ When indexing documents, tags are merged in this order (later wins):
 1. **Existing tags** — preserved from previous version
 2. **Config tags** — from `[tags]` section in `keep.toml`
 3. **Environment tags** — from `KEEP_TAG_*` variables
-4. **User tags** — passed to `update()`, `remember()`, or `tag()`
+4. **User tags** — passed to `update()` (CLI or API), `remember()` (API), or `tag()`
 
 ### Environment Variable Tags
 Set tags via environment variables with the `KEEP_TAG_` prefix:
 ```bash
 export KEEP_TAG_PROJECT=myapp
 export KEEP_TAG_OWNER=alice
-keep remember "deployment note"  # auto-tagged with project=myapp, owner=alice
+keep update "deployment note"  # auto-tagged with project=myapp, owner=alice
 ```
 
 ### Config-Based Default Tags

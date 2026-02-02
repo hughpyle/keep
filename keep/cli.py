@@ -36,6 +36,7 @@ def _verbose_callback(value: bool):
 
 # Global state for CLI options
 _json_output = False
+_ids_output = False
 
 
 def _json_callback(value: bool):
@@ -47,6 +48,15 @@ def _get_json_output() -> bool:
     return _json_output
 
 
+def _ids_callback(value: bool):
+    global _ids_output
+    _ids_output = value
+
+
+def _get_ids_output() -> bool:
+    return _ids_output
+
+
 app = typer.Typer(
     name="keep",
     help="Associative memory with semantic search.",
@@ -55,11 +65,18 @@ app = typer.Typer(
 )
 
 
-def _format_tags(tags: dict[str, str]) -> str:
-    """Format tags as compact comma-separated key=value string."""
-    if not tags:
-        return ""
-    return ", ".join(f"{k}={v}" for k, v in sorted(tags.items()))
+def _format_yaml_frontmatter(item: Item) -> str:
+    """Format item as YAML frontmatter with summary as content."""
+    lines = ["---", f"id: {item.id}"]
+    if item.tags:
+        lines.append("tags:")
+        for k, v in sorted(item.tags.items()):
+            lines.append(f"  {k}: {v}")
+    if item.score is not None:
+        lines.append(f"score: {item.score:.3f}")
+    lines.append("---")
+    lines.append(item.summary)  # Summary IS the content
+    return "\n".join(lines)
 
 
 @app.callback(invoke_without_command=True)
@@ -75,6 +92,12 @@ def main_callback(
         "--json", "-j",
         help="Output as JSON",
         callback=_json_callback,
+        is_eager=True,
+    )] = False,
+    ids_only: Annotated[bool, typer.Option(
+        "--ids", "-I",
+        help="Output only IDs (for piping to xargs)",
+        callback=_ids_callback,
         is_eager=True,
     )] = False,
 ):
@@ -135,10 +158,12 @@ def _format_item(item: Item, as_json: bool = False) -> str:
     """
     Format an item for display.
 
-    Text format (machine-parsable):
-        [score] id [tag1=v1 tag2=v2 ...]
-          summary
+    Text format: YAML frontmatter (matches docs/system format)
+    With --ids: just the ID (for piping)
     """
+    if _get_ids_output():
+        return json.dumps(item.id) if as_json else item.id
+
     if as_json:
         return json.dumps({
             "id": item.id,
@@ -146,14 +171,16 @@ def _format_item(item: Item, as_json: bool = False) -> str:
             "tags": item.tags,
             "score": item.score,
         })
-    else:
-        score = f"[{item.score:.3f}] " if item.score is not None else ""
-        tags = _format_tags(item.tags)
-        tag_str = f" [{tags}]" if tags else ""
-        return f"{score}{item.id}{tag_str}\n  {item.summary}"
+
+    return _format_yaml_frontmatter(item)
 
 
 def _format_items(items: list[Item], as_json: bool = False) -> str:
+    """Format multiple items for display."""
+    if _get_ids_output():
+        ids = [item.id for item in items]
+        return json.dumps(ids) if as_json else "\n".join(ids)
+
     if as_json:
         return json.dumps([
             {
@@ -178,6 +205,39 @@ def _get_keeper(store: Optional[Path], collection: str) -> Keeper:
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+
+
+def _parse_tags(tags: Optional[list[str]]) -> dict[str, str]:
+    """Parse key=value tag list to dict."""
+    if not tags:
+        return {}
+    parsed = {}
+    for tag in tags:
+        if "=" not in tag:
+            typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value", err=True)
+            raise typer.Exit(1)
+        k, v = tag.split("=", 1)
+        parsed[k] = v
+    return parsed
+
+
+def _timestamp() -> str:
+    """Generate timestamp for auto-generated IDs."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+
+def _parse_frontmatter(text: str) -> tuple[str, dict[str, str]]:
+    """Parse YAML frontmatter from text, return (content, tags)."""
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            import yaml
+            frontmatter = yaml.safe_load(parts[1])
+            content = parts[2].lstrip("\n")
+            tags = frontmatter.get("tags", {}) if frontmatter else {}
+            return content, {k: str(v) for k, v in tags.items()}
+    return text, {}
 
 
 # -----------------------------------------------------------------------------
@@ -359,7 +419,13 @@ def tag_update(
 
 @app.command()
 def update(
-    id: Annotated[str, typer.Argument(help="URI of document to index")],
+    source: Annotated[Optional[str], typer.Argument(
+        help="URI to fetch, text content, or '-' for stdin"
+    )] = None,
+    id: Annotated[Optional[str], typer.Option(
+        "--id", "-i",
+        help="Document ID (auto-generated for text/stdin modes)"
+    )] = None,
     store: StoreOption = None,
     collection: CollectionOption = "default",
     tags: Annotated[Optional[list[str]], typer.Option(
@@ -378,68 +444,34 @@ def update(
     """
     Add or update a document in the store.
 
-    Use --summary to provide your own summary (skips auto-summarization).
-    Use --lazy for fast indexing when summarization is slow.
-    Run 'keep process-pending' later to generate real summaries.
+    Three input modes (auto-detected):
+      keep update file:///path       # URI mode: has ://
+      keep update "my note"          # Text mode: no ://
+      keep update -                  # Stdin mode: explicit -
+      echo "pipe" | keep update      # Stdin mode: piped input
     """
     kp = _get_keeper(store, collection)
+    parsed_tags = _parse_tags(tags)
 
-    # Parse tags from key=value format
-    parsed_tags = {}
-    if tags:
-        for tag in tags:
-            if "=" not in tag:
-                typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value", err=True)
-                raise typer.Exit(1)
-            k, v = tag.split("=", 1)
-            parsed_tags[k] = v
+    # Determine mode based on source content
+    if source == "-" or (source is None and not sys.stdin.isatty()):
+        # Stdin mode: explicit '-' or piped input
+        content = sys.stdin.read()
+        content, frontmatter_tags = _parse_frontmatter(content)
+        parsed_tags = {**frontmatter_tags, **parsed_tags}  # CLI tags override
+        doc_id = id or f"mem:{_timestamp()}"
+        item = kp.remember(content, id=doc_id, summary=summary, tags=parsed_tags or None, lazy=lazy)
+    elif source and "://" in source:
+        # URI mode: fetch from URI (ID is the URI itself)
+        item = kp.update(source, tags=parsed_tags or None, summary=summary, lazy=lazy)
+    elif source:
+        # Text mode: inline content (no :// in source)
+        doc_id = id or f"mem:{_timestamp()}"
+        item = kp.remember(source, id=doc_id, summary=summary, tags=parsed_tags or None, lazy=lazy)
+    else:
+        typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
+        raise typer.Exit(1)
 
-    item = kp.update(id, tags=parsed_tags or None, summary=summary, lazy=lazy)
-    typer.echo(_format_item(item, as_json=_get_json_output()))
-
-
-@app.command()
-def remember(
-    content: Annotated[str, typer.Argument(help="Content to remember")],
-    store: StoreOption = None,
-    collection: CollectionOption = "default",
-    id: Annotated[Optional[str], typer.Option(
-        "--id", "-i",
-        help="Custom identifier (default: auto-generated)"
-    )] = None,
-    tags: Annotated[Optional[list[str]], typer.Option(
-        "--tag", "-t",
-        help="Tag as key=value (can be repeated)"
-    )] = None,
-    summary: Annotated[Optional[str], typer.Option(
-        "--summary",
-        help="User-provided summary (skips auto-summarization)"
-    )] = None,
-    lazy: Annotated[bool, typer.Option(
-        "--lazy",
-        help="Fast mode: use truncated summary, queue for later processing"
-    )] = False,
-):
-    """
-    Remember inline content (conversations, notes, insights).
-
-    Short content (≤500 chars) is used verbatim as its own summary.
-    Use --summary to provide your own summary for longer content.
-    Use --lazy for fast indexing when summarization is slow.
-    """
-    kp = _get_keeper(store, collection)
-
-    # Parse tags from key=value format
-    parsed_tags = {}
-    if tags:
-        for tag in tags:
-            if "=" not in tag:
-                typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value", err=True)
-                raise typer.Exit(1)
-            k, v = tag.split("=", 1)
-            parsed_tags[k] = v
-
-    item = kp.remember(content, id=id, summary=summary, tags=parsed_tags or None, lazy=lazy)
     typer.echo(_format_item(item, as_json=_get_json_output()))
 
 
@@ -483,10 +515,10 @@ def now(
     if setting:
         if reset:
             # Reset to default from system (delete first to clear old tags)
-            from .api import _load_system, NOWDOC_ID
+            from .api import _load_frontmatter, NOWDOC_ID, SYSTEM_DOC_DIR
             kp.delete(NOWDOC_ID)
             try:
-                new_content, default_tags = _load_system("now.md")
+                new_content, default_tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
                 parsed_tags = default_tags
             except FileNotFoundError:
                 typer.echo("Error: Builtin now.md not found", err=True)
@@ -604,8 +636,6 @@ def init(
         typer.echo(f"  Embedding: {config.embedding.name}")
         typer.echo(f"  Summarization: {config.summarization.name}")
 
-    # .gitignore reminder
-    typer.echo(f"\nRemember to add .keep/ to .gitignore")
 
 
 @app.command()
@@ -656,6 +686,16 @@ def list_system(
     """
     kp = _get_keeper(store, "default")
     docs = kp.list_system_documents()
+
+    # Use --ids flag for pipe-friendly output
+    if _get_ids_output():
+        ids = [doc.id for doc in docs]
+        if _get_json_output():
+            typer.echo(json.dumps(ids))
+        else:
+            for doc_id in ids:
+                typer.echo(doc_id)
+        return
 
     if _get_json_output():
         typer.echo(json.dumps([

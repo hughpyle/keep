@@ -1,5 +1,6 @@
 ---
 tags:
+  category: system
   context: now
 ---
 # Now
@@ -13,6 +14,6 @@ This is top-of-mind right now.  Reminders for essential practice.
 - What else is skillful? `keep find ...`
 
 **After acting:**
-- What happened? `keep remember "what I learned" -t context=learning`
+- What happened? `keep update "what I learned" -t context=learning`
 - What do I save? `keep update`
 - What now? `keep now "Current focus: ..."`

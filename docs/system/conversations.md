@@ -1,7 +1,6 @@
 ---
-id: _system:conversations
-summary: Process knowledge patterns for recognizing conversation types and work structure (Language-Action Perspective)
 tags:
+  category: system
   context: practice
 ---
 # Conversation Patterns for Process Knowledge
@@ -152,7 +151,7 @@ Possibility conversations explore "what could be" — no commitment yet.
 
 ```bash
 # Index possibility exploration
-keep remember "Explored three auth options: OAuth2, API keys, magic links. \
+keep update "Explored three auth options: OAuth2, API keys, magic links. \
 User showed interest in magic links for UX simplicity. No decision yet." \
   --tag type=possibility --tag topic=authentication --tag status=open
 ```
@@ -179,7 +178,7 @@ A **breakdown** occurs when the normal flow is interrupted:
 
 When indexing a breakdown:
 ```bash
-keep remember "Assumption: user wanted full rewrite. Actually: wanted minimal patch." \
+keep update "Assumption: user wanted full rewrite. Actually: wanted minimal patch." \
   --tag type=breakdown --tag conversation_type=code_change_request
 ```
 
@@ -264,7 +263,7 @@ keep now
 Agents can recognize and record new conversation patterns:
 
 ```bash
-keep remember "Pattern: Incremental Specification. \
+keep update "Pattern: Incremental Specification. \
 When requirements are vague, don't promise immediately. \
 Propose interpretation → get correction → repeat until clear. \
 Only then commit to action. Breakdown risk: Promising too early leads to rework." \

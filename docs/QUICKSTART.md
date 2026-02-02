@@ -44,11 +44,11 @@ keep -v find "something"
 # Index a document
 keep update file:///path/to/doc.md -t project=myapp
 
-# Remember inline content (short content used verbatim as summary)
-keep remember "Meeting notes from today" -t type=meeting
+# Store inline content (short content used verbatim as summary)
+keep update "Meeting notes from today" -t type=meeting
 
-# Remember with custom summary
-keep remember "Long detailed content..." --summary "TL;DR version"
+# Store with custom summary
+keep update "Long detailed content..." --summary "TL;DR version"
 
 # Search by text
 keep find "authentication" --limit 5
@@ -89,7 +89,7 @@ kp = Keeper()
 # Index a document from URI
 item = kp.update("file:///path/to/document.md")
 
-# Remember inline content
+# Store inline content (API method)
 item = kp.remember("Important insight about authentication patterns")
 
 # Semantic search

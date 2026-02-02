@@ -8,6 +8,7 @@ avoiding redundant embedding calls for unchanged content.
 import hashlib
 import json
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -32,6 +33,7 @@ class EmbeddingCache:
         self._cache_path = cache_path
         self._max_entries = max_entries
         self._conn: Optional[sqlite3.Connection] = None
+        self._lock = threading.RLock()
         self._init_db()
     
     def _init_db(self) -> None:
@@ -62,28 +64,30 @@ class EmbeddingCache:
     def get(self, model_name: str, content: str) -> Optional[list[float]]:
         """
         Get cached embedding if it exists.
-        
+
         Updates last_accessed timestamp on hit.
         """
         content_hash = self._hash_key(model_name, content)
-        cursor = self._conn.execute(
-            "SELECT embedding FROM embedding_cache WHERE content_hash = ?",
-            (content_hash,)
-        )
-        row = cursor.fetchone()
-        
-        if row is not None:
-            # Update last_accessed
-            now = datetime.now(timezone.utc).isoformat()
-            self._conn.execute(
-                "UPDATE embedding_cache SET last_accessed = ? WHERE content_hash = ?",
-                (now, content_hash)
+
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT embedding FROM embedding_cache WHERE content_hash = ?",
+                (content_hash,)
             )
-            self._conn.commit()
-            
-            # Deserialize embedding
-            return json.loads(row[0])
-        
+            row = cursor.fetchone()
+
+            if row is not None:
+                # Update last_accessed
+                now = datetime.now(timezone.utc).isoformat()
+                self._conn.execute(
+                    "UPDATE embedding_cache SET last_accessed = ? WHERE content_hash = ?",
+                    (now, content_hash)
+                )
+                self._conn.commit()
+
+                # Deserialize embedding
+                return json.loads(row[0])
+
         return None
     
     def put(
@@ -94,40 +98,42 @@ class EmbeddingCache:
     ) -> None:
         """
         Cache an embedding.
-        
+
         Evicts oldest entries if cache exceeds max_entries.
         """
         content_hash = self._hash_key(model_name, content)
         now = datetime.now(timezone.utc).isoformat()
         embedding_blob = json.dumps(embedding)
-        
-        self._conn.execute("""
-            INSERT OR REPLACE INTO embedding_cache 
-            (content_hash, model_name, embedding, dimension, created_at, last_accessed)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (content_hash, model_name, embedding_blob, len(embedding), now, now))
-        self._conn.commit()
-        
-        # Evict old entries if needed
-        self._maybe_evict()
+
+        with self._lock:
+            self._conn.execute("""
+                INSERT OR REPLACE INTO embedding_cache
+                (content_hash, model_name, embedding, dimension, created_at, last_accessed)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (content_hash, model_name, embedding_blob, len(embedding), now, now))
+            self._conn.commit()
+
+            # Evict old entries if needed
+            self._maybe_evict()
     
     def _maybe_evict(self) -> None:
         """Evict oldest entries if cache exceeds max size."""
-        cursor = self._conn.execute("SELECT COUNT(*) FROM embedding_cache")
-        count = cursor.fetchone()[0]
-        
-        if count > self._max_entries:
-            # Delete oldest 10% by last_accessed
-            evict_count = max(1, count // 10)
-            self._conn.execute("""
-                DELETE FROM embedding_cache 
-                WHERE content_hash IN (
-                    SELECT content_hash FROM embedding_cache 
-                    ORDER BY last_accessed ASC 
-                    LIMIT ?
-                )
-            """, (evict_count,))
-            self._conn.commit()
+        with self._lock:
+            cursor = self._conn.execute("SELECT COUNT(*) FROM embedding_cache")
+            count = cursor.fetchone()[0]
+
+            if count > self._max_entries:
+                # Delete oldest 10% by last_accessed
+                evict_count = max(1, count // 10)
+                self._conn.execute("""
+                    DELETE FROM embedding_cache
+                    WHERE content_hash IN (
+                        SELECT content_hash FROM embedding_cache
+                        ORDER BY last_accessed ASC
+                        LIMIT ?
+                    )
+                """, (evict_count,))
+                self._conn.commit()
     
     def stats(self) -> dict:
         """Get cache statistics."""
@@ -145,8 +151,9 @@ class EmbeddingCache:
     
     def clear(self) -> None:
         """Clear all cached embeddings."""
-        self._conn.execute("DELETE FROM embedding_cache")
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("DELETE FROM embedding_cache")
+            self._conn.commit()
 
     def close(self) -> None:
         """Close the database connection."""
