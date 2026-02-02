@@ -88,6 +88,9 @@ class StoreConfig:
     # Default tags applied to all update/remember operations
     default_tags: dict[str, str] = field(default_factory=dict)
 
+    # Maximum length for summaries (used for smart remember and validation)
+    max_summary_length: int = 500
+
     @property
     def config_path(self) -> Path:
         """Path to the TOML config file."""
@@ -344,6 +347,9 @@ def load_config(config_dir: Path) -> StoreConfig:
     default_tags = {k: str(v) for k, v in raw_tags.items()
                     if not k.startswith("_")}
 
+    # Parse max_summary_length (default 500)
+    max_summary_length = data.get("store", {}).get("max_summary_length", 500)
+
     return StoreConfig(
         path=actual_store,
         config_dir=config_dir,
@@ -355,6 +361,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         document=parse_provider(data.get("document", {"name": "composite"})),
         embedding_identity=parse_embedding_identity(data.get("embedding_identity")),
         default_tags=default_tags,
+        max_summary_length=max_summary_length,
     )
 
 
@@ -396,6 +403,9 @@ def save_config(config: StoreConfig) -> None:
     # Only write store.path if explicitly set (not default)
     if config.store_path:
         store_section["path"] = config.store_path
+    # Only write max_summary_length if not default
+    if config.max_summary_length != 500:
+        store_section["max_summary_length"] = config.max_summary_length
 
     data = {
         "store": store_section,

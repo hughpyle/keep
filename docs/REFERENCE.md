@@ -31,8 +31,10 @@ from keep import Keeper, Item
 kp = Keeper()  # uses default store
 
 # Core indexing
-kp.update(uri, tags={})                 # Index document from URI → Item
-kp.remember(content, id=None, ...)      # Index inline content → Item
+kp.update(uri, tags={}, summary=None)   # Index document from URI → Item
+kp.remember(content, summary=None, ...) # Index inline content → Item
+# Note: If summary provided, skips auto-summarization
+# Note: remember() uses content verbatim if short (≤max_summary_length)
 
 # Search
 kp.find(query, limit=10)                # Semantic search → list[Item]

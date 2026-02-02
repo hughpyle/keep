@@ -307,6 +307,10 @@ def update(
         "--tag", "-t",
         help="Tag as key=value (can be repeated)"
     )] = None,
+    summary: Annotated[Optional[str], typer.Option(
+        "--summary",
+        help="User-provided summary (skips auto-summarization)"
+    )] = None,
     lazy: Annotated[bool, typer.Option(
         "--lazy", "-l",
         help="Fast mode: use truncated summary, queue for later processing"
@@ -316,6 +320,7 @@ def update(
     """
     Add or update a document in the store.
 
+    Use --summary to provide your own summary (skips auto-summarization).
     Use --lazy for fast indexing when summarization is slow.
     Run 'keep process-pending' later to generate real summaries.
     """
@@ -331,7 +336,7 @@ def update(
             k, v = tag.split("=", 1)
             parsed_tags[k] = v
 
-    item = kp.update(id, tags=parsed_tags or None, lazy=lazy)
+    item = kp.update(id, tags=parsed_tags or None, summary=summary, lazy=lazy)
     typer.echo(_format_item(item, as_json=output_json))
 
 
@@ -348,6 +353,10 @@ def remember(
         "--tag", "-t",
         help="Tag as key=value (can be repeated)"
     )] = None,
+    summary: Annotated[Optional[str], typer.Option(
+        "--summary",
+        help="User-provided summary (skips auto-summarization)"
+    )] = None,
     lazy: Annotated[bool, typer.Option(
         "--lazy", "-l",
         help="Fast mode: use truncated summary, queue for later processing"
@@ -357,8 +366,9 @@ def remember(
     """
     Remember inline content (conversations, notes, insights).
 
+    Short content (≤500 chars) is used verbatim as its own summary.
+    Use --summary to provide your own summary for longer content.
     Use --lazy for fast indexing when summarization is slow.
-    Run 'keep process-pending' later to generate real summaries.
     """
     kp = _get_keeper(store, collection)
 
@@ -372,7 +382,7 @@ def remember(
             k, v = tag.split("=", 1)
             parsed_tags[k] = v
 
-    item = kp.remember(content, id=id, tags=parsed_tags or None, lazy=lazy)
+    item = kp.remember(content, id=id, summary=summary, tags=parsed_tags or None, lazy=lazy)
     typer.echo(_format_item(item, as_json=output_json))
 
 

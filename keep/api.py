@@ -244,6 +244,7 @@ class Keeper:
         id: str,
         tags: Optional[dict[str, str]] = None,
         *,
+        summary: Optional[str] = None,
         source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
         collection: Optional[str] = None,
         lazy: bool = False
@@ -254,7 +255,7 @@ class Keeper:
         Fetches the document, generates embeddings and summary, then stores it.
 
         **Update behavior:**
-        - Summary: Always replaced with newly generated summary
+        - Summary: Replaced with user-provided or newly generated summary
         - Tags: Merged - existing tags are preserved, new tags override
           on key collision. System tags (prefixed with _) are always managed by
           the system.
@@ -262,11 +263,12 @@ class Keeper:
         Args:
             id: URI of document to fetch and index
             tags: User-provided tags to merge with existing tags
+            summary: User-provided summary (skips auto-summarization if given)
             source_tags: Deprecated alias for 'tags'
             collection: Target collection (uses default if None)
             lazy: If True, use truncated placeholder summary and queue for
                   background processing. Use `process_pending()` to generate
-                  real summaries later.
+                  real summaries later. Ignored if summary is provided.
 
         Returns:
             The stored Item with merged tags and new summary
@@ -301,17 +303,30 @@ class Keeper:
         # Generate embedding
         embedding = self._get_embedding_provider().embed(doc.content)
 
-        # Generate summary (or queue for later if lazy)
-        if lazy:
-            # Truncated placeholder
-            if len(doc.content) > TRUNCATE_LENGTH:
-                summary = doc.content[:TRUNCATE_LENGTH] + "..."
+        # Determine summary
+        max_len = self._config.max_summary_length
+        if summary is not None:
+            # User-provided summary - validate length
+            if len(summary) > max_len:
+                import warnings
+                warnings.warn(
+                    f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
+                    UserWarning,
+                    stacklevel=2
+                )
+                summary = summary[:max_len]
+            final_summary = summary
+        elif lazy:
+            # Truncated placeholder for lazy mode
+            if len(doc.content) > max_len:
+                final_summary = doc.content[:max_len] + "..."
             else:
-                summary = doc.content
+                final_summary = doc.content
             # Queue for background processing
             self._pending_queue.enqueue(id, coll, doc.content)
         else:
-            summary = self._get_summarization_provider().summarize(doc.content)
+            # Auto-generate summary
+            final_summary = self._get_summarization_provider().summarize(doc.content)
 
         # Build tags: existing → config → env → user (later wins on collision)
         merged_tags = {**existing_tags}
@@ -337,19 +352,19 @@ class Keeper:
         self._document_store.upsert(
             collection=coll,
             id=id,
-            summary=summary,
+            summary=final_summary,
             tags=merged_tags,
         )
         self._store.upsert(
             collection=coll,
             id=id,
             embedding=embedding,
-            summary=summary,
+            summary=final_summary,
             tags=merged_tags,
         )
 
-        # Spawn background processor if lazy
-        if lazy:
+        # Spawn background processor if lazy (only if summary wasn't user-provided)
+        if lazy and summary is None:
             self._spawn_processor()
 
         # Return the stored item
@@ -365,6 +380,7 @@ class Keeper:
         content: str,
         *,
         id: Optional[str] = None,
+        summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
         source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
         collection: Optional[str] = None,
@@ -375,8 +391,13 @@ class Keeper:
 
         Use for conversation snippets, notes, insights.
 
+        **Smart summary behavior:**
+        - If summary is provided, use it (skips auto-summarization)
+        - If content is short (≤ max_summary_length), use content verbatim
+        - Otherwise, generate summary via summarization provider
+
         **Update behavior (when id already exists):**
-        - Summary: Replaced with newly generated summary from content
+        - Summary: Replaced with user-provided, content, or generated summary
         - Tags: Merged - existing tags preserved, new tags override
           on key collision. System tags (prefixed with _) are always managed by
           the system.
@@ -384,12 +405,13 @@ class Keeper:
         Args:
             content: Text to store and index
             id: Optional custom ID (auto-generated if None)
+            summary: User-provided summary (skips auto-summarization if given)
             tags: User-provided tags to merge with existing tags
             source_tags: Deprecated alias for 'tags'
             collection: Target collection (uses default if None)
-            lazy: If True, use truncated placeholder summary and queue for
-                  background processing. Use `process_pending()` to generate
-                  real summaries later.
+            lazy: If True and content is long, use truncated placeholder summary
+                  and queue for background processing. Ignored if content is
+                  short or summary is provided.
 
         Returns:
             The stored Item with merged tags and new summary
@@ -425,17 +447,30 @@ class Keeper:
         # Generate embedding
         embedding = self._get_embedding_provider().embed(content)
 
-        # Generate summary (or queue for later if lazy)
-        if lazy:
-            # Truncated placeholder
-            if len(content) > TRUNCATE_LENGTH:
-                summary = content[:TRUNCATE_LENGTH] + "..."
-            else:
-                summary = content
+        # Determine summary (smart behavior for remember)
+        max_len = self._config.max_summary_length
+        if summary is not None:
+            # User-provided summary - validate length
+            if len(summary) > max_len:
+                import warnings
+                warnings.warn(
+                    f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
+                    UserWarning,
+                    stacklevel=2
+                )
+                summary = summary[:max_len]
+            final_summary = summary
+        elif len(content) <= max_len:
+            # Content is short enough - use verbatim (smart summary)
+            final_summary = content
+        elif lazy:
+            # Content is long and lazy mode - truncated placeholder
+            final_summary = content[:max_len] + "..."
             # Queue for background processing
             self._pending_queue.enqueue(id, coll, content)
         else:
-            summary = self._get_summarization_provider().summarize(content)
+            # Content is long - generate summary
+            final_summary = self._get_summarization_provider().summarize(content)
 
         # Build tags: existing → config → env → user (later wins on collision)
         merged_tags = {**existing_tags}
@@ -459,19 +494,19 @@ class Keeper:
         self._document_store.upsert(
             collection=coll,
             id=id,
-            summary=summary,
+            summary=final_summary,
             tags=merged_tags,
         )
         self._store.upsert(
             collection=coll,
             id=id,
             embedding=embedding,
-            summary=summary,
+            summary=final_summary,
             tags=merged_tags,
         )
 
-        # Spawn background processor if lazy
-        if lazy:
+        # Spawn background processor if lazy and content was queued
+        if lazy and summary is None and len(content) > max_len:
             self._spawn_processor()
 
         # Return the stored item

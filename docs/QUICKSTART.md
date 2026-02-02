@@ -38,8 +38,11 @@ keep -v find "something"
 # Index a document
 keep update file:///path/to/doc.md -t project=myapp
 
-# Remember inline content
+# Remember inline content (short content used verbatim as summary)
 keep remember "Meeting notes from today" -t type=meeting
+
+# Remember with custom summary
+keep remember "Long detailed content..." --summary "TL;DR version"
 
 # Search
 keep find "authentication" --limit 5
@@ -143,6 +146,7 @@ First run auto-detects best providers and creates `.keep/keep.toml`:
 version = 2
 created = "2026-01-30T12:00:00Z"
 # path = "/path/to/data"  # Optional: separate data from config
+# max_summary_length = 500  # Optional: max chars for summaries (default 500)
 
 [embedding]
 name = "sentence-transformers"
