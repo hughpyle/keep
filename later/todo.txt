@@ -1,13 +1,5 @@
 
-* `keep` with no args -> return the 'now doc'
-    - also need a way to update this document
-    - user doesn't specify its id, idk there's a guid or something assigned
-    - there's only one, how do you find it?  with a `__sys`: `now` tag or something like that?  is that fast enough?
-    - if there's none, e.g. first time you every used `keep`, we should store the primary instructions
-        - could do that when `keep init` because the database is empty
-        - so the default nowdoc is literally the skill instructions
-        - maybe it has the SKILL.md and the "patterns" all together?  and summary?
-        - check with the model, for context token budget
+* "now" and "projects", "topics" tags
     - this replaces all the "top-of-mind" stuff in `later/` (except for "recent")
         - the later thing for "topics" is more explicit than using tasks/projects, but same goal
         - actually "topics" is a much better word than "tasks" because this is not really a task-focused skill
@@ -21,7 +13,7 @@
             - limit 10, and limit to the last 7 days, should be enough for a default?
                 - "last N days" is subtle, not part of this task, don't have any time-limited behavior yet
 
-* history of now
+* history of nowdoc
     - we should keep a history of the nowdoc
         - which is quite interesting, it's everything you've been doing
         - does that lead to task-blending?  if you're working on multiple things at once?
@@ -39,7 +31,6 @@
     - on update, save previous version before overwriting
     - requires: version storage mechanism, history retrieval API
     - needs more design work
-
 
 * tags themselves should have summaries and full descriptions
     i.e. somewhere in the "system" store is a docuemnt that describes a tag
@@ -185,3 +176,8 @@ Done:
 . --since option for time-based filtering: accepts ISO duration (P3D, P1W, PT1H) or date (2026-01-15)
 . time-based filtering on find, similar, search, tag commands
 . system tags documented in docs/SYSTEM-TAGS.md (implemented vs reserved, protection mechanism)
+. `keep` with no args shows current working context (the "now")
+. `keep now` command to get/set current context
+. get_now() and set_now() API methods with auto-create on first access
+. default "now" content in docs/builtin/now.md (pre-loaded content pattern)
+. unified output format: ID [tag1=val1, tag2=val2, ...] with all tags shown
