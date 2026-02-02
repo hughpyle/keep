@@ -71,128 +71,78 @@ keep tag project myapp
 - Call `update()` whenever you reference a file or URL worth remembering
 - Call `remember()` to capture conversation insights, decisions, or notes
 - Call `find()` before filesystem search — the answer may already be indexed
-- Call `top_of_mind()` at session start to get current context
-- Call `set_context()` when focus changes to help future agents
+- Call `get_now()` at session start to see current working context
+- Call `set_now()` when focus changes to help future agents
 
 ---
 
 ## Working Session Pattern
 
-Use `set_context()` as a scratchpad to track where you are in the work. This isn't enforced structure — it's a convention that helps you (and future agents) maintain perspective.
-
-**Recommended metadata fields:**
-
-| Field | Purpose | Example |
-|-------|---------|---------|
-| `conversation_type` | What kind of work is this? | `"bug_diagnosis"`, `"feature_request"`, `"research"` |
-| `state` | Where are we in the flow? | `"gathering_info"`, `"investigating"`, `"implementing"`, `"awaiting_confirmation"` |
-| `commitments` | What have I promised? | `[{"what": "fix the flaky test", "to": "user"}]` |
-| `completion_criteria` | What does "done" look like? | `"test passes reliably in CI"` |
-| `hypothesis` | Current working theory | `"timing assertion too tight for CI latency"` |
-| `blocked_on` | What's preventing progress? | `"need CI logs from user"` |
+Use `set_now()` as a scratchpad to track where you are in the work. This isn't enforced structure — it's a convention that helps you (and future agents) maintain perspective.
 
 **Session lifecycle:**
 
 ```python
-# 1. Starting work — record what we're doing
-kp.set_context(
-    summary="Diagnosing flaky test in auth module.",
-    topics=["auth", "testing"],
-    metadata={
-        "conversation_type": "bug_diagnosis",
-        "state": "gathering_info",
-        "commitments": []
-    }
+# 1. Starting work — check current context
+now = kp.get_now()
+print(now.summary)  # What are we working on?
+
+# 2. Update context as work evolves
+kp.set_now(
+    "Diagnosing flaky test in auth module. Likely timing issue.",
+    tags={"topic": "testing", "state": "investigating"}
 )
 
-# 2. Mid-work — update as understanding evolves
-kp.set_context(
-    summary="Investigating test_token_refresh. Likely timing issue.",
-    active_items=["file:///tests/test_oauth_flow.py"],
-    topics=["auth", "testing", "timing"],
-    metadata={
-        "conversation_type": "bug_diagnosis",
-        "state": "investigating",
-        "hypothesis": "hardcoded 100ms timeout too tight for CI",
-        "commitments": []
-    }
-)
-
-# 3. Committing — I've promised to do something
-kp.set_context(
-    summary="Implementing mock timer fix for test_token_refresh.",
-    active_items=["file:///tests/test_oauth_flow.py"],
-    metadata={
-        "conversation_type": "bug_fix",
-        "state": "implementing",
-        "commitments": [{"what": "mock timer fix", "to": "user"}],
-        "completion_criteria": "test passes reliably, no timing dependency"
-    }
-)
-
-# 4. Completing — record the learning
+# 3. Completing — record the learning
 kp.remember(
     content="Flaky timing in CI → mock time instead of real assertions.",
     tags={"type": "learning", "domain": "testing"}
 )
-kp.set_context(
-    summary="Completed flaky test fix.",
-    metadata={"state": "completed", "commitments": []}
-)
+kp.set_now("Completed flaky test fix.", tags={"state": "completed"})
 ```
 
-**Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first:
-
-```python
-ctx = kp.get_context()
-# ctx.metadata["state"] tells you where you left off
-# ctx.metadata["commitments"] tells you what's still owed
-# ctx.active_items tells you what to look at
+**CLI equivalent:**
+```bash
+keep now                                    # Show current context
+keep now "Investigating auth bug"           # Set context
+keep now "Done with auth" --tag state=done  # Set with tags
 ```
+
+**Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first with `get_now()`.
 
 ---
 
-## Hierarchical Context Model
+## Agent Handoff Pattern
 
-The store supports O(log(log(N))) context retrieval through a hierarchy:
-
-```
-Level 3:  [  Working Context  ]           ← "What are we doing?" (~100 tokens)
-Level 2:  [ Topic Summaries   ]           ← "What about X?" (~5-10 topics)
-Level 1:  [ Cluster Summaries ]           ← √N aggregated summaries
-Level 0:  [ Source Items      ]           ← N indexed documents
-```
-
-**Agent handoff pattern:**
+**Starting a session:**
 ```python
-# New agent/session starts
-ctx = kp.get_context()           # Instant: what are we working on?
-recent = kp.top_of_mind(limit=5) # Associative: what's relevant now?
+# Check current context
+now = kp.get_now()
+print(f"Current focus: {now.summary}")
 
-# ... work happens ...
+# Find recent relevant items
+recent = kp.find("", limit=5, since="P1D")  # Last 24 hours
+```
 
-# Before ending session, update context for next agent
-kp.set_context(
-    summary="Completed OAuth2 flow. Token refresh working. Next: add tests.",
-    active_items=["file:///src/auth.py", "file:///src/oauth_client.py"],
-    topics=["authentication", "testing"]
+**Ending a session:**
+```python
+# Update context for next agent
+kp.set_now(
+    "Completed OAuth2 flow. Token refresh working. Next: add tests.",
+    tags={"topic": "authentication"}
 )
 ```
 
-**Top-of-mind retrieval:**
+**Recent items retrieval:**
 ```python
-# Combines: recency + context similarity + topic relevance + session
-items = kp.top_of_mind()                    # What's relevant right now?
-items = kp.top_of_mind("authentication")    # What's relevant about auth?
-items = kp.recent(limit=10)                 # Just the latest items
-items = kp.recent(since="2026-01-30")       # Items from today
-```
+# Items from the last day
+recent = kp.find("", since="P1D")
 
-**Topic summaries (Level 2):**
-```python
-topics = kp.list_topics()                   # ["authentication", "database", ...]
-summary = kp.get_topic_summary("authentication")
-# → TopicSummary with aggregate overview, item count, key items
+# Items from the last week matching a query
+auth_items = kp.find("authentication", since="P7D")
+
+# Items updated today (via tag query)
+today = kp.query_tag("_updated_date", "2026-01-30")
 ```
 
 ---
