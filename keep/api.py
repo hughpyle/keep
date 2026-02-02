@@ -129,6 +129,42 @@ COLLECTION_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 # Environment variable prefix for auto-applied tags
 ENV_TAG_PREFIX = "KEEP_TAG_"
 
+# Fixed ID for the current working context (singleton)
+NOWDOC_ID = "_now:default"
+
+
+def _load_builtin(name: str) -> tuple[str, dict[str, str]]:
+    """
+    Load content and tags from a builtin file with optional YAML frontmatter.
+
+    Args:
+        name: Filename within docs/builtin/ (e.g., "now.md")
+
+    Returns:
+        (content, tags) tuple
+
+    Raises:
+        FileNotFoundError: If the builtin file doesn't exist
+    """
+    # docs/builtin is at repo root, two levels up from keep/api.py
+    builtin_dir = Path(__file__).parent.parent / "docs" / "builtin"
+    path = builtin_dir / name
+    text = path.read_text()
+
+    # Parse YAML frontmatter if present
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            import yaml
+            frontmatter = yaml.safe_load(parts[1])
+            content = parts[2].lstrip("\n")
+            tags = frontmatter.get("tags", {}) if frontmatter else {}
+            # Ensure all tag values are strings
+            tags = {k: str(v) for k, v in tags.items()}
+            return content, tags
+
+    return text, {}
+
 
 def _get_env_tags() -> dict[str, str]:
     """
@@ -916,6 +952,54 @@ class Keeper:
         doc_deleted = self._document_store.delete(coll, id)
         chroma_deleted = self._store.delete(coll, id)
         return doc_deleted or chroma_deleted
+
+    # -------------------------------------------------------------------------
+    # Current Working Context (Now)
+    # -------------------------------------------------------------------------
+
+    def get_now(self) -> Item:
+        """
+        Get the current working context.
+
+        A singleton document representing what you're currently working on.
+        If it doesn't exist, creates one with default content and tags from
+        docs/builtin/now.md.
+
+        Returns:
+            The current context Item (never None - auto-creates if missing)
+        """
+        item = self.get(NOWDOC_ID)
+        if item is None:
+            # First-time initialization with default content and tags
+            try:
+                default_content, default_tags = _load_builtin("now.md")
+            except FileNotFoundError:
+                # Fallback if builtin file is missing
+                default_content = "# Now\n\nYour working context."
+                default_tags = {}
+            item = self.set_now(default_content, tags=default_tags)
+        return item
+
+    def set_now(
+        self,
+        content: str,
+        *,
+        tags: Optional[dict[str, str]] = None,
+    ) -> Item:
+        """
+        Set the current working context.
+
+        Updates the singleton context with new content. Uses remember()
+        internally with the fixed NOWDOC_ID.
+
+        Args:
+            content: New content for the current context
+            tags: Optional additional tags to apply
+
+        Returns:
+            The updated context Item
+        """
+        return self.remember(content, id=NOWDOC_ID, tags=tags)
 
     def tag(
         self,

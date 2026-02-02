@@ -37,12 +37,21 @@ def _verbose_callback(value: bool):
 app = typer.Typer(
     name="keep",
     help="Associative memory with semantic search.",
-    no_args_is_help=True,
+    no_args_is_help=False,
+    invoke_without_command=True,
 )
 
 
-@app.callback()
+def _format_tags(tags: dict[str, str]) -> str:
+    """Format tags as compact comma-separated key=value string."""
+    if not tags:
+        return ""
+    return ", ".join(f"{k}={v}" for k, v in sorted(tags.items()))
+
+
+@app.callback(invoke_without_command=True)
 def main_callback(
+    ctx: typer.Context,
     verbose: Annotated[bool, typer.Option(
         "--verbose", "-v",
         help="Enable debug-level logging to stderr",
@@ -51,7 +60,12 @@ def main_callback(
     )] = False,
 ):
     """Associative memory with semantic search."""
-    pass
+    # If no subcommand provided, show the current context (now)
+    if ctx.invoked_subcommand is None:
+        kp = _get_keeper(None, "default")
+        item = kp.get_now()
+        typer.echo(_format_item(item))
+        typer.echo("\nUse --help for commands.", err=True)
 
 
 # -----------------------------------------------------------------------------
@@ -105,6 +119,13 @@ SinceOption = Annotated[
 # -----------------------------------------------------------------------------
 
 def _format_item(item: Item, as_json: bool = False) -> str:
+    """
+    Format an item for display.
+
+    Text format (machine-parsable):
+        [score] id [tag1=v1 tag2=v2 ...]
+          summary
+    """
     if as_json:
         return json.dumps({
             "id": item.id,
@@ -114,7 +135,9 @@ def _format_item(item: Item, as_json: bool = False) -> str:
         })
     else:
         score = f"[{item.score:.3f}] " if item.score is not None else ""
-        return f"{score}{item.id}\n  {item.summary}"
+        tags = _format_tags(item.tags)
+        tag_str = f" [{tags}]" if tags else ""
+        return f"{score}{item.id}{tag_str}\n  {item.summary}"
 
 
 def _format_items(items: list[Item], as_json: bool = False) -> str:
@@ -397,6 +420,82 @@ def remember(
 
     item = kp.remember(content, id=id, summary=summary, tags=parsed_tags or None, lazy=lazy)
     typer.echo(_format_item(item, as_json=output_json))
+
+
+@app.command()
+def now(
+    content: Annotated[Optional[str], typer.Argument(
+        help="Content to set (omit to show current)"
+    )] = None,
+    file: Annotated[Optional[Path], typer.Option(
+        "--file", "-f",
+        help="Read content from file"
+    )] = None,
+    reset: Annotated[bool, typer.Option(
+        "--reset",
+        help="Reset to default content from builtin"
+    )] = False,
+    store: StoreOption = None,
+    collection: CollectionOption = "default",
+    tags: Annotated[Optional[list[str]], typer.Option(
+        "--tag", "-t",
+        help="Tag as key=value (can be repeated)"
+    )] = None,
+    output_json: JsonOption = False,
+):
+    """
+    Get or set the current working context.
+
+    With no arguments, displays the current context.
+    With content, replaces it.
+
+    Examples:
+        keep now                         # Show current context
+        keep now "Working on auth flow"  # Set context
+        keep now -f context.md           # Set from file
+        keep now --reset                 # Reset to default
+    """
+    kp = _get_keeper(store, collection)
+
+    # Determine if we're getting or setting
+    setting = content is not None or file is not None or reset
+
+    if setting:
+        if reset:
+            # Reset to default from builtin (delete first to clear old tags)
+            from .api import _load_builtin, NOWDOC_ID
+            kp.delete(NOWDOC_ID)
+            try:
+                new_content, default_tags = _load_builtin("now.md")
+                parsed_tags = default_tags
+            except FileNotFoundError:
+                typer.echo("Error: Builtin now.md not found", err=True)
+                raise typer.Exit(1)
+        elif file is not None:
+            if not file.exists():
+                typer.echo(f"Error: File not found: {file}", err=True)
+                raise typer.Exit(1)
+            new_content = file.read_text()
+            parsed_tags = {}
+        else:
+            new_content = content
+            parsed_tags = {}
+
+        # Parse user-provided tags (merge with default if reset)
+        if tags:
+            for tag in tags:
+                if "=" not in tag:
+                    typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value", err=True)
+                    raise typer.Exit(1)
+                k, v = tag.split("=", 1)
+                parsed_tags[k] = v
+
+        item = kp.set_now(new_content, tags=parsed_tags or None)
+        typer.echo(_format_item(item, as_json=output_json))
+    else:
+        # Get current context
+        item = kp.get_now()
+        typer.echo(_format_item(item, as_json=output_json))
 
 
 @app.command()

@@ -238,3 +238,38 @@ class TestVisibilityPatterns:
         )
         assert item.tags["_visibility"] == "shared"
         assert item.tags["_reviewed"] == "true"
+
+
+# -----------------------------------------------------------------------------
+# Nowdoc Tests
+# -----------------------------------------------------------------------------
+
+class TestNowdoc:
+    """Tests for nowdoc constants and builtin content."""
+
+    def test_nowdoc_id_constant(self):
+        """NOWDOC_ID is exported and has expected format."""
+        from keep import NOWDOC_ID
+
+        assert NOWDOC_ID == "_now:default"
+        assert NOWDOC_ID.startswith("_")  # System-managed ID
+
+    def test_builtin_now_md_exists(self):
+        """Builtin now.md file exists in docs/builtin/ with frontmatter."""
+        from keep.api import _load_builtin
+
+        content, tags = _load_builtin("now.md")
+        assert "# Now" in content
+        assert "keep find" in content
+        assert "keep remember" in content
+        # Frontmatter should be parsed into tags
+        assert isinstance(tags, dict)
+        assert len(tags) > 0  # Has at least one tag from frontmatter
+
+    def test_load_builtin_missing_file(self):
+        """_load_builtin raises FileNotFoundError for missing files."""
+        from keep.api import _load_builtin
+        import pytest
+
+        with pytest.raises(FileNotFoundError):
+            _load_builtin("nonexistent.md")

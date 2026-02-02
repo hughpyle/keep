@@ -8,8 +8,13 @@
 
 ## CLI
 ```bash
-keep <cmd> [args]
-# Commands: find, similar, search, tag, tag-update, update, get, exists, collections, init
+keep                                 # Show current working context
+keep --help                          # Show all commands
+
+# Current context (now)
+keep now                             # Show current context (explicit)
+keep now "Working on auth flow"      # Set current context
+keep now -f context.md -t project=x  # Set from file with tags
 
 # Debug mode
 keep -v <cmd>                        # Enable debug logging to stderr
@@ -60,6 +65,9 @@ kp.get(id)                              # Fetch by ID → Item | None
 kp.exists(id)                           # Check existence → bool
 kp.list_collections()                   # All collections → list[str]
 
+# Current context (now)
+kp.get_now()                            # Get current context (auto-creates if missing) → Item
+kp.set_now(content, tags={})            # Set current context → Item
 ```
 
 ## Item Fields
