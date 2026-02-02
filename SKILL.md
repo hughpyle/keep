@@ -37,7 +37,7 @@ Ground yourself:
 - What happened? What did I learn?
 - Was there a breakdown? What assumption was revealed?
   ```bash
-  keep remember "what happened and why it matters" -t type=learning
+  keep update "what happened and why it matters" -t type=learning
   ```
 
 This is how you develop judgment. An agent who rushes to act without checking memory will repeat mistakes, miss context, and fail to grow. An agent who reflects — before, during, after — becomes skillful.
@@ -93,7 +93,7 @@ keep find "similar situations" --limit 3
 
 **After:** Capture the learning.
 ```bash
-keep remember "Assumption was X, actually Y. Next time: Z" -t type=breakdown
+keep update "Assumption was X, actually Y. Next time: Z" -t type=breakdown
 ```
 
 **Do this now — index the source teaching:**
@@ -115,7 +115,7 @@ A **breakdown** interrupts normal flow: expected response doesn't come, completi
 **Don't hide breakdowns. Index them.**
 
 ```bash
-keep remember "Assumed user wanted full rewrite. Actually: minimal patch. Ask about scope first." \
+keep update "Assumed user wanted full rewrite. Actually: minimal patch. Ask about scope first." \
   -t type=breakdown -t domain=code_changes
 ```
 
@@ -174,8 +174,8 @@ When you `find`, you get summaries. When you need depth, `get` the full item.
 Build your own navigation structure:
 
 ```bash
-keep remember "OAuth2 with PKCE chosen for auth" -t domain=auth -t type=decision
-keep remember "Token refresh fails if clock skew > 30s" -t domain=auth -t type=finding
+keep update "OAuth2 with PKCE chosen for auth" -t domain=auth -t type=decision
+keep update "Token refresh fails if clock skew > 30s" -t domain=auth -t type=finding
 ```
 
 Later:
@@ -220,10 +220,9 @@ Don't dump everything into context. Navigate the tree:
 |---------|---------|---------|
 | `now` | Get/set current context | `keep now` or `keep now "status"` |
 | `find` | Semantic search | `keep find "authentication flow" --limit 5` |
-| `remember` | Store inline content | `keep remember "note" -t key=value` |
-| `update` | Index document by URI | `keep update "file:///path" -t key=value` |
+| `update` | Index content (URI, text, or stdin) | `keep update "note" -t key=value` |
 | `get` | Retrieve by ID | `keep get "file:///path/to/doc.md"` |
-| `similar` | Find neighbors | `keep similar "id" --limit 3` |
+| `find --id` | Find similar items | `keep find --id "docid" --limit 3` |
 | `tag` | Query by tag | `keep tag domain auth` or `keep tag --list` |
 | `tag-update` | Modify tags only | `keep tag-update "id" --tag key=value` |
 | `exists` | Check if indexed | `keep exists "id"` |
@@ -235,7 +234,7 @@ When using local models (MLX), summarization is slow. Use `--lazy` for fast inde
 
 ```bash
 keep update "file:///path/to/doc.md" --lazy
-keep remember "insight" -t type=learning --lazy
+keep update "insight" -t type=learning --lazy
 ```
 
 The `--lazy` flag:
@@ -248,9 +247,31 @@ The `--lazy` flag:
 
 ### Output
 
-Add `--json` for structured output:
+Default output uses YAML frontmatter format:
+```yaml
+---
+id: file:///path/to/doc.md
+summary: Document summary here...
+tags:
+  project: myapp
+score: 0.823
+---
+```
+
+Global flags (before the command):
 ```bash
-keep find "auth" --json | jq '.[0].summary'
+keep --json find "auth"    # JSON output
+keep --ids find "auth"     # IDs only (for piping)
+keep -v find "auth"        # Debug logging
+```
+
+### Pipe Composition
+
+Use `--ids` for Unix-style composition:
+```bash
+keep --ids system | xargs keep get              # Get all system docs
+keep --ids find "auth" | xargs keep get         # Get full details of matches
+keep --ids tag project=foo | xargs keep tag-update --tag status=done
 ```
 
 ### Store Location
@@ -272,7 +293,7 @@ Every time you receive a request, pause:
 
 Every time you complete work, pause:
 1. What did I learn?
-2. `keep remember` — capture it for future you.
+2. `keep update "learning"` — capture it for future you.
 3. Then move on.
 
 The conversations pattern tells you where you are.

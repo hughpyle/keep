@@ -19,7 +19,7 @@ Technically: semantic search using embeddings, backed by ChromaDB, with tag-base
 keep find "how should we handle auth?"
 
 # After learning: capture it for future you
-keep remember "User prefers OAuth2 with PKCE for authentication"
+keep update "User prefers OAuth2 with PKCE for authentication"
 ```
 
 **The practice:**
@@ -93,8 +93,8 @@ keep init
 # Index a file
 keep update path/to/document.md --tag project=myapp
 
-# Remember inline content
-keep remember "Important: rate limit is 100 req/min" --tag topic=api
+# Store inline content
+keep update "Important: rate limit is 100 req/min" --tag topic=api
 
 # Semantic search
 keep find "what's the rate limit?"
@@ -113,7 +113,7 @@ kp = Keeper()
 # Index a file
 kp.update("file:///path/to/document.md", tags={"project": "myapp"})
 
-# Remember inline content
+# Store inline content (API method)
 kp.remember("Important: rate limit is 100 req/min", tags={"topic": "api"})
 
 # Semantic search
@@ -198,7 +198,7 @@ An agent without memory reacts to each moment as if it were new. An agent with m
 **Current**: v0.1.0 — Early draft
 
 **Working:**
-- ✅ Core indexing (`update`, `remember`)
+- ✅ Core indexing (`update` with URI, text, or stdin modes)
 - ✅ Semantic search (`find`, `find_similar`)
 - ✅ Tag queries and full-text search
 - ✅ Embedding cache for performance

@@ -15,6 +15,7 @@ Embeddings are stored in ChromaDB collections, keyed by embedding provider.
 
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +55,7 @@ class DocumentStore:
         """
         self._db_path = store_path
         self._conn: Optional[sqlite3.Connection] = None
+        self._lock = threading.Lock()
         self._init_db()
     
     def _init_db(self) -> None:
@@ -98,6 +100,28 @@ class DocumentStore:
     def _now(self) -> str:
         """Current timestamp in ISO format."""
         return datetime.now(timezone.utc).isoformat()
+
+    def _get_unlocked(self, collection: str, id: str) -> Optional[DocumentRecord]:
+        """Get a document by ID without acquiring the lock (for use within locked contexts)."""
+        cursor = self._conn.execute("""
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
+            FROM documents
+            WHERE id = ? AND collection = ?
+        """, (id, collection))
+
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        return DocumentRecord(
+            id=row["id"],
+            collection=row["collection"],
+            summary=row["summary"],
+            tags=json.loads(row["tags_json"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            content_hash=row["content_hash"],
+        )
     
     # -------------------------------------------------------------------------
     # Write Operations
@@ -129,16 +153,17 @@ class DocumentStore:
         now = self._now()
         tags_json = json.dumps(tags, ensure_ascii=False)
 
-        # Check if exists to preserve created_at
-        existing = self.get(collection, id)
-        created_at = existing.created_at if existing else now
+        with self._lock:
+            # Check if exists to preserve created_at
+            existing = self._get_unlocked(collection, id)
+            created_at = existing.created_at if existing else now
 
-        self._conn.execute("""
-            INSERT OR REPLACE INTO documents
-            (id, collection, summary, tags_json, created_at, updated_at, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (id, collection, summary, tags_json, created_at, now, content_hash))
-        self._conn.commit()
+            self._conn.execute("""
+                INSERT OR REPLACE INTO documents
+                (id, collection, summary, tags_json, created_at, updated_at, content_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (id, collection, summary, tags_json, created_at, now, content_hash))
+            self._conn.commit()
 
         return DocumentRecord(
             id=id,
@@ -165,14 +190,15 @@ class DocumentStore:
             True if document was found and updated, False otherwise
         """
         now = self._now()
-        
-        cursor = self._conn.execute("""
-            UPDATE documents
-            SET summary = ?, updated_at = ?
-            WHERE id = ? AND collection = ?
-        """, (summary, now, id, collection))
-        self._conn.commit()
-        
+
+        with self._lock:
+            cursor = self._conn.execute("""
+                UPDATE documents
+                SET summary = ?, updated_at = ?
+                WHERE id = ? AND collection = ?
+            """, (summary, now, id, collection))
+            self._conn.commit()
+
         return cursor.rowcount > 0
     
     def update_tags(
@@ -183,44 +209,46 @@ class DocumentStore:
     ) -> bool:
         """
         Update tags of an existing document.
-        
+
         Args:
             collection: Collection name
             id: Document identifier
             tags: New tags dict (replaces existing)
-            
+
         Returns:
             True if document was found and updated, False otherwise
         """
         now = self._now()
         tags_json = json.dumps(tags, ensure_ascii=False)
-        
-        cursor = self._conn.execute("""
-            UPDATE documents
-            SET tags_json = ?, updated_at = ?
-            WHERE id = ? AND collection = ?
-        """, (tags_json, now, id, collection))
-        self._conn.commit()
-        
+
+        with self._lock:
+            cursor = self._conn.execute("""
+                UPDATE documents
+                SET tags_json = ?, updated_at = ?
+                WHERE id = ? AND collection = ?
+            """, (tags_json, now, id, collection))
+            self._conn.commit()
+
         return cursor.rowcount > 0
     
     def delete(self, collection: str, id: str) -> bool:
         """
         Delete a document record.
-        
+
         Args:
             collection: Collection name
             id: Document identifier
-            
+
         Returns:
             True if document existed and was deleted
         """
-        cursor = self._conn.execute("""
-            DELETE FROM documents
-            WHERE id = ? AND collection = ?
-        """, (id, collection))
-        self._conn.commit()
-        
+        with self._lock:
+            cursor = self._conn.execute("""
+                DELETE FROM documents
+                WHERE id = ? AND collection = ?
+            """, (id, collection))
+            self._conn.commit()
+
         return cursor.rowcount > 0
     
     # -------------------------------------------------------------------------
@@ -505,18 +533,19 @@ class DocumentStore:
     def delete_collection(self, collection: str) -> int:
         """
         Delete all documents in a collection.
-        
+
         Args:
             collection: Collection name
-            
+
         Returns:
             Number of documents deleted
         """
-        cursor = self._conn.execute("""
-            DELETE FROM documents
-            WHERE collection = ?
-        """, (collection,))
-        self._conn.commit()
+        with self._lock:
+            cursor = self._conn.execute("""
+                DELETE FROM documents
+                WHERE collection = ?
+            """, (collection,))
+            self._conn.commit()
         return cursor.rowcount
     
     # -------------------------------------------------------------------------

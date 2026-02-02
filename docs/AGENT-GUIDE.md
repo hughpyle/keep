@@ -24,7 +24,7 @@ kp = Keeper()
 # Index a document from URI (fetches, embeds, summarizes, tags automatically)
 item = kp.update("file:///project/readme.md", tags={"project": "myapp"})
 
-# Remember inline content (conversations, notes, insights)
+# Store inline content via API (conversations, notes, insights)
 kp.remember(
     content="User prefers OAuth2 with PKCE for auth. Discussed tradeoffs.",
     id="conversation:2026-01-30:auth",
@@ -68,11 +68,11 @@ keep tag project myapp
 - [system/conversations.md](system/conversations.md) — process knowledge: how work proceeds
 
 **When to use:**
-- Call `update()` whenever you reference a file or URL worth remembering
-- Call `remember()` to capture conversation insights, decisions, or notes
-- Call `find()` before filesystem search — the answer may already be indexed
-- Call `get_now()` at session start to see current working context
-- Call `set_now()` when focus changes to help future agents
+- CLI: `keep update` for all content (URI, inline text, or stdin)
+- API: `kp.update()` for URIs, `kp.remember()` for inline content
+- `find()` before filesystem search — the answer may already be indexed
+- `get_now()` at session start to see current working context
+- `set_now()` when focus changes to help future agents
 
 ---
 

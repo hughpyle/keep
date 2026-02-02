@@ -58,7 +58,7 @@ These tags are actively set and maintained by the system.
 
 **Example:** `"text/markdown"`, `"text/html"`, `"application/pdf"`
 
-**Note:** Not set for `remember()` (inline content).
+**Note:** Not set for inline content (CLI: `keep update "text"`, API: `kp.remember()`).
 
 ---
 
@@ -69,8 +69,8 @@ These tags are actively set and maintained by the system.
 **Set by:** `Keeper.update()` and `Keeper.remember()` in `api.py`
 
 **Values:**
-- `"uri"` - Content fetched from a URI via `update()`
-- `"inline"` - Content provided directly via `remember()`
+- `"uri"` - Content fetched from a URI (CLI: `keep update <uri>`, API: `kp.update()`)
+- `"inline"` - Inline content (CLI: `keep update "text"`, API: `kp.remember()`)
 
 **Usage:** Query with `kp.query_tag("_source", "inline")` to find remembered content.
 
@@ -89,7 +89,7 @@ def filter_non_system_tags(tags: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in tags.items() if not k.startswith(SYSTEM_TAG_PREFIX)}
 ```
 
-This function is called before merging user-provided tags in `update()`, `remember()`, and `tag()` methods.
+This function is called before merging user-provided tags in `update()` (API), `remember()` (API), and `tag()` methods.
 
 ## Tag Merge Order
 

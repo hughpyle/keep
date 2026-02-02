@@ -30,7 +30,7 @@ The original document content is **not stored** — only the summary and embeddi
 ┌─────────────────────────────────────────────────────────────┐
 │  API Layer (api.py)                                          │
 │  - Keeper class                                   │
-│  - High-level operations: update(), remember(), find()       │
+│  - High-level operations: update(), remember() (API), find() │
 └──────────────────┬──────────────────────────────────────────┘
                    │
         ┌──────────┼──────────┬──────────────┐

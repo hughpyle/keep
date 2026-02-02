@@ -30,8 +30,6 @@ def _parse_since(since: str) -> str:
     Returns:
         YYYY-MM-DD string for the cutoff date
     """
-    import re
-
     since = since.strip()
 
     # ISO 8601 duration: P[n]Y[n]M[n]W[n]DT[n]H[n]M[n]S
@@ -140,21 +138,19 @@ NOWDOC_ID = "_now:default"
 SYSTEM_DOC_DIR = Path(__file__).parent.parent / "docs" / "system"
 
 
-def _load_system(name: str) -> tuple[str, dict[str, str], Optional[str], Optional[str]]:
+def _load_frontmatter(path: Path) -> tuple[str, dict[str, str]]:
     """
-    Load content, tags, ID, and summary from a system file with YAML frontmatter.
+    Load content and tags from a file with optional YAML frontmatter.
 
     Args:
-        name: Filename within docs/system/ (e.g., "now.md")
+        path: Path to the file
 
     Returns:
-        (content, tags, id, summary) tuple.
-        id and summary are None if not specified in frontmatter.
+        (content, tags) tuple. Tags empty if no frontmatter.
 
     Raises:
-        FileNotFoundError: If the system file doesn't exist
+        FileNotFoundError: If the file doesn't exist
     """
-    path = SYSTEM_DOC_DIR / name
     text = path.read_text()
 
     # Parse YAML frontmatter if present
@@ -168,12 +164,10 @@ def _load_system(name: str) -> tuple[str, dict[str, str], Optional[str], Optiona
                 tags = frontmatter.get("tags", {})
                 # Ensure all tag values are strings
                 tags = {k: str(v) for k, v in tags.items()}
-                doc_id = frontmatter.get("id")
-                summary = frontmatter.get("summary")
-                return content, tags, doc_id, summary
-            return content, {}, None, None
+                return content, tags
+            return content, {}
 
-    return text, {}, None, None
+    return text, {}
 
 
 def _get_env_tags() -> dict[str, str]:
@@ -288,9 +282,9 @@ class Keeper:
         """
         Ensure system documents are loaded into the store.
 
-        Scans all .md files in docs/system/. Files with an `id` field in their
-        YAML frontmatter are loaded as system documents with that ID.
-        Files can also specify `summary` in frontmatter to avoid auto-summarization.
+        Scans all .md files in docs/system/. Each file is indexed with its
+        file:// URI as the ID and `_category: system` tag for identification.
+        Content becomes the summary directly (no auto-summarization).
 
         Called during init. Only loads docs that don't already exist,
         so user modifications are preserved and no network access occurs
@@ -298,9 +292,11 @@ class Keeper:
         """
         for path in SYSTEM_DOC_DIR.glob("*.md"):
             try:
-                content, tags, doc_id, summary = _load_system(path.name)
-                if doc_id and not self.exists(doc_id):
-                    self.remember(content, id=doc_id, tags=tags, summary=summary)
+                uri = f"file://{path.resolve()}"
+                if not self.exists(uri):
+                    content, tags = _load_frontmatter(path)
+                    tags["category"] = "system"
+                    self.remember(content, id=uri, tags=tags)
             except FileNotFoundError:
                 # System file missing - skip silently
                 pass
@@ -1037,7 +1033,7 @@ class Keeper:
         if item is None:
             # First-time initialization with default content and tags
             try:
-                default_content, default_tags, _, _ = _load_system("now.md")
+                default_content, default_tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
             except FileNotFoundError:
                 # Fallback if system file is missing
                 default_content = "# Now\n\nYour working context."
@@ -1074,7 +1070,7 @@ class Keeper:
         """
         List all system documents.
 
-        System documents have IDs starting with "_system:" or "_now:".
+        System documents are identified by the `category: system` tag.
         These are preloaded on init and provide foundational content.
 
         Args:
@@ -1083,21 +1079,7 @@ class Keeper:
         Returns:
             List of system document Items
         """
-        coll = self._resolve_collection(collection)
-
-        # Query documents by prefix
-        results = []
-        for prefix in ("_system:", "_now:"):
-            records = self._document_store.query_by_id_prefix(coll, prefix)
-            for record in records:
-                results.append(Item(
-                    id=record.id,
-                    summary=record.summary,
-                    tags=record.tags,
-                    score=None,
-                ))
-
-        return results
+        return self.query_tag("category", "system", collection=collection)
 
     def tag(
         self,
@@ -1320,8 +1302,9 @@ class Keeper:
             subprocess.Popen(cmd, **kwargs)
             return True
 
-        except Exception:
-            # Spawn failed - not critical, queue will be processed later
+        except Exception as e:
+            # Spawn failed - log for debugging, queue will be processed later
+            logger.warning("Failed to spawn background processor: %s", e)
             return False
 
     def close(self) -> None:
