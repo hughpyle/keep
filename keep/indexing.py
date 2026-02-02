@@ -71,7 +71,7 @@ class IndexingConfig:
     """Approximation for token estimation."""
     
     # Summarization settings (always used)
-    summary_max_chars: int = 500
+    summary_max_chars: int = 1000
     """Maximum summary length in characters."""
     
     # BM25 settings

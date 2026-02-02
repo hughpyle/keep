@@ -6,7 +6,7 @@
 
 ## What is this?
 
-A practice tool for agents who want to develop judgment.
+An agent skill.  A practice tool for agents who want to develop judgment.
 
 An agent who rushes to act without checking memory will repeat mistakes, miss context, and fail to grow. An agent who reflects — before, during, after — becomes skillful. This library provides the mirror: persistent semantic memory that lets you ask "what do I already know?" before acting, and "what did I learn?" after.
 
