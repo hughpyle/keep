@@ -71,23 +71,26 @@ class EmbeddingIdentity:
 @dataclass
 class StoreConfig:
     """Complete store configuration."""
-    path: Path
+    path: Path  # Store path (where data lives)
+    config_dir: Optional[Path] = None  # Where config was loaded from (may differ from path)
+    store_path: Optional[str] = None  # Explicit store.path from config file (raw string)
     version: int = CONFIG_VERSION
     created: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    
+
     # Provider configurations
     embedding: ProviderConfig = field(default_factory=lambda: ProviderConfig("sentence-transformers"))
     summarization: ProviderConfig = field(default_factory=lambda: ProviderConfig("truncate"))
     document: ProviderConfig = field(default_factory=lambda: ProviderConfig("composite"))
-    
+
     # Embedding identity (set after first use, used for validation)
     embedding_identity: Optional[EmbeddingIdentity] = None
-    
+
     @property
     def config_path(self) -> Path:
         """Path to the TOML config file."""
-        return self.path / CONFIG_FILENAME
-    
+        config_location = self.config_dir if self.config_dir else self.path
+        return config_location / CONFIG_FILENAME
+
     def exists(self) -> bool:
         """Check if config file exists."""
         return self.config_path.exists()
@@ -265,48 +268,78 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
     return providers
 
 
-def create_default_config(store_path: Path) -> StoreConfig:
-    """Create a new config with auto-detected defaults."""
+def create_default_config(config_dir: Path, store_path: Optional[Path] = None) -> StoreConfig:
+    """
+    Create a new config with auto-detected defaults.
+
+    Args:
+        config_dir: Directory where keep.toml will be saved
+        store_path: Optional explicit store location (if different from config_dir)
+    """
     providers = detect_default_providers()
-    
+
+    # If store_path is provided and different from config_dir, record it
+    store_path_str = None
+    actual_store = config_dir
+    if store_path and store_path.resolve() != config_dir.resolve():
+        store_path_str = str(store_path)
+        actual_store = store_path
+
     return StoreConfig(
-        path=store_path,
+        path=actual_store,
+        config_dir=config_dir,
+        store_path=store_path_str,
         embedding=providers["embedding"],
         summarization=providers["summarization"],
         document=providers["document"],
     )
 
 
-def load_config(store_path: Path) -> StoreConfig:
+def load_config(config_dir: Path) -> StoreConfig:
     """
-    Load configuration from a store directory.
-    
+    Load configuration from a config directory.
+
+    The config_dir is where keep.toml lives. The actual store location
+    may be different if store.path is set in the config.
+
+    Args:
+        config_dir: Directory containing keep.toml
+
     Raises:
         FileNotFoundError: If config doesn't exist
         ValueError: If config is invalid
     """
-    config_path = store_path / CONFIG_FILENAME
-    
+    config_path = config_dir / CONFIG_FILENAME
+
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
-    
+
     with open(config_path, "rb") as f:
         data = tomllib.load(f)
-    
+
     # Validate version
     version = data.get("store", {}).get("version", 1)
     if version > CONFIG_VERSION:
         raise ValueError(f"Config version {version} is newer than supported ({CONFIG_VERSION})")
-    
+
+    # Parse store.path - explicit store location
+    store_path_str = data.get("store", {}).get("path")
+    if store_path_str:
+        actual_store = Path(store_path_str).expanduser().resolve()
+    else:
+        actual_store = config_dir  # Backwards compat: store is at config location
+
     # Parse provider configs
     def parse_provider(section: dict) -> ProviderConfig:
         return ProviderConfig(
             name=section.get("name", ""),
             params={k: v for k, v in section.items() if k != "name"},
         )
-    
+
     return StoreConfig(
-        path=store_path,
+        path=actual_store,
+        config_dir=config_dir,
+        store_path=store_path_str,
         version=version,
         created=data.get("store", {}).get("created", ""),
         embedding=parse_provider(data.get("embedding", {"name": "sentence-transformers"})),
@@ -330,32 +363,38 @@ def parse_embedding_identity(data: dict | None) -> EmbeddingIdentity | None:
 
 def save_config(config: StoreConfig) -> None:
     """
-    Save configuration to the store directory.
-    
+    Save configuration to the config directory.
+
     Creates the directory if it doesn't exist.
     """
     if tomli_w is None:
         raise RuntimeError("tomli_w is required to save config. Install with: pip install tomli-w")
-    
-    # Ensure directory exists
-    config.path.mkdir(parents=True, exist_ok=True)
-    
+
+    # Ensure config directory exists
+    config_location = config.config_dir if config.config_dir else config.path
+    config_location.mkdir(parents=True, exist_ok=True)
+
     # Build TOML structure
     def provider_to_dict(p: ProviderConfig) -> dict:
         d = {"name": p.name}
         d.update(p.params)
         return d
-    
+
+    store_section: dict[str, Any] = {
+        "version": config.version,
+        "created": config.created,
+    }
+    # Only write store.path if explicitly set (not default)
+    if config.store_path:
+        store_section["path"] = config.store_path
+
     data = {
-        "store": {
-            "version": config.version,
-            "created": config.created,
-        },
+        "store": store_section,
         "embedding": provider_to_dict(config.embedding),
         "summarization": provider_to_dict(config.summarization),
         "document": provider_to_dict(config.document),
     }
-    
+
     # Add embedding identity if set
     if config.embedding_identity:
         data["embedding_identity"] = {
@@ -363,22 +402,26 @@ def save_config(config: StoreConfig) -> None:
             "model": config.embedding_identity.model,
             "dimension": config.embedding_identity.dimension,
         }
-    
+
     with open(config.config_path, "wb") as f:
         tomli_w.dump(data, f)
 
 
-def load_or_create_config(store_path: Path) -> StoreConfig:
+def load_or_create_config(config_dir: Path, store_path: Optional[Path] = None) -> StoreConfig:
     """
     Load existing config or create a new one with defaults.
-    
+
     This is the main entry point for config management.
+
+    Args:
+        config_dir: Directory containing (or to contain) keep.toml
+        store_path: Optional explicit store location (for new configs only)
     """
-    config_path = store_path / CONFIG_FILENAME
-    
+    config_path = config_dir / CONFIG_FILENAME
+
     if config_path.exists():
-        return load_config(store_path)
+        return load_config(config_dir)
     else:
-        config = create_default_config(store_path)
+        config = create_default_config(config_dir, store_path)
         save_config(config)
         return config

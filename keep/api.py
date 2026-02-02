@@ -18,7 +18,7 @@ import subprocess
 import sys
 
 from .config import load_or_create_config, save_config, StoreConfig, EmbeddingIdentity
-from .paths import get_default_store_path
+from .paths import get_config_dir, get_default_store_path
 from .pending_summaries import PendingSummaryQueue
 from .providers import get_registry
 from .providers.base import (
@@ -60,20 +60,15 @@ class Keeper:
     ) -> None:
         """
         Initialize or open an existing associative memory store.
-        
+
         Args:
             store_path: Path to store directory. Uses default if not specified.
+                       Overrides any store.path setting in config.
             collection: Default collection name.
             decay_half_life_days: Memory decay half-life in days (ACT-R model).
                 After this many days, an item's effective relevance is halved.
                 Set to 0 or negative to disable decay.
         """
-        # Resolve store path
-        if store_path is None:
-            self._store_path = get_default_store_path()
-        else:
-            self._store_path = Path(store_path).resolve()
-        
         # Validate collection name
         if not COLLECTION_NAME_PATTERN.match(collection):
             raise ValueError(
@@ -82,9 +77,23 @@ class Keeper:
             )
         self._default_collection = collection
         self._decay_half_life_days = decay_half_life_days
-        
+
+        # Resolve config and store paths
+        # If store_path is explicitly provided, use it as both config and store location
+        # Otherwise, discover config via tree-walk and let config determine store
+        if store_path is not None:
+            self._store_path = Path(store_path).resolve()
+            config_dir = self._store_path
+        else:
+            # Discover config directory (tree-walk or envvar)
+            config_dir = get_config_dir()
+
         # Load or create configuration
-        self._config: StoreConfig = load_or_create_config(self._store_path)
+        self._config: StoreConfig = load_or_create_config(config_dir)
+
+        # If store_path wasn't explicit, resolve from config
+        if store_path is None:
+            self._store_path = get_default_store_path(self._config)
 
         # Initialize document provider (needed for most operations)
         registry = get_registry()

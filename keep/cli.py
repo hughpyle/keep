@@ -18,13 +18,20 @@ from typing_extensions import Annotated
 
 from .api import Keeper
 from .types import Item
-from .logging_config import configure_quiet_mode
+from .logging_config import configure_quiet_mode, enable_debug_mode
 
 
 # Configure quiet mode by default (suppress verbose library output)
-# Set KEEP_VERBOSE=1 to enable verbose mode for debugging
-_verbose = sys.argv and "--verbose" in sys.argv or os.environ.get("KEEP_VERBOSE") == "1"
-configure_quiet_mode(quiet=not _verbose)
+# Set KEEP_VERBOSE=1 to enable debug mode via environment
+if os.environ.get("KEEP_VERBOSE") == "1":
+    enable_debug_mode()
+else:
+    configure_quiet_mode(quiet=True)
+
+
+def _verbose_callback(value: bool):
+    if value:
+        enable_debug_mode()
 
 
 app = typer.Typer(
@@ -32,6 +39,19 @@ app = typer.Typer(
     help="Associative memory with semantic search.",
     no_args_is_help=True,
 )
+
+
+@app.callback()
+def main_callback(
+    verbose: Annotated[bool, typer.Option(
+        "--verbose", "-v",
+        help="Enable debug-level logging to stderr",
+        callback=_verbose_callback,
+        is_eager=True,
+    )] = False,
+):
+    """Associative memory with semantic search."""
+    pass
 
 
 # -----------------------------------------------------------------------------
@@ -193,7 +213,7 @@ def update(
     collection: CollectionOption = "default",
     tags: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
-        help="Source tag as key=value (can be repeated)"
+        help="Source tag as key=value (can be repeated to tag with multiple keys)"
     )] = None,
     lazy: Annotated[bool, typer.Option(
         "--lazy", "-l",
@@ -333,25 +353,33 @@ def init(
     Initialize or verify the store is ready.
     """
     kp = _get_keeper(store, collection)
-    
-    # Show actual store path
-    actual_path = kp._store_path if hasattr(kp, '_store_path') else Path(store or ".keep")
-    typer.echo(f"✓ Store ready: {actual_path}")
-    typer.echo(f"✓ Collections: {kp.list_collections()}")
-    
+
+    # Show config and store paths
+    config = kp._config
+    config_path = config.config_path if config else None
+    store_path = kp._store_path
+
+    # Show paths (config and store may differ)
+    if config and config.config_dir and config.config_dir.resolve() != store_path.resolve():
+        typer.echo(f"Config: {config_path}")
+        typer.echo(f"Store:  {store_path}")
+    else:
+        typer.echo(f"Store: {store_path}")
+
+    typer.echo(f"Collections: {kp.list_collections()}")
+
     # Show detected providers
     try:
-        if hasattr(kp, '_config'):
-            config = kp._config
-            typer.echo(f"\n✓ Detected providers:")
+        if config:
+            typer.echo(f"\nProviders:")
             typer.echo(f"  Embedding: {config.embedding.name}")
             typer.echo(f"  Summarization: {config.summarization.name}")
-            typer.echo(f"\nTo customize, edit {actual_path}/keep.toml")
+            typer.echo(f"\nTo customize, edit {config_path}")
     except Exception:
         pass  # Don't fail if provider detection doesn't work
-    
+
     # .gitignore reminder
-    typer.echo(f"\n⚠️  Remember to add .keep/ to .gitignore")
+    typer.echo(f"\nRemember to add .keep/ to .gitignore")
 
 
 @app.command("system")
@@ -360,7 +388,7 @@ def list_system(
     output_json: JsonOption = False,
 ):
     """
-    List all system documents (schema as data).
+    List the system documents.
     """
     kp = _get_keeper(store, "default")
     docs = kp.list_system_documents()
