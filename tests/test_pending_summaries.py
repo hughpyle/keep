@@ -155,6 +155,7 @@ class TestLazySummarization:
 
                 mock_embed_provider = MagicMock()
                 mock_embed_provider.dimension = 384
+                mock_embed_provider.model_name = "mock-model"
                 mock_embed_provider.embed.return_value = [0.1] * 384
 
                 # Make the cache wrapper return the mock directly
@@ -173,10 +174,13 @@ class TestLazySummarization:
 
                 kp = Keeper(store_path)
 
+                # Reset mock to ignore calls from system doc loading during init
+                mock_summ_provider.reset_mock()
+
                 # Lazy update
                 item = kp.update("file:///test.txt", lazy=True)
 
-                # Should NOT call summarize
+                # Should NOT call summarize for lazy update
                 mock_summ_provider.summarize.assert_not_called()
 
                 # Summary should be truncated content
@@ -204,6 +208,7 @@ class TestLazySummarization:
 
                 mock_embed_provider = MagicMock()
                 mock_embed_provider.dimension = 384
+                mock_embed_provider.model_name = "mock-model"
                 mock_embed_provider.embed.return_value = [0.1] * 384
 
                 mock_cache.return_value = mock_embed_provider
@@ -221,6 +226,9 @@ class TestLazySummarization:
 
                 kp = Keeper(store_path)
 
+                # Reset mock to ignore calls from system doc loading during init
+                mock_summ_provider.reset_mock()
+
                 # Lazy update
                 kp.update("file:///test.txt", lazy=True)
                 assert kp.pending_count() == 1
@@ -230,7 +238,7 @@ class TestLazySummarization:
                 assert processed == 1
                 assert kp.pending_count() == 0
 
-                # Summarize should have been called
+                # Summarize should have been called once (for processing pending)
                 mock_summ_provider.summarize.assert_called_once()
 
                 kp.close()
@@ -249,12 +257,16 @@ class TestProcessorSpawning:
                  patch("keep.api.CachingEmbeddingProvider") as mock_cache:
                 mock_embed = MagicMock()
                 mock_embed.dimension = 384
+                mock_embed.model_name = "mock-model"
+                mock_embed.embed.return_value = [0.1] * 384
                 mock_cache.return_value = mock_embed
 
                 mock_reg = MagicMock()
                 mock_reg.create_document.return_value = MagicMock()
                 mock_reg.create_embedding.return_value = mock_embed
-                mock_reg.create_summarization.return_value = MagicMock()
+                mock_summ = MagicMock()
+                mock_summ.summarize.return_value = "mock summary"
+                mock_reg.create_summarization.return_value = mock_summ
                 mock_registry.return_value = mock_reg
 
                 from keep.api import Keeper
@@ -274,12 +286,16 @@ class TestProcessorSpawning:
                  patch("keep.api.CachingEmbeddingProvider") as mock_cache:
                 mock_embed = MagicMock()
                 mock_embed.dimension = 384
+                mock_embed.model_name = "mock-model"
+                mock_embed.embed.return_value = [0.1] * 384
                 mock_cache.return_value = mock_embed
 
                 mock_reg = MagicMock()
                 mock_reg.create_document.return_value = MagicMock()
                 mock_reg.create_embedding.return_value = mock_embed
-                mock_reg.create_summarization.return_value = MagicMock()
+                mock_summ = MagicMock()
+                mock_summ.summarize.return_value = "mock summary"
+                mock_reg.create_summarization.return_value = mock_summ
                 mock_registry.return_value = mock_reg
 
                 from keep.api import Keeper
@@ -304,12 +320,16 @@ class TestProcessorSpawning:
                  patch("keep.api.CachingEmbeddingProvider") as mock_cache:
                 mock_embed = MagicMock()
                 mock_embed.dimension = 384
+                mock_embed.model_name = "mock-model"
+                mock_embed.embed.return_value = [0.1] * 384
                 mock_cache.return_value = mock_embed
 
                 mock_reg = MagicMock()
                 mock_reg.create_document.return_value = MagicMock()
                 mock_reg.create_embedding.return_value = mock_embed
-                mock_reg.create_summarization.return_value = MagicMock()
+                mock_summ = MagicMock()
+                mock_summ.summarize.return_value = "mock summary"
+                mock_reg.create_summarization.return_value = mock_summ
                 mock_registry.return_value = mock_reg
 
                 from keep.api import Keeper
@@ -336,12 +356,16 @@ class TestProcessorSpawning:
                  patch("keep.api.subprocess.Popen") as mock_popen:
                 mock_embed = MagicMock()
                 mock_embed.dimension = 384
+                mock_embed.model_name = "mock-model"
+                mock_embed.embed.return_value = [0.1] * 384
                 mock_cache.return_value = mock_embed
 
                 mock_reg = MagicMock()
                 mock_reg.create_document.return_value = MagicMock()
                 mock_reg.create_embedding.return_value = mock_embed
-                mock_reg.create_summarization.return_value = MagicMock()
+                mock_summ = MagicMock()
+                mock_summ.summarize.return_value = "mock summary"
+                mock_reg.create_summarization.return_value = mock_summ
                 mock_registry.return_value = mock_reg
 
                 from keep.api import Keeper

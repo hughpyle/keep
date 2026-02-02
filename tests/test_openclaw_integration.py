@@ -86,8 +86,8 @@ class TestGetOpenclawMemorySearchConfig:
 class TestDetectDefaultProviders:
     """Tests for provider detection with OpenClaw integration."""
 
-    def test_falls_back_to_sentence_transformers_without_config(self):
-        """Should use sentence-transformers when no OpenClaw config."""
+    def test_falls_back_to_local_embedding_without_config(self):
+        """Should use local embedding (mlx on Apple Silicon, sentence-transformers otherwise)."""
         with patch.dict(os.environ, {"OPENCLAW_CONFIG": "/nonexistent"}, clear=False):
             # Clear any API keys that might affect detection
             env = {
@@ -98,7 +98,8 @@ class TestDetectDefaultProviders:
             }
             with patch.dict(os.environ, env, clear=False):
                 providers = detect_default_providers()
-                assert providers["embedding"].name == "sentence-transformers"
+                # On Apple Silicon, prefers mlx; otherwise sentence-transformers
+                assert providers["embedding"].name in ("mlx", "sentence-transformers")
 
     def test_uses_gemini_when_configured(self):
         """Should use Gemini embeddings when memorySearch.provider is gemini."""
