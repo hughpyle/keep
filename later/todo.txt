@@ -1,4 +1,10 @@
 
+* metaschema: special tag that triggers "keep history of this document" behavior
+    - user-settable tag (maybe `keep:history` prefix convention?)
+    - on update, save previous version before overwriting
+    - requires: version storage mechanism, history retrieval API
+    - needs more design work
+
 * `keep` with no args -> return the 'now doc'
     - also need a way to update this document
     - user doesn't specify its id, idk there's a guid or something assigned
@@ -176,3 +182,4 @@ Done:
 . timestamps always UTC - verified all datetime.now uses timezone.utc
 . --since option for time-based filtering: accepts ISO duration (P3D, P1W, PT1H) or date (2026-01-15)
 . time-based filtering on find, similar, search, tag commands
+. system tags documented in docs/SYSTEM-TAGS.md (implemented vs reserved, protection mechanism)
