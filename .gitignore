@@ -61,3 +61,5 @@ coverage.xml
 .keep/
 test_extraction_store/
 .DS_Store
+.claude/
+.agents/
