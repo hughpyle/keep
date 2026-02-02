@@ -14,16 +14,12 @@ For the full practice guide, see **[SKILL.md](SKILL.md)**.
 
 Technically: semantic search using embeddings, backed by ChromaDB, with tag-based organization and recency decay. Available as CLI and Python API.
 
-```python
-from keep import Keeper
-
-kp = Keeper()
-
+```bash
 # Before acting: what do I already know?
-results = kp.find("how should we handle auth?")
+keep find "how should we handle auth?"
 
 # After learning: capture it for future you
-kp.remember("User prefers OAuth2 with PKCE for authentication")
+keep remember "User prefers OAuth2 with PKCE for authentication"
 ```
 
 **The practice:**
@@ -93,7 +89,21 @@ pip install keep-skill
 ```bash
 keep init
 # ⚠️  Remember to add .keep/ to .gitignore
+
+# Index a file
+keep update path/to/document.md --tag project=myapp
+
+# Remember inline content
+keep remember "Important: rate limit is 100 req/min" --tag topic=api
+
+# Semantic search
+keep find "what's the rate limit?"
+
+# Tag lookup
+keep tag topic=api
 ```
+
+### Python API
 
 ```python
 from keep import Keeper
