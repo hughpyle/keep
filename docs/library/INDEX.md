@@ -1,6 +1,7 @@
 # Library
 
 Public domain texts for testing and bootstrapping keep.
+The content, as well as the format, is relevant to the practice of this skill.
 
 ---
 
@@ -9,9 +10,9 @@ Public domain texts for testing and bootstrapping keep.
 ### ancrenewisse.pdf
 - **Title:** Ancrene Wisse (Ancrene Riwle)
 - **Date:** c. 1200s (13th century)
-- **Language:** Middle English
+- **Language:** Middle English, translation by (TODO)
 - **Status:** Public domain
-- **Description:** A monastic guide for anchoresses, one of the earliest works in English prose
+- **Description:** A monastic guide for Christian anchoresses.  Provides guidance on conduct with an "inner" and "outer" rule, and their relationship: "one relates to the right conduct of the heart; the other, to the regulation of the outward life".
 
 ---
 
@@ -33,7 +34,8 @@ Public domain texts for testing and bootstrapping keep.
 - **Source:** https://www.dhammatalks.org/suttas/MN/MN61.html
 - **Format:** Raw HTML (complete with markup, navigation, footnotes)
 - **License:** Freely distributed for educational use
-- **Description:** Buddha's teaching to his son Rāhula on reflection before, during, and after bodily, verbal, and mental actions. The triple-check pattern: reflect before acting/speaking, check while doing, review after. Mirror metaphor for self-reflection. Includes water dipper teaching on truthfulness and notes on contemplative practice. **Format note:** Kept as raw HTML to test document processing and summarization on markup-heavy content.
+- **Description:** Buddha's teaching to his son Rāhula on reflection before, during, and after bodily, verbal, and mental actions. The triple-check pattern: reflect before acting/speaking, check while doing, review after. Mirror metaphor for self-reflection.
+**Format note:** Kept as raw HTML to test document processing and summarization on markup-heavy content.
 
 ---
 
@@ -44,7 +46,7 @@ Public domain texts for testing and bootstrapping keep.
 - **Translator:** Bhikkhu Sujato
 - **Source:** SuttaCentral
 - **License:** Creative Commons CC0 1.0 Universal (SuttaCentral translations)
-- **Description:** The Five Remembrances - five subjects that all people should reflect on regularly: aging, sickness, death, separation from loved ones, and being heir to one's own actions. Teaches that reviewing these truths reduces vanity and unwholesome conduct, and leads to awakening.
+- **Description:** The Five Remembrances - five subjects that all sentient beings should reflect on regularly: aging, sickness, death, separation from loved ones, and being heir to one's own actions.  "Reviewing this subject often, they entirely give up bad conduct, or at least reduce it".
 
 ---
 
@@ -84,7 +86,7 @@ Public domain texts for testing and bootstrapping keep.
 - **Source:** Record of Linji (臨濟錄, Línjì Lù); Book of Serenity (從容錄) Case 38
 - **Primary sources:** DILA Buddhist Dictionary, multiple scholarly translations
 - **Status:** Core teaching in public domain; compiled with verification notes
-- **Description:** Linji Yixuan's famous teaching: "Within this mass of red flesh, there is a true person of no rank, constantly coming and going through the gates of your face." Multi-layered document exploring the original teaching, koan tradition, Dōgen's commentary, modern interpretations, and linguistic analysis. Includes Chinese text (verified), translations, and commentary relationships. Intentionally leaves some questions open for investigation.
+- **Description:** Linji Yixuan's famous teaching: "Within this mass of red flesh, there is a true person of no rank, constantly coming and going through the gates of your face." Multi-layered document exploring the original teaching, koan tradition, Dōgen's commentary, modern interpretations, and linguistic analysis. Includes Chinese text (verified), translations, and commentary relationships.
 
 **Verification status:** Chinese text and basic structure verified (2026-01-31). Modern teacher quotes compiled from teaching notes and may be paraphrased. See document header for details.
 
@@ -96,12 +98,12 @@ These texts provide diverse test cases for keep:
 
 1. **Different languages:** English, Chinese (Classical and modern romanization), Japanese, Middle English, Pali (via translation)
 2. **Different formats:** PDF, plain text, JSON, Markdown, HTML (with markup)
-3. **Different domains:** Buddhist teachings, Zen liturgy, architectural criticism, medieval devotional prose
+3. **Different domains:** Buddhist teachings, Zen liturgy, architectural criticism, medieval instructional prose
 4. **Different writing styles:** Ancient scripture, koan commentary, scholarly analysis, liturgical verse, teaching notes
 5. **Different lengths:** Four-line verses to full books
 6. **Different structures:** Linear narratives, multi-layered commentaries, character-by-character analysis, mirror patterns, web documents with navigation
 7. **Multilingual content:** Japanese-English parallel texts, Chinese with romanization, cross-linguistic terminology
-8. **Processing challenges:** OCR artifacts (Mumford), HTML markup (MN 61), PDF extraction (Ancrene Wisse), structured data (JSON)
+8. **Processing challenges:** Markdown, UTF-8 plaintext, OCR artifacts (Mumford), HTML markup (MN 61), PDF extraction (Ancrene Wisse), structured JSON data (AN5.57).
 
 ---
 
@@ -109,28 +111,10 @@ These texts provide diverse test cases for keep:
 
 When adding public domain texts:
 
-1. Verify public domain status (pre-1929 for US, or explicit license)
-2. Include source URL (Project Gutenberg, archive.org, etc.)
-3. Add metadata to this index
-4. Prefer clean text formats (txt, json) over scanned PDFs when available
-
----
-
-## Lewis Mumford Works
-
-**In Public Domain (pre-1929):**
-- "The Story of Utopias" (1922) — ✅ Available on archive.org
-- "Sticks and Stones" (1924) — ✅ Included in this dataset
-- "The Golden Day" (1926) — ✅ Available on archive.org
-
-**Still Under Copyright:**
-- "Technics and Civilization" (1934)
-- "The Culture of Cities" (1938)
-- "The City in History" (1961) ⚠️ Not freely licensed
-
-Other early Mumford works can be found at:
-- https://archive.org (search: creator:"Lewis Mumford" AND date:[1900 TO 1928])
-- Project Gutenberg (limited selection)
+1. Verify their relevance to the practice of this skill
+2. Verify compatibility with the MIT license, e.g. public domain status (pre-1929 for US, or explicit license)
+3. Include source URL (Project Gutenberg, archive.org, etc.)
+4. Add metadata to this index
 
 ---
 
