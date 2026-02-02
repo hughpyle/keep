@@ -1,4 +1,3 @@
-* what is the "warning" for HF
 
 * tags themselves should have summaries and full descriptions
     i.e. somewhere in the "system" store is a docuemnt that describes a tag
@@ -193,3 +192,4 @@ Done:
 . renamed 'builtin' to 'system' (docs/builtin → docs/system, _load_builtin → _load_system)
 . `keep tag xyz` lists VALUES for key (not documents)
 . `keep tag xyz=foo` lists DOCUMENTS with that tag
+. what is the "warning" for HF sentence trqansformers

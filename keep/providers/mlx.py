@@ -15,21 +15,18 @@ from .base import EmbeddingProvider, SummarizationProvider, get_registry
 
 class MLXEmbedding:
     """
-    Embedding provider using MLX on Apple Silicon.
-    
-    Uses sentence-transformer compatible models converted to MLX format.
-    
+    Embedding provider using MPS (Metal) acceleration on Apple Silicon.
+
+    Uses sentence-transformer models with GPU acceleration via Metal Performance Shaders.
+
     Requires: pip install mlx sentence-transformers
     """
-    
-    def __init__(self, model: str = "mlx-community/bge-small-en-v1.5"):
+
+    def __init__(self, model: str = "all-MiniLM-L6-v2"):
         """
         Args:
-            model: Model name from mlx-community hub or local path.
-                   Good options:
-                   - mlx-community/bge-small-en-v1.5 (small, fast)
-                   - mlx-community/bge-base-en-v1.5 (balanced)
-                   - mlx-community/bge-large-en-v1.5 (best quality)
+            model: Model name from sentence-transformers hub.
+                   Default: all-MiniLM-L6-v2 (384 dims, fast, no auth required)
         """
         try:
             import mlx.core as mx
@@ -39,17 +36,22 @@ class MLXEmbedding:
                 "MLXEmbedding requires 'mlx' and 'sentence-transformers'. "
                 "Install with: pip install mlx sentence-transformers"
             )
-        
+
         self.model_name = model
-        
-        # sentence-transformers can use MLX backend on Apple Silicon
-        # For MLX-specific models, we use the direct approach
-        if model.startswith("mlx-community/"):
-            # Use sentence-transformers which auto-detects MLX
-            self._model = SentenceTransformer(model, device="mps")
-        else:
-            self._model = SentenceTransformer(model)
-        
+
+        # Check if model is already cached locally to avoid network calls
+        local_only = False
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            repo_id = model if "/" in model else f"sentence-transformers/{model}"
+            cached = try_to_load_from_cache(repo_id, "config.json")
+            local_only = cached is not None
+        except ImportError:
+            pass
+
+        # Use MPS (Metal) for GPU acceleration on Apple Silicon
+        self._model = SentenceTransformer(model, device="mps", local_files_only=local_only)
+
         self._dimension: int | None = None
     
     @property
