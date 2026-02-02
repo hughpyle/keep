@@ -29,8 +29,14 @@ pip install 'keep-skill[dev]'
 ## CLI Usage
 
 ```bash
-# Initialize store
+# Initialize store (creates .keep/ at repo root)
 keep init
+
+# Initialize in current directory
+keep init --store ./data
+
+# Show current config and store location
+keep config
 
 # Debug mode (verbose logging to stderr)
 keep -v find "something"
@@ -44,10 +50,13 @@ keep remember "Meeting notes from today" -t type=meeting
 # Remember with custom summary
 keep remember "Long detailed content..." --summary "TL;DR version"
 
-# Search
+# Search by text
 keep find "authentication" --limit 5
 keep find "authentication" --since P7D  # Last 7 days
 keep find "auth" --since 2026-01-15     # Since specific date
+
+# Find similar to existing item
+keep find --id file:///path/to/doc.md
 
 # Get by ID
 keep get file:///path/to/doc.md
@@ -65,8 +74,8 @@ keep tag-update "id" --remove obsolete
 # List collections
 keep collections
 
-# Output as JSON
-keep find "auth" --json
+# Output as JSON (global flag)
+keep -j find "auth"
 ```
 
 ## Python API
@@ -117,7 +126,7 @@ keep update file:///path/to/doc.md --lazy
 
 # Background processor starts automatically
 # Check pending count:
-keep process-pending --json
+keep -j process-pending
 # {"processed": 0, "remaining": 1}
 
 # Or process manually:
@@ -148,7 +157,7 @@ First run auto-detects best providers and creates `.keep/keep.toml`:
 version = 2
 created = "2026-01-30T12:00:00Z"
 # path = "/path/to/data"  # Optional: separate data from config
-# max_summary_length = 500  # Optional: max chars for summaries (default 500)
+# max_summary_length = 1000  # Optional: max chars for summaries (default 1000)
 
 [embedding]
 name = "sentence-transformers"
@@ -156,10 +165,7 @@ model = "all-MiniLM-L6-v2"
 
 [summarization]
 name = "truncate"
-max_length = 500
-
-[document]
-name = "composite"
+max_length = 1000
 
 # Default tags applied to all updates
 [tags]
@@ -380,7 +386,7 @@ keep update "file://$PWD/docs/library/true_person_no_rank.md" -t type=teaching -
 keep update "file://$PWD/docs/library/impermanence_verse.txt" -t type=teaching -t topic=impermanence --lazy
 
 # Summaries generate in background - check progress:
-keep process-pending --json
+keep -j process-pending
 ```
 
 **What these teach:**

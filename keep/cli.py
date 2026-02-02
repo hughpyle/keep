@@ -34,6 +34,19 @@ def _verbose_callback(value: bool):
         enable_debug_mode()
 
 
+# Global state for CLI options
+_json_output = False
+
+
+def _json_callback(value: bool):
+    global _json_output
+    _json_output = value
+
+
+def _get_json_output() -> bool:
+    return _json_output
+
+
 app = typer.Typer(
     name="keep",
     help="Associative memory with semantic search.",
@@ -58,14 +71,21 @@ def main_callback(
         callback=_verbose_callback,
         is_eager=True,
     )] = False,
+    output_json: Annotated[bool, typer.Option(
+        "--json", "-j",
+        help="Output as JSON",
+        callback=_json_callback,
+        is_eager=True,
+    )] = False,
 ):
     """Associative memory with semantic search."""
     # If no subcommand provided, show the current context (now)
     if ctx.invoked_subcommand is None:
         kp = _get_keeper(None, "default")
         item = kp.get_now()
-        typer.echo(_format_item(item))
-        typer.echo("\nUse --help for commands.", err=True)
+        typer.echo(_format_item(item, as_json=_get_json_output()))
+        if not _get_json_output():
+            typer.echo("\nUse --help for commands.", err=True)
 
 
 # -----------------------------------------------------------------------------
@@ -97,13 +117,6 @@ LimitOption = Annotated[
     )
 ]
 
-JsonOption = Annotated[
-    bool,
-    typer.Option(
-        "--json", "-j",
-        help="Output as JSON"
-    )
-]
 
 SinceOption = Annotated[
     Optional[str],
@@ -173,37 +186,41 @@ def _get_keeper(store: Optional[Path], collection: str) -> Keeper:
 
 @app.command()
 def find(
-    query: Annotated[str, typer.Argument(help="Search query text")],
+    query: Annotated[Optional[str], typer.Argument(help="Search query text")] = None,
+    id: Annotated[Optional[str], typer.Option(
+        "--id",
+        help="Find items similar to this ID (instead of text search)"
+    )] = None,
+    include_self: Annotated[bool, typer.Option(
+        help="Include the queried item (only with --id)"
+    )] = False,
     store: StoreOption = None,
     collection: CollectionOption = "default",
     limit: LimitOption = 10,
     since: SinceOption = None,
-    output_json: JsonOption = False,
 ):
     """
     Find items using semantic similarity search.
-    """
-    kp = _get_keeper(store, collection)
-    results = kp.find(query, limit=limit, since=since)
-    typer.echo(_format_items(results, as_json=output_json))
 
+    Examples:
+        keep find "authentication"              # Search by text
+        keep find --id file:///path/to/doc.md   # Find similar to item
+    """
+    if id and query:
+        typer.echo("Error: Specify either a query or --id, not both", err=True)
+        raise typer.Exit(1)
+    if not id and not query:
+        typer.echo("Error: Specify a query or --id", err=True)
+        raise typer.Exit(1)
 
-@app.command()
-def similar(
-    id: Annotated[str, typer.Argument(help="URI of item to find similar items for")],
-    store: StoreOption = None,
-    collection: CollectionOption = "default",
-    limit: LimitOption = 10,
-    since: SinceOption = None,
-    include_self: Annotated[bool, typer.Option(help="Include the queried item")] = False,
-    output_json: JsonOption = False,
-):
-    """
-    Find items similar to an existing item.
-    """
     kp = _get_keeper(store, collection)
-    results = kp.find_similar(id, limit=limit, since=since, include_self=include_self)
-    typer.echo(_format_items(results, as_json=output_json))
+
+    if id:
+        results = kp.find_similar(id, limit=limit, since=since, include_self=include_self)
+    else:
+        results = kp.find(query, limit=limit, since=since)
+
+    typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
 @app.command()
@@ -213,14 +230,13 @@ def search(
     collection: CollectionOption = "default",
     limit: LimitOption = 10,
     since: SinceOption = None,
-    output_json: JsonOption = False,
 ):
     """
     Search item summaries using full-text search.
     """
     kp = _get_keeper(store, collection)
     results = kp.query_fulltext(query, limit=limit, since=since)
-    typer.echo(_format_items(results, as_json=output_json))
+    typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
 @app.command()
@@ -236,7 +252,6 @@ def tag(
     collection: CollectionOption = "default",
     limit: LimitOption = 100,
     since: SinceOption = None,
-    output_json: JsonOption = False,
 ):
     """
     List tag values or find items by tag.
@@ -251,7 +266,7 @@ def tag(
     # List all keys mode
     if list_keys or query is None:
         tags = kp.list_tags(None, collection=collection)
-        if output_json:
+        if _get_json_output():
             typer.echo(json.dumps(tags))
         else:
             if not tags:
@@ -266,11 +281,11 @@ def tag(
         # key=value → find documents
         key, value = query.split("=", 1)
         results = kp.query_tag(key, value, limit=limit, since=since)
-        typer.echo(_format_items(results, as_json=output_json))
+        typer.echo(_format_items(results, as_json=_get_json_output()))
     else:
         # key only → list values
         values = kp.list_tags(query, collection=collection)
-        if output_json:
+        if _get_json_output():
             typer.echo(json.dumps(values))
         else:
             if not values:
@@ -293,7 +308,6 @@ def tag_update(
     )] = None,
     store: StoreOption = None,
     collection: CollectionOption = "default",
-    output_json: JsonOption = False,
 ):
     """
     Add, update, or remove tags on existing documents.
@@ -336,7 +350,7 @@ def tag_update(
         else:
             results.append(item)
 
-    if output_json:
+    if _get_json_output():
         typer.echo(_format_items(results, as_json=True))
     else:
         for item in results:
@@ -357,10 +371,9 @@ def update(
         help="User-provided summary (skips auto-summarization)"
     )] = None,
     lazy: Annotated[bool, typer.Option(
-        "--lazy", "-l",
+        "--lazy",
         help="Fast mode: use truncated summary, queue for later processing"
     )] = False,
-    output_json: JsonOption = False,
 ):
     """
     Add or update a document in the store.
@@ -382,7 +395,7 @@ def update(
             parsed_tags[k] = v
 
     item = kp.update(id, tags=parsed_tags or None, summary=summary, lazy=lazy)
-    typer.echo(_format_item(item, as_json=output_json))
+    typer.echo(_format_item(item, as_json=_get_json_output()))
 
 
 @app.command()
@@ -403,10 +416,9 @@ def remember(
         help="User-provided summary (skips auto-summarization)"
     )] = None,
     lazy: Annotated[bool, typer.Option(
-        "--lazy", "-l",
+        "--lazy",
         help="Fast mode: use truncated summary, queue for later processing"
     )] = False,
-    output_json: JsonOption = False,
 ):
     """
     Remember inline content (conversations, notes, insights).
@@ -428,7 +440,7 @@ def remember(
             parsed_tags[k] = v
 
     item = kp.remember(content, id=id, summary=summary, tags=parsed_tags or None, lazy=lazy)
-    typer.echo(_format_item(item, as_json=output_json))
+    typer.echo(_format_item(item, as_json=_get_json_output()))
 
 
 @app.command()
@@ -450,7 +462,6 @@ def now(
         "--tag", "-t",
         help="Tag as key=value (can be repeated)"
     )] = None,
-    output_json: JsonOption = False,
 ):
     """
     Get or set the current working context.
@@ -500,11 +511,11 @@ def now(
                 parsed_tags[k] = v
 
         item = kp.set_now(new_content, tags=parsed_tags or None)
-        typer.echo(_format_item(item, as_json=output_json))
+        typer.echo(_format_item(item, as_json=_get_json_output()))
     else:
         # Get current context
         item = kp.get_now()
-        typer.echo(_format_item(item, as_json=output_json))
+        typer.echo(_format_item(item, as_json=_get_json_output()))
 
 
 @app.command()
@@ -512,19 +523,18 @@ def get(
     id: Annotated[str, typer.Argument(help="URI of item to retrieve")],
     store: StoreOption = None,
     collection: CollectionOption = "default",
-    output_json: JsonOption = False,
 ):
     """
     Retrieve a specific item by ID.
     """
     kp = _get_keeper(store, collection)
     item = kp.get(id)
-    
+
     if item is None:
         typer.echo(f"Not found: {id}", err=True)
         raise typer.Exit(1)
-    
-    typer.echo(_format_item(item, as_json=output_json))
+
+    typer.echo(_format_item(item, as_json=_get_json_output()))
 
 
 @app.command()
@@ -549,15 +559,14 @@ def exists(
 @app.command("collections")
 def list_collections(
     store: StoreOption = None,
-    output_json: JsonOption = False,
 ):
     """
     List all collections in the store.
     """
     kp = _get_keeper(store, "default")
     collections = kp.list_collections()
-    
-    if output_json:
+
+    if _get_json_output():
         typer.echo(json.dumps(collections))
     else:
         if not collections:
@@ -582,40 +591,70 @@ def init(
     config_path = config.config_path if config else None
     store_path = kp._store_path
 
-    # Show paths (config and store may differ)
+    # Show paths
+    typer.echo(f"Config: {config_path}")
     if config and config.config_dir and config.config_dir.resolve() != store_path.resolve():
-        typer.echo(f"Config: {config_path}")
         typer.echo(f"Store:  {store_path}")
-    else:
-        typer.echo(f"Store: {store_path}")
 
     typer.echo(f"Collections: {kp.list_collections()}")
 
     # Show detected providers
-    try:
-        if config:
-            typer.echo(f"\nProviders:")
-            typer.echo(f"  Embedding: {config.embedding.name}")
-            typer.echo(f"  Summarization: {config.summarization.name}")
-            typer.echo(f"\nTo customize, edit {config_path}")
-    except Exception:
-        pass  # Don't fail if provider detection doesn't work
+    if config:
+        typer.echo(f"\nProviders:")
+        typer.echo(f"  Embedding: {config.embedding.name}")
+        typer.echo(f"  Summarization: {config.summarization.name}")
 
     # .gitignore reminder
     typer.echo(f"\nRemember to add .keep/ to .gitignore")
 
 
+@app.command()
+def config(
+    store: StoreOption = None,
+):
+    """
+    Show current configuration and store location.
+    """
+    kp = _get_keeper(store, "default")
+
+    cfg = kp._config
+    config_path = cfg.config_path if cfg else None
+    store_path = kp._store_path
+
+    if _get_json_output():
+        result = {
+            "store": str(store_path),
+            "config": str(config_path) if config_path else None,
+            "collections": kp.list_collections(),
+        }
+        if cfg:
+            result["embedding"] = cfg.embedding.name
+            result["summarization"] = cfg.summarization.name
+        typer.echo(json.dumps(result, indent=2))
+    else:
+        # Show paths
+        typer.echo(f"Config: {config_path}")
+        if cfg and cfg.config_dir and cfg.config_dir.resolve() != store_path.resolve():
+            typer.echo(f"Store:  {store_path}")
+
+        typer.echo(f"Collections: {kp.list_collections()}")
+
+        if cfg:
+            typer.echo(f"\nProviders:")
+            typer.echo(f"  Embedding: {cfg.embedding.name}")
+            typer.echo(f"  Summarization: {cfg.summarization.name}")
+
+
 @app.command("system")
 def list_system(
     store: StoreOption = None,
-    output_json: JsonOption = False,
 ):
     """
     List the system documents.
     """
     kp = _get_keeper(store, "default")
     docs = kp.list_system_documents()
-    typer.echo(_format_items(docs, as_json=output_json))
+    typer.echo(_format_items(docs, as_json=_get_json_output()))
 
 
 @app.command("process-pending")
@@ -634,7 +673,6 @@ def process_pending(
         hidden=True,
         help="Run as background daemon (used internally)"
     )] = False,
-    output_json: JsonOption = False,
 ):
     """
     Process pending summaries from lazy indexing.
@@ -683,7 +721,7 @@ def process_pending(
     pending_before = kp.pending_count()
 
     if pending_before == 0:
-        if output_json:
+        if _get_json_output():
             typer.echo(json.dumps({"processed": 0, "remaining": 0}))
         else:
             typer.echo("No pending summaries.")
@@ -697,11 +735,11 @@ def process_pending(
             total_processed += processed
             if processed == 0:
                 break
-            if not output_json:
+            if not _get_json_output():
                 typer.echo(f"  Processed {total_processed}...")
 
         remaining = kp.pending_count()
-        if output_json:
+        if _get_json_output():
             typer.echo(json.dumps({
                 "processed": total_processed,
                 "remaining": remaining
@@ -713,7 +751,7 @@ def process_pending(
         processed = kp.process_pending(limit=limit)
         remaining = kp.pending_count()
 
-        if output_json:
+        if _get_json_output():
             typer.echo(json.dumps({
                 "processed": processed,
                 "remaining": remaining
