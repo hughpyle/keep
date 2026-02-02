@@ -85,6 +85,9 @@ class StoreConfig:
     # Embedding identity (set after first use, used for validation)
     embedding_identity: Optional[EmbeddingIdentity] = None
 
+    # Default tags applied to all update/remember operations
+    default_tags: dict[str, str] = field(default_factory=dict)
+
     @property
     def config_path(self) -> Path:
         """Path to the TOML config file."""
@@ -336,6 +339,11 @@ def load_config(config_dir: Path) -> StoreConfig:
             params={k: v for k, v in section.items() if k != "name"},
         )
 
+    # Parse default tags (filter out system tags)
+    raw_tags = data.get("tags", {})
+    default_tags = {k: str(v) for k, v in raw_tags.items()
+                    if not k.startswith("_")}
+
     return StoreConfig(
         path=actual_store,
         config_dir=config_dir,
@@ -346,6 +354,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         summarization=parse_provider(data.get("summarization", {"name": "truncate"})),
         document=parse_provider(data.get("document", {"name": "composite"})),
         embedding_identity=parse_embedding_identity(data.get("embedding_identity")),
+        default_tags=default_tags,
     )
 
 
@@ -402,6 +411,10 @@ def save_config(config: StoreConfig) -> None:
             "model": config.embedding_identity.model,
             "dimension": config.embedding_identity.dimension,
         }
+
+    # Add default tags if set
+    if config.default_tags:
+        data["tags"] = config.default_tags
 
     with open(config.config_path, "wb") as f:
         tomli_w.dump(data, f)
