@@ -510,26 +510,6 @@ def list_system(
     typer.echo(_format_items(docs, as_json=output_json))
 
 
-@app.command("routing")
-def show_routing(
-    store: StoreOption = None,
-    output_json: JsonOption = False,
-):
-    """
-    Show the current routing configuration.
-    """
-    kp = _get_keeper(store, "default")
-    routing = kp.get_routing()
-
-    if output_json:
-        from dataclasses import asdict
-        typer.echo(json.dumps(asdict(routing), indent=2))
-    else:
-        typer.echo(f"Summary: {routing.summary}")
-        typer.echo(f"Private patterns: {routing.private_patterns}")
-        typer.echo(f"Updated: {routing.updated}")
-
-
 @app.command("process-pending")
 def process_pending(
     store: StoreOption = None,

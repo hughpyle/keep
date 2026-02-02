@@ -60,10 +60,6 @@ kp.get(id)                              # Fetch by ID → Item | None
 kp.exists(id)                           # Check existence → bool
 kp.list_collections()                   # All collections → list[str]
 
-# System documents
-kp.get_routing()                        # Get routing config → RoutingContext
-kp.get_system_document(name)            # Get _system:{name} → Item | None
-kp.list_system_documents()              # All system docs → list[Item]
 ```
 
 ## Item Fields
@@ -121,37 +117,12 @@ Protected tags prefixed with `_`. Users cannot modify these directly.
 
 **Implemented:** `_created`, `_updated`, `_updated_date`, `_content_type`, `_source`
 
-**Reserved:** `_session`, `_topic`, `_level`, `_summarizes`, `_system`, `_visibility`, `_for`
-
 ```python
 kp.query_tag("_updated_date", "2026-01-30")  # Temporal query
 kp.query_tag("_source", "inline")            # Find remembered content
-kp.query_tag("_system", "true")              # All system documents
 ```
 
 See [SYSTEM-TAGS.md](SYSTEM-TAGS.md) for complete reference.
-
-## System Documents
-There is a very small metaschema, managed by documents in the store.  You can adjust these as needed.
-
-| Document | Purpose |
-|----------|---------|
-| `_system:routing` | Private/shared routing patterns |
-| `_system:context` | Current working context |
-| `_system:guidance` | Local behavioral guidance |
-| `_system:guidance:{topic}` | Topic-specific guidance |
-
-```python
-# Query and update system documents like any item
-guidance = kp.get_system_document("guidance:code_review")
-
-# Create/update guidance through remember()
-kp.remember(
-    content="For code review: check security, tests, docs",
-    id="_system:guidance:code_review",
-    tags={"_system": "true"}
-)
-```
 
 ## Time-Based Filtering
 ```python
@@ -174,18 +145,6 @@ kp.query_fulltext("error", since="P3D")
 - `remember()` — capture conversation insights, decisions, notes
 - `find()` — before searching filesystem; may already be indexed
 - `find(since="P7D")` — filter to recent items when recency matters
-
-## Private vs Shared Routing
-Items tagged for private visibility route to a **physically separate** store.
-
-**Default private patterns:**
-- `{"_visibility": "draft"}`
-- `{"_visibility": "private"}`
-- `{"_for": "self"}`
-
-Private items cannot be seen from the shared store — physical separation, not convention.
-
-Routing rules live in `_system:routing` document (shared store). Update it to customize.
 
 ## Domain Patterns
 See [patterns/domains.md](../patterns/domains.md) for organization templates.
