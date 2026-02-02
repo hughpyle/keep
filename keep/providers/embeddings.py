@@ -11,12 +11,12 @@ from .base import EmbeddingProvider, get_registry
 class SentenceTransformerEmbedding:
     """
     Embedding provider using sentence-transformers library.
-    
+
     Runs locally, no API key required. Good default for getting started.
-    
+
     Requires: pip install sentence-transformers
     """
-    
+
     def __init__(self, model: str = "all-MiniLM-L6-v2"):
         """
         Args:
@@ -29,9 +29,21 @@ class SentenceTransformerEmbedding:
                 "SentenceTransformerEmbedding requires 'sentence-transformers' library. "
                 "Install with: pip install sentence-transformers"
             )
-        
+
         self.model_name = model
-        self._model = SentenceTransformer(model)
+
+        # Check if model is already cached locally to avoid network calls
+        # Expand short model names (e.g. "all-MiniLM-L6-v2" -> "sentence-transformers/all-MiniLM-L6-v2")
+        local_only = False
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            repo_id = model if "/" in model else f"sentence-transformers/{model}"
+            cached = try_to_load_from_cache(repo_id, "config.json")
+            local_only = cached is not None
+        except ImportError:
+            pass
+
+        self._model = SentenceTransformer(model, local_files_only=local_only)
     
     @property
     def dimension(self) -> int:
