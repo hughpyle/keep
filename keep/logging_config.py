@@ -57,17 +57,48 @@ def configure_quiet_mode(quiet: bool = True):
 def enable_verbose_mode():
     """Re-enable verbose output for debugging."""
     configure_quiet_mode(quiet=False)
-    
+
     # Restore defaults
     os.environ.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
     os.environ.pop("TRANSFORMERS_VERBOSITY", None)
-    
+
     # Re-enable warnings
     warnings.filterwarnings("default")
-    
+
     # Reset logging levels
     import logging
     logging.getLogger("transformers").setLevel(logging.INFO)
     logging.getLogger("sentence_transformers").setLevel(logging.INFO)
     logging.getLogger("mlx").setLevel(logging.INFO)
     logging.getLogger("chromadb").setLevel(logging.INFO)
+
+
+def enable_debug_mode():
+    """Enable debug-level logging to stderr."""
+    import logging
+
+    # Re-enable warnings
+    warnings.filterwarnings("default")
+
+    # Restore library verbosity
+    os.environ.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
+    os.environ.pop("TRANSFORMERS_VERBOSITY", None)
+
+    # Configure root logger for debug output
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+
+    # Add stderr handler if not already present
+    if not any(isinstance(h, logging.StreamHandler) and h.stream == sys.stderr
+               for h in root_logger.handlers):
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%H:%M:%S"
+        ))
+        root_logger.addHandler(handler)
+
+    # Set library loggers to DEBUG
+    for name in ("keep", "transformers", "sentence_transformers", "mlx", "chromadb"):
+        logging.getLogger(name).setLevel(logging.DEBUG)
