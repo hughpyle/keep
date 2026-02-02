@@ -1,94 +1,12 @@
-* `keep init` should always be able to tell you the status, in detail
-    e.g. fails with sentence-transformers right now
 
-* what is the startup cost for the basic `keep` commands?
-    - when are any "write" operations needed at all?
-
-* error handling should be much nicer, don't just dump the stack trace, instead log it in /tmp and tell the user about it
-
-* make sure timestamps are always utc
-
-* `context` text alongside summaries?
-    - optional field for "why this matters" or additional notes
-    - completely optional, not a priority
-
-* tags themselves should have summaries and full descriptions
-    i.e. somewhere in the "system" store is a docuemnt that describes a tag
-    of course it's optional, you can just tag things in an open-ended way
-    but sure would be useful for convention, as well as maintenance, if tags are documented by whoever uses them.
-    doesn't really need to be in the "system" namespace but yeah it kihda does
-
-    * then: provide a set of predefined things as files in `docs/system` that get loaded on `init`
-      and include in there: a description of the "project" tag, a description of the "topic" tag
-      (and whatever else we decide to pre-load... bearing in mind that pre-loaded content is for convention not specification!)
-    * "project" and "topic" are the first two
-      - placeholder descriptions for these are fine initially
-
-* tag-by-model
-    - is there a model-supported tagging? what would that need to be useful? (specific domains??)
-      - i.e. as well as summarization, there's a "system document" that the model reads, and uses that document to decide which tags should be applied
-      - it really needs to be one document per tag (because the model might choose multiple tags)
-      - requires "system documents" so later
-    - want this to be pluggable, guide the model-driven tagging from a sysdoc that defines how it works
-
-* compare openclaw 'memory-lancedb' plugin
-
-* "last N days" by default???
-    not sure it's needed at all
-
-* update the REFERENCE.md
-    (but don't do this until the 'nowdoc' is baked)
-
-* check - what is your emotional response when encountering this project the first time?
-
-* check for compatibility with linux (so far I've exclusively been running on macOS)
-    can deploy on rpi at home
-    also think about what would differ if we wanted to run this within docker, or in a k8s cluster
-
-* check for compatibility with windows
-    not sure we need to support powershell, only WSL? but paths etc. will vary
-    and I don't know if windows has local models available through system services yet (would be nice)
-    - this is all investigation work, not implementation  (I don't have a test environment)
-
-* logs and messages should respect TERM (or the terminal capabilities) so that I can run this commandline
-  on my ancient ASR33 teletype without dealing with ANSI escapes
-
-* whose translation is this copy of the Ancrene Riwle?  Update the INDEX.md accordingly.
-    (would prefer use a ME transcription, too)
-
-* Add github URL for the an5.57 text to the INDEX.md (and the HTML URL too)
-
-* add support for the kimi/moonshot models, etc - what are we missing? compare claude code, openclaw
-
-* add an audio track (mp3, flac, or something similar) to the library
-    - keep it small tho, under a megabyte?
-    - public domain recording of a song that resonates with the instructional content?
-    - use as content but don't really want add dependencies on mp3/flace/wav decoding (especially anything requiring a license such as the fraunhofer stuff, all our deps must be MIT-compatible)
-    - getting tags out of the file would be a great test case
-    - analysis of the audio content will depend on the available models, but some might do a good job
-
-* add an image; same strategy as audio
-
-* openclaw install a heartbeat.  Not too often, but often enough.
-
-* multi-embeddings
-    - background task can detect current config and maintain compat
-
-* review how system documents are used today
-    - remove the "schema as data" reminder in docs/REFERENCE.md and cli.py, it's naff
-    - `keep system` needs some parameters for "latest N" or "latest timestamp"
-      and those should be filters on all the list/search options too
-      (like `keep tag -n 5` but also filter by date)
-    - `keep list [--system]` would be better, cover non-system too 
-
-* make sure `process-pending` is robust to offline too (if it has work to do)
+* is there a "updated within the last N days" filter?
+    - by default???
 
 * make sure that time-based filtering is efficient for "recent", we'll use that all over
 
-* review the CLI completely.  Can the common tasks have single-letter aliases for their commands?
 
 * `keep` with no args -> return the 'now doc'
-    - also need a way to update this
+    - also need a way to update this document
     - user doesn't specify its id, idk there's a guid or something assigned
     - we should keep a history of the nowdoc
         - which is quite interesting, it's everything you've been doing
@@ -120,6 +38,73 @@
             - limit 10, and limit to the last 7 days, should be enough for a default?
                 - "last N days" is subtle, not part of this task, don't have any time-limited behavior yet
 
+
+* tags themselves should have summaries and full descriptions
+    i.e. somewhere in the "system" store is a docuemnt that describes a tag
+    of course it's optional, you can just tag things in an open-ended way
+    but sure would be useful for convention, as well as maintenance, if tags are documented by whoever uses them.
+    doesn't really need to be in the "system" namespace but yeah it kihda does
+
+    * then: provide a set of predefined things as files in `docs/system` that get loaded on `init`
+      and include in there: a description of the "project" tag, a description of the "topic" tag
+      (and whatever else we decide to pre-load... bearing in mind that pre-loaded content is for convention not specification!)
+    * "project" and "topic" are the first two
+      - placeholder descriptions for these are fine initially
+
+* tag-by-model
+    - is there a model-supported tagging? what would that need to be useful? (specific domains??)
+      - i.e. as well as summarization, there's a "system document" that the model reads, and uses that document to decide which tags should be applied
+      - it really needs to be one document per tag (because the model might choose multiple tags)
+      - requires "system documents" so later
+    - want this to be pluggable, guide the model-driven tagging from a sysdoc that defines how it works
+
+* compare openclaw 'memory-lancedb' plugin
+
+* update the REFERENCE.md
+    (but don't do this until the 'nowdoc' is baked)
+
+* check - what is your emotional response when encountering this project the first time?
+
+* check for compatibility with linux (so far I've exclusively been running on macOS)
+    can deploy on rpi at home
+    also think about what would differ if we wanted to run this within docker, or in a k8s cluster
+
+* check for compatibility with windows
+    not sure we need to support powershell, only WSL? but paths etc. will vary
+    and I don't know if windows has local models available through system services yet (would be nice)
+    - this is all investigation work, not implementation  (I don't have a test environment)
+
+* logs and messages should respect TERM (or the terminal capabilities) so that I can run this commandline
+  on my ancient ASR33 teletype without dealing with ANSI escapes
+
+* whose translation is this copy of the Ancrene Riwle?  Update the INDEX.md accordingly.
+    (would prefer use a transcription of one of the original MS, instead of a translation!)
+
+* Add github URL for the an5.57 text to the INDEX.md (and the HTML URL too)
+
+* add support for the kimi/moonshot models, etc - what are we missing? compare claude code, openclaw
+
+* add an audio track (mp3, flac, or something similar) to the library
+    - keep it small tho, under a megabyte?
+    - public domain recording of a song that resonates with the instructional content?
+    - use as content but don't really want add dependencies on mp3/flace/wav decoding (especially anything requiring a license such as the fraunhofer stuff, all our deps must be MIT-compatible)
+    - getting tags out of the file would be a great test case
+    - analysis of the audio content will depend on the available models, but some might do a good job
+
+* add an image; same strategy as audio
+
+* openclaw install a heartbeat.  Not too often, but often enough.
+
+* multi-embeddings
+    - background task can detect current config and maintain compat
+
+* review how system documents (e.g. "metaschema") are used today, if any
+    - `keep system` needs some parameters for "latest N" or "latest timestamp"
+      and those should be filters on all the list/search options too
+      (like `keep tag -n 5` but also filter by date)
+    - `keep list [--system]` would be better, cover non-system too 
+
+* review the CLI completely.  Can the common tasks have single-letter aliases for their commands?
 
 * "relevance / focus scores" are to be decveloped within the context of "topics / projects"
     - there isn't an absolute relevance
@@ -160,6 +145,9 @@
 
 * move plugin into a `plugins` directory? yuk name, these are not "plugins for keep", so what?
 
+* `context` text alongside summaries?
+    - optional field for "why this matters" or additional notes
+    - completely optional, not a priority
 
 ----
 
@@ -187,3 +175,8 @@ Done:
 . documentstore already correct (stores only summaries, not full content)
 . remember vs update: keep separate (different input semantics, both useful)
 . model dimensions: lazy detection for unknown models (OpenAI, Gemini)
+. `keep init` works offline - providers lazy-loaded, no network at init
+. `process-pending` robust to offline - retries with max 5 attempts, graceful degradation
+. startup cost optimized - read-only commands don't load providers
+. error handling: log tracebacks to /tmp/keep-errors.log, show clean message to user
+. timestamps always UTC - verified all datetime.now uses timezone.utc
