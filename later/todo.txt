@@ -1,8 +1,10 @@
+* `keep init` should always be able to tell you the status, in detail
+    e.g. fails with sentence-transformers right now
 
-* model dimensions
-    - the OpenAiEmbeddings class hardcodes its model dimensionality
-    - surely that can just be detected at runtime? otherwise we'll get it wrong, or fail for unknown, etc.
-    - do we even need to track the dimensionality at all?  the database is annotated with trhe actual model name now
+* what is the startup cost for the basic `keep` commands?
+    - when are any "write" operations needed at all?
+
+* error handling should be much nicer, don't just dump the stack trace, instead log it in /tmp and tell the user about it
 
 * make sure timestamps are always utc
 
@@ -148,21 +150,12 @@
 
 * can we do something similar for kiro?
 
-* better update/degrade strategies: compare with current best of breed
+* better update/degrade memory strategies: compare with current best of breed
     - want something that tracks last-retrieval time
     - not sure how that applies to the ranking for retrieval
     - do we need any of this to be config not code??
 
  
-
-* `keep init` should always be able to tell you the status, in detail
-    e.g. fails with sentence-transformers right now
-
-* what is the startup cost for the basic `keep` commands?
-    - when are any "write" operations needed at all?
-
-* error handling should be much nicer, don't just dump the stack trace, instead log it in /tmp and tell the user about it
-
 * compare the openclaw plugin against the other memory plugins on the hub
 
 * move plugin into a `plugins` directory? yuk name, these are not "plugins for keep", so what?
@@ -193,3 +186,4 @@ Done:
 . summaries: --summary flag, smart remember (short content verbatim), max_summary_length config
 . documentstore already correct (stores only summaries, not full content)
 . remember vs update: keep separate (different input semantics, both useful)
+. model dimensions: lazy detection for unknown models (OpenAI, Gemini)
