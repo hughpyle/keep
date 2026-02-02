@@ -31,7 +31,7 @@ Ground yourself:
    keep find "what I'm about to work on"
    ```
 3. Be here, now, "aquí donde los papas queman", and reflect.
-3. Only then: act.  
+4. Only then: act.  
 
 **After acting, reflect:**
 - What happened? What did I learn?
@@ -219,7 +219,8 @@ Don't dump everything into context. Navigate the tree:
 | `update` | Index document by URI | `keep update "file:///path" -t key=value` |
 | `get` | Retrieve by ID | `keep get "file:///path/to/doc.md"` |
 | `similar` | Find neighbors | `keep similar "id" --limit 3` |
-| `tag` | Query by tag | `keep tag domain auth` |
+| `tag` | Query by tag | `keep tag domain auth` or `keep tag --list` |
+| `tag-update` | Modify tags only | `keep tag-update "id" --tag key=value` |
 | `exists` | Check if indexed | `keep exists "id"` |
 | `process-pending` | Process lazy summaries | `keep process-pending --all` |
 

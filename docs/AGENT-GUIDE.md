@@ -22,13 +22,13 @@ from keep import Keeper, Item
 kp = Keeper()
 
 # Index a document from URI (fetches, embeds, summarizes, tags automatically)
-item = kp.update("file:///project/readme.md", source_tags={"project": "myapp"})
+item = kp.update("file:///project/readme.md", tags={"project": "myapp"})
 
 # Remember inline content (conversations, notes, insights)
 kp.remember(
     content="User prefers OAuth2 with PKCE for auth. Discussed tradeoffs.",
     id="conversation:2026-01-30:auth",
-    source_tags={"topic": "authentication"}
+    tags={"topic": "authentication"}
 )
 
 # Semantic search
@@ -133,7 +133,7 @@ kp.set_context(
 # 4. Completing — record the learning
 kp.remember(
     content="Flaky timing in CI → mock time instead of real assertions.",
-    source_tags={"type": "learning", "domain": "testing"}
+    tags={"type": "learning", "domain": "testing"}
 )
 kp.set_context(
     summary="Completed flaky test fix.",
@@ -223,11 +223,11 @@ The data is partitioned by *collection*. Collection names are lowercase ASCII wi
 
 within a collection:
 
-`update(id: URI, source_tags: dict)` - inserts or updates the document at `URI` into the store.  This process delegates the work of embedding, summarization and tagging, then updates the store.  Any `source_tags` are merged with existing tags (overlay, not replace) and stored alongside the "derived tags" produced by the tagging service.
+`update(id: URI, tags: dict)` - inserts or updates the document at `URI` into the store.  This process delegates the work of embedding, summarization and tagging, then updates the store.  Any `tags` are merged with existing tags (overlay, not replace) and stored alongside the "derived tags" produced by the tagging service.
 
 > NOTE: update tasks are serialized to avoid any concurrency issues.
 
-> NOTE: there is no `delete` operation.
+> NOTE: Items cannot be deleted through the public API. To remove tags, use `tag()` with empty string values.
 
 `find(query: str)` - locate items using a semantic-similarity query for any text
 
@@ -245,7 +245,7 @@ There are three domains of tags:
 
 2. **System tags.**  These have special meaning for this service and are managed automatically.
    * System tags have keys that begin with underscore (`_`).
-   * **Source tags and generated tags cannot set system tag values** — any tag starting with `_` in source_tags is filtered out before storage.
+   * **Source tags and generated tags cannot set system tag values** — any tag starting with `_` in tags is filtered out before storage.
    * The tagging provider does not produce system tags.
 
    | System Tag | Description | Example |
@@ -288,13 +288,13 @@ Knowledge has an interior/exterior dimension. Some items are working notes; othe
 # Working hypothesis — routes to private store
 kp.remember(
     "I think the bug is in token refresh, but need to verify.",
-    source_tags={"_visibility": "draft", "_for": "self"}
+    tags={"_visibility": "draft", "_for": "self"}
 )
 
 # Confirmed learning — routes to shared store
 kp.remember(
     "Token refresh fails when clock skew exceeds 30s. Fix: use server time.",
-    source_tags={"_visibility": "shared", "_for": "team", "_reviewed": "true"}
+    tags={"_visibility": "shared", "_for": "team", "_reviewed": "true"}
 )
 ```
 
@@ -393,7 +393,7 @@ kp.remember(
     Source: Team retrospective + industry research.
     """,
     id="_system:guidance:code_review",
-    source_tags={"_system": "true", "domain": "code_review"}
+    tags={"_system": "true", "domain": "code_review"}
 )
 
 # 3. Future sessions read this guidance when doing code review
@@ -421,13 +421,7 @@ Components:
 
 ### Provider Options
 
-| Type | Local (Apple Silicon) | Local (other) | API-based |
-|------|----------------------|---------------|-----------|
-| Embedding | `mlx` | `sentence-transformers` | `openai` |
-| Summarization | `mlx` | `passthrough` | `openai`, `ollama` |
-| Tagging | `mlx` | `noop` | `openai`, `ollama` |
-
-Providers are auto-detected at initialization based on platform and available API keys.
+See [QUICKSTART.md](QUICKSTART.md#provider-options) for available embedding, summarization, and tagging providers. Providers are auto-detected at initialization based on platform and available API keys.
 
 ## Error Handling
 
@@ -441,7 +435,7 @@ Providers are auto-detected at initialization based on platform and available AP
 
 ## Initialization
 
-See [initialize.md](../initialize.md) for details.
+See [QUICKSTART.md](QUICKSTART.md) for details.
 
 ```python
 from keep import Keeper
