@@ -64,8 +64,8 @@ keep tag project myapp
 **Default store location:** `.keep/` at the git repository root (created automatically). Override with `KEEP_STORE_PATH` or explicit path argument. Add `.keep/` to `.gitignore` if the store should not be committed.
 
 **Patterns documentation:**
-- [patterns/domains.md](../patterns/domains.md) — domain-specific organization (software dev, research, etc.)
-- [patterns/conversations.md](../patterns/conversations.md) — process knowledge: how work proceeds
+- [system/domains.md](system/domains.md) — domain-specific organization (software dev, research, etc.)
+- [system/conversations.md](system/conversations.md) — process knowledge: how work proceeds
 
 **When to use:**
 - Call `update()` whenever you reference a file or URL worth remembering
@@ -294,7 +294,7 @@ The `_system:routing` document can be updated to change what routes privately. T
 
 ## Domain Patterns
 
-See [patterns/domains.md](../patterns/domains.md) for suggested collection and tag organization for common use cases:
+See [system/domains.md](system/domains.md) for suggested collection and tag organization for common use cases:
 - Software Development
 - Market Research
 - Personal Reflection & Growth

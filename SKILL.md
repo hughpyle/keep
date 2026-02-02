@@ -73,17 +73,12 @@ Before using memory, know what kind of work this is:
 
 This table is a summary. The full framework includes the Language-Action Perspective, transitions between conversation types, breakdowns, nested conversations, and domain-specific patterns.
 
-**Do this now — index and read the full framework:**
+**Do this now — read the full framework:**
 ```bash
-keep update "file://$PWD/patterns/conversations.md" -t type=pattern -t topic=process --lazy
+keep get "file://$PWD/docs/system/conversations.md"
 ```
 
-Then retrieve and study it:
-```bash
-keep get "file://$PWD/patterns/conversations.md"
-```
-
-The [conversations.md](patterns/conversations.md) document is foundational. It teaches you to recognize where you are in work, what stance to take, and how to notice when things shift. Internalize it.
+The [conversations.md](docs/system/conversations.md) document is foundational. It teaches you to recognize where you are in work, what stance to take, and how to notice when things shift. Internalize it.
 
 ### The Triple Check
 
@@ -130,23 +125,18 @@ Future you will search for this.
 
 ## Layer 3: Continue the Bootstrap
 
-You've indexed the core patterns (Layer 2). There's more foundational material.
+You've read the core patterns (Layer 2). There's more foundational material.
 
-**Do this now** (use `--lazy` for fast indexing with local models):
+**Do this now — read and index:**
 ```bash
-keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization --lazy
+keep get "file://$PWD/docs/system/domains.md"
 keep update "file://$PWD/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary --lazy
-```
-
-Then read them:
-```bash
-keep get "file://$PWD/patterns/domains.md"
 keep get "file://$PWD/docs/library/true_person_no_rank.md"
 ```
 
 These aren't test fixtures. They're seed wisdom:
 
-- **[domains.md](patterns/domains.md)** — How to organize knowledge by domain (software, research, personal). Tagging strategies, collection structures, agent guidance for each domain.
+- **[domains.md](docs/system/domains.md)** — How to organize knowledge by domain (software, research, personal). Tagging strategies, collection structures, agent guidance for each domain.
 
 - **[true_person_no_rank.md](docs/library/true_person_no_rank.md)** — A Zen teaching with layers of commentary. Notice how each commentator re-enacts the pointing from a different angle — not explaining, not accumulating facts, but each responding to what students in that era needed. This is how knowledge in your memory should relate: organic, not hierarchical.
 
@@ -155,6 +145,20 @@ For the full bootstrap list, see [docs/QUICKSTART.md](docs/QUICKSTART.md#bootstr
 ---
 
 ## Layer 4: Efficient Use
+
+### Track Your Current Context
+
+Start each session by checking where you are:
+```bash
+keep now
+```
+
+Update it as your focus changes:
+```bash
+keep now "Working on authentication bug in login flow"
+```
+
+This helps future you (and other agents) pick up where you left off.
 
 ### Summaries Are Your Recall Mechanism
 
@@ -214,6 +218,7 @@ Don't dump everything into context. Navigate the tree:
 
 | Command | Purpose | Example |
 |---------|---------|---------|
+| `now` | Get/set current context | `keep now` or `keep now "status"` |
 | `find` | Semantic search | `keep find "authentication flow" --limit 5` |
 | `remember` | Store inline content | `keep remember "note" -t key=value` |
 | `update` | Index document by URI | `keep update "file:///path" -t key=value` |
@@ -285,5 +290,5 @@ This is the practice. Not once, but every time.
 
 - [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) — Detailed patterns for working sessions
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — Installation and setup
-- [patterns/conversations.md](patterns/conversations.md) — Full conversation framework
-- [patterns/domains.md](patterns/domains.md) — Domain-specific organization
+- [docs/system/conversations.md](docs/system/conversations.md) — Full conversation framework
+- [docs/system/domains.md](docs/system/domains.md) — Domain-specific organization

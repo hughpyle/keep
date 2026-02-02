@@ -371,8 +371,8 @@ Use `--lazy` for fast indexing (recommended with local MLX models):
 
 ```bash
 # The practice frameworks
-keep update "file://$PWD/patterns/conversations.md" -t type=pattern -t topic=process --lazy
-keep update "file://$PWD/patterns/domains.md" -t type=pattern -t topic=organization --lazy
+keep update "file://$PWD/docs/system/conversations.md" -t type=pattern -t topic=process --lazy
+keep update "file://$PWD/docs/system/domains.md" -t type=pattern -t topic=organization --lazy
 
 # Seed wisdom (from docs/library/)
 keep update "file://$PWD/docs/library/mn61.html" -t type=teaching -t topic=reflection --lazy

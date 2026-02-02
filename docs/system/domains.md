@@ -1,9 +1,13 @@
+---
+tags:
+  context: domains
+---
 # Domain Patterns
 
-This document describes common organization patterns for different use cases. 
+This document describes common organization patterns for different use cases.
 These are suggestions, not requirements — adapt them to your needs.
 
-**See also:** [conversations.md](conversations.md) for process knowledge — 
+**See also:** [conversations.md](conversations.md) for process knowledge —
 understanding *how work proceeds*, not just *what we know*.
 
 ---
@@ -31,9 +35,9 @@ understanding *how work proceeds*, not just *what we know*.
 
 **Agent guidance:**
 - Index every file you read or modify
-- When encountering an error, index it in `issues` with the error message as content
-- Before searching the filesystem, check `mem.find()` — you may already know about it
-- Use `find_similar()` to discover related code when working on a feature
+- When encountering an error, index it with the error message as content
+- Before searching the filesystem, check `keep find` — you may already know about it
+- Use `keep similar` to discover related code when working on a feature
 - Record breakdowns: "Assumption X was wrong, actually Y"
 
 ---
@@ -58,7 +62,7 @@ understanding *how work proceeds*, not just *what we know*.
 **Agent guidance:**
 - Always index sources you fetch, even if they seem tangential
 - Tag competitor information consistently for later cross-reference
-- Create `insights` entries to capture your synthesized conclusions
+- Create insights entries to capture your synthesized conclusions
 - Use semantic search to find connections across different sources
 
 ---
@@ -83,7 +87,7 @@ understanding *how work proceeds*, not just *what we know*.
 - Index conversations about personal topics as journal entries
 - Look for patterns when the user reports similar feelings repeatedly
 - Connect current challenges to past insights
-- Use `find_similar()` to surface "you've felt this way before"
+- Use `keep similar` to surface "you've felt this way before"
 
 ---
 
@@ -117,54 +121,40 @@ understanding *how work proceeds*, not just *what we know*.
 These patterns apply regardless of domain:
 
 **Conversation indexing:**
-```python
+```bash
 # Index the current conversation as a remembered item
-mem.remember(
-    content="User asked about X, we discussed Y, decided Z",
-    id="conversation:2026-01-30:topic",
-    tags={"session": "abc123"}
-)
+keep remember "User asked about X, we discussed Y, decided Z" \
+  --tag session=abc123
 ```
 
-**Commitment tracking:**
-```python
-# Record open commitments for handoff
-mem.set_context(
-    summary="Working on feature X",
-    metadata={
-        "open_commitments": [
-            {"type": "promise", "what": "implement auth flow", "to": "user"}
-        ],
-        "completion_criteria": "login works with OAuth"
-    }
-)
+**Context tracking:**
+```bash
+# Record current focus for handoff
+keep now "Working on feature X" --tag topic=feature_x
 ```
 
 **Breakdown learning:**
-```python
+```bash
 # When something goes wrong, capture the learning
-mem.remember(
-    content="Assumed user wanted full rewrite, actually wanted minimal fix. "
-            "Ask about scope before large changes.",
-    tags={"type": "breakdown", "conversation_type": "code_change_request"}
-)
+keep remember "Assumed user wanted full rewrite, actually wanted minimal fix. \
+Ask about scope before large changes." \
+  --tag type=breakdown --tag conversation_type=code_change_request
 ```
 
 **Temporal queries using system tags:**
-```python
-# Find items from a specific session
-mem.query_tag("_session", session_id)
+```bash
+# Find items updated today
+keep tag _updated_date=2026-01-30
 
-# Find items from today
-mem.query_tag("_updated_date", "2026-01-30")
+# Find all inline content (from remember)
+keep tag _source=inline
 ```
 
 **Progressive refinement:**
-```python
+```bash
 # Start broad, then narrow
-results = mem.find("authentication")
-if too_many_results:
-    results = mem.query_tag("module", "auth", collection="code")
+keep find "authentication"
+keep tag module=auth
 ```
 
 ---
@@ -173,23 +163,16 @@ if too_many_results:
 
 Beyond subject-matter knowledge, index *how to work effectively*:
 
-```python
+```bash
 # Index a learned pattern
-mem.remember(
-    content="""
-    Pattern: Incremental Specification
-    
-    When requirements are vague, don't promise immediately.
-    Propose interpretation → get correction → repeat until clear.
-    Only then commit to action.
-    
-    Breakdown risk: Promising too early leads to rework.
-    """,
-    tags={"type": "conversation_pattern", "domain": "general"}
-)
+keep remember "Pattern: Incremental Specification. \
+When requirements are vague, don't promise immediately. \
+Propose interpretation → get correction → repeat until clear. \
+Only then commit to action. Breakdown risk: Promising too early leads to rework." \
+  --tag type=conversation_pattern --tag domain=general
 
 # Later, retrieve it
-patterns = mem.query_tag("type", "conversation_pattern")
+keep tag type=conversation_pattern
 ```
 
 See [conversations.md](conversations.md) for the full framework.

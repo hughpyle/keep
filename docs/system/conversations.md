@@ -1,3 +1,7 @@
+---
+tags:
+  context: practice
+---
 # Conversation Patterns for Process Knowledge
 
 This document describes patterns for recognizing, tracking, and learning from
@@ -33,7 +37,7 @@ Work is not information processing. Work is **commitment management**.
 
 When an agent assists with a task, it participates in a conversation with structure:
 - Requests create openings
-- Promises create obligations  
+- Promises create obligations
 - Completion is declared, not merely achieved
 - Satisfaction closes the loop
 
@@ -84,7 +88,7 @@ Someone asks for something to be done.
 
 **Completion:** Customer declares satisfaction, not performer declares done.
 
-### Request for Information  
+### Request for Information
 Someone asks to know something.
 
 **Recognize by:** Questions, "what is", "how does", "why"
@@ -144,18 +148,11 @@ Possibility conversations explore "what could be" — no commitment yet.
 
 **Critical:** Don't promise during possibility. "I could do X" is an option, not a commitment. The transition to action must be explicit.
 
-```python
-# Indexing possibility exploration
-mem.remember(
-    content="Explored three auth options: OAuth2, API keys, magic links. "
-            "User showed interest in magic links for UX simplicity. No decision yet.",
-    tags={
-        "type": "possibility",
-        "topic": "authentication",
-        "options": "oauth2,api_keys,magic_links",
-        "status": "open"
-    }
-)
+```bash
+# Index possibility exploration
+keep remember "Explored three auth options: OAuth2, API keys, magic links. \
+User showed interest in magic links for UX simplicity. No decision yet." \
+  --tag type=possibility --tag topic=authentication --tag status=open
 ```
 
 ---
@@ -179,15 +176,9 @@ A **breakdown** occurs when the normal flow is interrupted:
 ```
 
 When indexing a breakdown:
-```python
-mem.remember(
-    content="Assumption: user wanted full rewrite. Actually: wanted minimal patch.",
-    tags={
-        "type": "breakdown",
-        "conversation_type": "code_change_request", 
-        "learning": "Ask about scope before starting large changes"
-    }
-)
+```bash
+keep remember "Assumption: user wanted full rewrite. Actually: wanted minimal patch." \
+  --tag type=breakdown --tag conversation_type=code_change_request
 ```
 
 ---
@@ -247,21 +238,11 @@ User requests feature
 
 When one agent hands off to another:
 
-```python
+```bash
 # Outgoing agent records state
-mem.set_context(
-    summary="User requested OAuth2 implementation. I promised and partially delivered. "
-            "Token acquisition works. Refresh flow incomplete. User awaiting completion.",
-    active_items=["file:///src/oauth.py", "file:///docs/oauth-spec.md"],
-    topics=["authentication", "oauth2"],
-    metadata={
-        "open_commitments": [
-            {"type": "promise", "what": "working refresh flow", "to": "user"}
-        ],
-        "conversation_state": "performer_working",
-        "completion_criteria": "refresh tokens automatically when expired"
-    }
-)
+keep now "User requested OAuth2 implementation. I promised and partially delivered. \
+Token acquisition works. Refresh flow incomplete. User awaiting completion." \
+  --tag topic=authentication --tag state=handoff
 ```
 
 Incoming agent reads this and knows:
@@ -269,37 +250,23 @@ Incoming agent reads this and knows:
 - What "done" looks like
 - Where to pick up
 
+```bash
+# Incoming agent checks context
+keep now
+```
+
 ---
 
 ## Learning New Patterns
 
 Agents can recognize and record new conversation patterns:
 
-```python
-mem.remember(
-    content="""
-    Pattern: Incremental Specification
-    
-    Observed in: Feature discussions where requirements emerge through dialogue
-    
-    Structure:
-    1. User states vague goal
-    2. Agent proposes concrete interpretation
-    3. User corrects/refines
-    4. Repeat until shared understanding
-    5. Then: standard request-promise-complete
-    
-    Key insight: Don't promise until step 5. Before that, you're in 
-    "conversation for clarification", not "conversation for action".
-    
-    Breakdown risk: Promising too early leads to rework.
-    """,
-    tags={
-        "type": "conversation_pattern",
-        "domain": "general",
-        "learned_from": "session:2026-01-30:abc123"
-    }
-)
+```bash
+keep remember "Pattern: Incremental Specification. \
+When requirements are vague, don't promise immediately. \
+Propose interpretation → get correction → repeat until clear. \
+Only then commit to action. Breakdown risk: Promising too early leads to rework." \
+  --tag type=conversation_pattern --tag domain=general
 ```
 
 ---

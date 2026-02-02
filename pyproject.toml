@@ -74,7 +74,6 @@ keep = "keep.cli:main"
 packages = ["keep"]
 artifacts = [
     "SKILL.md",
-    "patterns/**/*.md",
     "docs/system/**/*.md",
 ]
 
@@ -82,7 +81,6 @@ artifacts = [
 include = [
     "/keep",
     "/SKILL.md",
-    "/patterns",
     "/docs/system",
     "/README.md",
     "/LICENSE",
