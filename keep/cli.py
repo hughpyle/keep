@@ -651,10 +651,27 @@ def list_system(
 ):
     """
     List the system documents.
+
+    Shows ID and summary for each. Use `keep get ID` for full details.
     """
     kp = _get_keeper(store, "default")
     docs = kp.list_system_documents()
-    typer.echo(_format_items(docs, as_json=_get_json_output()))
+
+    if _get_json_output():
+        typer.echo(json.dumps([
+            {"id": doc.id, "summary": doc.summary}
+            for doc in docs
+        ], indent=2))
+    else:
+        if not docs:
+            typer.echo("No system documents.")
+        else:
+            for doc in docs:
+                # Compact summary: collapse whitespace, truncate to 70 chars
+                summary = " ".join(doc.summary.split())[:70]
+                if len(doc.summary) > 70:
+                    summary += "..."
+                typer.echo(f"{doc.id}: {summary}")
 
 
 @app.command("process-pending")
