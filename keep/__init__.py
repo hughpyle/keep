@@ -39,15 +39,11 @@ if not os.environ.get("KEEP_VERBOSE"):
 
 from .api import Keeper
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX
-from .context import WorkingContext, TopicSummary, RoutingContext
 
 __version__ = "0.1.0"
 __all__ = [
     "Keeper",
     "Item",
-    "WorkingContext",
-    "TopicSummary",
-    "RoutingContext",
     "filter_non_system_tags",
     "SYSTEM_TAG_PREFIX",
 ]

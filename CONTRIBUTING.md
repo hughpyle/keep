@@ -31,7 +31,6 @@ The following are considered public API — changes require version bumps and de
 **Python API:**
 - `Keeper` class and its public methods
 - `Item` type and its fields
-- `WorkingContext`, `TopicSummary`, `RoutingContext`
 - Anything exported in `keep/__init__.py`
 
 **CLI:**
