@@ -1,24 +1,7 @@
 
-* metaschema: special tag that triggers "keep history of this document" behavior
-    - user-settable tag (maybe `keep:history` prefix convention?)
-    - on update, save previous version before overwriting
-    - requires: version storage mechanism, history retrieval API
-    - needs more design work
-
 * `keep` with no args -> return the 'now doc'
     - also need a way to update this document
     - user doesn't specify its id, idk there's a guid or something assigned
-    - we should keep a history of the nowdoc
-        - which is quite interesting, it's everything you've been doing
-        - does that lead to task-blending?  if you're working on multiple things at once?
-            - use tags to identify the task(s) that you're working on
-            - list nowdocs in historical order, filtered by tag (and always include the "original nowdoc" at the end of  the list)
-            - "task" within "project" as the suggested way to do this
-            - just "keep" can list the current projects & their tasks in a tree if you want (list the nowdocs by distinct...)
-            - when you want to mark a task as done, or a project as completed or archived -> use tags
-    - need a way to get the historical versions (maybe they just have a timestamp in their ID, or something)
-        - any time you update the nowdoc, this is different from all the other update paths that have no memory
-        - it saves the old one and replaces your new one
     - there's only one, how do you find it?  with a `__sys`: `now` tag or something like that?  is that fast enough?
     - if there's none, e.g. first time you every used `keep`, we should store the primary instructions
         - could do that when `keep init` because the database is empty
@@ -37,6 +20,25 @@
               get the list of distinct projects, distinct topics, within a reasonable time and count limit
             - limit 10, and limit to the last 7 days, should be enough for a default?
                 - "last N days" is subtle, not part of this task, don't have any time-limited behavior yet
+
+* history of now
+    - we should keep a history of the nowdoc
+        - which is quite interesting, it's everything you've been doing
+        - does that lead to task-blending?  if you're working on multiple things at once?
+            - use tags to identify the task(s) that you're working on
+            - list nowdocs in historical order, filtered by tag (and always include the "original nowdoc" at the end of  the list)
+            - "task" within "project" as the suggested way to do this
+            - just "keep" can list the current projects & their tasks in a tree if you want (list the nowdocs by distinct...)
+            - when you want to mark a task as done, or a project as completed or archived -> use tags
+    - need a way to get the historical versions (maybe they just have a timestamp in their ID, or something)
+        - any time you update the nowdoc, this is different from all the other update paths that have no memory
+        - it saves the old one and replaces your new one
+
+* metaschema: special tag that triggers "keep history of this document" behavior
+    - user-settable tag (maybe `keep:history` prefix convention?)
+    - on update, save previous version before overwriting
+    - requires: version storage mechanism, history retrieval API
+    - needs more design work
 
 
 * tags themselves should have summaries and full descriptions
