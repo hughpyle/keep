@@ -1,10 +1,4 @@
 
-* is there a "updated within the last N days" filter?
-    - by default???
-
-* make sure that time-based filtering is efficient for "recent", we'll use that all over
-
-
 * `keep` with no args -> return the 'now doc'
     - also need a way to update this document
     - user doesn't specify its id, idk there's a guid or something assigned
@@ -180,3 +174,5 @@ Done:
 . startup cost optimized - read-only commands don't load providers
 . error handling: log tracebacks to /tmp/keep-errors.log, show clean message to user
 . timestamps always UTC - verified all datetime.now uses timezone.utc
+. --since option for time-based filtering: accepts ISO duration (P3D, P1W, PT1H) or date (2026-01-15)
+. time-based filtering on find, similar, search, tag commands

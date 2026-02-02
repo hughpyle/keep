@@ -91,6 +91,14 @@ JsonOption = Annotated[
     )
 ]
 
+SinceOption = Annotated[
+    Optional[str],
+    typer.Option(
+        "--since",
+        help="Only items updated since (ISO duration: P3D, P1W, PT1H; or date: 2026-01-15)"
+    )
+]
+
 
 # -----------------------------------------------------------------------------
 # Output Helpers
@@ -146,13 +154,14 @@ def find(
     store: StoreOption = None,
     collection: CollectionOption = "default",
     limit: LimitOption = 10,
+    since: SinceOption = None,
     output_json: JsonOption = False,
 ):
     """
     Find items using semantic similarity search.
     """
     kp = _get_keeper(store, collection)
-    results = kp.find(query, limit=limit)
+    results = kp.find(query, limit=limit, since=since)
     typer.echo(_format_items(results, as_json=output_json))
 
 
@@ -162,6 +171,7 @@ def similar(
     store: StoreOption = None,
     collection: CollectionOption = "default",
     limit: LimitOption = 10,
+    since: SinceOption = None,
     include_self: Annotated[bool, typer.Option(help="Include the queried item")] = False,
     output_json: JsonOption = False,
 ):
@@ -169,7 +179,7 @@ def similar(
     Find items similar to an existing item.
     """
     kp = _get_keeper(store, collection)
-    results = kp.find_similar(id, limit=limit, include_self=include_self)
+    results = kp.find_similar(id, limit=limit, since=since, include_self=include_self)
     typer.echo(_format_items(results, as_json=output_json))
 
 
@@ -179,13 +189,14 @@ def search(
     store: StoreOption = None,
     collection: CollectionOption = "default",
     limit: LimitOption = 10,
+    since: SinceOption = None,
     output_json: JsonOption = False,
 ):
     """
     Search item summaries using full-text search.
     """
     kp = _get_keeper(store, collection)
-    results = kp.query_fulltext(query, limit=limit)
+    results = kp.query_fulltext(query, limit=limit, since=since)
     typer.echo(_format_items(results, as_json=output_json))
 
 
@@ -200,6 +211,7 @@ def tag(
     store: StoreOption = None,
     collection: CollectionOption = "default",
     limit: LimitOption = 100,
+    since: SinceOption = None,
     output_json: JsonOption = False,
 ):
     """
@@ -210,10 +222,11 @@ def tag(
         keep tag project             # Find docs with 'project' tag (any value)
         keep tag project myapp       # Find docs with project=myapp
         keep tag project --list      # List distinct values for 'project'
+        keep tag project --since 7   # Find docs with 'project' tag updated in last 7 days
     """
     kp = _get_keeper(store, collection)
 
-    # List mode
+    # List mode (--since not applicable)
     if list_tags:
         tags = kp.list_tags(key, collection=collection)
         if output_json:
@@ -231,7 +244,7 @@ def tag(
         typer.echo("Error: Specify a tag key or use --list", err=True)
         raise typer.Exit(1)
 
-    results = kp.query_tag(key, value, limit=limit)
+    results = kp.query_tag(key, value, limit=limit, since=since)
     typer.echo(_format_items(results, as_json=output_json))
 
 

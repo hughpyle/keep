@@ -9,9 +9,94 @@ This is the minimal working implementation focused on:
 """
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Optional
+
+
+def _parse_since(since: str) -> str:
+    """
+    Parse a 'since' string and return a YYYY-MM-DD cutoff date.
+
+    Accepts:
+    - ISO 8601 duration: P3D (3 days), P1W (1 week), PT1H (1 hour), P1DT12H, etc.
+    - ISO date: 2026-01-15
+    - Date with slashes: 2026/01/15
+
+    Returns:
+        YYYY-MM-DD string for the cutoff date
+    """
+    import re
+
+    since = since.strip()
+
+    # ISO 8601 duration: P[n]Y[n]M[n]W[n]DT[n]H[n]M[n]S
+    if since.upper().startswith("P"):
+        duration_str = since.upper()
+
+        # Parse duration components
+        years = months = weeks = days = hours = minutes = seconds = 0
+
+        # Split on T to separate date and time parts
+        if "T" in duration_str:
+            date_part, time_part = duration_str.split("T", 1)
+        else:
+            date_part = duration_str
+            time_part = ""
+
+        # Parse date part (P[n]Y[n]M[n]W[n]D)
+        date_part = date_part[1:]  # Remove leading P
+        for match in re.finditer(r"(\d+)([YMWD])", date_part):
+            value, unit = int(match.group(1)), match.group(2)
+            if unit == "Y":
+                years = value
+            elif unit == "M":
+                months = value
+            elif unit == "W":
+                weeks = value
+            elif unit == "D":
+                days = value
+
+        # Parse time part ([n]H[n]M[n]S)
+        for match in re.finditer(r"(\d+)([HMS])", time_part):
+            value, unit = int(match.group(1)), match.group(2)
+            if unit == "H":
+                hours = value
+            elif unit == "M":
+                minutes = value
+            elif unit == "S":
+                seconds = value
+
+        # Convert to timedelta (approximate months/years)
+        total_days = years * 365 + months * 30 + weeks * 7 + days
+        delta = timedelta(days=total_days, hours=hours, minutes=minutes, seconds=seconds)
+        cutoff = datetime.now(timezone.utc) - delta
+        return cutoff.strftime("%Y-%m-%d")
+
+    # Try parsing as date
+    # ISO format: 2026-01-15 or 2026-01-15T...
+    # Slash format: 2026/01/15
+    date_str = since.replace("/", "-").split("T")[0]
+
+    try:
+        parsed = datetime.strptime(date_str, "%Y-%m-%d")
+        return parsed.strftime("%Y-%m-%d")
+    except ValueError:
+        pass
+
+    raise ValueError(
+        f"Invalid 'since' format: {since}. "
+        "Use ISO duration (P3D, PT1H, P1W) or date (2026-01-15)"
+    )
+
+
+def _filter_by_date(items: list, since: str) -> list:
+    """Filter items to only those updated since the given date/duration."""
+    cutoff = _parse_since(since)
+    return [
+        item for item in items
+        if item.tags.get("_updated_date", "0000-00-00") >= cutoff
+    ]
 
 import os
 import subprocess
@@ -572,27 +657,40 @@ class Keeper:
         query: str,
         *,
         limit: int = 10,
+        since: Optional[str] = None,
         collection: Optional[str] = None
     ) -> list[Item]:
         """
         Find items using semantic similarity search.
-        
+
         Scores are adjusted by recency decay (ACT-R model) - older items
         have reduced effective relevance unless recently accessed.
+
+        Args:
+            query: Search query text
+            limit: Maximum results to return
+            since: Only include items updated since (ISO duration like P3D, or date)
+            collection: Target collection
         """
         coll = self._resolve_collection(collection)
-        
+
         # Embed query
         embedding = self._get_embedding_provider().embed(query)
-        
-        # Search (fetch extra to account for re-ranking)
+
+        # Search (fetch extra to account for re-ranking and date filtering)
         fetch_limit = limit * 2 if self._decay_half_life_days > 0 else limit
+        if since is not None:
+            fetch_limit = max(fetch_limit, limit * 3)  # Fetch more when filtering
         results = self._store.query_embedding(coll, embedding, limit=fetch_limit)
-        
+
         # Convert to Items and apply decay
         items = [r.to_item() for r in results]
         items = self._apply_recency_decay(items)
-        
+
+        # Apply date filter if specified
+        if since is not None:
+            items = _filter_by_date(items, since)
+
         return items[:limit]
     
     def find_similar(
@@ -600,32 +698,46 @@ class Keeper:
         id: str,
         *,
         limit: int = 10,
+        since: Optional[str] = None,
         include_self: bool = False,
         collection: Optional[str] = None
     ) -> list[Item]:
         """
         Find items similar to an existing item.
+
+        Args:
+            id: ID of item to find similar items for
+            limit: Maximum results to return
+            since: Only include items updated since (ISO duration like P3D, or date)
+            include_self: Include the queried item in results
+            collection: Target collection
         """
         coll = self._resolve_collection(collection)
-        
+
         # Get the item to find its embedding
         item = self._store.get(coll, id)
         if item is None:
             raise KeyError(f"Item not found: {id}")
-        
-        # Search using the summary's embedding
+
+        # Search using the summary's embedding (fetch extra when filtering)
         embedding = self._get_embedding_provider().embed(item.summary)
         actual_limit = limit + 1 if not include_self else limit
+        if since is not None:
+            actual_limit = max(actual_limit, limit * 3)
         results = self._store.query_embedding(coll, embedding, limit=actual_limit)
-        
+
         # Filter self if needed
         if not include_self:
             results = [r for r in results if r.id != id]
-        
+
         # Convert to Items and apply decay
         items = [r.to_item() for r in results]
         items = self._apply_recency_decay(items)
-        
+
+        # Apply date filter if specified
+        if since is not None:
+            items = _filter_by_date(items, since)
+
         return items[:limit]
     
     def query_fulltext(
@@ -633,14 +745,30 @@ class Keeper:
         query: str,
         *,
         limit: int = 10,
+        since: Optional[str] = None,
         collection: Optional[str] = None
     ) -> list[Item]:
         """
         Search item summaries using full-text search.
+
+        Args:
+            query: Text to search for in summaries
+            limit: Maximum results to return
+            since: Only include items updated since (ISO duration like P3D, or date)
+            collection: Target collection
         """
         coll = self._resolve_collection(collection)
-        results = self._store.query_fulltext(coll, query, limit=limit)
-        return [r.to_item() for r in results]
+
+        # Fetch extra when filtering by date
+        fetch_limit = limit * 3 if since is not None else limit
+        results = self._store.query_fulltext(coll, query, limit=fetch_limit)
+        items = [r.to_item() for r in results]
+
+        # Apply date filter if specified
+        if since is not None:
+            items = _filter_by_date(items, since)
+
+        return items[:limit]
     
     def query_tag(
         self,
@@ -648,6 +776,7 @@ class Keeper:
         value: Optional[str] = None,
         *,
         limit: int = 100,
+        since: Optional[str] = None,
         collection: Optional[str] = None,
         **tags: str
     ) -> list[Item]:
@@ -663,12 +792,25 @@ class Keeper:
 
             # Multiple tags via kwargs
             query_tag(tradition="buddhist", source="mn22")
+
+        Args:
+            key: Tag key to search for
+            value: Tag value (optional, any value if not provided)
+            limit: Maximum results to return
+            since: Only include items updated since (ISO duration like P3D, or date)
+            collection: Target collection
+            **tags: Additional tag filters as keyword arguments
         """
         coll = self._resolve_collection(collection)
 
         # Key-only query: find docs that have this tag key (any value)
+        # Uses DocumentStore which supports efficient SQL date filtering
         if key is not None and value is None and not tags:
-            docs = self._document_store.query_by_tag_key(coll, key, limit=limit)
+            # Convert since to cutoff date for SQL query
+            since_date = _parse_since(since) if since else None
+            docs = self._document_store.query_by_tag_key(
+                coll, key, limit=limit, since_date=since_date
+            )
             return [Item(id=d.id, summary=d.summary, tags=d.tags) for d in docs]
 
         # Build tag filter from positional or keyword args
@@ -683,11 +825,26 @@ class Keeper:
         if not tag_filter:
             raise ValueError("At least one tag must be specified")
 
-        # Build where clause
-        where = {k: v for k, v in tag_filter.items()}
+        # Build where clause for tag filters only
+        # (ChromaDB $gte doesn't support string dates, so date filtering is done post-query)
+        where_conditions = [{k: v} for k, v in tag_filter.items()]
 
-        results = self._store.query_metadata(coll, where, limit=limit)
-        return [r.to_item() for r in results]
+        # Use $and if multiple conditions, otherwise single condition
+        if len(where_conditions) == 1:
+            where = where_conditions[0]
+        else:
+            where = {"$and": where_conditions}
+
+        # Fetch extra when filtering by date
+        fetch_limit = limit * 3 if since is not None else limit
+        results = self._store.query_metadata(coll, where, limit=fetch_limit)
+        items = [r.to_item() for r in results]
+
+        # Apply date filter if specified (post-filter)
+        if since is not None:
+            items = _filter_by_date(items, since)
+
+        return items[:limit]
 
     def list_tags(
         self,
