@@ -37,7 +37,7 @@ understanding *how work proceeds*, not just *what we know*.
 - Index every file you read or modify
 - When encountering an error, index it with the error message as content
 - Before searching the filesystem, check `keep find` — you may already know about it
-- Use `keep similar` to discover related code when working on a feature
+- Use `keep find --id` to discover related code when working on a feature
 - Record breakdowns: "Assumption X was wrong, actually Y"
 
 ---
@@ -87,7 +87,7 @@ understanding *how work proceeds*, not just *what we know*.
 - Index conversations about personal topics as journal entries
 - Look for patterns when the user reports similar feelings repeatedly
 - Connect current challenges to past insights
-- Use `keep similar` to surface "you've felt this way before"
+- Use `keep find --id` to surface "you've felt this way before"
 
 ---
 

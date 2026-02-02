@@ -24,7 +24,7 @@ keep find "query" --since P7D        # Last 7 days
 keep find "query" --since P1W        # Last week
 keep find "query" --since PT1H       # Last hour
 keep find "query" --since 2026-01-15 # Since specific date
-keep similar ID --since P30D         # Similar items from last 30 days
+keep find --id ID --since P30D       # Similar items from last 30 days
 keep search "text" --since P3D       # Full-text search, last 3 days
 
 # Tag commands

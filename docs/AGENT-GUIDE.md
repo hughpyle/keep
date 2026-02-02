@@ -53,7 +53,7 @@ if kp.exists("file:///project/readme.md"):
 ```bash
 # Uses .keep/ at repo root by default
 keep update "file:///project/readme.md" -t project=myapp
-keep find "authentication flow" --limit 5 --json
+keep -j find "authentication flow" --limit 5
 keep tag project myapp
 ```
 
