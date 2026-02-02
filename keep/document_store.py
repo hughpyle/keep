@@ -25,7 +25,7 @@ from typing import Any, Optional
 class DocumentRecord:
     """
     A canonical document record.
-    
+
     This is the source of truth, independent of any embedding index.
     """
     id: str
@@ -34,6 +34,7 @@ class DocumentRecord:
     tags: dict[str, str]
     created_at: str
     updated_at: str
+    content_hash: Optional[str] = None
 
 
 class DocumentStore:
@@ -69,9 +70,16 @@ class DocumentStore:
                 tags_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                content_hash TEXT,
                 PRIMARY KEY (id, collection)
             )
         """)
+
+        # Migration: add content_hash column if missing (for existing databases)
+        cursor = self._conn.execute("PRAGMA table_info(documents)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "content_hash" not in columns:
+            self._conn.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT")
         
         # Index for collection queries
         self._conn.execute("""
@@ -101,35 +109,37 @@ class DocumentStore:
         id: str,
         summary: str,
         tags: dict[str, str],
+        content_hash: Optional[str] = None,
     ) -> DocumentRecord:
         """
         Insert or update a document record.
-        
+
         Preserves created_at on update. Updates updated_at always.
-        
+
         Args:
             collection: Collection name
             id: Document identifier (URI or custom)
             summary: Document summary text
             tags: All tags (source + system)
-            
+            content_hash: SHA256 hash of content (for change detection)
+
         Returns:
             The stored DocumentRecord
         """
         now = self._now()
         tags_json = json.dumps(tags, ensure_ascii=False)
-        
+
         # Check if exists to preserve created_at
         existing = self.get(collection, id)
         created_at = existing.created_at if existing else now
-        
+
         self._conn.execute("""
             INSERT OR REPLACE INTO documents
-            (id, collection, summary, tags_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (id, collection, summary, tags_json, created_at, now))
+            (id, collection, summary, tags_json, created_at, updated_at, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (id, collection, summary, tags_json, created_at, now, content_hash))
         self._conn.commit()
-        
+
         return DocumentRecord(
             id=id,
             collection=collection,
@@ -137,6 +147,7 @@ class DocumentStore:
             tags=tags,
             created_at=created_at,
             updated_at=now,
+            content_hash=content_hash,
         )
     
     def update_summary(self, collection: str, id: str, summary: str) -> bool:
@@ -219,24 +230,24 @@ class DocumentStore:
     def get(self, collection: str, id: str) -> Optional[DocumentRecord]:
         """
         Get a document by ID.
-        
+
         Args:
             collection: Collection name
             id: Document identifier
-            
+
         Returns:
             DocumentRecord if found, None otherwise
         """
         cursor = self._conn.execute("""
-            SELECT id, collection, summary, tags_json, created_at, updated_at
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
             FROM documents
             WHERE id = ? AND collection = ?
         """, (id, collection))
-        
+
         row = cursor.fetchone()
         if row is None:
             return None
-        
+
         return DocumentRecord(
             id=row["id"],
             collection=row["collection"],
@@ -244,6 +255,7 @@ class DocumentStore:
             tags=json.loads(row["tags_json"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            content_hash=row["content_hash"],
         )
     
     def get_many(
@@ -253,24 +265,24 @@ class DocumentStore:
     ) -> dict[str, DocumentRecord]:
         """
         Get multiple documents by ID.
-        
+
         Args:
             collection: Collection name
             ids: List of document identifiers
-            
+
         Returns:
             Dict mapping id → DocumentRecord (missing IDs omitted)
         """
         if not ids:
             return {}
-        
+
         placeholders = ",".join("?" * len(ids))
         cursor = self._conn.execute(f"""
-            SELECT id, collection, summary, tags_json, created_at, updated_at
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
             FROM documents
             WHERE collection = ? AND id IN ({placeholders})
         """, (collection, *ids))
-        
+
         results = {}
         for row in cursor:
             results[row["id"]] = DocumentRecord(
@@ -280,8 +292,9 @@ class DocumentStore:
                 tags=json.loads(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
+                content_hash=row["content_hash"],
             )
-        
+
         return results
     
     def exists(self, collection: str, id: str) -> bool:
@@ -335,6 +348,42 @@ class DocumentStore:
         """Count total documents across all collections."""
         cursor = self._conn.execute("SELECT COUNT(*) FROM documents")
         return cursor.fetchone()[0]
+
+    def query_by_id_prefix(
+        self,
+        collection: str,
+        prefix: str,
+    ) -> list[DocumentRecord]:
+        """
+        Query documents by ID prefix.
+
+        Args:
+            collection: Collection name
+            prefix: ID prefix to match (e.g., "_system:")
+
+        Returns:
+            List of matching DocumentRecords
+        """
+        cursor = self._conn.execute("""
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
+            FROM documents
+            WHERE collection = ? AND id LIKE ?
+            ORDER BY id
+        """, (collection, f"{prefix}%"))
+
+        results = []
+        for row in cursor:
+            results.append(DocumentRecord(
+                id=row["id"],
+                collection=row["collection"],
+                summary=row["summary"],
+                tags=json.loads(row["tags_json"]),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                content_hash=row["content_hash"],
+            ))
+
+        return results
 
     # -------------------------------------------------------------------------
     # Tag Queries
@@ -411,7 +460,7 @@ class DocumentStore:
         params: list[Any] = [collection, f"$.{key}"]
 
         sql = """
-            SELECT id, collection, summary, tags_json, created_at, updated_at
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
             FROM documents
             WHERE collection = ?
               AND json_extract(tags_json, ?) IS NOT NULL
@@ -436,6 +485,7 @@ class DocumentStore:
                 tags=json.loads(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
+                content_hash=row["content_hash"],
             ))
 
         return results
