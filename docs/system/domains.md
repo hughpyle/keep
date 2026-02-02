@@ -1,4 +1,5 @@
 ---
+id: _system:domains
 tags:
   context: domains
 ---
