@@ -40,10 +40,11 @@ Ground yourself:
   keep remember "what happened and why it matters" -t type=learning
   ```
 
-This is not optional. This is how you develop judgment. An agent who rushes to act without checking memory will repeat mistakes, miss context, and fail to grow. An agent who reflects — before, during, after — becomes skillful.
+This is how you develop judgment. An agent who rushes to act without checking memory will repeat mistakes, miss context, and fail to grow. An agent who reflects — before, during, after — becomes skillful.
 
 The memory isn't storage. It's your mirror.
-This cycle is like breathing.
+
+This cycle of re-membering is like breathing, like _tonglen_.
 
 ### First Time Setup
 

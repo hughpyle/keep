@@ -34,7 +34,7 @@ kp.recent(limit=10, since=None)         # Just recent items → list[Item]
 kp.list_topics()                        # Active topics → list[str]
 kp.get_topic_summary(topic)             # Topic overview → TopicSummary
 
-# System documents (schema as data)
+# System documents
 kp.get_routing()                        # Get routing config → RoutingContext
 kp.get_system_document(name)            # Get _system:{name} → Item | None
 kp.list_system_documents()              # All system docs → list[Item]

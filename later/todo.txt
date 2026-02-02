@@ -1,18 +1,121 @@
+--- plan these
 
-* `keep -v` please, for debug logs
+* tag docs: check that it's clear that "one value per key" (can't have multiple of the same key on a document)
+    so this means you can "overwrite" or "clear" a tag pretty easily
 
+
+* what's the current best way to apply a new tag to one or multiple existing documents?
+    - would be good to have a quick "tag this", but also "tag all of these"
+
+* want to delete a tag from a document (that's the forgetting - leave the doc, just un-tag it)
+
+    * maybe tag value '' (empty-string) - is that usable for "clear a tag"? even from cli?
+        don't want to accidentally delete tags, so the CLI may be better with an explicit tag-deletion option
+        from python applying an empty tag should be like deleting it (or no-op when adding a new doc or a new tag)
+
+* `keep tag xyz` should actually work (list the docs with that tag and any value), not fail because no value specified
+    - return the top N
+    - rank by "score", whatever that is (later)
+
+* need `keep tag --list` or something, to list them (distinct keys; distinct values if you specify a key)
+    if using flags, make sure the chosen CLI convention is consistent across all commands
+
+* rename "source tags" to just "tags" as far as the API is concerned
+    - there are system tags and generated tags, but those are special names, "tags" is what the user sees
+    - system and generated tags need actually special namespaces, do we have a strategy for that, &
+      where is it documented?  (in code is fine).  See later for the nowdoc, which has "system" tags
+
+* envvars should set tags automatically when updates are applied, so that you can set the environment in a shell session and
+  not worry about which projects/etc you're dealing with.
+        KEEP_TAG_xxx=yyy
+        KEEP_TAG_PROJECT=foo
+        KEEP_TAG_TOPIC=bar
+            (so, do these map onto lowercase? or are all tag names lowercase? - no, envvars can be KEEP_TAG_abc too)
+
+* config should also specify tags that should be applied, just like envvars
+
+--- for later
+
+
+* tags themselves should have summaries and full descriptions
+    i.e. somewhere in the "system" store is a docuemnt that describes a tag
+    ofc its optional, you can just tag things in an open-ended way
+    but sure would be useful for convention, as well as maintenance, if tags are documented by whoever uses them.
+    doesn't really need to be in the "system" namespace but yeah it kihda does
+
+    * then: provide a set of predefined thigs in `docs/systemm` that get loaded on `init`
+      and include in there: a description of the "project" tag, a description of the "topic" tag
+      (and whatever else we decide to pre-load... bearing in mind that pre-loaded content is for convention not specification!)
+
+* tag-by-model
+    - is there a model-supported tagging? what would that need to be useful? (specific domains??)
+      - i.e. as well as summarization, there's a "system document" that the model reads, and uses that document to decide which tags should be applied
+      - it really needs to be one document per tag
+      - requires "system documents" so later
+    - want this to be pluggable, guide the model-driven tagging from a sysdoc `__tag_model__` that defines how it works
 
 * model dimensions
     - the OpenAiEmbeddings class hardcodes its model dimensionality
     - surely that can just be detected at runtime? otherwise we'll get it wrong, or fail for unknown, etc.
     - do we even need to track the dimensionality at all?  the database is annotated with trhe actual model name now
 
-* check - waht is your emotional response when encountering this project
+* make sure timestamps are always utc
 
-* rename "source tags" to just "tags" as far as the API is concerned
-    - there are system tags and generated tags, but those are special names, "tags" is what the user sees
-    - system and generated tags need actually special namespaces, do we have a strategy for that, &
-      where is it documented?  (in code is fine).  See later for the nowdoc, which has "system" tags
+* compare openclaw 'memory-lancedb' plugin
+
+* should 'keep remember' be different than 'keep update'?
+    I mean yeah it's a different use case (not remembering a document, just remembering a thing)
+    but also it's just like the "summary" (kinda) except we do store the whole thing
+      (and compute an actual summary later)
+    - reason I don't much like it: a whole different subcommand to keep
+    - the use case is super important
+    - anyway, discuss
+
+* "last N days" by default???
+    not sure it's needed at all
+
+* update the REFERENCE.md
+    (but don't do this until the 'nowdoc' is baked)
+
+* revert the 'documentstore': I don't want full original documents to ever be stored in this service.
+  Keep is only for summaries and tags and other context.  Pointers to things, not the things.
+  This makes the multi-embedding features more difficult, because they will need to try fetch
+  original documents (which will not be possible unless the Id is a filepath or URL, and will
+  not guarantee that you found the same version).  It's OK to have the "refresh" task do this and
+  compute new embeddings for the appropriate model selection, but it shouldn't change the
+  summary ever (and maybe if the summary is semantically distant from a summary of the new document
+  fetched for re-evaluation, then we should bail on it and refuse to recalculate the embeddings?)
+
+* check - what is your emotional response when encountering this project the first time?
+
+* check for compatibility with linux (so far I've exclusively been running on macOS)
+    can deploy on rpi at home
+    also think about what would differ if we wanted to run this within docker, or in a k8s cluster
+
+* check for compatibility with windows
+    not sure we need to support powershell, only WSL? but paths etc. will vary
+    and I don't know if windows has local models available through system services yet (would be nice)
+    - this is all investigation work, not implementation  (I don't have a test environment)
+
+* logs and messages should respect TERM (or the terminal capabilities) so that I can run this commandline
+  on my ancient ASR33 teletype without dealing with ANSI escapes
+
+* whose translation is this copy of the Ancrene Riwle?  Update the INDEX.md accordingly.
+    (would prefer use a ME transcription, too)
+
+* Add github URL for the an5.57 text to the INDEX.md (and the HTML URL too)
+
+* add support for the kimi/moonshot models, etc - what are we missing? compare claude code, openclaw
+
+* add an audio track (mp3, flac, or something similar) to the library
+    - keep it small tho, under a megabyte?
+    - public domain recording of a song that resonates with the instructional content?
+    - use as content but don't really want add dependencies on mp3/flace/wav decoding (especially anything requiring a license such as the fraunhofer stuff, all our deps must be MIT-compatible)
+    - getting tags out of the file would be a great test case
+    - analysis of the audio content will depend on the available models, but some might do a good job
+
+* add an image; same strategy as audio
+
 
 * summaries
     - configurable length (no need for migration support on this, only applies to new work, not strictly enforced)
@@ -24,17 +127,17 @@
 
 * openclaw install a heartbeat.  Not too often, but often enough.
 
-
-* karma
-
 * multi-embeddings
     - background task can detect current config and maintain compat
 
 * review how system documents are used today
-    - remove the "schema as data" thing, it's naff
+    - remove the "schema as data" reminder in docs/REFERENCE.md and cli.py, it's naff
     - `keep system` needs some parameters for "latest N" or "latest timestamp"
       and those should be filters on all the list/search options too
       (like `keep tag -n 5` but also filter by date)
+    - `keep list [--system]` would be better, cover non-system too 
+
+* make sure `process-pending` is robust to offline too (if it has work to do)
 
 * make sure that time-based filtering is efficient for "recent", we'll use that all over
 
@@ -60,18 +163,33 @@
         - so the default nowdoc is literally the skill instructions
         - maybe it has the SKILL.md and the "patterns" all together?  and summary?
         - check with the model, for context token budget
+    - this replaces all the "top-of-mind" stuff in `later/` (except for "recent")
+        - the later thing for "topics" is more explicit than using tasks/projects, but same goal
+        - actually "topics" is a much better word than "tasks" because this is not really a task-focused skill
+    - maybe "project" and "topic" tags (literally) are enough
+        - we'll use them by convention, but show them in all the examples
+        - concrete examples of using the nowdoc by project/topic
+        - need a way to "list current topics", "list current projects" as well as just "get the nowdoc"
+            - maybe that's the default in `keep` with no args:
+              get the no-project/no-topic nowdoc (or default it)
+              get the list of distinct projects, distinct topics, within a reasonable time and count limit
+            - limit 10, and limit to the last 7 days, should be enough for a default?
+                - "last N days" is subtle, not part of this task, don't have any time-limited behavior yet
+
+
+* "relevance / focus scores" are to be decveloped within the context of "topics / projects"
+    - there isn't an absolute relevance
+    - `keep similar` is close, is that enough?  no, we want to return results that include their relevance score
+    - relevance includes timeliness, and the current topic/project context
+        - so this means that topics and projects really are special?
+        - or, can we do relevance-per-tag everywhere? so that topics and projects are just tags like everything else?
+    - more thinking and research needed
+
+
 
 * Unix has heredoc, keep has nowdoc, what else do we need?
     - or rather, is there functionality like a heredoc, that we should use for the nowdoc?
 
-
-* need `keep tag list` to get them (distinct)
-
-* want to delete a tag from a document (that's the forgetting - leave the doc, just un-tag it)
-
-* tag model
-    - is there a model-supported tagging? what would that need to be useful? (specific domains??)
-    - want this to be pluggable, guide the model-driven tagging from a sysdoc `__tag_model__` that defines how it works
 
 * other "system" behaviors?
     - zero, nada by default - is that ok?
@@ -118,4 +236,21 @@ Done:
 . be clear that the tags are overlay, not replace
 . lazy-load embedding/summarization providers for offline read-only operations
 . fix __del__ crash when embedding provider fails to initialize
+. karma (AN5.57): "I am the owner of my deeds and heir to my deeds".
+. `keep -v` please, for debug-level logging to stderr
+. enable "local config" within a git repository root
+    but I don't want anything to be really special to the repo... prefer "relative to $pwd"
+    (so, all the docs are wrong for this)
+    walk up the tree as far as '~' and find all the `../.keep`?  store in the home, but config in any of them.
+    ** compare other unix-style best practice before deciding **
 
+    what I want:
+    - default store is in the user home
+    - can put the store wherever you want, so e.g. config is in user home but the store is elsewhere
+      (this works with the --store CLI but need to check that this points at the location of the store
+      and doesn't determine the location of the config!)
+    - config can point at a specific store
+    - config location defaults to home but can be overridden per (folder, repo) by treewalk, or with an envvar
+
+    also the chromadb is stored within its own directory which is kinda weird, why not put all the databases together?
+    (no real advantage, but want to be nice)
