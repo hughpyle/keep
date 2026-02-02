@@ -63,7 +63,12 @@ class DocumentStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        
+
+        # Enable WAL mode for better concurrent access across processes
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        # Wait up to 5 seconds for locks instead of failing immediately
+        self._conn.execute("PRAGMA busy_timeout=5000")
+
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 id TEXT NOT NULL,

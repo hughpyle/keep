@@ -295,7 +295,21 @@ class ChromaStore:
         coll = self._get_collection(collection)
         result = coll.get(ids=[id], include=[])
         return bool(result["ids"])
-    
+
+    def list_ids(self, collection: str) -> list[str]:
+        """
+        List all document IDs in a collection.
+
+        Args:
+            collection: Collection name
+
+        Returns:
+            List of document IDs
+        """
+        coll = self._get_collection(collection)
+        result = coll.get(include=[])
+        return result["ids"]
+
     def query_embedding(
         self,
         collection: str,

@@ -40,6 +40,12 @@ class EmbeddingCache:
         """Initialize the SQLite database."""
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._cache_path), check_same_thread=False)
+
+        # Enable WAL mode for better concurrent access across processes
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        # Wait up to 5 seconds for locks instead of failing immediately
+        self._conn.execute("PRAGMA busy_timeout=5000")
+
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS embedding_cache (
                 content_hash TEXT PRIMARY KEY,

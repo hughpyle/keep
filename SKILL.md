@@ -219,13 +219,18 @@ Don't dump everything into context. Navigate the tree:
 | Command | Purpose | Example |
 |---------|---------|---------|
 | `now` | Get/set current context | `keep now` or `keep now "status"` |
-| `find` | Semantic search | `keep find "authentication flow" --limit 5` |
+| `find` | Semantic similarity search | `keep find "authentication flow" --limit 5` |
+| `find --id` | Find similar to existing item | `keep find --id "docid" --limit 3` |
+| `search` | Full-text search in summaries | `keep search "OAuth"` |
 | `update` | Index content (URI, text, or stdin) | `keep update "note" -t key=value` |
-| `get` | Retrieve by ID | `keep get "file:///path/to/doc.md"` |
-| `find --id` | Find similar items | `keep find --id "docid" --limit 3` |
-| `tag` | Query by tag | `keep tag domain auth` or `keep tag --list` |
-| `tag-update` | Modify tags only | `keep tag-update "id" --tag key=value` |
-| `exists` | Check if indexed | `keep exists "id"` |
+| `get` | Retrieve item by ID | `keep get "file:///path/to/doc.md"` |
+| `tag` | List tag values or find by tag | `keep tag domain auth` or `keep tag --list` |
+| `tag-update` | Modify tags on existing item | `keep tag-update "id" --tag key=value` |
+| `exists` | Check if item is indexed | `keep exists "id"` |
+| `system` | List system documents | `keep system` |
+| `collections` | List all collections | `keep collections` |
+| `init` | Initialize or verify store | `keep init` |
+| `config` | Show configuration and store path | `keep config` |
 | `process-pending` | Process lazy summaries | `keep process-pending --all` |
 
 ### Fast Indexing with `--lazy`

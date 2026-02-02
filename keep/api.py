@@ -1307,6 +1307,66 @@ class Keeper:
             logger.warning("Failed to spawn background processor: %s", e)
             return False
 
+    def reconcile(
+        self,
+        collection: Optional[str] = None,
+        fix: bool = False,
+    ) -> dict:
+        """
+        Check and optionally fix consistency between DocumentStore and ChromaDB.
+
+        Detects:
+        - Documents in DocumentStore missing from ChromaDB (not searchable)
+        - Documents in ChromaDB missing from DocumentStore (orphaned embeddings)
+
+        Args:
+            collection: Collection to check (None = default collection)
+            fix: If True, re-index documents missing from ChromaDB
+
+        Returns:
+            Dict with 'missing_from_chroma', 'orphaned_in_chroma', 'fixed' counts
+        """
+        coll = self._resolve_collection(collection)
+
+        # Get IDs from both stores
+        doc_ids = set(self._document_store.list_ids(coll))
+        chroma_ids = set(self._store.list_ids(coll))
+
+        missing_from_chroma = doc_ids - chroma_ids
+        orphaned_in_chroma = chroma_ids - doc_ids
+
+        fixed = 0
+        if fix and missing_from_chroma:
+            for doc_id in missing_from_chroma:
+                try:
+                    # Re-fetch and re-index
+                    doc_record = self._document_store.get(coll, doc_id)
+                    if doc_record:
+                        # Fetch original content
+                        doc = self._document_provider.fetch(doc_id)
+                        embedding = self._get_embedding_provider().embed(doc.content)
+
+                        # Write to ChromaDB
+                        self._store.upsert(
+                            collection=coll,
+                            id=doc_id,
+                            embedding=embedding,
+                            summary=doc_record.summary,
+                            tags=doc_record.tags,
+                        )
+                        fixed += 1
+                        logger.info("Reconciled: %s", doc_id)
+                except Exception as e:
+                    logger.warning("Failed to reconcile %s: %s", doc_id, e)
+
+        return {
+            "missing_from_chroma": len(missing_from_chroma),
+            "orphaned_in_chroma": len(orphaned_in_chroma),
+            "fixed": fixed,
+            "missing_ids": list(missing_from_chroma) if missing_from_chroma else [],
+            "orphaned_ids": list(orphaned_in_chroma) if orphaned_in_chroma else [],
+        }
+
     def close(self) -> None:
         """
         Close resources (embedding cache connection, pending queue, etc.).
