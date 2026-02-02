@@ -26,7 +26,45 @@ pip install 'keep-skill[dev]'
 | `keep-skill[dev]` | pytest, pytest-cov | For running tests |
 | `keep-skill` | chromadb, typer, tomli-w | Minimal - configure providers yourself |
 
-## Basic Usage
+## CLI Usage
+
+```bash
+# Initialize store
+keep init
+
+# Debug mode (verbose logging to stderr)
+keep -v find "something"
+
+# Index a document
+keep update file:///path/to/doc.md -t project=myapp
+
+# Remember inline content
+keep remember "Meeting notes from today" -t type=meeting
+
+# Search
+keep find "authentication" --limit 5
+
+# Get by ID
+keep get file:///path/to/doc.md
+
+# Tag lookup
+keep tag project myapp              # Exact match
+keep tag project                    # Any doc with 'project' tag
+keep tag --list                     # List all tag keys
+keep tag project --list             # List values for 'project'
+
+# Update tags without re-indexing
+keep tag-update "id" --tag status=done
+keep tag-update "id" --remove obsolete
+
+# List collections
+keep collections
+
+# Output as JSON
+keep find "auth" --json
+```
+
+## Python API
 
 ```python
 from keep import Keeper
@@ -50,38 +88,18 @@ item = kp.get("file:///path/to/document.md")
 
 # Tag-based lookup
 docs = kp.query_tag("project", "myapp")
+docs = kp.query_tag("project")  # Any doc with 'project' tag
+
+# Update tags without re-indexing
+kp.tag("file:///path/to/document.md", {"status": "reviewed"})
+
+# List available tags
+all_keys = kp.list_tags()           # All tag keys
+values = kp.list_tags("project")    # Values for 'project' tag
 
 # Check if item exists
 if kp.exists("file:///path/to/document.md"):
     print("Already indexed")
-```
-
-## CLI Usage
-
-```bash
-# Initialize store
-keep init
-
-# Index a document
-keep update file:///path/to/doc.md -t project=myapp
-
-# Remember inline content
-keep remember "Meeting notes from today" -t type=meeting
-
-# Search
-keep find "authentication" --limit 5
-
-# Get by ID
-keep get file:///path/to/doc.md
-
-# Tag lookup
-keep tag project myapp
-
-# List collections
-keep collections
-
-# Output as JSON
-keep find "auth" --json
 ```
 
 ## Lazy Summarization
@@ -122,8 +140,9 @@ First run auto-detects best providers and creates `.keep/keep.toml`:
 
 ```toml
 [store]
-version = 1
+version = 2
 created = "2026-01-30T12:00:00Z"
+# path = "/path/to/data"  # Optional: separate data from config
 
 [embedding]
 name = "sentence-transformers"
@@ -135,9 +154,34 @@ max_length = 500
 
 [document]
 name = "composite"
+
+# Default tags applied to all updates
+[tags]
+project = "my-project"
+owner = "alice"
 ```
 
 Edit to customize providers or models.
+
+### Config Discovery
+
+keep finds configuration by walking up from the current directory:
+1. Check for `.keep/keep.toml` in current directory
+2. Walk up to parent directories until finding one
+3. Stop at home directory, use `~/.keep/` as fallback
+
+Override with `KEEP_CONFIG` environment variable.
+
+### Separate Config from Data
+
+Use `store.path` to keep the config file in your repo while storing data elsewhere:
+
+```toml
+[store]
+path = "~/.keep-data/myproject"  # Data goes here
+```
+
+The config file stays in `.keep/keep.toml` (in your repo), but all data (ChromaDB, embeddings) goes to the specified path.
 
 ## Working with Collections
 
@@ -183,14 +227,24 @@ except ValueError as e:
 ## Environment Variables
 
 ```bash
-# Store location
+# Config location (overrides tree-walking discovery)
+export KEEP_CONFIG=/path/to/config/dir
+
+# Store location (overrides config file)
 export KEEP_STORE_PATH=/path/to/store
+
+# Auto-apply tags to all updates
+export KEEP_TAG_PROJECT=myapp
+export KEEP_TAG_OWNER=alice
+# Results in tags: {"project": "myapp", "owner": "alice"}
 
 # OpenAI API key (if using openai provider)
 export OPENAI_API_KEY=sk-...
 # or
 export KEEP_OPENAI_API_KEY=sk-...
 ```
+
+**Tag merge order:** existing tags → config `[tags]` → `KEEP_TAG_*` env vars → user-provided tags (later wins).
 
 ## Common Patterns
 
@@ -202,18 +256,22 @@ from pathlib import Path
 for file in Path("docs").rglob("*.md"):
     uri = file.as_uri()
     if not kp.exists(uri):
-        kp.update(uri, source_tags={"type": "documentation"})
+        kp.update(uri, tags={"type": "documentation"})
 ```
 
 ### Tagging Strategy
 
 ```python
-# Source tags (provided at index time)
-kp.update(uri, source_tags={
+# User tags (provided at index time)
+kp.update(uri, tags={
     "project": "myapp",
     "module": "auth",
     "language": "python"
 })
+
+# Update tags later without re-indexing
+kp.tag(uri, {"status": "reviewed"})
+kp.tag(uri, {"obsolete": ""})  # Empty string deletes the tag
 
 # System tags (auto-managed, prefixed with _)
 item.tags["_created"]      # ISO timestamp

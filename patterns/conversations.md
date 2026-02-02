@@ -149,7 +149,7 @@ Possibility conversations explore "what could be" — no commitment yet.
 mem.remember(
     content="Explored three auth options: OAuth2, API keys, magic links. "
             "User showed interest in magic links for UX simplicity. No decision yet.",
-    source_tags={
+    tags={
         "type": "possibility",
         "topic": "authentication",
         "options": "oauth2,api_keys,magic_links",
@@ -182,7 +182,7 @@ When indexing a breakdown:
 ```python
 mem.remember(
     content="Assumption: user wanted full rewrite. Actually: wanted minimal patch.",
-    source_tags={
+    tags={
         "type": "breakdown",
         "conversation_type": "code_change_request", 
         "learning": "Ask about scope before starting large changes"
@@ -294,7 +294,7 @@ mem.remember(
     
     Breakdown risk: Promising too early leads to rework.
     """,
-    source_tags={
+    tags={
         "type": "conversation_pattern",
         "domain": "general",
         "learned_from": "session:2026-01-30:abc123"

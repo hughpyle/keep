@@ -101,10 +101,10 @@ from keep import Keeper
 kp = Keeper()
 
 # Index a file
-kp.update("file:///path/to/document.md", source_tags={"project": "myapp"})
+kp.update("file:///path/to/document.md", tags={"project": "myapp"})
 
 # Remember inline content
-kp.remember("Important: rate limit is 100 req/min", source_tags={"topic": "api"})
+kp.remember("Important: rate limit is 100 req/min", tags={"topic": "api"})
 
 # Semantic search
 results = kp.find("what's the rate limit?", limit=5)

@@ -4,7 +4,26 @@
 
 **Default store:** `.keep/` at git repo root (auto-created)
 
-**Key principle:** The schema is data. System documents control behavior and can be queried/updated.
+**Key principle:** Lightweight but extremely flexible functionality.  A minimal and extensible metaschema.
+
+## CLI
+```bash
+keep <cmd> [args]
+# Commands: find, similar, search, tag, tag-update, update, get, exists, collections, init
+
+# Debug mode
+keep -v <cmd>                        # Enable debug logging to stderr
+
+# Tag commands
+keep tag --list                      # List all tag keys
+keep tag project                     # Docs with 'project' tag (any value)
+keep tag project myapp               # Docs with project=myapp
+keep tag project --list              # List values for 'project'
+
+keep tag-update ID --tag key=value   # Add/update tag
+keep tag-update ID --remove key      # Remove tag
+keep tag-update ID1 ID2 --tag k=v    # Tag multiple docs
+```
 
 ## Python API
 ```python
@@ -12,7 +31,7 @@ from keep import Keeper, Item
 kp = Keeper()  # uses default store
 
 # Core indexing
-kp.update(uri, source_tags={})          # Index document from URI → Item
+kp.update(uri, tags={})                 # Index document from URI → Item
 kp.remember(content, id=None, ...)      # Index inline content → Item
 
 # Search
@@ -20,6 +39,10 @@ kp.find(query, limit=10)                # Semantic search → list[Item]
 kp.find_similar(uri, limit=10)          # Similar items → list[Item]
 kp.query_tag(key, value=None)           # Tag lookup → list[Item]
 kp.query_fulltext(query)                # Text search → list[Item]
+
+# Tags
+kp.tag(id, tags={})                     # Update tags only → Item | None
+kp.list_tags(key=None)                  # List tag keys or values → list[str]
 
 # Item access
 kp.get(id)                              # Fetch by ID → Item | None
@@ -45,11 +68,53 @@ kp.list_system_documents()              # All system docs → list[Item]
 
 Timestamps accessed via properties: `item.created`, `item.updated` (read from tags)
 
+## Tags
+
+**One value per key.** Setting a tag overwrites any existing value for that key.
+
+**System tags** (prefixed with `_`) are protected and cannot be set by user tags.
+
+### Tag Merge Order
+When indexing documents, tags are merged in this order (later wins):
+1. **Existing tags** — preserved from previous version
+2. **Config tags** — from `[tags]` section in `keep.toml`
+3. **Environment tags** — from `KEEP_TAG_*` variables
+4. **User tags** — passed to `update()`, `remember()`, or `tag()`
+
+### Environment Variable Tags
+Set tags via environment variables with the `KEEP_TAG_` prefix:
+```bash
+export KEEP_TAG_PROJECT=myapp
+export KEEP_TAG_OWNER=alice
+keep remember "deployment note"  # auto-tagged with project=myapp, owner=alice
+```
+
+### Config-Based Default Tags
+Add a `[tags]` section to `keep.toml`:
+```toml
+[tags]
+project = "my-project"
+owner = "alice"
+```
+
+### Tag-Only Updates
+Update tags without re-processing the document:
+```python
+kp.tag("doc:1", {"status": "reviewed"})      # Add/update tag
+kp.tag("doc:1", {"obsolete": ""})            # Delete tag (empty string)
+```
+
+### Tag Queries
+```python
+kp.query_tag("project", "myapp")             # Exact key=value match
+kp.query_tag("project")                      # Any doc with 'project' tag
+kp.list_tags()                               # All distinct tag keys
+kp.list_tags("project")                      # All values for 'project'
+```
+
 ## System Tags (auto-managed)
 `_created`, `_updated`, `_updated_date`, `_content_type`, `_source`
 `_session`, `_topic`, `_level`, `_summarizes`, `_system`, `_visibility`, `_for`
-
-**System tags cannot be set by source_tags or generated tags** — they are managed by the system.
 
 ```python
 kp.query_tag("_updated_date", "2026-01-30")  # Temporal query
@@ -58,10 +123,9 @@ kp.query_tag("_system", "true")              # All system documents
 ```
 
 **Note:** Relevance/focus scores are computed at query time, not stored.
-This preserves agility between broad exploration and focused work.
 
 ## System Documents
-The schema is data. Behavior is controlled by documents in the store:
+There is a very small metaschema, managed by documents in the store.  You can adjust these as needed.
 
 | Document | Purpose |
 |----------|---------|
@@ -78,7 +142,7 @@ guidance = kp.get_system_document("guidance:code_review")
 kp.remember(
     content="For code review: check security, tests, docs",
     id="_system:guidance:code_review",
-    source_tags={"_system": "true"}
+    tags={"_system": "true"}
 )
 ```
 
@@ -96,12 +160,6 @@ kp.set_context(
     active_items=["file:///src/auth.py"],
     topics=["authentication"]
 )
-```
-
-## CLI
-```bash
-keep <cmd> [args]
-# Commands: find, similar, search, tag, update, get, exists, collections, init
 ```
 
 ## When to Use

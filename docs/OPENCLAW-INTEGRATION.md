@@ -124,7 +124,7 @@ Created at: `.keep/keep.toml` (workspace root)
 **Example (OpenClaw integration active):**
 ```toml
 [store]
-version = 1
+version = 2
 created = "2026-01-30T12:00:00Z"
 
 [embedding]

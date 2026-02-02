@@ -122,7 +122,7 @@ These patterns apply regardless of domain:
 mem.remember(
     content="User asked about X, we discussed Y, decided Z",
     id="conversation:2026-01-30:topic",
-    source_tags={"session": "abc123"}
+    tags={"session": "abc123"}
 )
 ```
 
@@ -146,7 +146,7 @@ mem.set_context(
 mem.remember(
     content="Assumed user wanted full rewrite, actually wanted minimal fix. "
             "Ask about scope before large changes.",
-    source_tags={"type": "breakdown", "conversation_type": "code_change_request"}
+    tags={"type": "breakdown", "conversation_type": "code_change_request"}
 )
 ```
 
@@ -185,7 +185,7 @@ mem.remember(
     
     Breakdown risk: Promising too early leads to rework.
     """,
-    source_tags={"type": "conversation_pattern", "domain": "general"}
+    tags={"type": "conversation_pattern", "domain": "general"}
 )
 
 # Later, retrieve it
