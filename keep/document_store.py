@@ -392,6 +392,7 @@ class DocumentStore:
         collection: str,
         key: str,
         limit: int = 100,
+        since_date: Optional[str] = None,
     ) -> list[DocumentRecord]:
         """
         Find documents that have a specific tag key (any value).
@@ -400,20 +401,31 @@ class DocumentStore:
             collection: Collection name
             key: Tag key to search for
             limit: Maximum results
+            since_date: Only include items updated on or after this date (YYYY-MM-DD)
 
         Returns:
             List of matching DocumentRecords
         """
         # SQLite JSON functions for tag key existence
         # json_extract returns NULL if key doesn't exist
-        cursor = self._conn.execute("""
+        params: list[Any] = [collection, f"$.{key}"]
+
+        sql = """
             SELECT id, collection, summary, tags_json, created_at, updated_at
             FROM documents
             WHERE collection = ?
               AND json_extract(tags_json, ?) IS NOT NULL
-            ORDER BY updated_at DESC
-            LIMIT ?
-        """, (collection, f"$.{key}", limit))
+        """
+
+        if since_date is not None:
+            # Compare against the date portion of updated_at
+            sql += "  AND updated_at >= ?\n"
+            params.append(since_date)
+
+        sql += "ORDER BY updated_at DESC\nLIMIT ?"
+        params.append(limit)
+
+        cursor = self._conn.execute(sql, params)
 
         results = []
         for row in cursor:

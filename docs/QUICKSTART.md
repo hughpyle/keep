@@ -46,6 +46,8 @@ keep remember "Long detailed content..." --summary "TL;DR version"
 
 # Search
 keep find "authentication" --limit 5
+keep find "authentication" --since P7D  # Last 7 days
+keep find "auth" --since 2026-01-15     # Since specific date
 
 # Get by ID
 keep get file:///path/to/doc.md
