@@ -89,7 +89,7 @@ class StoreConfig:
     default_tags: dict[str, str] = field(default_factory=dict)
 
     # Maximum length for summaries (used for smart remember and validation)
-    max_summary_length: int = 500
+    max_summary_length: int = 1000
 
     @property
     def config_path(self) -> Path:
