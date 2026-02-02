@@ -225,11 +225,12 @@ def search(
 
 @app.command()
 def tag(
-    key: Annotated[Optional[str], typer.Argument(help="Tag key to search for")] = None,
-    value: Annotated[Optional[str], typer.Argument(help="Tag value (optional)")] = None,
-    list_tags: Annotated[bool, typer.Option(
+    query: Annotated[Optional[str], typer.Argument(
+        help="Tag key to list values, or key=value to find docs"
+    )] = None,
+    list_keys: Annotated[bool, typer.Option(
         "--list", "-l",
-        help="List distinct tag keys, or values if key is provided"
+        help="List all distinct tag keys"
     )] = False,
     store: StoreOption = None,
     collection: CollectionOption = "default",
@@ -238,20 +239,18 @@ def tag(
     output_json: JsonOption = False,
 ):
     """
-    Find items by tag or list available tags.
+    List tag values or find items by tag.
 
     Examples:
         keep tag --list              # List all tag keys
-        keep tag project             # Find docs with 'project' tag (any value)
-        keep tag project myapp       # Find docs with project=myapp
-        keep tag project --list      # List distinct values for 'project'
-        keep tag project --since 7   # Find docs with 'project' tag updated in last 7 days
+        keep tag project             # List values for 'project' tag
+        keep tag project=myapp       # Find docs with project=myapp
     """
     kp = _get_keeper(store, collection)
 
-    # List mode (--since not applicable)
-    if list_tags:
-        tags = kp.list_tags(key, collection=collection)
+    # List all keys mode
+    if list_keys or query is None:
+        tags = kp.list_tags(None, collection=collection)
         if output_json:
             typer.echo(json.dumps(tags))
         else:
@@ -262,13 +261,23 @@ def tag(
                     typer.echo(t)
         return
 
-    # Query mode - key is required
-    if key is None:
-        typer.echo("Error: Specify a tag key or use --list", err=True)
-        raise typer.Exit(1)
-
-    results = kp.query_tag(key, value, limit=limit, since=since)
-    typer.echo(_format_items(results, as_json=output_json))
+    # Check if query is key=value or just key
+    if "=" in query:
+        # key=value → find documents
+        key, value = query.split("=", 1)
+        results = kp.query_tag(key, value, limit=limit, since=since)
+        typer.echo(_format_items(results, as_json=output_json))
+    else:
+        # key only → list values
+        values = kp.list_tags(query, collection=collection)
+        if output_json:
+            typer.echo(json.dumps(values))
+        else:
+            if not values:
+                typer.echo(f"No values for tag '{query}'.")
+            else:
+                for v in values:
+                    typer.echo(v)
 
 
 @app.command("tag-update")
@@ -433,7 +442,7 @@ def now(
     )] = None,
     reset: Annotated[bool, typer.Option(
         "--reset",
-        help="Reset to default content from builtin"
+        help="Reset to default from system"
     )] = False,
     store: StoreOption = None,
     collection: CollectionOption = "default",
@@ -462,11 +471,11 @@ def now(
 
     if setting:
         if reset:
-            # Reset to default from builtin (delete first to clear old tags)
-            from .api import _load_builtin, NOWDOC_ID
+            # Reset to default from system (delete first to clear old tags)
+            from .api import _load_system, NOWDOC_ID
             kp.delete(NOWDOC_ID)
             try:
-                new_content, default_tags = _load_builtin("now.md")
+                new_content, default_tags = _load_system("now.md")
                 parsed_tags = default_tags
             except FileNotFoundError:
                 typer.echo("Error: Builtin now.md not found", err=True)

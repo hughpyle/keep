@@ -133,22 +133,22 @@ ENV_TAG_PREFIX = "KEEP_TAG_"
 NOWDOC_ID = "_now:default"
 
 
-def _load_builtin(name: str) -> tuple[str, dict[str, str]]:
+def _load_system(name: str) -> tuple[str, dict[str, str]]:
     """
-    Load content and tags from a builtin file with optional YAML frontmatter.
+    Load content and tags from a system file with optional YAML frontmatter.
 
     Args:
-        name: Filename within docs/builtin/ (e.g., "now.md")
+        name: Filename within docs/system/ (e.g., "now.md")
 
     Returns:
         (content, tags) tuple
 
     Raises:
-        FileNotFoundError: If the builtin file doesn't exist
+        FileNotFoundError: If the system file doesn't exist
     """
-    # docs/builtin is at repo root, two levels up from keep/api.py
-    builtin_dir = Path(__file__).parent.parent / "docs" / "builtin"
-    path = builtin_dir / name
+    # docs/system is at repo root, two levels up from keep/api.py
+    system_dir = Path(__file__).parent.parent / "docs" / "system"
+    path = system_dir / name
     text = path.read_text()
 
     # Parse YAML frontmatter if present
@@ -963,7 +963,7 @@ class Keeper:
 
         A singleton document representing what you're currently working on.
         If it doesn't exist, creates one with default content and tags from
-        docs/builtin/now.md.
+        docs/system/now.md.
 
         Returns:
             The current context Item (never None - auto-creates if missing)
@@ -972,9 +972,9 @@ class Keeper:
         if item is None:
             # First-time initialization with default content and tags
             try:
-                default_content, default_tags = _load_builtin("now.md")
+                default_content, default_tags = _load_system("now.md")
             except FileNotFoundError:
-                # Fallback if builtin file is missing
+                # Fallback if system file is missing
                 default_content = "# Now\n\nYour working context."
                 default_tags = {}
             item = self.set_now(default_content, tags=default_tags)

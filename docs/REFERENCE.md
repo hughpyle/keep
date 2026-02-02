@@ -29,10 +29,9 @@ keep search "text" --since P3D       # Full-text search, last 3 days
 
 # Tag commands
 keep tag --list                      # List all tag keys
-keep tag project                     # Docs with 'project' tag (any value)
-keep tag project myapp               # Docs with project=myapp
-keep tag project --list              # List values for 'project'
-keep tag project --since P7D         # Filter by recency
+keep tag project                     # List values for 'project' tag
+keep tag project=myapp               # Find docs with project=myapp
+keep tag project=myapp --since P7D   # Filter by recency
 
 keep tag-update ID --tag key=value   # Add/update tag
 keep tag-update ID --remove key      # Remove tag
