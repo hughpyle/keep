@@ -231,9 +231,13 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
                     params["model"] = ms_model
                 embedding_provider = ProviderConfig("gemini", params)
 
-    # Fall back to sentence-transformers (local, always works)
+    # Fall back to local embedding (prefer MPS-accelerated on Apple Silicon)
     if embedding_provider is None:
-        embedding_provider = ProviderConfig("sentence-transformers")
+        if is_apple_silicon:
+            # Use sentence-transformers with MPS acceleration (no auth required)
+            embedding_provider = ProviderConfig("mlx", {"model": "all-MiniLM-L6-v2"})
+        else:
+            embedding_provider = ProviderConfig("sentence-transformers")
 
     providers["embedding"] = embedding_provider
     
