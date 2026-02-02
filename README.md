@@ -165,7 +165,7 @@ See [docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md) for details.
 - **[docs/REFERENCE.md](docs/REFERENCE.md)** — Complete API reference
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — How it works under the hood
 - **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)** — OpenClaw integration guide
-- **[patterns/](patterns/)** — Domain and conversation patterns
+- **[docs/system/](docs/system/)** — Domain and conversation patterns
 
 ---
 

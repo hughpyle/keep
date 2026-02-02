@@ -154,5 +154,5 @@ kp.query_fulltext("error", since="P3D")
 - `find(since="P7D")` — filter to recent items when recency matters
 
 ## Domain Patterns
-See [patterns/domains.md](../patterns/domains.md) for organization templates.
-See [patterns/conversations.md](../patterns/conversations.md) for process knowledge.
+See [system/domains.md](system/domains.md) for organization templates.
+See [system/conversations.md](system/conversations.md) for process knowledge.
