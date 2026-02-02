@@ -5,7 +5,7 @@ description: Associative memory for reflection and skillful action
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
 user-invocable: true
-metadata: {"openclaw":{"emoji":"🪞","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"kind":"uv","package":"keep-skill[local]","label":"Install keep with local models"}],"primaryEnv":"KEEP_STORE_PATH"}}
+metadata: {"openclaw":{"emoji":"🪞","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"id":"uv","kind":"uv","package":"keep-skill[local]","bins":["keep"],"label":"Install keep with local models"}],"primaryEnv":"KEEP_STORE_PATH"}}
 ---
 
 # Associative Memory
