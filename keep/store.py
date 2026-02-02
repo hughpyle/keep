@@ -226,6 +226,40 @@ class ChromaStore:
         )
         return True
 
+    def update_tags(self, collection: str, id: str, tags: dict[str, str]) -> bool:
+        """
+        Update tags of an existing item without changing embedding or summary.
+
+        Args:
+            collection: Collection name
+            id: Item identifier
+            tags: New tags dict (replaces existing)
+
+        Returns:
+            True if item was updated, False if not found
+        """
+        coll = self._get_collection(collection)
+
+        # Get existing item
+        existing = coll.get(ids=[id], include=["metadatas"])
+        if not existing["ids"]:
+            return False
+
+        # Update timestamp
+        now = datetime.now(timezone.utc).isoformat()
+        tags = dict(tags)  # Copy to avoid mutating input
+        tags["_updated"] = now
+        tags["_updated_date"] = now[:10]
+
+        # Convert to metadata format
+        metadata = self._tags_to_metadata(tags)
+
+        coll.update(
+            ids=[id],
+            metadatas=[metadata],
+        )
+        return True
+
     # -------------------------------------------------------------------------
     # Read Operations
     # -------------------------------------------------------------------------

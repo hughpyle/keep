@@ -191,19 +191,111 @@ def search(
 
 @app.command()
 def tag(
-    key: Annotated[str, typer.Argument(help="Tag key to search for")],
+    key: Annotated[Optional[str], typer.Argument(help="Tag key to search for")] = None,
     value: Annotated[Optional[str], typer.Argument(help="Tag value (optional)")] = None,
+    list_tags: Annotated[bool, typer.Option(
+        "--list", "-l",
+        help="List distinct tag keys, or values if key is provided"
+    )] = False,
     store: StoreOption = None,
     collection: CollectionOption = "default",
     limit: LimitOption = 100,
     output_json: JsonOption = False,
 ):
     """
-    Find items by tag.
+    Find items by tag or list available tags.
+
+    Examples:
+        keep tag --list              # List all tag keys
+        keep tag project             # Find docs with 'project' tag (any value)
+        keep tag project myapp       # Find docs with project=myapp
+        keep tag project --list      # List distinct values for 'project'
     """
     kp = _get_keeper(store, collection)
+
+    # List mode
+    if list_tags:
+        tags = kp.list_tags(key, collection=collection)
+        if output_json:
+            typer.echo(json.dumps(tags))
+        else:
+            if not tags:
+                typer.echo("No tags found.")
+            else:
+                for t in tags:
+                    typer.echo(t)
+        return
+
+    # Query mode - key is required
+    if key is None:
+        typer.echo("Error: Specify a tag key or use --list", err=True)
+        raise typer.Exit(1)
+
     results = kp.query_tag(key, value, limit=limit)
     typer.echo(_format_items(results, as_json=output_json))
+
+
+@app.command("tag-update")
+def tag_update(
+    ids: Annotated[list[str], typer.Argument(help="Document IDs to tag")],
+    tags: Annotated[Optional[list[str]], typer.Option(
+        "--tag", "-t",
+        help="Tag as key=value (empty value removes: key=)"
+    )] = None,
+    remove: Annotated[Optional[list[str]], typer.Option(
+        "--remove", "-r",
+        help="Tag keys to remove"
+    )] = None,
+    store: StoreOption = None,
+    collection: CollectionOption = "default",
+    output_json: JsonOption = False,
+):
+    """
+    Add, update, or remove tags on existing documents.
+
+    Does not re-process the document - only updates tags.
+
+    Examples:
+        keep tag-update doc:1 --tag project=myapp
+        keep tag-update doc:1 doc:2 --tag status=reviewed
+        keep tag-update doc:1 --remove obsolete_tag
+        keep tag-update doc:1 --tag temp=  # Remove via empty value
+    """
+    kp = _get_keeper(store, collection)
+
+    # Parse tags from key=value format
+    tag_changes: dict[str, str] = {}
+    if tags:
+        for tag in tags:
+            if "=" not in tag:
+                typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value (or key= to remove)", err=True)
+                raise typer.Exit(1)
+            k, v = tag.split("=", 1)
+            tag_changes[k] = v  # Empty v means delete
+
+    # Add explicit removals as empty strings
+    if remove:
+        for key in remove:
+            tag_changes[key] = ""
+
+    if not tag_changes:
+        typer.echo("Error: Specify at least one --tag or --remove", err=True)
+        raise typer.Exit(1)
+
+    # Process each document
+    results = []
+    for doc_id in ids:
+        item = kp.tag(doc_id, tags=tag_changes, collection=collection)
+        if item is None:
+            typer.echo(f"Not found: {doc_id}", err=True)
+        else:
+            results.append(item)
+
+    if output_json:
+        typer.echo(_format_items(results, as_json=True))
+    else:
+        for item in results:
+            typer.echo(_format_item(item, as_json=False))
 
 
 @app.command()
@@ -213,7 +305,7 @@ def update(
     collection: CollectionOption = "default",
     tags: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
-        help="Source tag as key=value (can be repeated to tag with multiple keys)"
+        help="Tag as key=value (can be repeated)"
     )] = None,
     lazy: Annotated[bool, typer.Option(
         "--lazy", "-l",
@@ -230,16 +322,16 @@ def update(
     kp = _get_keeper(store, collection)
 
     # Parse tags from key=value format
-    source_tags = {}
+    parsed_tags = {}
     if tags:
         for tag in tags:
             if "=" not in tag:
                 typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value", err=True)
                 raise typer.Exit(1)
             k, v = tag.split("=", 1)
-            source_tags[k] = v
+            parsed_tags[k] = v
 
-    item = kp.update(id, source_tags=source_tags or None, lazy=lazy)
+    item = kp.update(id, tags=parsed_tags or None, lazy=lazy)
     typer.echo(_format_item(item, as_json=output_json))
 
 
@@ -254,7 +346,7 @@ def remember(
     )] = None,
     tags: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
-        help="Source tag as key=value (can be repeated)"
+        help="Tag as key=value (can be repeated)"
     )] = None,
     lazy: Annotated[bool, typer.Option(
         "--lazy", "-l",
@@ -271,16 +363,16 @@ def remember(
     kp = _get_keeper(store, collection)
 
     # Parse tags from key=value format
-    source_tags = {}
+    parsed_tags = {}
     if tags:
         for tag in tags:
             if "=" not in tag:
                 typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value", err=True)
                 raise typer.Exit(1)
             k, v = tag.split("=", 1)
-            source_tags[k] = v
+            parsed_tags[k] = v
 
-    item = kp.remember(content, id=id, source_tags=source_tags or None, lazy=lazy)
+    item = kp.remember(content, id=id, tags=parsed_tags or None, lazy=lazy)
     typer.echo(_format_item(item, as_json=output_json))
 
 

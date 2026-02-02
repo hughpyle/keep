@@ -28,7 +28,7 @@ from .providers.base import (
 )
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .store import ChromaStore
-from .types import Item, filter_non_system_tags
+from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX
 
 
 # Default max length for truncated placeholder summaries
@@ -40,6 +40,26 @@ MAX_SUMMARY_ATTEMPTS = 5
 
 # Collection name validation: lowercase ASCII and underscores only
 COLLECTION_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+# Environment variable prefix for auto-applied tags
+ENV_TAG_PREFIX = "KEEP_TAG_"
+
+
+def _get_env_tags() -> dict[str, str]:
+    """
+    Collect tags from KEEP_TAG_* environment variables.
+
+    KEEP_TAG_PROJECT=foo -> {"project": "foo"}
+    KEEP_TAG_MyTag=bar   -> {"mytag": "bar"}
+
+    Tag keys are lowercased for consistency.
+    """
+    tags = {}
+    for key, value in os.environ.items():
+        if key.startswith(ENV_TAG_PREFIX) and value:
+            tag_key = key[len(ENV_TAG_PREFIX):].lower()
+            tags[tag_key] = value
+    return tags
 
 
 class Keeper:
@@ -222,8 +242,9 @@ class Keeper:
     def update(
         self,
         id: str,
-        source_tags: Optional[dict[str, str]] = None,
+        tags: Optional[dict[str, str]] = None,
         *,
+        source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
         collection: Optional[str] = None,
         lazy: bool = False
     ) -> Item:
@@ -234,13 +255,14 @@ class Keeper:
 
         **Update behavior:**
         - Summary: Always replaced with newly generated summary
-        - Tags: Merged - existing source tags are preserved, new source_tags override
+        - Tags: Merged - existing tags are preserved, new tags override
           on key collision. System tags (prefixed with _) are always managed by
           the system.
 
         Args:
             id: URI of document to fetch and index
-            source_tags: User-provided tags to merge with existing tags
+            tags: User-provided tags to merge with existing tags
+            source_tags: Deprecated alias for 'tags'
             collection: Target collection (uses default if None)
             lazy: If True, use truncated placeholder summary and queue for
                   background processing. Use `process_pending()` to generate
@@ -249,6 +271,17 @@ class Keeper:
         Returns:
             The stored Item with merged tags and new summary
         """
+        # Handle deprecated source_tags parameter
+        if source_tags is not None:
+            import warnings
+            warnings.warn(
+                "source_tags is deprecated, use 'tags' instead",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            if tags is None:
+                tags = source_tags
+
         coll = self._resolve_collection(collection)
 
         # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
@@ -280,31 +313,39 @@ class Keeper:
         else:
             summary = self._get_summarization_provider().summarize(doc.content)
 
-        # Build tags: existing + new (new overrides on collision)
-        tags = {**existing_tags}
+        # Build tags: existing → config → env → user (later wins on collision)
+        merged_tags = {**existing_tags}
 
-        # Merge in new source tags (filtered to prevent system tag override)
-        if source_tags:
-            tags.update(filter_non_system_tags(source_tags))
+        # Merge config default tags
+        if self._config.default_tags:
+            merged_tags.update(self._config.default_tags)
+
+        # Merge environment variable tags
+        env_tags = _get_env_tags()
+        merged_tags.update(env_tags)
+
+        # Merge in user-provided tags (filtered to prevent system tag override)
+        if tags:
+            merged_tags.update(filter_non_system_tags(tags))
 
         # Add system tags
-        tags["_source"] = "uri"
+        merged_tags["_source"] = "uri"
         if doc.content_type:
-            tags["_content_type"] = doc.content_type
+            merged_tags["_content_type"] = doc.content_type
 
         # Dual-write: document store (canonical) + ChromaDB (embedding index)
         self._document_store.upsert(
             collection=coll,
             id=id,
             summary=summary,
-            tags=tags,
+            tags=merged_tags,
         )
         self._store.upsert(
             collection=coll,
             id=id,
             embedding=embedding,
             summary=summary,
-            tags=tags,
+            tags=merged_tags,
         )
 
         # Spawn background processor if lazy
@@ -324,7 +365,8 @@ class Keeper:
         content: str,
         *,
         id: Optional[str] = None,
-        source_tags: Optional[dict[str, str]] = None,
+        tags: Optional[dict[str, str]] = None,
+        source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
         collection: Optional[str] = None,
         lazy: bool = False
     ) -> Item:
@@ -335,14 +377,15 @@ class Keeper:
 
         **Update behavior (when id already exists):**
         - Summary: Replaced with newly generated summary from content
-        - Tags: Merged - existing source tags preserved, new source_tags override
+        - Tags: Merged - existing tags preserved, new tags override
           on key collision. System tags (prefixed with _) are always managed by
           the system.
 
         Args:
             content: Text to store and index
             id: Optional custom ID (auto-generated if None)
-            source_tags: User-provided tags to merge with existing tags
+            tags: User-provided tags to merge with existing tags
+            source_tags: Deprecated alias for 'tags'
             collection: Target collection (uses default if None)
             lazy: If True, use truncated placeholder summary and queue for
                   background processing. Use `process_pending()` to generate
@@ -351,6 +394,17 @@ class Keeper:
         Returns:
             The stored Item with merged tags and new summary
         """
+        # Handle deprecated source_tags parameter
+        if source_tags is not None:
+            import warnings
+            warnings.warn(
+                "source_tags is deprecated, use 'tags' instead",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            if tags is None:
+                tags = source_tags
+
         coll = self._resolve_collection(collection)
 
         # Generate ID if not provided
@@ -383,29 +437,37 @@ class Keeper:
         else:
             summary = self._get_summarization_provider().summarize(content)
 
-        # Build tags: existing + new (new overrides on collision)
-        tags = {**existing_tags}
+        # Build tags: existing → config → env → user (later wins on collision)
+        merged_tags = {**existing_tags}
 
-        # Merge in new source tags (filtered)
-        if source_tags:
-            tags.update(filter_non_system_tags(source_tags))
+        # Merge config default tags
+        if self._config.default_tags:
+            merged_tags.update(self._config.default_tags)
+
+        # Merge environment variable tags
+        env_tags = _get_env_tags()
+        merged_tags.update(env_tags)
+
+        # Merge in user-provided tags (filtered)
+        if tags:
+            merged_tags.update(filter_non_system_tags(tags))
 
         # Add system tags
-        tags["_source"] = "inline"
+        merged_tags["_source"] = "inline"
 
         # Dual-write: document store (canonical) + ChromaDB (embedding index)
         self._document_store.upsert(
             collection=coll,
             id=id,
             summary=summary,
-            tags=tags,
+            tags=merged_tags,
         )
         self._store.upsert(
             collection=coll,
             id=id,
             embedding=embedding,
             summary=summary,
-            tags=tags,
+            tags=merged_tags,
         )
 
         # Spawn background processor if lazy
@@ -558,21 +620,26 @@ class Keeper:
         Find items by tag(s).
 
         Usage:
-            # Simple: single key-value pair
-            query_tag("project", "myapp")
-            query_tag("tradition", "buddhist")
+            # Key only: find all docs with this tag key (any value)
+            query_tag("project")
 
-            # Advanced: multiple tags via kwargs
+            # Key with value: find docs with specific tag value
+            query_tag("project", "myapp")
+
+            # Multiple tags via kwargs
             query_tag(tradition="buddhist", source="mn22")
         """
         coll = self._resolve_collection(collection)
 
+        # Key-only query: find docs that have this tag key (any value)
+        if key is not None and value is None and not tags:
+            docs = self._document_store.query_by_tag_key(coll, key, limit=limit)
+            return [Item(id=d.id, summary=d.summary, tags=d.tags) for d in docs]
+
         # Build tag filter from positional or keyword args
         tag_filter = {}
 
-        if key is not None:
-            if value is None:
-                raise ValueError(f"Value required when querying by key '{key}'")
+        if key is not None and value is not None:
             tag_filter[key] = value
 
         if tags:
@@ -586,6 +653,30 @@ class Keeper:
 
         results = self._store.query_metadata(coll, where, limit=limit)
         return [r.to_item() for r in results]
+
+    def list_tags(
+        self,
+        key: Optional[str] = None,
+        *,
+        collection: Optional[str] = None,
+    ) -> list[str]:
+        """
+        List distinct tag keys or values.
+
+        Args:
+            key: If provided, list distinct values for this key.
+                 If None, list distinct tag keys.
+            collection: Target collection
+
+        Returns:
+            Sorted list of distinct keys or values
+        """
+        coll = self._resolve_collection(collection)
+
+        if key is None:
+            return self._document_store.list_distinct_tag_keys(coll)
+        else:
+            return self._document_store.list_distinct_tag_values(coll, key)
     
     # -------------------------------------------------------------------------
     # Direct Access
@@ -625,7 +716,7 @@ class Keeper:
     def delete(self, id: str, *, collection: Optional[str] = None) -> bool:
         """
         Delete an item from both stores.
-        
+
         Returns True if item existed and was deleted.
         """
         coll = self._resolve_collection(collection)
@@ -633,7 +724,67 @@ class Keeper:
         doc_deleted = self._document_store.delete(coll, id)
         chroma_deleted = self._store.delete(coll, id)
         return doc_deleted or chroma_deleted
-    
+
+    def tag(
+        self,
+        id: str,
+        tags: Optional[dict[str, str]] = None,
+        *,
+        collection: Optional[str] = None,
+    ) -> Optional[Item]:
+        """
+        Update tags on an existing document without re-processing.
+
+        Does NOT re-fetch, re-embed, or re-summarize. Only updates tags.
+
+        Tag behavior:
+        - Provided tags are merged with existing user tags
+        - Empty string value ("") deletes that tag
+        - System tags (_prefixed) cannot be modified via this method
+
+        Args:
+            id: Document identifier
+            tags: Tags to add/update/delete (empty string = delete)
+            collection: Target collection
+
+        Returns:
+            Updated Item if found, None if document doesn't exist
+        """
+        coll = self._resolve_collection(collection)
+
+        # Get existing item (prefer document store, fall back to ChromaDB)
+        existing = self.get(id, collection=collection)
+        if existing is None:
+            return None
+
+        # Start with existing tags, separate system from user
+        current_tags = dict(existing.tags)
+        system_tags = {k: v for k, v in current_tags.items()
+                       if k.startswith(SYSTEM_TAG_PREFIX)}
+        user_tags = {k: v for k, v in current_tags.items()
+                     if not k.startswith(SYSTEM_TAG_PREFIX)}
+
+        # Apply tag changes (filter out system tags from input)
+        if tags:
+            for key, value in tags.items():
+                if key.startswith(SYSTEM_TAG_PREFIX):
+                    continue  # Cannot modify system tags
+                if value == "":
+                    # Empty string = delete
+                    user_tags.pop(key, None)
+                else:
+                    user_tags[key] = value
+
+        # Merge back: user tags + system tags
+        final_tags = {**user_tags, **system_tags}
+
+        # Dual-write to both stores
+        self._document_store.update_tags(coll, id, final_tags)
+        self._store.update_tags(coll, id, final_tags)
+
+        # Return updated item
+        return self.get(id, collection=collection)
+
     # -------------------------------------------------------------------------
     # Collection Management
     # -------------------------------------------------------------------------

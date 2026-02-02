@@ -335,7 +335,99 @@ class DocumentStore:
         """Count total documents across all collections."""
         cursor = self._conn.execute("SELECT COUNT(*) FROM documents")
         return cursor.fetchone()[0]
-    
+
+    # -------------------------------------------------------------------------
+    # Tag Queries
+    # -------------------------------------------------------------------------
+
+    def list_distinct_tag_keys(self, collection: str) -> list[str]:
+        """
+        List all distinct tag keys used in the collection.
+
+        Excludes system tags (prefixed with _).
+
+        Returns:
+            Sorted list of distinct tag keys
+        """
+        cursor = self._conn.execute("""
+            SELECT tags_json FROM documents
+            WHERE collection = ?
+        """, (collection,))
+
+        keys: set[str] = set()
+        for row in cursor:
+            tags = json.loads(row["tags_json"])
+            for key in tags:
+                if not key.startswith("_"):
+                    keys.add(key)
+
+        return sorted(keys)
+
+    def list_distinct_tag_values(self, collection: str, key: str) -> list[str]:
+        """
+        List all distinct values for a given tag key.
+
+        Args:
+            collection: Collection name
+            key: Tag key to get values for
+
+        Returns:
+            Sorted list of distinct values
+        """
+        cursor = self._conn.execute("""
+            SELECT tags_json FROM documents
+            WHERE collection = ?
+        """, (collection,))
+
+        values: set[str] = set()
+        for row in cursor:
+            tags = json.loads(row["tags_json"])
+            if key in tags:
+                values.add(tags[key])
+
+        return sorted(values)
+
+    def query_by_tag_key(
+        self,
+        collection: str,
+        key: str,
+        limit: int = 100,
+    ) -> list[DocumentRecord]:
+        """
+        Find documents that have a specific tag key (any value).
+
+        Args:
+            collection: Collection name
+            key: Tag key to search for
+            limit: Maximum results
+
+        Returns:
+            List of matching DocumentRecords
+        """
+        # SQLite JSON functions for tag key existence
+        # json_extract returns NULL if key doesn't exist
+        cursor = self._conn.execute("""
+            SELECT id, collection, summary, tags_json, created_at, updated_at
+            FROM documents
+            WHERE collection = ?
+              AND json_extract(tags_json, ?) IS NOT NULL
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """, (collection, f"$.{key}", limit))
+
+        results = []
+        for row in cursor:
+            results.append(DocumentRecord(
+                id=row["id"],
+                collection=row["collection"],
+                summary=row["summary"],
+                tags=json.loads(row["tags_json"]),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            ))
+
+        return results
+
     # -------------------------------------------------------------------------
     # Collection Management
     # -------------------------------------------------------------------------
