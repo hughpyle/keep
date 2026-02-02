@@ -8,10 +8,14 @@ This is the minimal working implementation focused on:
 - get(): retrieve by ID
 """
 
+import hashlib
+import logging
 import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_since(since: str) -> str:
@@ -132,6 +136,12 @@ ENV_TAG_PREFIX = "KEEP_TAG_"
 # Fixed ID for the current working context (singleton)
 NOWDOC_ID = "_now:default"
 
+# System documents to preload on init (filename -> special ID)
+SYSTEM_DOC_IDS = {
+    "conversations.md": "_system:conversations",
+    "domains.md": "_system:domains",
+}
+
 
 def _load_system(name: str) -> tuple[str, dict[str, str]]:
     """
@@ -181,6 +191,11 @@ def _get_env_tags() -> dict[str, str]:
             tag_key = key[len(ENV_TAG_PREFIX):].lower()
             tags[tag_key] = value
     return tags
+
+
+def _content_hash(content: str) -> str:
+    """SHA256 hash of content for change detection."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 class Keeper:
@@ -265,7 +280,27 @@ class Keeper:
             self._store_path,
             embedding_dimension=embedding_dim,
         )
-    
+
+        # Preload system documents (only if not already present)
+        self._ensure_system_documents()
+
+    def _ensure_system_documents(self) -> None:
+        """
+        Ensure system documents are loaded into the store.
+
+        Called during init. Only loads docs that don't already exist,
+        so user modifications are preserved and no network access occurs
+        if docs are already present.
+        """
+        for filename, doc_id in SYSTEM_DOC_IDS.items():
+            if not self.exists(doc_id):
+                try:
+                    content, tags = _load_system(filename)
+                    self.remember(content, id=doc_id, tags=tags)
+                except FileNotFoundError:
+                    # System file missing - skip silently
+                    pass
+
     def _get_embedding_provider(self) -> EmbeddingProvider:
         """
         Get embedding provider, creating it lazily on first use.
@@ -421,12 +456,24 @@ class Keeper:
         # Fetch document
         doc = self._document_provider.fetch(id)
 
+        # Compute content hash for change detection
+        new_hash = _content_hash(doc.content)
+
         # Generate embedding
         embedding = self._get_embedding_provider().embed(doc.content)
 
-        # Determine summary
+        # Determine summary - skip if content unchanged
         max_len = self._config.max_summary_length
-        if summary is not None:
+        content_unchanged = (
+            existing_doc is not None
+            and existing_doc.content_hash == new_hash
+        )
+
+        if content_unchanged and summary is None:
+            # Content unchanged - preserve existing summary
+            logger.debug("Content unchanged, skipping summarization for %s", id)
+            final_summary = existing_doc.summary
+        elif summary is not None:
             # User-provided summary - validate length
             if len(summary) > max_len:
                 import warnings
@@ -475,6 +522,7 @@ class Keeper:
             id=id,
             summary=final_summary,
             tags=merged_tags,
+            content_hash=new_hash,
         )
         self._store.upsert(
             collection=coll,
@@ -484,8 +532,8 @@ class Keeper:
             tags=merged_tags,
         )
 
-        # Spawn background processor if lazy (only if summary wasn't user-provided)
-        if lazy and summary is None:
+        # Spawn background processor if lazy (only if summary wasn't user-provided and content changed)
+        if lazy and summary is None and not content_unchanged:
             self._spawn_processor()
 
         # Return the stored item
@@ -565,12 +613,24 @@ class Keeper:
             if existing:
                 existing_tags = filter_non_system_tags(existing.tags)
 
+        # Compute content hash for change detection
+        new_hash = _content_hash(content)
+
         # Generate embedding
         embedding = self._get_embedding_provider().embed(content)
 
-        # Determine summary (smart behavior for remember)
+        # Determine summary (smart behavior for remember) - skip if content unchanged
         max_len = self._config.max_summary_length
-        if summary is not None:
+        content_unchanged = (
+            existing_doc is not None
+            and existing_doc.content_hash == new_hash
+        )
+
+        if content_unchanged and summary is None:
+            # Content unchanged - preserve existing summary
+            logger.debug("Content unchanged, skipping summarization for %s", id)
+            final_summary = existing_doc.summary
+        elif summary is not None:
             # User-provided summary - validate length
             if len(summary) > max_len:
                 import warnings
@@ -617,6 +677,7 @@ class Keeper:
             id=id,
             summary=final_summary,
             tags=merged_tags,
+            content_hash=new_hash,
         )
         self._store.upsert(
             collection=coll,
@@ -626,8 +687,8 @@ class Keeper:
             tags=merged_tags,
         )
 
-        # Spawn background processor if lazy and content was queued
-        if lazy and summary is None and len(content) > max_len:
+        # Spawn background processor if lazy and content was queued (only if content changed)
+        if lazy and summary is None and len(content) > max_len and not content_unchanged:
             self._spawn_processor()
 
         # Return the stored item
@@ -1000,6 +1061,39 @@ class Keeper:
             The updated context Item
         """
         return self.remember(content, id=NOWDOC_ID, tags=tags)
+
+    def list_system_documents(
+        self,
+        *,
+        collection: Optional[str] = None,
+    ) -> list[Item]:
+        """
+        List all system documents.
+
+        System documents have IDs starting with "_system:" or "_now:".
+        These are preloaded on init and provide foundational content.
+
+        Args:
+            collection: Target collection (default: default collection)
+
+        Returns:
+            List of system document Items
+        """
+        coll = self._resolve_collection(collection)
+
+        # Query documents by prefix
+        results = []
+        for prefix in ("_system:", "_now:"):
+            records = self._document_store.query_by_id_prefix(coll, prefix)
+            for record in records:
+                results.append(Item(
+                    id=record.id,
+                    summary=record.summary,
+                    tags=record.tags,
+                    score=None,
+                ))
+
+        return results
 
     def tag(
         self,
