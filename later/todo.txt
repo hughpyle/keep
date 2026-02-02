@@ -1,41 +1,3 @@
---- plan these
-
-* tag docs: check that it's clear that "one value per key" (can't have multiple of the same key on a document)
-    so this means you can "overwrite" or "clear" a tag pretty easily
-
-
-* what's the current best way to apply a new tag to one or multiple existing documents?
-    - would be good to have a quick "tag this", but also "tag all of these"
-
-* want to delete a tag from a document (that's the forgetting - leave the doc, just un-tag it)
-
-    * maybe tag value '' (empty-string) - is that usable for "clear a tag"? even from cli?
-        don't want to accidentally delete tags, so the CLI may be better with an explicit tag-deletion option
-        from python applying an empty tag should be like deleting it (or no-op when adding a new doc or a new tag)
-
-* `keep tag xyz` should actually work (list the docs with that tag and any value), not fail because no value specified
-    - return the top N
-    - rank by "score", whatever that is (later)
-
-* need `keep tag --list` or something, to list them (distinct keys; distinct values if you specify a key)
-    if using flags, make sure the chosen CLI convention is consistent across all commands
-
-* rename "source tags" to just "tags" as far as the API is concerned
-    - there are system tags and generated tags, but those are special names, "tags" is what the user sees
-    - system and generated tags need actually special namespaces, do we have a strategy for that, &
-      where is it documented?  (in code is fine).  See later for the nowdoc, which has "system" tags
-
-* envvars should set tags automatically when updates are applied, so that you can set the environment in a shell session and
-  not worry about which projects/etc you're dealing with.
-        KEEP_TAG_xxx=yyy
-        KEEP_TAG_PROJECT=foo
-        KEEP_TAG_TOPIC=bar
-            (so, do these map onto lowercase? or are all tag names lowercase? - no, envvars can be KEEP_TAG_abc too)
-
-* config should also specify tags that should be applied, just like envvars
-
---- for later
-
 
 * tags themselves should have summaries and full descriptions
     i.e. somewhere in the "system" store is a docuemnt that describes a tag
@@ -238,19 +200,13 @@ Done:
 . fix __del__ crash when embedding provider fails to initialize
 . karma (AN5.57): "I am the owner of my deeds and heir to my deeds".
 . `keep -v` please, for debug-level logging to stderr
-. enable "local config" within a git repository root
-    but I don't want anything to be really special to the repo... prefer "relative to $pwd"
-    (so, all the docs are wrong for this)
-    walk up the tree as far as '~' and find all the `../.keep`?  store in the home, but config in any of them.
-    ** compare other unix-style best practice before deciding **
-
-    what I want:
-    - default store is in the user home
-    - can put the store wherever you want, so e.g. config is in user home but the store is elsewhere
-      (this works with the --store CLI but need to check that this points at the location of the store
-      and doesn't determine the location of the config!)
-    - config can point at a specific store
-    - config location defaults to home but can be overridden per (folder, repo) by treewalk, or with an envvar
-
-    also the chromadb is stored within its own directory which is kinda weird, why not put all the databases together?
-    (no real advantage, but want to be nice)
+. CLI-first documentation ordering in REFERENCE.md and QUICKSTART.md
+. enable "local config" - tree-walk config discovery, KEEP_CONFIG envvar, store.path config option
+. tag docs: "one value per key" documented in REFERENCE.md
+. tag-update CLI and tag() API for updating existing documents
+. delete tags via empty string or --remove flag
+. `keep tag KEY` works with key only (any value)
+. `keep tag --list` and `keep tag KEY --list`
+. rename source_tags → tags (with deprecation warning)
+. KEEP_TAG_* environment variables for auto-tagging
+. [tags] config section for default tags
