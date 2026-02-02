@@ -116,8 +116,12 @@ kp.list_tags("project")                      # All values for 'project'
 ```
 
 ## System Tags (auto-managed)
-`_created`, `_updated`, `_updated_date`, `_content_type`, `_source`
-`_session`, `_topic`, `_level`, `_summarizes`, `_system`, `_visibility`, `_for`
+
+Protected tags prefixed with `_`. Users cannot modify these directly.
+
+**Implemented:** `_created`, `_updated`, `_updated_date`, `_content_type`, `_source`
+
+**Reserved:** `_session`, `_topic`, `_level`, `_summarizes`, `_system`, `_visibility`, `_for`
 
 ```python
 kp.query_tag("_updated_date", "2026-01-30")  # Temporal query
@@ -125,7 +129,7 @@ kp.query_tag("_source", "inline")            # Find remembered content
 kp.query_tag("_system", "true")              # All system documents
 ```
 
-**Note:** Relevance/focus scores are computed at query time, not stored.
+See [SYSTEM-TAGS.md](SYSTEM-TAGS.md) for complete reference.
 
 ## System Documents
 There is a very small metaschema, managed by documents in the store.  You can adjust these as needed.
