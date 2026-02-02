@@ -52,18 +52,15 @@
     - requires: version storage mechanism, history retrieval API
     - needs more design work
 
-* tag-by-model
+* tag-by-model ("auto-tag")?
     - is there a model-supported tagging? what would that need to be useful? (specific domains??)
       - i.e. as well as summarization, there's a "system document" that the model reads, and uses that document to decide which tags should be applied
       - it really needs to be one document per tag (because the model might choose multiple tags)
-      - requires "system documents" so later
+      - these are "system documents"
     - want this to be pluggable, guide the model-driven tagging from a sysdoc that defines how it works
-
+    - want "references" for this too... maybe later
 
 * compare openclaw 'memory-lancedb' plugin
-
-* update the REFERENCE.md
-    (but don't do this until the 'nowdoc' is baked)
 
 * check - what is your emotional response when encountering this project the first time?
 

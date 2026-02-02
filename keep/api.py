@@ -136,29 +136,24 @@ ENV_TAG_PREFIX = "KEEP_TAG_"
 # Fixed ID for the current working context (singleton)
 NOWDOC_ID = "_now:default"
 
-# System documents to preload on init (filename -> special ID)
-SYSTEM_DOC_IDS = {
-    "conversations.md": "_system:conversations",
-    "domains.md": "_system:domains",
-}
+# Path to system documents
+SYSTEM_DOC_DIR = Path(__file__).parent.parent / "docs" / "system"
 
 
-def _load_system(name: str) -> tuple[str, dict[str, str]]:
+def _load_system(name: str) -> tuple[str, dict[str, str], Optional[str]]:
     """
-    Load content and tags from a system file with optional YAML frontmatter.
+    Load content, tags, and optional ID from a system file with YAML frontmatter.
 
     Args:
         name: Filename within docs/system/ (e.g., "now.md")
 
     Returns:
-        (content, tags) tuple
+        (content, tags, id) tuple. id is None if not specified in frontmatter.
 
     Raises:
         FileNotFoundError: If the system file doesn't exist
     """
-    # docs/system is at repo root, two levels up from keep/api.py
-    system_dir = Path(__file__).parent.parent / "docs" / "system"
-    path = system_dir / name
+    path = SYSTEM_DOC_DIR / name
     text = path.read_text()
 
     # Parse YAML frontmatter if present
@@ -168,12 +163,15 @@ def _load_system(name: str) -> tuple[str, dict[str, str]]:
             import yaml
             frontmatter = yaml.safe_load(parts[1])
             content = parts[2].lstrip("\n")
-            tags = frontmatter.get("tags", {}) if frontmatter else {}
-            # Ensure all tag values are strings
-            tags = {k: str(v) for k, v in tags.items()}
-            return content, tags
+            if frontmatter:
+                tags = frontmatter.get("tags", {})
+                # Ensure all tag values are strings
+                tags = {k: str(v) for k, v in tags.items()}
+                doc_id = frontmatter.get("id")
+                return content, tags, doc_id
+            return content, {}, None
 
-    return text, {}
+    return text, {}, None
 
 
 def _get_env_tags() -> dict[str, str]:
@@ -288,18 +286,21 @@ class Keeper:
         """
         Ensure system documents are loaded into the store.
 
+        Scans all .md files in docs/system/. Files with an `id` field in their
+        YAML frontmatter are loaded as system documents with that ID.
+
         Called during init. Only loads docs that don't already exist,
         so user modifications are preserved and no network access occurs
         if docs are already present.
         """
-        for filename, doc_id in SYSTEM_DOC_IDS.items():
-            if not self.exists(doc_id):
-                try:
-                    content, tags = _load_system(filename)
+        for path in SYSTEM_DOC_DIR.glob("*.md"):
+            try:
+                content, tags, doc_id = _load_system(path.name)
+                if doc_id and not self.exists(doc_id):
                     self.remember(content, id=doc_id, tags=tags)
-                except FileNotFoundError:
-                    # System file missing - skip silently
-                    pass
+            except FileNotFoundError:
+                # System file missing - skip silently
+                pass
 
     def _get_embedding_provider(self) -> EmbeddingProvider:
         """
@@ -1033,7 +1034,7 @@ class Keeper:
         if item is None:
             # First-time initialization with default content and tags
             try:
-                default_content, default_tags = _load_system("now.md")
+                default_content, default_tags, _ = _load_system("now.md")
             except FileNotFoundError:
                 # Fallback if system file is missing
                 default_content = "# Now\n\nYour working context."
