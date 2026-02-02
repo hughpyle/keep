@@ -14,6 +14,7 @@ interface PluginApi {
   registerTool: (tool: Tool, opts?: { optional?: boolean }) => void;
   registerCli: (fn: (ctx: CliContext) => void, opts: { commands: string[] }) => void;
   registerService: (svc: Service) => void;
+  on: (hookName: string, handler: (event: unknown, ctx: unknown) => void | Promise<void>) => void;
 }
 
 interface PluginConfig {
@@ -73,6 +74,59 @@ interface Service {
   id: string;
   start: () => void | Promise<void>;
   stop: () => void | Promise<void>;
+}
+
+// Helper to run openclaw CLI commands
+async function runOpenClaw(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("openclaw", args, {
+      env: { ...process.env },
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout.on("data", (data) => { stdout += data; });
+    proc.stderr.on("data", (data) => { stderr += data; });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve(stdout);
+      } else {
+        reject(new Error(`openclaw exited with code ${code}: ${stderr}`));
+      }
+    });
+  });
+}
+
+// Check if keep-reminder cron job exists, create if not
+async function ensureReminderCron(logger: PluginApi["logger"]): Promise<void> {
+  try {
+    // List existing cron jobs
+    const listOutput = await runOpenClaw(["cron", "list", "--json"]);
+    const jobs = JSON.parse(listOutput);
+
+    // Check if our job already exists
+    const existingJob = jobs.find((j: { name: string }) => j.name === "keep-reminder");
+    if (existingJob) {
+      logger.info("keep: reminder cron job already exists");
+      return;
+    }
+
+    // Create the hourly reminder
+    await runOpenClaw([
+      "cron", "add",
+      "--name", "keep-reminder",
+      "--cron", "22 * * * *",  // Every hour at minute 22
+      "--session", "main",
+      "--system-event", "Remember? `keep now`",
+    ]);
+
+    logger.info("keep: created hourly reminder cron job");
+  } catch (err) {
+    // Don't fail plugin load if cron setup fails
+    logger.error(`keep: failed to setup reminder cron: ${err}`);
+  }
 }
 
 // Helper to call Python CLI
@@ -304,6 +358,13 @@ export default function register(api: PluginApi) {
       api.logger.info("keep: watcher stopped");
     },
   });
-  
+
+  // ─────────────────────────────────────────────────────────────
+  // Cron: Hourly reminder to run `keep now`
+  // ─────────────────────────────────────────────────────────────
+  api.on("gateway_start", async () => {
+    await ensureReminderCron(api.logger);
+  });
+
   api.logger.info("memory-keep plugin loaded");
 }
