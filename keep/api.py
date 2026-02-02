@@ -140,15 +140,16 @@ NOWDOC_ID = "_now:default"
 SYSTEM_DOC_DIR = Path(__file__).parent.parent / "docs" / "system"
 
 
-def _load_system(name: str) -> tuple[str, dict[str, str], Optional[str]]:
+def _load_system(name: str) -> tuple[str, dict[str, str], Optional[str], Optional[str]]:
     """
-    Load content, tags, and optional ID from a system file with YAML frontmatter.
+    Load content, tags, ID, and summary from a system file with YAML frontmatter.
 
     Args:
         name: Filename within docs/system/ (e.g., "now.md")
 
     Returns:
-        (content, tags, id) tuple. id is None if not specified in frontmatter.
+        (content, tags, id, summary) tuple.
+        id and summary are None if not specified in frontmatter.
 
     Raises:
         FileNotFoundError: If the system file doesn't exist
@@ -168,10 +169,11 @@ def _load_system(name: str) -> tuple[str, dict[str, str], Optional[str]]:
                 # Ensure all tag values are strings
                 tags = {k: str(v) for k, v in tags.items()}
                 doc_id = frontmatter.get("id")
-                return content, tags, doc_id
-            return content, {}, None
+                summary = frontmatter.get("summary")
+                return content, tags, doc_id, summary
+            return content, {}, None, None
 
-    return text, {}, None
+    return text, {}, None, None
 
 
 def _get_env_tags() -> dict[str, str]:
@@ -288,6 +290,7 @@ class Keeper:
 
         Scans all .md files in docs/system/. Files with an `id` field in their
         YAML frontmatter are loaded as system documents with that ID.
+        Files can also specify `summary` in frontmatter to avoid auto-summarization.
 
         Called during init. Only loads docs that don't already exist,
         so user modifications are preserved and no network access occurs
@@ -295,9 +298,9 @@ class Keeper:
         """
         for path in SYSTEM_DOC_DIR.glob("*.md"):
             try:
-                content, tags, doc_id = _load_system(path.name)
+                content, tags, doc_id, summary = _load_system(path.name)
                 if doc_id and not self.exists(doc_id):
-                    self.remember(content, id=doc_id, tags=tags)
+                    self.remember(content, id=doc_id, tags=tags, summary=summary)
             except FileNotFoundError:
                 # System file missing - skip silently
                 pass
@@ -1034,7 +1037,7 @@ class Keeper:
         if item is None:
             # First-time initialization with default content and tags
             try:
-                default_content, default_tags, _ = _load_system("now.md")
+                default_content, default_tags, _, _ = _load_system("now.md")
             except FileNotFoundError:
                 # Fallback if system file is missing
                 default_content = "# Now\n\nYour working context."

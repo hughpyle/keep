@@ -1,5 +1,6 @@
 ---
 id: _system:conversations
+summary: Process knowledge patterns for recognizing conversation types and work structure (Language-Action Perspective)
 tags:
   context: practice
 ---

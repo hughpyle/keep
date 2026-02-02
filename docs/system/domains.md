@@ -1,5 +1,6 @@
 ---
 id: _system:domains
+summary: Organization patterns for software dev, research, personal reflection, and other domains
 tags:
   context: domains
 ---
