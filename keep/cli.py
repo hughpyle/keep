@@ -115,7 +115,10 @@ def _format_yaml_frontmatter(
         lines.append("similar:")
         for sim_item in similar_items:
             score_str = f"({sim_item.score:.2f})" if sim_item.score else ""
-            lines.append(f"  - {sim_item.id} {score_str}")
+            summary_preview = sim_item.summary[:40].replace("\n", " ")
+            if len(sim_item.summary) > 40:
+                summary_preview += "..."
+            lines.append(f"  - {sim_item.id} {score_str} {summary_preview}")
 
     # Add version navigation if available
     if version_nav:
