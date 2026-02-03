@@ -257,7 +257,7 @@ def _format_item(
     """
     Format an item for display.
 
-    Text format: YAML frontmatter (matches docs/system format)
+    Text format: YAML frontmatter (matches system document format)
     With --ids: just the ID (for piping)
 
     Args:
@@ -1045,6 +1045,10 @@ def list_collections(
 
 @app.command()
 def init(
+    reset_system_docs: Annotated[bool, typer.Option(
+        "--reset-system-docs",
+        help="Force reload system documents from bundled content (overwrites modifications)"
+    )] = False,
     store: StoreOption = None,
     collection: CollectionOption = "default",
 ):
@@ -1052,6 +1056,11 @@ def init(
     Initialize or verify the store is ready.
     """
     kp = _get_keeper(store, collection)
+
+    # Handle reset if requested
+    if reset_system_docs:
+        stats = kp.reset_system_documents()
+        typer.echo(f"Reset {stats['reset']} system documents")
 
     # Show config and store paths
     config = kp._config

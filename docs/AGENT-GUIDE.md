@@ -66,9 +66,9 @@ if kp.exists("file:///project/readme.md"):
 
 **Default store location:** `.keep/` at the git repository root (created automatically). Override with `KEEP_STORE_PATH` or explicit path argument. Add `.keep/` to `.gitignore` if the store should not be committed.
 
-**Patterns documentation:**
-- [system/domains.md](system/domains.md) — domain-specific organization (software dev, research, etc.)
-- [system/conversations.md](system/conversations.md) — process knowledge: how work proceeds
+**Patterns documentation** (bundled system docs, access via `keep get`):
+- `_system:domains` — domain-specific organization (software dev, research, etc.)
+- `_system:conversations` — process knowledge: how work proceeds
 
 **When to use:**
 - CLI: `keep update` for all content (URI, inline text, or stdin)
@@ -365,7 +365,7 @@ The `_system:routing` document can be updated to change what routes privately. T
 
 ## Domain Patterns
 
-See [system/domains.md](system/domains.md) for suggested collection and tag organization for common use cases:
+See `_system:domains` (`keep get _system:domains`) for suggested collection and tag organization for common use cases:
 - Software Development
 - Market Research
 - Personal Reflection & Growth

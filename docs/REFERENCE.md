@@ -303,5 +303,5 @@ Same content = same ID = enables versioning via tag changes.
 - `find(since="P7D")` — filter to recent items when recency matters
 
 ## Domain Patterns
-See [system/domains.md](system/domains.md) for organization templates.
-See [system/conversations.md](system/conversations.md) for process knowledge.
+See `_system:domains` for organization templates (`keep get _system:domains`).
+See `_system:conversations` for process knowledge (`keep get _system:conversations`).

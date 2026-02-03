@@ -255,7 +255,7 @@ class TestNowdoc:
         assert NOWDOC_ID.startswith("_")  # System-managed ID
 
     def test_system_now_md_exists(self):
-        """System now.md file exists in docs/system/ with frontmatter."""
+        """System now.md file exists in keep/data/system/ with frontmatter."""
         from keep.api import _load_frontmatter, SYSTEM_DOC_DIR
 
         content, tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
