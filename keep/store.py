@@ -58,15 +58,9 @@ class ChromaStore:
             embedding_dimension: Expected dimension of embeddings (for validation).
                 Can be None for read-only access; will be set on first write.
         """
-        try:
-            import chromadb
-            from chromadb.config import Settings
-        except ImportError:
-            raise RuntimeError(
-                "ChromaStore requires 'chromadb' library. "
-                "Install with: pip install chromadb"
-            )
-        
+        import chromadb
+        from chromadb.config import Settings
+
         self._store_path = store_path
         self._embedding_dimension = embedding_dimension
         

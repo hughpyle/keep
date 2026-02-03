@@ -962,6 +962,28 @@ class Keeper:
 
         return filtered
 
+    def get_version_offset(self, item: Item, collection: Optional[str] = None) -> int:
+        """
+        Get version offset (0=current, 1=previous, ...) for an item.
+
+        Converts the internal version number (1=oldest, 2=next...) to the
+        user-visible offset format (0=current, 1=previous, 2=two-ago...).
+
+        Args:
+            item: Item to get version offset for
+            collection: Target collection
+
+        Returns:
+            Version offset (0 for current version)
+        """
+        version_tag = item.tags.get("_version")
+        if not version_tag:
+            return 0  # Current version
+        base_id = item.tags.get("_base_id", item.id)
+        coll = self._resolve_collection(collection)
+        version_count = self._document_store.version_count(coll, base_id)
+        return version_count - int(version_tag) + 1
+
     def query_fulltext(
         self,
         query: str,

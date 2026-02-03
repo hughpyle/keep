@@ -119,7 +119,7 @@ async function ensureReminderCron(logger: PluginApi["logger"]): Promise<void> {
       "--name", "keep-reminder",
       "--cron", "22 * * * *",  // Every hour at minute 22
       "--session", "main",
-      "--system-event", "Remember? `keep now`",
+      "--system-event", "Reflect on this work using the `keep` skill.",
     ]);
 
     logger.info("keep: created hourly reminder cron job");
