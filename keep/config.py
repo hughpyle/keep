@@ -21,7 +21,7 @@ except ImportError:
 
 
 CONFIG_FILENAME = "keep.toml"
-CONFIG_VERSION = 2  # Bumped for embedding identity tracking
+CONFIG_VERSION = 3  # Bumped for document versioning support
 
 
 @dataclass

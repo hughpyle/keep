@@ -124,7 +124,7 @@ class ChromaStore:
     ) -> None:
         """
         Insert or update an item in the store.
-        
+
         Args:
             collection: Collection name
             id: Item identifier (URI or custom)
@@ -140,9 +140,9 @@ class ChromaStore:
                 f"Embedding dimension mismatch: expected {self._embedding_dimension}, "
                 f"got {len(embedding)}"
             )
-        
+
         coll = self._get_collection(collection)
-        
+
         # Add timestamp if not present
         now = datetime.now(timezone.utc).isoformat()
         if "_updated" not in tags:
@@ -158,36 +158,122 @@ class ChromaStore:
                     tags = {**tags, "_created": now}
             else:
                 tags = {**tags, "_created": now}
-        
+
         # Add date portion for easier date queries
         tags = {**tags, "_updated_date": now[:10]}
-        
+
         coll.upsert(
             ids=[id],
             embeddings=[embedding],
             documents=[summary],
             metadatas=[self._tags_to_metadata(tags)],
         )
-    
-    def delete(self, collection: str, id: str) -> bool:
+
+    def upsert_version(
+        self,
+        collection: str,
+        id: str,
+        version: int,
+        embedding: list[float],
+        summary: str,
+        tags: dict[str, str],
+    ) -> None:
         """
-        Delete an item from the store.
-        
+        Store an archived version with a versioned ID.
+
+        The versioned ID format is: {id}@v{version}
+        Metadata includes _version and _base_id for filtering/navigation.
+
+        Args:
+            collection: Collection name
+            id: Base item identifier (not versioned)
+            version: Version number (1=oldest archived)
+            embedding: Vector embedding
+            summary: Human-readable summary
+            tags: All tags from the archived version
+        """
+        if self._embedding_dimension is None:
+            self._embedding_dimension = len(embedding)
+        elif len(embedding) != self._embedding_dimension:
+            raise ValueError(
+                f"Embedding dimension mismatch: expected {self._embedding_dimension}, "
+                f"got {len(embedding)}"
+            )
+
+        coll = self._get_collection(collection)
+
+        # Versioned ID format
+        versioned_id = f"{id}@v{version}"
+
+        # Add version metadata
+        versioned_tags = dict(tags)
+        versioned_tags["_version"] = str(version)
+        versioned_tags["_base_id"] = id
+
+        coll.upsert(
+            ids=[versioned_id],
+            embeddings=[embedding],
+            documents=[summary],
+            metadatas=[self._tags_to_metadata(versioned_tags)],
+        )
+
+    def get_content_hash(self, collection: str, id: str) -> Optional[str]:
+        """
+        Get the content hash of an existing item.
+
+        Used to check if content changed (to skip re-embedding).
+
         Args:
             collection: Collection name
             id: Item identifier
-            
+
+        Returns:
+            Content hash if item exists and has one, None otherwise
+        """
+        coll = self._get_collection(collection)
+        result = coll.get(ids=[id], include=["metadatas"])
+
+        if not result["ids"]:
+            return None
+
+        metadata = result["metadatas"][0] or {}
+        return metadata.get("_content_hash")
+    
+    def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
+        """
+        Delete an item from the store.
+
+        Args:
+            collection: Collection name
+            id: Item identifier
+            delete_versions: If True, also delete versioned copies ({id}@v{N})
+
         Returns:
             True if item existed and was deleted, False if not found
         """
         coll = self._get_collection(collection)
-        
+
         # Check existence first
         existing = coll.get(ids=[id])
         if not existing["ids"]:
             return False
-        
+
         coll.delete(ids=[id])
+
+        if delete_versions:
+            # Delete all versioned copies
+            # Query by _base_id metadata to find all versions
+            try:
+                versions = coll.get(
+                    where={"_base_id": id},
+                    include=[],
+                )
+                if versions["ids"]:
+                    coll.delete(ids=versions["ids"])
+            except Exception:
+                # Metadata filter might fail if no versions exist
+                pass
+
         return True
 
     def update_summary(self, collection: str, id: str, summary: str) -> bool:
