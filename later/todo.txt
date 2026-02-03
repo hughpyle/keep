@@ -54,16 +54,6 @@
     and I don't know if windows has local models available through system services yet (would be nice)
     - this is all investigation work, not implementation  (I don't have a test environment)
 
-* logs and messages should respect TERM (or the terminal capabilities) so that I can run this commandline
-  on my ancient ASR33 teletype without dealing with ANSI escapes
-
-* whose translation is this copy of the Ancrene Riwle?  Update the INDEX.md accordingly.
-    (would prefer use a transcription of one of the original MS, instead of a translation!)
-
-* Add github URL for the an5.57 text to the INDEX.md (and the HTML URL too)
-    js: https://github.com/suttacentral/sc-data/blob/main/sc_bilara_data/translation/en/sujato/sutta/an/an5/an5.57_translation-en-sujato.json
-    html: https://suttacentral.net/an5.57/en/sujato?lang=en
-
 * add support for the kimi/moonshot models, etc - what are we missing? compare claude code, openclaw
 
 * add an audio track (mp3, flac, or something similar) to the library
@@ -188,3 +178,6 @@ Done:
 . `keep now --history` and `keep get _now:default --history` produce identical output
 . condensed tags in frontmatter: YAML flow format `{key: value, ...}`
 . similar items in frontmatter: max 3, version-aware filtering, `--similar`/`--no-similar` flags, `-n` limit
+. disable Rich markup in CLI help (plain text, teletype-safe)
+. Ancrene Riwle attribution: James Morton, Camden Society 1853
+. AN5.57 URLs added to INDEX.md

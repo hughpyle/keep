@@ -78,6 +78,7 @@ app = typer.Typer(
     help="Associative memory with semantic search.",
     no_args_is_help=False,
     invoke_without_command=True,
+    rich_markup_mode=None,
 )
 
 
