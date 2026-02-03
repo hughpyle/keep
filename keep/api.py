@@ -902,7 +902,66 @@ class Keeper:
             items = _filter_by_date(items, since)
 
         return items[:limit]
-    
+
+    def get_similar_for_display(
+        self,
+        id: str,
+        *,
+        limit: int = 3,
+        collection: Optional[str] = None
+    ) -> list[Item]:
+        """
+        Find similar items for frontmatter display using stored embedding.
+
+        Optimized for display: uses stored embedding (no re-embedding),
+        filters to distinct base documents, excludes source document versions.
+
+        Args:
+            id: ID of item to find similar items for
+            limit: Maximum results to return
+            collection: Target collection
+
+        Returns:
+            List of similar items, one per unique base document
+        """
+        coll = self._resolve_collection(collection)
+
+        # Get the stored embedding (no re-embedding)
+        embedding = self._store.get_embedding(coll, id)
+        if embedding is None:
+            return []
+
+        # Fetch more than needed to account for version filtering
+        fetch_limit = limit * 3
+        results = self._store.query_embedding(coll, embedding, limit=fetch_limit)
+
+        # Convert to Items
+        items = [r.to_item() for r in results]
+
+        # Extract base ID of source document
+        source_base_id = id.split("@v")[0] if "@v" in id else id
+
+        # Filter to distinct base IDs, excluding source document
+        seen_base_ids: set[str] = set()
+        filtered: list[Item] = []
+        for item in items:
+            # Get base ID from tags or parse from ID
+            base_id = item.tags.get("_base_id", item.id.split("@v")[0] if "@v" in item.id else item.id)
+
+            # Skip versions of source document
+            if base_id == source_base_id:
+                continue
+
+            # Keep only first version of each document
+            if base_id not in seen_base_ids:
+                seen_base_ids.add(base_id)
+                filtered.append(item)
+
+                if len(filtered) >= limit:
+                    break
+
+        return filtered
+
     def query_fulltext(
         self,
         query: str,

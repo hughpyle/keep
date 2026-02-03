@@ -1,16 +1,3 @@
-* "tags" in frontmatter: use `[one, two, three]` condensed form, should be fine for yaml
-
-* "nearby:" in frontmatter
-    - the most similar other items
-        - excluding previous versions of this document!
-        - only max one version of other documents too! - even if they are the top similarity.
-    - max 3 in frontmatter
-    - consistent CLI for listing as many similar items as you want
-        (compare the CLI for history)
-    - you don't need to evaluate embeddings to get the similarity result.
-      Only need to do a vector similarity search and rank the results.
-      The results are filtered (for distinct ID) but ranked according to our relevance score.
-
 * filter any 'get' by tag (show the most recent that has that tag; for recents only show the ones that have that tag)
 
 * tags themselves should have summaries and full descriptions
@@ -74,6 +61,8 @@
     (would prefer use a transcription of one of the original MS, instead of a translation!)
 
 * Add github URL for the an5.57 text to the INDEX.md (and the HTML URL too)
+    js: https://github.com/suttacentral/sc-data/blob/main/sc_bilara_data/translation/en/sujato/sutta/an/an5/an5.57_translation-en-sujato.json
+    html: https://suttacentral.net/an5.57/en/sujato?lang=en
 
 * add support for the kimi/moonshot models, etc - what are we missing? compare claude code, openclaw
 
@@ -197,3 +186,5 @@ Done:
     - ChromaDB stores versioned embeddings as {id}@v{N}
 . composable history: `keep list` IDs-first, `--ids --history` outputs @V{N} identifiers
 . `keep now --history` and `keep get _now:default --history` produce identical output
+. condensed tags in frontmatter: YAML flow format `{key: value, ...}`
+. similar items in frontmatter: max 3, version-aware filtering, `--similar`/`--no-similar` flags, `-n` limit
