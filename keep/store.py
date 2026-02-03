@@ -382,6 +382,23 @@ class ChromaStore:
         result = coll.get(ids=[id], include=[])
         return bool(result["ids"])
 
+    def get_embedding(self, collection: str, id: str) -> list[float] | None:
+        """
+        Retrieve the stored embedding for a document.
+
+        Args:
+            collection: Collection name
+            id: Item identifier
+
+        Returns:
+            Embedding vector if found, None otherwise
+        """
+        coll = self._get_collection(collection)
+        result = coll.get(ids=[id], include=["embeddings"])
+        if not result["ids"] or result["embeddings"] is None or len(result["embeddings"]) == 0:
+            return None
+        return list(result["embeddings"][0])
+
     def list_ids(self, collection: str) -> list[str]:
         """
         List all document IDs in a collection.
