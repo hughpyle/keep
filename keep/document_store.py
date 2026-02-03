@@ -666,7 +666,43 @@ class DocumentStore:
             """, (collection,))
         
         return [row["id"] for row in cursor]
-    
+
+    def list_recent(
+        self,
+        collection: str,
+        limit: int = 10,
+    ) -> list[DocumentRecord]:
+        """
+        List recent documents ordered by update time.
+
+        Args:
+            collection: Collection name
+            limit: Maximum number to return
+
+        Returns:
+            List of DocumentRecords, most recently updated first
+        """
+        cursor = self._conn.execute("""
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
+            FROM documents
+            WHERE collection = ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """, (collection, limit))
+
+        return [
+            DocumentRecord(
+                id=row["id"],
+                collection=row["collection"],
+                summary=row["summary"],
+                tags=json.loads(row["tags_json"]),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                content_hash=row["content_hash"],
+            )
+            for row in cursor
+        ]
+
     def count(self, collection: str) -> int:
         """Count documents in a collection."""
         cursor = self._conn.execute("""

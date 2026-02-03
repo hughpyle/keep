@@ -18,8 +18,7 @@
     then when displaying a tag, mark it up with an asterisk if exists a definition-for-that-tag doc
     and give a shortcut `keep tag --describe` or something
 
-
-* enable multiple "now" docs by allowing "one for each tag"
+* filter "one for each tag"?
     - with "projects", "topics" tags
     - this replaces all the "top-of-mind" stuff in `later/` (except for "recent")
         - the later thing for "topics" is more explicit than using tasks/projects, but same goal
@@ -33,7 +32,6 @@
               get the list of distinct projects, distinct topics, within a reasonable time and count limit
             - limit 10, and limit to the last 7 days, should be enough for a default?
                 - "last N days" is subtle, not part of this task, don't have any time-limited behavior yet
-
 
 * tag-by-model ("auto-tag")?
     - is there a model-supported tagging? what would that need to be useful? (specific domains??)

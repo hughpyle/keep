@@ -20,11 +20,26 @@ Default output uses YAML frontmatter:
 ```yaml
 ---
 id: file:///path/to/doc.md
-summary: Document summary here...
 tags:
   project: myapp
   status: reviewed
 score: 0.823
+prev:
+  - 1: 2026-01-15 Previous summary text...
+  - 2: 2026-01-14 Older summary here...
+---
+Document summary here...
+```
+
+When viewing an old version (`-V N`):
+```yaml
+---
+id: file:///path/to/doc.md
+version: 2
+prev:
+  - 1: 2026-01-14 Previous summary...
+next:
+  - 3: 2026-01-16 Next summary...
 ---
 ```
 
@@ -54,9 +69,20 @@ keep                                 # Show current working context
 keep --help                          # Show all commands
 
 # Current context (now)
-keep now                             # Show current context (explicit)
-keep now "Working on auth flow"      # Set current context
-keep now -f context.md -t project=x  # Set from file with tags
+keep now                             # Show current context with version nav
+keep now "What's important now"      # Update context
+keep now -f context.md -t project=x  # Read content from file with tags
+keep now -V 1                        # Previous version
+keep now --history                   # List all versions
+
+# Get with versioning
+keep get ID                          # Current version with prev nav
+keep get ID -V 1                     # Previous version with prev/next nav
+keep get ID --history                # List all versions
+
+# List recent items
+keep list                            # Show 10 most recent items
+keep list -n 20                      # Show 20 most recent items
 
 # Debug mode
 keep -v <cmd>                        # Enable debug logging to stderr
@@ -83,6 +109,7 @@ keep tag-update ID1 ID2 --tag k=v    # Tag multiple docs
 ## Python API
 ```python
 from keep import Keeper, Item
+from keep.document_store import VersionInfo  # for version history
 kp = Keeper()  # uses default store
 
 # Core indexing
@@ -104,7 +131,13 @@ kp.list_tags(key=None)                  # List tag keys or values → list[str]
 # Item access
 kp.get(id)                              # Fetch by ID → Item | None
 kp.exists(id)                           # Check existence → bool
+kp.list_recent(limit=10)                # Recent items by update time → list[Item]
 kp.list_collections()                   # All collections → list[str]
+
+# Version history
+kp.get_version(id, offset=1)            # Get previous version (1=prev, 2=two ago) → Item | None
+kp.list_versions(id, limit=10)          # List archived versions → list[VersionInfo]
+kp.get_version_nav(id)                  # Get prev/next for display → dict
 
 # Current context (now)
 kp.get_now()                            # Get current context (auto-creates if missing) → Item
@@ -188,6 +221,34 @@ kp.find("auth", since="2026-01-15")
 kp.query_tag("project", since="P30D")
 kp.query_fulltext("error", since="P3D")
 ```
+
+## Document Versioning
+
+All documents retain history on update. Previous versions are archived automatically.
+
+### Version Access
+```python
+kp.get_version(id, offset=1)   # Previous version
+kp.get_version(id, offset=2)   # Two versions ago
+kp.list_versions(id)           # All archived versions (newest first)
+```
+
+```bash
+keep get ID -V 1               # Previous version
+keep get ID --history          # List all versions
+keep now -V 2                  # Two versions ago of nowdoc
+```
+
+### Content-Addressed IDs
+
+Text-mode updates use content-addressed IDs for versioning:
+```bash
+keep update "my note"              # Creates _text:a1b2c3d4e5f6
+keep update "my note" -t done      # Same ID, new version (tag change)
+keep update "different note"       # Different ID (new document)
+```
+
+Same content = same ID = enables versioning via tag changes.
 
 ## When to Use
 - `update()` — when referencing any file/URL worth remembering

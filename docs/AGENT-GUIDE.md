@@ -15,6 +15,17 @@ The associative memory provides persistent storage with semantic search.
 
 ## Quick Start (Agent Reference)
 
+**CLI:**
+```bash
+# Uses .keep/ at repo root by default
+keep update file:///project/readme.md -t project=myapp
+keep update "User prefers OAuth2 with PKCE" -t topic=auth
+keep find "authentication flow" --limit 5
+keep tag project=myapp
+keep get file:///project/readme.md
+```
+
+**Python API:**
 ```python
 from keep import Keeper, Item
 
@@ -49,14 +60,6 @@ if kp.exists("file:///project/readme.md"):
     item = kp.get("file:///project/readme.md")
 ```
 
-**CLI equivalent:**
-```bash
-# Uses .keep/ at repo root by default
-keep update "file:///project/readme.md" -t project=myapp
-keep -j find "authentication flow" --limit 5
-keep tag project myapp
-```
-
 **Item fields:** `id` (URI or custom), `summary` (str), `tags` (dict), `score` (float, search results only). Timestamps are in tags: `item.created` and `item.updated` are property accessors.
 
 **Prerequisites:** Python 3.11+, `pip install 'keep-skill[local]'` (preferably in a venv)
@@ -78,10 +81,26 @@ keep tag project myapp
 
 ## Working Session Pattern
 
-Use `set_now()` as a scratchpad to track where you are in the work. This isn't enforced structure — it's a convention that helps you (and future agents) maintain perspective.
+Use the nowdoc as a scratchpad to track where you are in the work. This isn't enforced structure — it's a convention that helps you (and future agents) maintain perspective.
 
-**Session lifecycle:**
+**Session lifecycle (CLI):**
+```bash
+# 1. Starting work — check current context (shows version history too)
+keep now                                    # Show current context with prev versions
 
+# 2. Update context as work evolves
+keep now "Diagnosing flaky test in auth module"
+keep now "Found timing issue" -t state=investigating
+
+# 3. Check previous context if needed
+keep now -V 1                               # Previous version
+keep now --history                          # List all versions
+
+# 4. Record learnings separately
+keep update "Flaky timing fix: mock time instead of real assertions" -t type=learning
+```
+
+**Python API equivalent:**
 ```python
 # 1. Starting work — check current context
 now = kp.get_now()
@@ -93,7 +112,11 @@ kp.set_now(
     tags={"topic": "testing", "state": "investigating"}
 )
 
-# 3. Completing — record the learning
+# 3. Check previous context if needed
+prev = kp.get_version("_now:default", offset=1)  # Previous version
+versions = kp.list_versions("_now:default")       # All versions
+
+# 4. Record the learning
 kp.remember(
     content="Flaky timing in CI → mock time instead of real assertions.",
     tags={"type": "learning", "domain": "testing"}
@@ -101,64 +124,107 @@ kp.remember(
 kp.set_now("Completed flaky test fix.", tags={"state": "completed"})
 ```
 
-**CLI equivalent:**
-```bash
-keep now                                    # Show current context
-keep now "Investigating auth bug"           # Set context
-keep now "Done with auth" --tag state=done  # Set with tags
-```
-
-**Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first with `get_now()`.
+**Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first. All updates create version history automatically.
 
 ---
 
 ## Agent Handoff Pattern
 
-**Starting a session:**
-```python
-# Check current context
-now = kp.get_now()
-print(f"Current focus: {now.summary}")
-
-# Find recent relevant items
-recent = kp.find("", limit=5, since="P1D")  # Last 24 hours
+**Starting a session (CLI):**
+```bash
+keep now                              # Check current context with version history
+keep now --history                    # See how context evolved
+keep find "recent work" --since P1D   # Last 24 hours
 ```
 
-**Ending a session:**
+**Ending a session (CLI):**
+```bash
+keep now "Completed OAuth2 flow. Token refresh working. Next: add tests." -t topic=auth
+```
+
+**Python API equivalent:**
 ```python
-# Update context for next agent
+# Starting a session
+now = kp.get_now()
+print(f"Current focus: {now.summary}")
+recent = kp.find("", limit=5, since="P1D")  # Last 24 hours
+
+# Ending a session
 kp.set_now(
     "Completed OAuth2 flow. Token refresh working. Next: add tests.",
     tags={"topic": "authentication"}
 )
 ```
 
-**Recent items retrieval:**
+**Recent items retrieval (CLI):**
+```bash
+keep find "authentication" --since P7D   # Last week
+keep tag _updated_date=2026-01-30        # Items updated today
+```
+
+**Python API:**
 ```python
-# Items from the last day
-recent = kp.find("", since="P1D")
-
-# Items from the last week matching a query
-auth_items = kp.find("authentication", since="P7D")
-
-# Items updated today (via tag query)
-today = kp.query_tag("_updated_date", "2026-01-30")
+recent = kp.find("", since="P1D")                    # Last day
+auth_items = kp.find("authentication", since="P7D") # Last week
+today = kp.query_tag("_updated_date", "2026-01-30") # Today
 ```
 
 ---
 
 ## Data Model
 
-An item has
+An item has:
 * A unique identifier (URI or custom ID for inline content)
 * A `created` timestamp (when first indexed)
-* A `updated` timestamp (when last indexed)
+* An `updated` timestamp (when last indexed)
 * A summary of the content, generated when indexed
 * A collection of tags (`{key: value, ...}`)
+* Version history (previous versions archived automatically on update)
 
 The full original document is not stored in this service.
 
 The services that implement embedding, summarization and tagging are configured at initialization time. This skill itself is provider-agnostic.
+
+## Document Versioning
+
+All documents retain version history automatically. When you update a document, the previous version is archived.
+
+**CLI:**
+```bash
+keep get ID                   # Current version with prev navigation
+keep get ID -V 1              # Previous version
+keep get ID -V 2              # Two versions ago
+keep get ID --history         # List all versions
+
+keep now -V 1                 # Previous nowdoc
+keep now --history            # Nowdoc version history
+```
+
+**Python API:**
+```python
+from keep.document_store import VersionInfo
+
+# Get previous versions
+prev = kp.get_version(id, offset=1)      # Previous
+two_ago = kp.get_version(id, offset=2)   # Two versions ago
+
+# List all archived versions (newest first)
+versions: list[VersionInfo] = kp.list_versions(id, limit=10)
+for v in versions:
+    print(f"v{v.version}: {v.created_at} - {v.summary[:50]}")
+
+# Get navigation info for display
+nav = kp.get_version_nav(id)  # {'prev': [...], 'next': [...]}
+```
+
+**Content-addressed IDs for text updates:**
+```bash
+keep update "my note"              # Creates _text:a1b2c3d4e5f6
+keep update "my note" -t done      # Same ID, new version (tag change)
+keep update "different note"       # Different ID (new document)
+```
+
+Same content = same ID = enables versioning via tag changes.
 
 ## Use Cases
 
@@ -210,13 +276,16 @@ There are three domains of tags:
 
 3. **Generated tags.**  Produced by the tagging provider based on content analysis at index time.
 
-**Temporal queries using system tags:**
-```python
-# Find items updated today
-kp.query_tag("_updated_date", "2026-01-30")
+**Temporal queries using system tags (CLI):**
+```bash
+keep tag _updated_date=2026-01-30   # Items updated today
+keep tag _source=inline             # All inline content
+```
 
-# Find all inline content (from remember())
-kp.query_tag("_source", "inline")
+**Python API:**
+```python
+kp.query_tag("_updated_date", "2026-01-30")  # Items updated today
+kp.query_tag("_source", "inline")            # All inline content
 ```
 
 ---
@@ -387,8 +456,17 @@ See [QUICKSTART.md](QUICKSTART.md#provider-options) for available embedding, sum
 
 See [QUICKSTART.md](QUICKSTART.md) for details.
 
+**CLI:**
+```bash
+keep init                          # Initialize at .keep/ in repo root
+keep init -s /path/to/store        # Explicit store path
+KEEP_STORE_PATH=/path keep init    # Via environment
+```
+
+**Python API:**
 ```python
 from keep import Keeper
 
-kp = Keeper("/path/to/store")
+kp = Keeper()                      # Uses .keep/ at repo root
+kp = Keeper("/path/to/store")      # Explicit path
 ```
