@@ -79,10 +79,10 @@ This table is a summary. The full framework includes the Language-Action Perspec
 
 **Do this now — read the full framework:**
 ```bash
-keep get "file://$PWD/docs/system/conversations.md"
+keep get "_system:conversations"
 ```
 
-The [conversations.md](docs/system/conversations.md) document is foundational. It teaches you to recognize where you are in work, what stance to take, and how to notice when things shift. Internalize it.
+The conversations document is foundational. It teaches you to recognize where you are in work, what stance to take, and how to notice when things shift. Internalize it.
 
 ### The Triple Check
 
@@ -133,14 +133,14 @@ You've read the core patterns (Layer 2). There's more foundational material.
 
 **Do this now — read and index:**
 ```bash
-keep get "file://$PWD/docs/system/domains.md"
+keep get "_system:domains"
 keep update "file://$PWD/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary --lazy
 keep get "file://$PWD/docs/library/true_person_no_rank.md"
 ```
 
 These aren't test fixtures. They're seed wisdom:
 
-- **[domains.md](docs/system/domains.md)** — How to organize knowledge by domain (software, research, personal). Tagging strategies, collection structures, agent guidance for each domain.
+- **`_system:domains`** — How to organize knowledge by domain (software, research, personal). Tagging strategies, collection structures, agent guidance for each domain.
 
 - **[true_person_no_rank.md](docs/library/true_person_no_rank.md)** — A Zen teaching with layers of commentary. Notice how each commentator re-enacts the pointing from a different angle — not explaining, not accumulating facts, but each responding to what students in that era needed. This is how knowledge in your memory should relate: organic, not hierarchical.
 
@@ -361,5 +361,5 @@ This is the practice. Not once, but every time.
 - [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) — Detailed patterns for working sessions
 - [docs/REFERENCE.md](docs/REFERENCE.md) — Complete CLI and API reference
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — Installation and setup
-- [docs/system/conversations.md](docs/system/conversations.md) — Full conversation framework
-- [docs/system/domains.md](docs/system/domains.md) — Domain-specific organization
+- [keep/data/system/conversations.md](keep/data/system/conversations.md) — Full conversation framework (`_system:conversations`)
+- [keep/data/system/domains.md](keep/data/system/domains.md) — Domain-specific organization (`_system:domains`)

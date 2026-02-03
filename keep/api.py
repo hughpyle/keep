@@ -9,6 +9,7 @@ This is the minimal working implementation focused on:
 """
 
 import hashlib
+import importlib.resources
 import logging
 import re
 from datetime import datetime, timezone, timedelta
@@ -135,8 +136,44 @@ ENV_TAG_PREFIX = "KEEP_TAG_"
 # Fixed ID for the current working context (singleton)
 NOWDOC_ID = "_now:default"
 
+
+def _get_system_doc_dir() -> Path:
+    """
+    Get path to system docs, works in both dev and installed environments.
+
+    Tries in order:
+    1. Package data via importlib.resources (installed packages)
+    2. Relative path inside package (development)
+    3. Legacy path outside package (backwards compatibility)
+    """
+    # Try package data first (works for installed packages)
+    try:
+        with importlib.resources.as_file(
+            importlib.resources.files("keep.data.system")
+        ) as path:
+            if path.exists():
+                return path
+    except (ModuleNotFoundError, TypeError):
+        pass
+
+    # Fallback to relative path inside package (development)
+    dev_path = Path(__file__).parent / "data" / "system"
+    if dev_path.exists():
+        return dev_path
+
+    # Legacy fallback (old structure)
+    return Path(__file__).parent.parent / "docs" / "system"
+
+
 # Path to system documents
-SYSTEM_DOC_DIR = Path(__file__).parent.parent / "docs" / "system"
+SYSTEM_DOC_DIR = _get_system_doc_dir()
+
+# Stable IDs for system documents (path-independent)
+SYSTEM_DOC_IDS = {
+    "now.md": "_system:now",
+    "conversations.md": "_system:conversations",
+    "domains.md": "_system:domains",
+}
 
 
 def _load_frontmatter(path: Path) -> tuple[str, dict[str, str]]:
@@ -295,31 +332,87 @@ class Keeper:
             embedding_dimension=embedding_dim,
         )
 
-        # Preload system documents (only if not already present)
-        self._ensure_system_documents()
+        # Migrate and ensure system documents (idempotent)
+        self._migrate_system_documents()
 
-    def _ensure_system_documents(self) -> None:
+    def _migrate_system_documents(self) -> dict:
         """
-        Ensure system documents are loaded into the store.
+        Migrate system documents to stable IDs and current version.
 
-        Scans all .md files in docs/system/. Each file is indexed with its
-        file:// URI as the ID and `_category: system` tag for identification.
-        Content becomes the summary directly (no auto-summarization).
+        Handles:
+        - Migration from old file:// URIs to _system:{name} IDs
+        - Fresh creation for new stores
+        - Version upgrades when bundled content changes
+        - Cleanup of old file:// URIs (from before path was changed)
 
         Called during init. Only loads docs that don't already exist,
-        so user modifications are preserved and no network access occurs
-        if docs are already present.
+        so user modifications are preserved. Updates config version
+        after successful migration.
+
+        Returns:
+            Dict with migration stats: created, migrated, skipped, cleaned
         """
+        from .config import SYSTEM_DOCS_VERSION, save_config
+
+        stats = {"created": 0, "migrated": 0, "skipped": 0, "cleaned": 0}
+
+        # Skip if already at current version
+        if self._config.system_docs_version >= SYSTEM_DOCS_VERSION:
+            return stats
+
+        # Build reverse lookup: filename -> new stable ID
+        filename_to_id = {name: doc_id for name, doc_id in SYSTEM_DOC_IDS.items()}
+
+        # First pass: clean up old file:// URIs with category=system tag
+        # These may have different paths than current SYSTEM_DOC_DIR
+        try:
+            old_system_docs = self.query_tag("category", "system")
+            for doc in old_system_docs:
+                if doc.id.startswith("file://") and doc.id.endswith(".md"):
+                    # Extract filename from path
+                    filename = Path(doc.id.replace("file://", "")).name
+                    new_id = filename_to_id.get(filename)
+                    if new_id and not self.exists(new_id):
+                        # Migrate content to new ID
+                        self.remember(doc.summary, id=new_id, tags=doc.tags)
+                        self.delete(doc.id)
+                        stats["migrated"] += 1
+                        logger.info("Migrated system doc: %s -> %s", doc.id, new_id)
+                    elif new_id:
+                        # New ID already exists, just clean up old one
+                        self.delete(doc.id)
+                        stats["cleaned"] += 1
+                        logger.info("Cleaned up old system doc: %s", doc.id)
+        except Exception as e:
+            logger.debug("Error scanning old system docs: %s", e)
+
+        # Second pass: create any missing system docs from bundled content
         for path in SYSTEM_DOC_DIR.glob("*.md"):
+            new_id = SYSTEM_DOC_IDS.get(path.name)
+            if new_id is None:
+                logger.debug("Skipping unknown system doc: %s", path.name)
+                continue
+
+            # Skip if already exists
+            if self.exists(new_id):
+                stats["skipped"] += 1
+                continue
+
             try:
-                uri = f"file://{path.resolve()}"
-                if not self.exists(uri):
-                    content, tags = _load_frontmatter(path)
-                    tags["category"] = "system"
-                    self.remember(content, id=uri, tags=tags)
+                content, tags = _load_frontmatter(path)
+                tags["category"] = "system"
+                self.remember(content, id=new_id, tags=tags)
+                stats["created"] += 1
+                logger.info("Created system doc: %s", new_id)
             except FileNotFoundError:
                 # System file missing - skip silently
                 pass
+
+        # Update config version
+        self._config.system_docs_version = SYSTEM_DOCS_VERSION
+        save_config(self._config)
+
+        return stats
 
     def _get_embedding_provider(self) -> EmbeddingProvider:
         """
@@ -1271,7 +1364,7 @@ class Keeper:
 
         A singleton document representing what you're currently working on.
         If it doesn't exist, creates one with default content and tags from
-        docs/system/now.md.
+        the bundled system now.md file.
 
         Returns:
             The current context Item (never None - auto-creates if missing)
@@ -1327,6 +1420,44 @@ class Keeper:
             List of system document Items
         """
         return self.query_tag("category", "system", collection=collection)
+
+    def reset_system_documents(self) -> dict:
+        """
+        Force reload all system documents from bundled content.
+
+        This overwrites any user modifications to system documents.
+        Use with caution - primarily for recovery or testing.
+
+        Returns:
+            Dict with stats: reset count
+        """
+        from .config import SYSTEM_DOCS_VERSION, save_config
+
+        stats = {"reset": 0}
+
+        for path in SYSTEM_DOC_DIR.glob("*.md"):
+            new_id = SYSTEM_DOC_IDS.get(path.name)
+            if new_id is None:
+                continue
+
+            try:
+                content, tags = _load_frontmatter(path)
+                tags["category"] = "system"
+
+                # Delete existing (if any) and create fresh
+                self.delete(new_id)
+                self.remember(content, id=new_id, tags=tags)
+                stats["reset"] += 1
+                logger.info("Reset system doc: %s", new_id)
+
+            except FileNotFoundError:
+                logger.warning("System doc file not found: %s", path)
+
+        # Update config version
+        self._config.system_docs_version = SYSTEM_DOCS_VERSION
+        save_config(self._config)
+
+        return stats
 
     def tag(
         self,

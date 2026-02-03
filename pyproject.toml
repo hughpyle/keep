@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "keep-skill"
-version = "0.4.2"
+version = "0.5.0"
 description = "Semantic memory - remember and search documents by meaning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -72,16 +72,11 @@ keep = "keep.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["keep"]
-artifacts = [
-    "SKILL.md",
-    "docs/system/**/*.md",
-]
 
 [tool.hatch.build.targets.sdist]
 include = [
     "/keep",
     "/SKILL.md",
-    "/docs/system",
     "/README.md",
     "/LICENSE",
 ]
