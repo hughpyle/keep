@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.3.0
+version: 0.4.0
 description: Associative memory for reflection and skillful action
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
