@@ -40,7 +40,7 @@ if not os.environ.get("KEEP_VERBOSE"):
 from .api import Keeper, NOWDOC_ID
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __all__ = [
     "Keeper",
     "Item",
