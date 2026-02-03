@@ -71,10 +71,8 @@
     - background task can detect current config and maintain compat
 
 * review how system documents (e.g. "metaschema") are used today, if any
-    - `keep system` needs some parameters for "latest N" or "latest timestamp"
-      and those should be filters on all the list/search options too
-      (like `keep tag -n 5` but also filter by date)
-    - `keep list [--system]` would be better, cover non-system too 
+    - use `keep tag category=system` to list system docs
+    - consider adding `-n` limit and `--since` filters to `keep tag` command 
 
 * review the CLI completely.  Can the common tasks have single-letter aliases for their commands?
 
