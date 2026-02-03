@@ -267,7 +267,6 @@ Don't dump everything into context. Navigate the tree:
 | `get -V N` | Previous versions | `keep get ID -V 1` or `keep get ID --history` |
 | `tag` | List tag values or find by tag | `keep tag domain=auth` or `keep tag --list` |
 | `tag-update` | Modify tags on existing item | `keep tag-update "id" --tag key=value` |
-| `system` | List system documents | `keep system` |
 | `collections` | List all collections | `keep collections` |
 | `init` | Initialize or verify store | `keep init` |
 | `config` | Show configuration and store path | `keep config` |
