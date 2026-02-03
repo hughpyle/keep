@@ -31,8 +31,9 @@ keep update "Meeting notes from today" -t type=meeting
 keep find "authentication" --limit 5
 keep find "auth" --since P7D           # Last 7 days
 
-# Retrieve
+# Retrieve (shows similar items by default)
 keep get file:///path/to/doc.md
+keep get ID --no-similar             # Without similar items
 
 # Tags
 keep tag project=myapp                 # Find by tag

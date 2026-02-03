@@ -26,12 +26,16 @@ You have a memory. Use it — not sometimes, but as practice.
 
 Ground yourself:
 1. What kind of conversation is this? (Action? Possibility? Clarification?)
-2. What do I already know about this?
+2. Where am I? What's the current context?
+   ```bash
+   keep now
+   ```
+3. What do I already know about this?
    ```bash
    keep find "what I'm about to work on"
    ```
-3. Be here, now, "aquí donde los papas queman", and reflect.
-4. Only then: act.  
+4. Be here, now, "aquí donde los papas queman", and reflect.
+5. Only then: act.  
 
 **After acting, reflect:**
 - What happened? What did I learn?
@@ -166,13 +170,25 @@ keep now --history     # All versions
 
 This helps future you (and other agents) pick up where you left off.
 
+### Similar Items for Discovery
+
+When you retrieve an item, you automatically see related items:
+
+```bash
+keep get ID                  # Shows up to 3 similar items
+keep get ID --similar        # List more similar items
+keep get ID --no-similar     # Just the document
+```
+
+This enables serendipitous discovery — you may find relevant context you didn't know to search for.
+
 ### Version History
 
 All documents retain history on update. Use this to see how understanding evolved:
 
 ```bash
 keep get ID -V 1       # Previous version
-keep get ID --history  # All versions
+keep get ID --history  # List all versions (default 10, -n to override)
 ```
 
 Text updates use content-addressed IDs — same content = same ID. This enables versioning through tag changes:
@@ -246,7 +262,8 @@ Don't dump everything into context. Navigate the tree:
 | `search` | Full-text search in summaries | `keep search "OAuth"` |
 | `list` | List recent item IDs | `keep list` or `keep --full list` |
 | `update` | Index content (URI, text, or stdin) | `keep update "note" -t key=value` |
-| `get` | Retrieve item by ID | `keep get "file:///path/to/doc.md"` |
+| `get` | Retrieve item (shows similar items) | `keep get "file:///path/to/doc.md"` |
+| `get --similar` | List similar items | `keep get ID --similar` or `-n 20` for more |
 | `get -V N` | Previous versions | `keep get ID -V 1` or `keep get ID --history` |
 | `tag` | List tag values or find by tag | `keep tag domain=auth` or `keep tag --list` |
 | `tag-update` | Modify tags on existing item | `keep tag-update "id" --tag key=value` |
@@ -280,12 +297,13 @@ Default output uses YAML frontmatter format:
 ```yaml
 ---
 id: file:///path/to/doc.md
-tags:
-  project: myapp
+tags: {project: myapp, domain: auth}
+similar:
+  - doc:related-auth (0.89)
+  - doc:token-notes (0.85)
 score: 0.823
 prev:
   - v1: 2026-01-15 Previous summary...
-  - v2: 2026-01-14 Older summary...
 ---
 Document summary here...
 ```
