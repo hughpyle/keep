@@ -21,13 +21,13 @@ Default output uses YAML frontmatter:
 ```yaml
 ---
 id: file:///path/to/doc.md
-tags:
-  project: myapp
-  status: reviewed
+tags: {project: myapp, status: reviewed}
+similar:
+  - doc:related-auth (0.89)
+  - doc:token-notes (0.85)
 score: 0.823
 prev:
   - v1: 2026-01-15 Previous summary text...
-  - v2: 2026-01-14 Older summary here...
 ---
 Document summary here...
 ```
@@ -83,11 +83,14 @@ keep now -f context.md -t project=x  # Read content from file with tags
 keep now -V 1                        # Previous version
 keep now --history                   # List all versions
 
-# Get with versioning
-keep get ID                          # Current version with prev nav
+# Get with versioning and similar items
+keep get ID                          # Current version with similar items
 keep get ID -V 1                     # Previous version with prev/next nav
 keep get "ID@V{1}"                   # Same as -V 1 (version identifier syntax)
-keep get ID --history                # List all versions
+keep get ID --history                # List all versions (default 10, -n to override)
+keep get ID --similar                # List similar items (default 10)
+keep get ID --no-similar             # Suppress similar items
+keep get ID --similar -n 20          # List 20 similar items
 
 # List recent items (IDs by default for composability - changed in 0.3.1)
 keep list                            # Show 10 most recent item IDs
@@ -131,6 +134,7 @@ kp.remember(content, summary=None, ...) # Index inline content → Item
 # Search (since: ISO duration like "P7D", "PT1H" or date "2026-01-15")
 kp.find(query, limit=10, since=None)       # Semantic search → list[Item]
 kp.find_similar(uri, limit=10, since=None) # Similar items → list[Item]
+kp.get_similar_for_display(id, limit=3)    # Similar items using stored embedding → list[Item]
 kp.query_tag(key, value=None, since=None)  # Tag lookup → list[Item]
 kp.query_fulltext(query, since=None)       # Text search → list[Item]
 
