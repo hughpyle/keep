@@ -183,11 +183,17 @@ def main_callback(
     """Associative memory with semantic search."""
     # If no subcommand provided, show the current context (now)
     if ctx.invoked_subcommand is None:
+        from .api import NOWDOC_ID
         kp = _get_keeper(None, "default")
         item = kp.get_now()
-        typer.echo(_format_item(item, as_json=_get_json_output()))
-        if not _get_json_output():
-            typer.echo("\nUse --help for commands.", err=True)
+        version_nav = kp.get_version_nav(NOWDOC_ID, None, collection="default")
+        similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection="default")
+        typer.echo(_format_item(
+            item,
+            as_json=_get_json_output(),
+            version_nav=version_nav,
+            similar_items=similar_items,
+        ))
 
 
 # -----------------------------------------------------------------------------
@@ -797,13 +803,15 @@ def now(
         item = kp.set_now(new_content, tags=parsed_tags or None)
         typer.echo(_format_item(item, as_json=_get_json_output()))
     else:
-        # Get current context with version navigation
+        # Get current context with version navigation and similar items
         item = kp.get_now()
         version_nav = kp.get_version_nav(NOWDOC_ID, None, collection=collection)
+        similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection=collection)
         typer.echo(_format_item(
             item,
             as_json=_get_json_output(),
             version_nav=version_nav,
+            similar_items=similar_items,
         ))
 
 
