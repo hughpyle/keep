@@ -10,7 +10,9 @@ The content, as well as the format, is relevant to the practice of this skill.
 ### ancrenewisse.pdf
 - **Title:** Ancrene Wisse (Ancrene Riwle)
 - **Date:** c. 1200s (13th century)
-- **Language:** Middle English, translation by (TODO)
+- **Language:** Middle English
+- **Translator:** James Morton, The Camden Society, London 1853
+- **Source:** https://www.bsswebsite.me.uk/History/AncreneRiwle/AncreneRiwle2.html
 - **Status:** Public domain
 - **Description:** A monastic guide for Christian anchoresses.  Provides guidance on conduct with an "inner" and "outer" rule, and their relationship: "one relates to the right conduct of the heart; the other, to the regulation of the outward life".
 
@@ -45,6 +47,8 @@ The content, as well as the format, is relevant to the practice of this skill.
 - **Language:** English translation from Pali
 - **Translator:** Bhikkhu Sujato
 - **Source:** SuttaCentral
+- **Source URL:** https://suttacentral.net/an5.57/en/sujato?lang=en
+- **Data:** https://github.com/suttacentral/sc-data/blob/main/sc_bilara_data/translation/en/sujato/sutta/an/an5/an5.57_translation-en-sujato.json
 - **License:** Creative Commons CC0 1.0 Universal (SuttaCentral translations)
 - **Description:** The Five Remembrances - five subjects that all sentient beings should reflect on regularly: aging, sickness, death, separation from loved ones, and being heir to one's own actions.  "Reviewing this subject often, they entirely give up bad conduct, or at least reduce it".
 
