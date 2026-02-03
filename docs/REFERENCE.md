@@ -11,6 +11,7 @@
 ```bash
 keep --json <cmd>   # Output as JSON
 keep --ids <cmd>    # Output only IDs (for piping to xargs)
+keep --full <cmd>   # Output full items (overrides --ids)
 keep -v <cmd>       # Enable debug logging to stderr
 ```
 
@@ -25,23 +26,25 @@ tags:
   status: reviewed
 score: 0.823
 prev:
-  - 1: 2026-01-15 Previous summary text...
-  - 2: 2026-01-14 Older summary here...
+  - v1: 2026-01-15 Previous summary text...
+  - v2: 2026-01-14 Older summary here...
 ---
 Document summary here...
 ```
 
-When viewing an old version (`-V N`):
+When viewing an old version (`-V N` or `@V{N}`):
 ```yaml
 ---
 id: file:///path/to/doc.md
-version: 2
+version: 1
 prev:
-  - 1: 2026-01-14 Previous summary...
+  - v2: 2026-01-14 Previous summary...
 next:
-  - 3: 2026-01-16 Next summary...
+  - v0 (current)
 ---
 ```
+
+Version numbers in output are **offsets**: v0 = current, v1 = previous, v2 = two versions ago.
 
 With `--json`:
 ```json
@@ -61,6 +64,11 @@ keep --ids system | xargs keep get
 keep --ids find "auth" | xargs keep get
 keep --ids tag project=foo | xargs keep tag-update --tag status=done
 keep --json --ids find "query"  # JSON array of IDs: ["id1", "id2"]
+
+# Version history composition
+keep --ids now --history | xargs -I{} keep get "{}"   # Get all versions
+keep list | xargs -I{} keep get "{}"                   # Get details for recent items
+diff <(keep get doc:1) <(keep get "doc:1@V{1}")        # Diff current vs previous
 ```
 
 ## CLI
@@ -78,11 +86,13 @@ keep now --history                   # List all versions
 # Get with versioning
 keep get ID                          # Current version with prev nav
 keep get ID -V 1                     # Previous version with prev/next nav
+keep get "ID@V{1}"                   # Same as -V 1 (version identifier syntax)
 keep get ID --history                # List all versions
 
-# List recent items
-keep list                            # Show 10 most recent items
-keep list -n 20                      # Show 20 most recent items
+# List recent items (IDs by default for composability - changed in 0.3.1)
+keep list                            # Show 10 most recent item IDs
+keep list -n 20                      # Show 20 most recent item IDs
+keep --full list                     # Show full items (pre-0.3.1 behavior)
 
 # Debug mode
 keep -v <cmd>                        # Enable debug logging to stderr
@@ -226,6 +236,18 @@ kp.query_fulltext("error", since="P3D")
 
 All documents retain history on update. Previous versions are archived automatically.
 
+### Version Identifiers
+
+Append `@V{N}` to any ID to specify a version by offset:
+- `ID@V{0}` — current version
+- `ID@V{1}` — previous version
+- `ID@V{2}` — two versions ago
+
+```bash
+keep get "doc:1@V{1}"          # Previous version of doc:1
+keep get "_now:default@V{2}"   # Two versions ago of nowdoc
+```
+
 ### Version Access
 ```python
 kp.get_version(id, offset=1)   # Previous version
@@ -235,8 +257,28 @@ kp.list_versions(id)           # All archived versions (newest first)
 
 ```bash
 keep get ID -V 1               # Previous version
+keep get "ID@V{1}"             # Same as -V 1
 keep get ID --history          # List all versions
 keep now -V 2                  # Two versions ago of nowdoc
+```
+
+### History Output
+
+`--history` shows versions using offset numbers:
+```
+v0 (current): Current summary...
+
+Archived:
+  v1 (2026-01-15): Previous summary...
+  v2 (2026-01-14): Older summary...
+```
+
+With `--ids`, outputs version identifiers for piping:
+```bash
+keep --ids now --history
+# _now:default@V{0}
+# _now:default@V{1}
+# _now:default@V{2}
 ```
 
 ### Content-Addressed IDs

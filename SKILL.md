@@ -244,7 +244,7 @@ Don't dump everything into context. Navigate the tree:
 | `find` | Semantic similarity search | `keep find "authentication flow" --limit 5` |
 | `find --id` | Find similar to existing item | `keep find --id "docid" --limit 3` |
 | `search` | Full-text search in summaries | `keep search "OAuth"` |
-| `list` | List recent items by update time | `keep list` or `keep list -n 20` |
+| `list` | List recent item IDs | `keep list` or `keep --full list` |
 | `update` | Index content (URI, text, or stdin) | `keep update "note" -t key=value` |
 | `get` | Retrieve item by ID | `keep get "file:///path/to/doc.md"` |
 | `get -V N` | Previous versions | `keep get ID -V 1` or `keep get ID --history` |
@@ -284,8 +284,8 @@ tags:
   project: myapp
 score: 0.823
 prev:
-  - 1: 2026-01-15 Previous summary...
-  - 2: 2026-01-14 Older summary...
+  - v1: 2026-01-15 Previous summary...
+  - v2: 2026-01-14 Older summary...
 ---
 Document summary here...
 ```
@@ -294,6 +294,7 @@ Global flags (before the command):
 ```bash
 keep --json find "auth"    # JSON output
 keep --ids find "auth"     # IDs only (for piping)
+keep --full list           # Full items (overrides IDs-only default)
 keep -v find "auth"        # Debug logging
 ```
 
