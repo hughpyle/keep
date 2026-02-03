@@ -22,6 +22,24 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+# Schema version for migrations
+SCHEMA_VERSION = 1
+
+
+@dataclass
+class VersionInfo:
+    """
+    Information about a document version.
+
+    Used for version navigation and history display.
+    """
+    version: int  # 1=oldest archived, increasing
+    summary: str
+    tags: dict[str, str]
+    created_at: str
+    content_hash: Optional[str] = None
+
+
 @dataclass
 class DocumentRecord:
     """
@@ -87,20 +105,57 @@ class DocumentStore:
         columns = {row[1] for row in cursor.fetchall()}
         if "content_hash" not in columns:
             self._conn.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT")
-        
+
         # Index for collection queries
         self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_documents_collection
             ON documents(collection)
         """)
-        
+
         # Index for timestamp queries
         self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_documents_updated
             ON documents(updated_at)
         """)
-        
+
         self._conn.commit()
+
+        # Run schema migrations
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        """
+        Run schema migrations using PRAGMA user_version.
+
+        Migrations:
+        - Version 0 → 1: Create document_versions table
+        """
+        cursor = self._conn.execute("PRAGMA user_version")
+        current_version = cursor.fetchone()[0]
+
+        if current_version < 1:
+            # Create versions table for document history
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS document_versions (
+                    id TEXT NOT NULL,
+                    collection TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    summary TEXT NOT NULL,
+                    tags_json TEXT NOT NULL,
+                    content_hash TEXT,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (id, collection, version)
+                )
+            """)
+
+            # Index for efficient version lookups
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_versions_doc
+                ON document_versions(id, collection, version DESC)
+            """)
+
+            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self._conn.commit()
     
     def _now(self) -> str:
         """Current timestamp in ISO format."""
@@ -139,11 +194,12 @@ class DocumentStore:
         summary: str,
         tags: dict[str, str],
         content_hash: Optional[str] = None,
-    ) -> DocumentRecord:
+    ) -> tuple[DocumentRecord, bool]:
         """
         Insert or update a document record.
 
         Preserves created_at on update. Updates updated_at always.
+        Archives the current version to history before updating.
 
         Args:
             collection: Collection name
@@ -153,15 +209,27 @@ class DocumentStore:
             content_hash: SHA256 hash of content (for change detection)
 
         Returns:
-            The stored DocumentRecord
+            Tuple of (stored DocumentRecord, content_changed bool).
+            content_changed is True if content hash differs from previous,
+            False if only tags/summary changed or if new document.
         """
         now = self._now()
         tags_json = json.dumps(tags, ensure_ascii=False)
 
         with self._lock:
-            # Check if exists to preserve created_at
+            # Check if exists to preserve created_at and archive
             existing = self._get_unlocked(collection, id)
             created_at = existing.created_at if existing else now
+            content_changed = False
+
+            if existing:
+                # Archive current version before updating
+                self._archive_current_unlocked(collection, id, existing)
+                # Detect content change
+                content_changed = (
+                    content_hash is not None
+                    and existing.content_hash != content_hash
+                )
 
             self._conn.execute("""
                 INSERT OR REPLACE INTO documents
@@ -178,7 +246,51 @@ class DocumentStore:
             created_at=created_at,
             updated_at=now,
             content_hash=content_hash,
-        )
+        ), content_changed
+
+    def _archive_current_unlocked(
+        self,
+        collection: str,
+        id: str,
+        current: DocumentRecord,
+    ) -> int:
+        """
+        Archive the current version to the versions table.
+
+        Must be called within a lock context.
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+            current: Current document record to archive
+
+        Returns:
+            The version number assigned to the archived version
+        """
+        # Get the next version number
+        cursor = self._conn.execute("""
+            SELECT COALESCE(MAX(version), 0) + 1
+            FROM document_versions
+            WHERE id = ? AND collection = ?
+        """, (id, collection))
+        next_version = cursor.fetchone()[0]
+
+        # Insert the current state as a version
+        self._conn.execute("""
+            INSERT INTO document_versions
+            (id, collection, version, summary, tags_json, content_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            id,
+            collection,
+            next_version,
+            current.summary,
+            json.dumps(current.tags, ensure_ascii=False),
+            current.content_hash,
+            current.updated_at,  # Use updated_at as the version's timestamp
+        ))
+
+        return next_version
     
     def update_summary(self, collection: str, id: str, summary: str) -> bool:
         """
@@ -236,13 +348,14 @@ class DocumentStore:
 
         return cursor.rowcount > 0
     
-    def delete(self, collection: str, id: str) -> bool:
+    def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         """
-        Delete a document record.
+        Delete a document record and optionally its version history.
 
         Args:
             collection: Collection name
             id: Document identifier
+            delete_versions: If True, also delete version history
 
         Returns:
             True if document existed and was deleted
@@ -252,6 +365,13 @@ class DocumentStore:
                 DELETE FROM documents
                 WHERE id = ? AND collection = ?
             """, (id, collection))
+
+            if delete_versions:
+                self._conn.execute("""
+                    DELETE FROM document_versions
+                    WHERE id = ? AND collection = ?
+                """, (id, collection))
+
             self._conn.commit()
 
         return cursor.rowcount > 0
@@ -290,7 +410,185 @@ class DocumentStore:
             updated_at=row["updated_at"],
             content_hash=row["content_hash"],
         )
-    
+
+    def get_version(
+        self,
+        collection: str,
+        id: str,
+        offset: int = 0,
+    ) -> Optional[VersionInfo]:
+        """
+        Get a specific version of a document by offset.
+
+        Offset semantics:
+        - 0 = current version (returns None, use get() instead)
+        - 1 = previous version (most recent archived)
+        - 2 = two versions ago
+        - etc.
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+            offset: Version offset (0=current, 1=previous, etc.)
+
+        Returns:
+            VersionInfo if found, None if offset 0 or version doesn't exist
+        """
+        if offset == 0:
+            # Offset 0 means current - caller should use get()
+            return None
+
+        # Get max version to calculate the target
+        cursor = self._conn.execute("""
+            SELECT MAX(version) FROM document_versions
+            WHERE id = ? AND collection = ?
+        """, (id, collection))
+        max_version = cursor.fetchone()[0]
+
+        if max_version is None:
+            return None  # No versions archived
+
+        # offset=1 → max_version, offset=2 → max_version-1, etc.
+        target_version = max_version - (offset - 1)
+
+        if target_version < 1:
+            return None  # Requested version doesn't exist
+
+        cursor = self._conn.execute("""
+            SELECT version, summary, tags_json, content_hash, created_at
+            FROM document_versions
+            WHERE id = ? AND collection = ? AND version = ?
+        """, (id, collection, target_version))
+
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        return VersionInfo(
+            version=row["version"],
+            summary=row["summary"],
+            tags=json.loads(row["tags_json"]),
+            created_at=row["created_at"],
+            content_hash=row["content_hash"],
+        )
+
+    def list_versions(
+        self,
+        collection: str,
+        id: str,
+        limit: int = 10,
+    ) -> list[VersionInfo]:
+        """
+        List version history for a document.
+
+        Returns versions in reverse chronological order (newest first).
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+            limit: Maximum versions to return
+
+        Returns:
+            List of VersionInfo, newest archived first
+        """
+        cursor = self._conn.execute("""
+            SELECT version, summary, tags_json, content_hash, created_at
+            FROM document_versions
+            WHERE id = ? AND collection = ?
+            ORDER BY version DESC
+            LIMIT ?
+        """, (id, collection, limit))
+
+        versions = []
+        for row in cursor:
+            versions.append(VersionInfo(
+                version=row["version"],
+                summary=row["summary"],
+                tags=json.loads(row["tags_json"]),
+                created_at=row["created_at"],
+                content_hash=row["content_hash"],
+            ))
+
+        return versions
+
+    def get_version_nav(
+        self,
+        collection: str,
+        id: str,
+        current_version: Optional[int] = None,
+        limit: int = 3,
+    ) -> dict[str, list[VersionInfo]]:
+        """
+        Get version navigation info (prev/next) for display.
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+            current_version: The version being viewed (None = current/live version)
+            limit: Max previous versions to return when viewing current
+
+        Returns:
+            Dict with 'prev' and optionally 'next' lists of VersionInfo.
+            When viewing current (None): {'prev': [up to limit versions]}
+            When viewing old version N: {'prev': [N-1 if exists], 'next': [N+1 if exists]}
+        """
+        result: dict[str, list[VersionInfo]] = {"prev": []}
+
+        if current_version is None:
+            # Viewing current version: get up to `limit` previous versions
+            versions = self.list_versions(collection, id, limit=limit)
+            result["prev"] = versions
+        else:
+            # Viewing an old version: get prev (N-1) and next (N+1)
+            # Previous version (older)
+            if current_version > 1:
+                cursor = self._conn.execute("""
+                    SELECT version, summary, tags_json, content_hash, created_at
+                    FROM document_versions
+                    WHERE id = ? AND collection = ? AND version = ?
+                """, (id, collection, current_version - 1))
+                row = cursor.fetchone()
+                if row:
+                    result["prev"] = [VersionInfo(
+                        version=row["version"],
+                        summary=row["summary"],
+                        tags=json.loads(row["tags_json"]),
+                        created_at=row["created_at"],
+                        content_hash=row["content_hash"],
+                    )]
+
+            # Next version (newer)
+            cursor = self._conn.execute("""
+                SELECT version, summary, tags_json, content_hash, created_at
+                FROM document_versions
+                WHERE id = ? AND collection = ? AND version = ?
+            """, (id, collection, current_version + 1))
+            row = cursor.fetchone()
+            if row:
+                result["next"] = [VersionInfo(
+                    version=row["version"],
+                    summary=row["summary"],
+                    tags=json.loads(row["tags_json"]),
+                    created_at=row["created_at"],
+                    content_hash=row["content_hash"],
+                )]
+            else:
+                # Check if there's a current version (meaning we're at newest archived)
+                if self.exists(collection, id):
+                    # Next is "current" - indicate this with empty next
+                    # (caller knows to check current doc)
+                    result["next"] = []
+
+        return result
+
+    def version_count(self, collection: str, id: str) -> int:
+        """Count archived versions for a document."""
+        cursor = self._conn.execute("""
+            SELECT COUNT(*) FROM document_versions
+            WHERE id = ? AND collection = ?
+        """, (id, collection))
+        return cursor.fetchone()[0]
+
     def get_many(
         self,
         collection: str,

@@ -114,6 +114,7 @@ from .providers.base import (
     SummarizationProvider,
 )
 from .providers.embedding_cache import CachingEmbeddingProvider
+from .document_store import VersionInfo
 from .store import ChromaStore
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX
 
@@ -190,6 +191,25 @@ def _get_env_tags() -> dict[str, str]:
 def _content_hash(content: str) -> str:
     """SHA256 hash of content for change detection."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _text_content_id(content: str) -> str:
+    """
+    Generate a content-addressed ID for text updates.
+
+    This makes text updates versioned by content:
+    - `keep update "my note"` → ID = _text:{hash[:12]}
+    - `keep update "my note" -t status=done` → same ID, new version
+    - `keep update "different note"` → different ID
+
+    Args:
+        content: The text content
+
+    Returns:
+        Content-addressed ID in format _text:{hash[:12]}
+    """
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+    return f"_text:{content_hash}"
 
 
 class Keeper:
@@ -516,14 +536,20 @@ class Keeper:
         if doc.content_type:
             merged_tags["_content_type"] = doc.content_type
 
+        # Get existing doc info for versioning before upsert
+        old_doc = self._document_store.get(coll, id)
+
         # Dual-write: document store (canonical) + ChromaDB (embedding index)
-        self._document_store.upsert(
+        # DocumentStore.upsert now returns (record, content_changed) and archives old version
+        doc_record, content_changed = self._document_store.upsert(
             collection=coll,
             id=id,
             summary=final_summary,
             tags=merged_tags,
             content_hash=new_hash,
         )
+
+        # Store embedding for current version
         self._store.upsert(
             collection=coll,
             id=id,
@@ -531,6 +557,23 @@ class Keeper:
             summary=final_summary,
             tags=merged_tags,
         )
+
+        # If content changed and we archived a version, also store versioned embedding
+        # Skip if content hash is same (only tags/summary changed)
+        if old_doc is not None and content_changed:
+            # Get the version number that was just archived
+            version_count = self._document_store.version_count(coll, id)
+            if version_count > 0:
+                # Re-embed the old content for the archived version
+                old_embedding = self._get_embedding_provider().embed(old_doc.summary)
+                self._store.upsert_version(
+                    collection=coll,
+                    id=id,
+                    version=version_count,
+                    embedding=old_embedding,
+                    summary=old_doc.summary,
+                    tags=old_doc.tags,
+                )
 
         # Spawn background processor if lazy (only if summary wasn't user-provided and content changed)
         if lazy and summary is None and not content_unchanged:
@@ -671,14 +714,20 @@ class Keeper:
         # Add system tags
         merged_tags["_source"] = "inline"
 
+        # Get existing doc info for versioning before upsert
+        old_doc = self._document_store.get(coll, id)
+
         # Dual-write: document store (canonical) + ChromaDB (embedding index)
-        self._document_store.upsert(
+        # DocumentStore.upsert now returns (record, content_changed) and archives old version
+        doc_record, content_changed = self._document_store.upsert(
             collection=coll,
             id=id,
             summary=final_summary,
             tags=merged_tags,
             content_hash=new_hash,
         )
+
+        # Store embedding for current version
         self._store.upsert(
             collection=coll,
             id=id,
@@ -686,6 +735,23 @@ class Keeper:
             summary=final_summary,
             tags=merged_tags,
         )
+
+        # If content changed and we archived a version, also store versioned embedding
+        # Skip if content hash is same (only tags/summary changed)
+        if old_doc is not None and content_changed:
+            # Get the version number that was just archived
+            version_count = self._document_store.version_count(coll, id)
+            if version_count > 0:
+                # Re-embed the old content for the archived version
+                old_embedding = self._get_embedding_provider().embed(old_doc.summary)
+                self._store.upsert_version(
+                    collection=coll,
+                    id=id,
+                    version=version_count,
+                    embedding=old_embedding,
+                    summary=old_doc.summary,
+                    tags=old_doc.tags,
+                )
 
         # Spawn background processor if lazy and content was queued (only if content changed)
         if lazy and summary is None and len(content) > max_len and not content_unchanged:
@@ -993,7 +1059,95 @@ class Keeper:
         if result is None:
             return None
         return result.to_item()
-    
+
+    def get_version(
+        self,
+        id: str,
+        offset: int = 0,
+        *,
+        collection: Optional[str] = None,
+    ) -> Optional[Item]:
+        """
+        Get a specific version of a document by offset.
+
+        Offset semantics:
+        - 0 = current version
+        - 1 = previous version
+        - 2 = two versions ago
+        - etc.
+
+        Args:
+            id: Document identifier
+            offset: Version offset (0=current, 1=previous, etc.)
+            collection: Target collection
+
+        Returns:
+            Item if found, None if version doesn't exist
+        """
+        coll = self._resolve_collection(collection)
+
+        if offset == 0:
+            # Current version
+            return self.get(id, collection=collection)
+
+        # Get archived version
+        version_info = self._document_store.get_version(coll, id, offset)
+        if version_info is None:
+            return None
+
+        return Item(
+            id=id,
+            summary=version_info.summary,
+            tags=version_info.tags,
+        )
+
+    def list_versions(
+        self,
+        id: str,
+        limit: int = 10,
+        *,
+        collection: Optional[str] = None,
+    ) -> list[VersionInfo]:
+        """
+        List version history for a document.
+
+        Returns versions in reverse chronological order (newest archived first).
+        Does not include the current version.
+
+        Args:
+            id: Document identifier
+            limit: Maximum versions to return
+            collection: Target collection
+
+        Returns:
+            List of VersionInfo, newest archived first
+        """
+        coll = self._resolve_collection(collection)
+        return self._document_store.list_versions(coll, id, limit)
+
+    def get_version_nav(
+        self,
+        id: str,
+        current_version: Optional[int] = None,
+        limit: int = 3,
+        *,
+        collection: Optional[str] = None,
+    ) -> dict[str, list[VersionInfo]]:
+        """
+        Get version navigation info (prev/next) for display.
+
+        Args:
+            id: Document identifier
+            current_version: The version being viewed (None = current/live version)
+            limit: Max previous versions to return when viewing current
+            collection: Target collection
+
+        Returns:
+            Dict with 'prev' and optionally 'next' lists of VersionInfo.
+        """
+        coll = self._resolve_collection(collection)
+        return self._document_store.get_version_nav(coll, id, current_version, limit)
+
     def exists(self, id: str, *, collection: Optional[str] = None) -> bool:
         """
         Check if an item exists in the store.
@@ -1002,16 +1156,28 @@ class Keeper:
         # Check document store first, then ChromaDB
         return self._document_store.exists(coll, id) or self._store.exists(coll, id)
     
-    def delete(self, id: str, *, collection: Optional[str] = None) -> bool:
+    def delete(
+        self,
+        id: str,
+        *,
+        collection: Optional[str] = None,
+        delete_versions: bool = True,
+    ) -> bool:
         """
         Delete an item from both stores.
 
-        Returns True if item existed and was deleted.
+        Args:
+            id: Document identifier
+            collection: Target collection
+            delete_versions: If True, also delete version history
+
+        Returns:
+            True if item existed and was deleted.
         """
         coll = self._resolve_collection(collection)
-        # Delete from both stores
-        doc_deleted = self._document_store.delete(coll, id)
-        chroma_deleted = self._store.delete(coll, id)
+        # Delete from both stores (including versions)
+        doc_deleted = self._document_store.delete(coll, id, delete_versions=delete_versions)
+        chroma_deleted = self._store.delete(coll, id, delete_versions=delete_versions)
         return doc_deleted or chroma_deleted
 
     # -------------------------------------------------------------------------

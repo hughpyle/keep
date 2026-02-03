@@ -16,7 +16,8 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from .api import Keeper
+from .api import Keeper, _text_content_id
+from .document_store import VersionInfo
 from .types import Item
 from .logging_config import configure_quiet_mode, enable_debug_mode
 
@@ -65,15 +66,53 @@ app = typer.Typer(
 )
 
 
-def _format_yaml_frontmatter(item: Item) -> str:
-    """Format item as YAML frontmatter with summary as content."""
+def _format_yaml_frontmatter(
+    item: Item,
+    version_nav: Optional[dict[str, list[VersionInfo]]] = None,
+    viewing_version: Optional[int] = None,
+) -> str:
+    """
+    Format item as YAML frontmatter with summary as content.
+
+    Args:
+        item: The item to format
+        version_nav: Optional version navigation info (prev/next lists)
+        viewing_version: If viewing an old version, the version number
+    """
     lines = ["---", f"id: {item.id}"]
+    if viewing_version is not None:
+        lines.append(f"version: {viewing_version}")
     if item.tags:
         lines.append("tags:")
         for k, v in sorted(item.tags.items()):
             lines.append(f"  {k}: {v}")
     if item.score is not None:
         lines.append(f"score: {item.score:.3f}")
+
+    # Add version navigation if available
+    if version_nav:
+        if version_nav.get("prev"):
+            lines.append("prev:")
+            for v in version_nav["prev"]:
+                # Show version number, date portion, and truncated summary
+                date_part = v.created_at[:10] if v.created_at else "unknown"
+                summary_preview = v.summary[:40].replace("\n", " ")
+                if len(v.summary) > 40:
+                    summary_preview += "..."
+                lines.append(f"  - {v.version}: {date_part} {summary_preview}")
+        if version_nav.get("next"):
+            lines.append("next:")
+            for v in version_nav["next"]:
+                date_part = v.created_at[:10] if v.created_at else "unknown"
+                summary_preview = v.summary[:40].replace("\n", " ")
+                if len(v.summary) > 40:
+                    summary_preview += "..."
+                lines.append(f"  - {v.version}: {date_part} {summary_preview}")
+        elif viewing_version is not None:
+            # Viewing old version and next is empty means current is next
+            lines.append("next:")
+            lines.append("  - current")
+
     lines.append("---")
     lines.append(item.summary)  # Summary IS the content
     return "\n".join(lines)
@@ -154,7 +193,12 @@ SinceOption = Annotated[
 # Output Helpers
 # -----------------------------------------------------------------------------
 
-def _format_item(item: Item, as_json: bool = False) -> str:
+def _format_item(
+    item: Item,
+    as_json: bool = False,
+    version_nav: Optional[dict[str, list[VersionInfo]]] = None,
+    viewing_version: Optional[int] = None,
+) -> str:
     """
     Format an item for display.
 
@@ -165,14 +209,23 @@ def _format_item(item: Item, as_json: bool = False) -> str:
         return json.dumps(item.id) if as_json else item.id
 
     if as_json:
-        return json.dumps({
+        result = {
             "id": item.id,
             "summary": item.summary,
             "tags": item.tags,
             "score": item.score,
-        })
+        }
+        if viewing_version is not None:
+            result["version"] = viewing_version
+        if version_nav:
+            result["version_nav"] = {
+                k: [{"version": v.version, "created_at": v.created_at, "summary": v.summary[:60]}
+                    for v in versions]
+                for k, versions in version_nav.items()
+            }
+        return json.dumps(result)
 
-    return _format_yaml_frontmatter(item)
+    return _format_yaml_frontmatter(item, version_nav, viewing_version)
 
 
 def _format_items(items: list[Item], as_json: bool = False) -> str:
@@ -446,9 +499,14 @@ def update(
 
     Three input modes (auto-detected):
       keep update file:///path       # URI mode: has ://
-      keep update "my note"          # Text mode: no ://
+      keep update "my note"          # Text mode: content-addressed ID
       keep update -                  # Stdin mode: explicit -
       echo "pipe" | keep update      # Stdin mode: piped input
+
+    Text mode uses content-addressed IDs for versioning:
+      keep update "my note"           # Creates _text:{hash}
+      keep update "my note" -t done   # Same ID, new version (tag change)
+      keep update "different note"    # Different ID (new doc)
     """
     kp = _get_keeper(store, collection)
     parsed_tags = _parse_tags(tags)
@@ -459,14 +517,16 @@ def update(
         content = sys.stdin.read()
         content, frontmatter_tags = _parse_frontmatter(content)
         parsed_tags = {**frontmatter_tags, **parsed_tags}  # CLI tags override
-        doc_id = id or f"mem:{_timestamp()}"
+        # Use content-addressed ID for stdin text (enables versioning)
+        doc_id = id or _text_content_id(content)
         item = kp.remember(content, id=doc_id, summary=summary, tags=parsed_tags or None, lazy=lazy)
     elif source and "://" in source:
         # URI mode: fetch from URI (ID is the URI itself)
         item = kp.update(source, tags=parsed_tags or None, summary=summary, lazy=lazy)
     elif source:
         # Text mode: inline content (no :// in source)
-        doc_id = id or f"mem:{_timestamp()}"
+        # Use content-addressed ID for text (enables versioning)
+        doc_id = id or _text_content_id(source)
         item = kp.remember(source, id=doc_id, summary=summary, tags=parsed_tags or None, lazy=lazy)
     else:
         typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
@@ -488,6 +548,14 @@ def now(
         "--reset",
         help="Reset to default from system"
     )] = False,
+    version: Annotated[Optional[int], typer.Option(
+        "--version", "-V",
+        help="Get specific version (0=current, 1=previous, etc.)"
+    )] = None,
+    history: Annotated[bool, typer.Option(
+        "--history", "-H",
+        help="List all versions"
+    )] = False,
     store: StoreOption = None,
     collection: CollectionOption = "default",
     tags: Annotated[Optional[list[str]], typer.Option(
@@ -503,11 +571,79 @@ def now(
 
     Examples:
         keep now                         # Show current context
-        keep now "Working on auth flow"  # Set context
-        keep now -f context.md           # Set from file
-        keep now --reset                 # Reset to default
+        keep now "What's important now"  # Update context
+        keep now -f context.md           # Read content from file
+        keep now --reset                 # Reset to default from system
+        keep now -V 1                    # Previous version
+        keep now --history               # List all versions
     """
+    from .api import NOWDOC_ID
+
     kp = _get_keeper(store, collection)
+
+    # Handle history listing
+    if history:
+        versions = kp.list_versions(NOWDOC_ID, limit=50, collection=collection)
+        current = kp.get(NOWDOC_ID, collection=collection)
+
+        if _get_json_output():
+            result = {
+                "id": NOWDOC_ID,
+                "current": {
+                    "summary": current.summary if current else None,
+                } if current else None,
+                "versions": [
+                    {
+                        "version": v.version,
+                        "summary": v.summary[:60],
+                        "created_at": v.created_at,
+                    }
+                    for v in versions
+                ],
+            }
+            typer.echo(json.dumps(result, indent=2))
+        else:
+            if current:
+                summary_preview = current.summary[:60].replace("\n", " ")
+                typer.echo(f"Current: {summary_preview}...")
+            if versions:
+                typer.echo(f"\nVersion history ({len(versions)} archived):")
+                for v in versions:
+                    date_part = v.created_at[:10] if v.created_at else "unknown"
+                    summary_preview = v.summary[:50].replace("\n", " ")
+                    if len(v.summary) > 50:
+                        summary_preview += "..."
+                    typer.echo(f"  v{v.version} ({date_part}): {summary_preview}")
+            else:
+                typer.echo("No version history.")
+        return
+
+    # Handle version retrieval
+    if version is not None:
+        offset = version
+        if offset == 0:
+            item = kp.get_now()
+            viewing_version = None
+        else:
+            item = kp.get_version(NOWDOC_ID, offset, collection=collection)
+            versions = kp.list_versions(NOWDOC_ID, limit=1, collection=collection)
+            if versions:
+                viewing_version = versions[0].version - (offset - 1)
+            else:
+                viewing_version = None
+
+        if item is None:
+            typer.echo(f"Version not found (offset {offset})", err=True)
+            raise typer.Exit(1)
+
+        version_nav = kp.get_version_nav(NOWDOC_ID, viewing_version, collection=collection)
+        typer.echo(_format_item(
+            item,
+            as_json=_get_json_output(),
+            version_nav=version_nav,
+            viewing_version=viewing_version,
+        ))
+        return
 
     # Determine if we're getting or setting
     setting = content is not None or file is not None or reset
@@ -515,7 +651,7 @@ def now(
     if setting:
         if reset:
             # Reset to default from system (delete first to clear old tags)
-            from .api import _load_frontmatter, NOWDOC_ID, SYSTEM_DOC_DIR
+            from .api import _load_frontmatter, SYSTEM_DOC_DIR
             kp.delete(NOWDOC_ID)
             try:
                 new_content, default_tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
@@ -545,28 +681,108 @@ def now(
         item = kp.set_now(new_content, tags=parsed_tags or None)
         typer.echo(_format_item(item, as_json=_get_json_output()))
     else:
-        # Get current context
+        # Get current context with version navigation
         item = kp.get_now()
-        typer.echo(_format_item(item, as_json=_get_json_output()))
+        version_nav = kp.get_version_nav(NOWDOC_ID, None, collection=collection)
+        typer.echo(_format_item(
+            item,
+            as_json=_get_json_output(),
+            version_nav=version_nav,
+        ))
 
 
 @app.command()
 def get(
     id: Annotated[str, typer.Argument(help="URI of item to retrieve")],
+    version: Annotated[Optional[int], typer.Option(
+        "--version", "-V",
+        help="Get specific version (0=current, 1=previous, etc.)"
+    )] = None,
+    history: Annotated[bool, typer.Option(
+        "--history", "-H",
+        help="List all versions"
+    )] = False,
     store: StoreOption = None,
     collection: CollectionOption = "default",
 ):
     """
     Retrieve a specific item by ID.
+
+    Examples:
+        keep get doc:1                  # Current version with prev nav
+        keep get doc:1 -V 1             # Previous version with prev/next nav
+        keep get doc:1 --history        # List all versions
     """
     kp = _get_keeper(store, collection)
-    item = kp.get(id)
+
+    if history:
+        # List all versions
+        versions = kp.list_versions(id, limit=50, collection=collection)
+        current = kp.get(id, collection=collection)
+
+        if _get_json_output():
+            result = {
+                "id": id,
+                "current": {
+                    "summary": current.summary if current else None,
+                    "tags": current.tags if current else {},
+                } if current else None,
+                "versions": [
+                    {
+                        "version": v.version,
+                        "summary": v.summary,
+                        "created_at": v.created_at,
+                    }
+                    for v in versions
+                ],
+            }
+            typer.echo(json.dumps(result, indent=2))
+        else:
+            if current:
+                typer.echo(f"Current: {current.summary[:60]}...")
+            if versions:
+                typer.echo(f"\nVersion history ({len(versions)} archived):")
+                for v in versions:
+                    date_part = v.created_at[:10] if v.created_at else "unknown"
+                    summary_preview = v.summary[:50].replace("\n", " ")
+                    if len(v.summary) > 50:
+                        summary_preview += "..."
+                    typer.echo(f"  v{v.version} ({date_part}): {summary_preview}")
+            else:
+                typer.echo("No version history.")
+        return
+
+    # Get specific version or current
+    offset = version if version is not None else 0
+
+    if offset == 0:
+        item = kp.get(id, collection=collection)
+        viewing_version = None
+    else:
+        item = kp.get_version(id, offset, collection=collection)
+        # Calculate actual version number for display
+        versions = kp.list_versions(id, limit=1, collection=collection)
+        if versions:
+            viewing_version = versions[0].version - (offset - 1)
+        else:
+            viewing_version = None
 
     if item is None:
-        typer.echo(f"Not found: {id}", err=True)
+        if offset > 0:
+            typer.echo(f"Version not found: {id} (offset {offset})", err=True)
+        else:
+            typer.echo(f"Not found: {id}", err=True)
         raise typer.Exit(1)
 
-    typer.echo(_format_item(item, as_json=_get_json_output()))
+    # Get version navigation
+    version_nav = kp.get_version_nav(id, viewing_version, collection=collection)
+
+    typer.echo(_format_item(
+        item,
+        as_json=_get_json_output(),
+        version_nav=version_nav,
+        viewing_version=viewing_version,
+    ))
 
 
 @app.command()

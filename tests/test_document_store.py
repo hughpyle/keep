@@ -23,17 +23,17 @@ class TestDocumentStoreBasics:
     
     def test_upsert_and_get(self, store: DocumentStore) -> None:
         """upsert() stores a document, get() retrieves it."""
-        record = store.upsert(
+        record, _ = store.upsert(
             collection="default",
             id="doc:1",
             summary="Test summary",
             tags={"topic": "testing"},
         )
-        
+
         assert record.id == "doc:1"
         assert record.summary == "Test summary"
         assert record.tags == {"topic": "testing"}
-        
+
         retrieved = store.get("default", "doc:1")
         assert retrieved is not None
         assert retrieved.id == "doc:1"
@@ -89,25 +89,25 @@ class TestTimestamps:
     
     def test_created_at_set_on_insert(self, store: DocumentStore) -> None:
         """created_at is set when first inserted."""
-        record = store.upsert("default", "doc:1", "Summary", {})
+        record, _ = store.upsert("default", "doc:1", "Summary", {})
         assert record.created_at is not None
         assert "T" in record.created_at  # ISO format
-    
+
     def test_updated_at_set_on_insert(self, store: DocumentStore) -> None:
         """updated_at is set when first inserted."""
-        record = store.upsert("default", "doc:1", "Summary", {})
+        record, _ = store.upsert("default", "doc:1", "Summary", {})
         assert record.updated_at is not None
-    
+
     def test_created_at_preserved_on_update(self, store: DocumentStore) -> None:
         """created_at is preserved when updated."""
-        original = store.upsert("default", "doc:1", "Original", {})
+        original, _ = store.upsert("default", "doc:1", "Original", {})
         original_created = original.created_at
-        
+
         import time
         time.sleep(0.01)  # Small delay to ensure different timestamp
-        
-        updated = store.upsert("default", "doc:1", "Updated", {})
-        
+
+        updated, _ = store.upsert("default", "doc:1", "Updated", {})
+
         assert updated.created_at == original_created
         assert updated.updated_at != original_created
 
@@ -281,8 +281,183 @@ class TestCollectionIsolation:
         """Delete in one collection doesn't affect others."""
         store.upsert("coll1", "doc:1", "Summary", {})
         store.upsert("coll2", "doc:1", "Summary", {})
-        
+
         store.delete("coll1", "doc:1")
-        
+
         assert store.exists("coll1", "doc:1") is False
         assert store.exists("coll2", "doc:1") is True
+
+
+class TestVersioning:
+    """Document versioning tests."""
+
+    @pytest.fixture
+    def store(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "documents.db"
+            with DocumentStore(db_path) as store:
+                yield store
+
+    def test_upsert_creates_version_on_content_change(self, store: DocumentStore) -> None:
+        """upsert() archives current version when content changes."""
+        # First insert
+        store.upsert("default", "doc:1", "Version 1", {"tag": "a"}, content_hash="hash1")
+
+        # Update with different content hash
+        store.upsert("default", "doc:1", "Version 2", {"tag": "b"}, content_hash="hash2")
+
+        # Check version was archived
+        versions = store.list_versions("default", "doc:1")
+        assert len(versions) == 1
+        assert versions[0].summary == "Version 1"
+        assert versions[0].tags == {"tag": "a"}
+
+        # Current should be updated
+        current = store.get("default", "doc:1")
+        assert current.summary == "Version 2"
+
+    def test_upsert_creates_version_on_tag_change_same_hash(self, store: DocumentStore) -> None:
+        """upsert() creates version even when only tags change (same content hash)."""
+        # First insert
+        store.upsert("default", "doc:1", "Content", {"status": "draft"}, content_hash="hash1")
+
+        # Update with same content hash but different tags
+        store.upsert("default", "doc:1", "Content", {"status": "done"}, content_hash="hash1")
+
+        # Version should still be created (for tag history)
+        versions = store.list_versions("default", "doc:1")
+        assert len(versions) == 1
+        assert versions[0].tags["status"] == "draft"
+
+        # Current should have new tags
+        current = store.get("default", "doc:1")
+        assert current.tags["status"] == "done"
+
+    def test_upsert_returns_content_changed_flag(self, store: DocumentStore) -> None:
+        """upsert() returns tuple with content_changed flag."""
+        # First insert - no previous content
+        _, content_changed = store.upsert("default", "doc:1", "V1", {}, content_hash="hash1")
+        assert content_changed is False  # No previous version
+
+        # Same hash - no content change
+        _, content_changed = store.upsert("default", "doc:1", "V1", {"tag": "new"}, content_hash="hash1")
+        assert content_changed is False
+
+        # Different hash - content changed
+        _, content_changed = store.upsert("default", "doc:1", "V2", {}, content_hash="hash2")
+        assert content_changed is True
+
+    def test_get_version_current_returns_none(self, store: DocumentStore) -> None:
+        """get_version() with offset=0 returns None (use get() instead)."""
+        store.upsert("default", "doc:1", "Content", {})
+        result = store.get_version("default", "doc:1", offset=0)
+        assert result is None
+
+    def test_get_version_previous(self, store: DocumentStore) -> None:
+        """get_version() retrieves previous versions by offset."""
+        # Create history
+        store.upsert("default", "doc:1", "V1", {}, content_hash="h1")
+        store.upsert("default", "doc:1", "V2", {}, content_hash="h2")
+        store.upsert("default", "doc:1", "V3", {}, content_hash="h3")
+
+        # offset=1 = previous (V2)
+        v = store.get_version("default", "doc:1", offset=1)
+        assert v is not None
+        assert v.summary == "V2"
+
+        # offset=2 = two ago (V1)
+        v = store.get_version("default", "doc:1", offset=2)
+        assert v is not None
+        assert v.summary == "V1"
+
+        # offset=3 = doesn't exist
+        v = store.get_version("default", "doc:1", offset=3)
+        assert v is None
+
+    def test_list_versions(self, store: DocumentStore) -> None:
+        """list_versions() returns versions newest first."""
+        store.upsert("default", "doc:1", "V1", {}, content_hash="h1")
+        store.upsert("default", "doc:1", "V2", {}, content_hash="h2")
+        store.upsert("default", "doc:1", "V3", {}, content_hash="h3")
+
+        versions = store.list_versions("default", "doc:1")
+        assert len(versions) == 2  # V1 and V2 archived, V3 is current
+        assert versions[0].summary == "V2"  # Newest archived first
+        assert versions[1].summary == "V1"
+
+    def test_list_versions_with_limit(self, store: DocumentStore) -> None:
+        """list_versions() respects limit."""
+        for i in range(5):
+            store.upsert("default", "doc:1", f"V{i+1}", {}, content_hash=f"h{i}")
+
+        versions = store.list_versions("default", "doc:1", limit=2)
+        assert len(versions) == 2
+
+    def test_get_version_nav_for_current(self, store: DocumentStore) -> None:
+        """get_version_nav() returns prev list when viewing current."""
+        store.upsert("default", "doc:1", "V1", {}, content_hash="h1")
+        store.upsert("default", "doc:1", "V2", {}, content_hash="h2")
+        store.upsert("default", "doc:1", "V3", {}, content_hash="h3")
+
+        nav = store.get_version_nav("default", "doc:1", current_version=None)
+        assert "prev" in nav
+        assert len(nav["prev"]) == 2
+        assert "next" not in nav or nav.get("next") == []
+
+    def test_get_version_nav_for_old_version(self, store: DocumentStore) -> None:
+        """get_version_nav() returns prev and next when viewing old version."""
+        store.upsert("default", "doc:1", "V1", {}, content_hash="h1")
+        store.upsert("default", "doc:1", "V2", {}, content_hash="h2")
+        store.upsert("default", "doc:1", "V3", {}, content_hash="h3")
+
+        # Viewing version 1 (oldest archived)
+        nav = store.get_version_nav("default", "doc:1", current_version=1)
+        assert nav["prev"] == []  # No older versions
+        assert len(nav.get("next", [])) == 1  # V2 is next
+
+        # Viewing version 2 (has both prev and next)
+        nav = store.get_version_nav("default", "doc:1", current_version=2)
+        assert len(nav["prev"]) == 1  # V1 is prev
+        # next is empty list meaning "current is next"
+        assert "next" in nav
+
+    def test_version_count(self, store: DocumentStore) -> None:
+        """version_count() returns correct count."""
+        assert store.version_count("default", "doc:1") == 0
+
+        store.upsert("default", "doc:1", "V1", {}, content_hash="h1")
+        assert store.version_count("default", "doc:1") == 0  # No archived yet
+
+        store.upsert("default", "doc:1", "V2", {}, content_hash="h2")
+        assert store.version_count("default", "doc:1") == 1
+
+        store.upsert("default", "doc:1", "V3", {}, content_hash="h3")
+        assert store.version_count("default", "doc:1") == 2
+
+    def test_delete_removes_versions(self, store: DocumentStore) -> None:
+        """delete() removes version history by default."""
+        store.upsert("default", "doc:1", "V1", {}, content_hash="h1")
+        store.upsert("default", "doc:1", "V2", {}, content_hash="h2")
+
+        store.delete("default", "doc:1")
+
+        assert store.version_count("default", "doc:1") == 0
+        assert store.list_versions("default", "doc:1") == []
+
+    def test_delete_preserves_versions_when_requested(self, store: DocumentStore) -> None:
+        """delete(delete_versions=False) preserves history."""
+        store.upsert("default", "doc:1", "V1", {}, content_hash="h1")
+        store.upsert("default", "doc:1", "V2", {}, content_hash="h2")
+
+        store.delete("default", "doc:1", delete_versions=False)
+
+        # Current deleted but versions preserved
+        assert store.get("default", "doc:1") is None
+        assert store.version_count("default", "doc:1") == 1
+
+    def test_first_upsert_no_version(self, store: DocumentStore) -> None:
+        """First upsert doesn't create a version (nothing to archive)."""
+        store.upsert("default", "doc:1", "First", {}, content_hash="h1")
+
+        versions = store.list_versions("default", "doc:1")
+        assert len(versions) == 0
