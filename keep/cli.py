@@ -989,25 +989,6 @@ def get(
     ))
 
 
-@app.command()
-def exists(
-    id: Annotated[str, typer.Argument(help="URI to check")],
-    store: StoreOption = None,
-    collection: CollectionOption = "default",
-):
-    """
-    Check if an item exists in the store.
-    """
-    kp = _get_keeper(store, collection)
-    found = kp.exists(id)
-    
-    if found:
-        typer.echo(f"Exists: {id}")
-    else:
-        typer.echo(f"Not found: {id}")
-        raise typer.Exit(1)
-
-
 @app.command("collections")
 def list_collections(
     store: StoreOption = None,
