@@ -20,6 +20,10 @@ from typing_extensions import Annotated
 # Pattern for version identifier suffix: @V{N} where N is digits only
 VERSION_SUFFIX_PATTERN = re.compile(r'@V\{(\d+)\}$')
 
+# URI scheme pattern per RFC 3986: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
+# Used to distinguish URIs from plain text in the update command
+_URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
+
 from .api import Keeper, _text_content_id
 from .document_store import VersionInfo
 from .types import Item
@@ -643,7 +647,7 @@ def update(
         # Use content-addressed ID for stdin text (enables versioning)
         doc_id = id or _text_content_id(content)
         item = kp.remember(content, id=doc_id, summary=summary, tags=parsed_tags or None, lazy=lazy)
-    elif source and "://" in source:
+    elif source and _URI_SCHEME_PATTERN.match(source):
         # URI mode: fetch from URI (ID is the URI itself)
         item = kp.update(source, tags=parsed_tags or None, summary=summary, lazy=lazy)
     elif source:
