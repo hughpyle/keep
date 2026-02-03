@@ -51,13 +51,15 @@ keep can automatically integrate with OpenClaw's configured models when both are
 
 ## Setup
 
+> **Note:** Use `uv tool install` or a virtual environment to avoid dependency conflicts.
+
 ### Option 1: Automatic (Recommended)
 
 If you already have OpenClaw configured:
 
 ```bash
 # 1. Install keep with Anthropic support
-pip install 'keep-skill[openclaw]'
+uv tool install 'keep-skill[openclaw]'
 
 # 2. Set your Anthropic API key
 export ANTHROPIC_API_KEY=sk-ant-...

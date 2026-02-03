@@ -14,10 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 # tomli_w for writing TOML (tomllib is read-only)
-try:
-    import tomli_w
-except ImportError:
-    tomli_w = None  # type: ignore
+import tomli_w
 
 
 CONFIG_FILENAME = "keep.toml"
@@ -387,9 +384,6 @@ def save_config(config: StoreConfig) -> None:
 
     Creates the directory if it doesn't exist.
     """
-    if tomli_w is None:
-        raise RuntimeError("tomli_w is required to save config. Install with: pip install tomli-w")
-
     # Ensure config directory exists
     config_location = config.config_dir if config.config_dir else config.path
     config_location.mkdir(parents=True, exist_ok=True)

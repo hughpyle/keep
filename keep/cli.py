@@ -17,7 +17,6 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-
 # Pattern for version identifier suffix: @V{N} where N is digits only
 VERSION_SUFFIX_PATTERN = re.compile(r'@V\{(\d+)\}$')
 
@@ -87,6 +86,7 @@ def _format_yaml_frontmatter(
     version_nav: Optional[dict[str, list[VersionInfo]]] = None,
     viewing_offset: Optional[int] = None,
     similar_items: Optional[list[Item]] = None,
+    similar_offsets: Optional[dict[str, int]] = None,
 ) -> str:
     """
     Format item as YAML frontmatter with summary as content.
@@ -96,6 +96,7 @@ def _format_yaml_frontmatter(
         version_nav: Optional version navigation info (prev/next lists)
         viewing_offset: If viewing an old version, the offset (1=previous, 2=two ago)
         similar_items: Optional list of similar items to display
+        similar_offsets: Version offsets for similar items (item.id -> offset)
 
     Note: Offset computation (v1, v2, etc.) assumes version_nav lists
     are ordered newest-first, matching list_versions() ordering.
@@ -110,17 +111,20 @@ def _format_yaml_frontmatter(
     if item.score is not None:
         lines.append(f"score: {item.score:.3f}")
 
-    # Add similar items if available
+    # Add similar items if available (version-scoped IDs with date and summary)
     if similar_items:
         lines.append("similar:")
         for sim_item in similar_items:
+            base_id = sim_item.tags.get("_base_id", sim_item.id)
+            offset = (similar_offsets or {}).get(sim_item.id, 0)
             score_str = f"({sim_item.score:.2f})" if sim_item.score else ""
+            date_part = sim_item.tags.get("_updated", sim_item.tags.get("_created", ""))[:10]
             summary_preview = sim_item.summary[:40].replace("\n", " ")
             if len(sim_item.summary) > 40:
                 summary_preview += "..."
-            lines.append(f"  - {sim_item.id} {score_str} {summary_preview}")
+            lines.append(f"  - {base_id}@V{{{offset}}} {score_str} {date_part} {summary_preview}")
 
-    # Add version navigation if available (using addressable ID format)
+    # Add version navigation (just @V{N} since ID is shown at top, with date + summary)
     if version_nav:
         # Current offset (0 if viewing current)
         current_offset = viewing_offset if viewing_offset is not None else 0
@@ -129,16 +133,24 @@ def _format_yaml_frontmatter(
             lines.append("prev:")
             for i, v in enumerate(version_nav["prev"]):
                 prev_offset = current_offset + i + 1
-                lines.append(f"  - {item.id}@V{{{prev_offset}}}")
+                date_part = v.created_at[:10] if v.created_at else ""
+                summary_preview = v.summary[:40].replace("\n", " ")
+                if len(v.summary) > 40:
+                    summary_preview += "..."
+                lines.append(f"  - @V{{{prev_offset}}} {date_part} {summary_preview}")
         if version_nav.get("next"):
             lines.append("next:")
             for i, v in enumerate(version_nav["next"]):
                 next_offset = current_offset - i - 1
-                lines.append(f"  - {item.id}@V{{{next_offset}}}")
+                date_part = v.created_at[:10] if v.created_at else ""
+                summary_preview = v.summary[:40].replace("\n", " ")
+                if len(v.summary) > 40:
+                    summary_preview += "..."
+                lines.append(f"  - @V{{{next_offset}}} {date_part} {summary_preview}")
         elif viewing_offset is not None:
             # Viewing old version and next is empty means current is next
             lines.append("next:")
-            lines.append(f"  - {item.id}@V{{0}}")
+            lines.append(f"  - @V{{0}}")
 
     lines.append("---")
     lines.append(item.summary)  # Summary IS the content
@@ -181,11 +193,13 @@ def main_callback(
         item = kp.get_now()
         version_nav = kp.get_version_nav(NOWDOC_ID, None, collection="default")
         similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection="default")
+        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
         typer.echo(_format_item(
             item,
             as_json=_get_json_output(),
             version_nav=version_nav,
             similar_items=similar_items,
+            similar_offsets=similar_offsets,
         ))
 
 
@@ -238,6 +252,7 @@ def _format_item(
     version_nav: Optional[dict[str, list[VersionInfo]]] = None,
     viewing_offset: Optional[int] = None,
     similar_items: Optional[list[Item]] = None,
+    similar_offsets: Optional[dict[str, int]] = None,
 ) -> str:
     """
     Format an item for display.
@@ -251,6 +266,7 @@ def _format_item(
         version_nav: Optional version navigation info (prev/next lists)
         viewing_offset: If viewing an old version, the offset (1=previous, 2=two ago)
         similar_items: Optional list of similar items to display
+        similar_offsets: Version offsets for similar items (item.id -> offset)
     """
     if _get_ids_output():
         return json.dumps(item.id) if as_json else item.id
@@ -267,7 +283,12 @@ def _format_item(
             result["vid"] = f"{item.id}@V{{{viewing_offset}}}"
         if similar_items:
             result["similar"] = [
-                {"id": s.id, "score": s.score, "summary": s.summary[:60]}
+                {
+                    "id": f"{s.tags.get('_base_id', s.id)}@V{{{(similar_offsets or {}).get(s.id, 0)}}}",
+                    "score": s.score,
+                    "date": s.tags.get("_updated", s.tags.get("_created", ""))[:10],
+                    "summary": s.summary[:60],
+                }
                 for s in similar_items
             ]
         if version_nav:
@@ -297,7 +318,7 @@ def _format_item(
                 result["version_nav"]["next"] = [{"offset": 0, "vid": f"{item.id}@V{{0}}", "label": "current"}]
         return json.dumps(result)
 
-    return _format_yaml_frontmatter(item, version_nav, viewing_offset, similar_items)
+    return _format_yaml_frontmatter(item, version_nav, viewing_offset, similar_items, similar_offsets)
 
 
 def _format_items(items: list[Item], as_json: bool = False) -> str:
@@ -410,7 +431,7 @@ def find(
 
 @app.command()
 def search(
-    query: Annotated[str, typer.Argument(help="Full-text search query")],
+    query: Annotated[str, typer.Argument(default=..., help="Full-text search query")],
     store: StoreOption = None,
     collection: CollectionOption = "default",
     limit: LimitOption = 10,
@@ -512,7 +533,7 @@ def tag(
 
 @app.command("tag-update")
 def tag_update(
-    ids: Annotated[list[str], typer.Argument(help="Document IDs to tag")],
+    ids: Annotated[list[str], typer.Argument(default=..., help="Document IDs to tag")],
     tags: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Tag as key=value (empty value removes: key=)"
@@ -800,17 +821,19 @@ def now(
         item = kp.get_now()
         version_nav = kp.get_version_nav(NOWDOC_ID, None, collection=collection)
         similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection=collection)
+        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
         typer.echo(_format_item(
             item,
             as_json=_get_json_output(),
             version_nav=version_nav,
             similar_items=similar_items,
+            similar_offsets=similar_offsets,
         ))
 
 
 @app.command()
 def get(
-    id: Annotated[str, typer.Argument(help="URI of item (append @V{N} for version)")],
+    id: Annotated[str, typer.Argument(default=..., help="URI of item (append @V{N} for version)")],
     version: Annotated[Optional[int], typer.Option(
         "--version", "-V",
         help="Get specific version (0=current, 1=previous, etc.)"
@@ -920,18 +943,22 @@ def get(
     if similar:
         # List similar items
         similar_items = kp.get_similar_for_display(actual_id, limit=limit, collection=collection)
+        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
 
         if _get_ids_output():
-            # Output IDs one per line
+            # Output version-scoped IDs one per line
             for item in similar_items:
-                typer.echo(item.id)
+                base_id = item.tags.get("_base_id", item.id)
+                offset = similar_offsets.get(item.id, 0)
+                typer.echo(f"{base_id}@V{{{offset}}}")
         elif _get_json_output():
             result = {
                 "id": actual_id,
                 "similar": [
                     {
-                        "id": item.id,
+                        "id": f"{item.tags.get('_base_id', item.id)}@V{{{similar_offsets.get(item.id, 0)}}}",
                         "score": item.score,
+                        "date": item.tags.get("_updated", item.tags.get("_created", ""))[:10],
                         "summary": item.summary[:60],
                     }
                     for item in similar_items
@@ -942,11 +969,14 @@ def get(
             typer.echo(f"Similar to {actual_id}:")
             if similar_items:
                 for item in similar_items:
+                    base_id = item.tags.get("_base_id", item.id)
+                    offset = similar_offsets.get(item.id, 0)
                     score_str = f"({item.score:.2f})" if item.score else ""
+                    date_part = item.tags.get("_updated", item.tags.get("_created", ""))[:10]
                     summary_preview = item.summary[:50].replace("\n", " ")
                     if len(item.summary) > 50:
                         summary_preview += "..."
-                    typer.echo(f"  {item.id} {score_str} {summary_preview}")
+                    typer.echo(f"  {base_id}@V{{{offset}}} {score_str} {date_part} {summary_preview}")
             else:
                 typer.echo("  No similar items found.")
         return
@@ -978,8 +1008,10 @@ def get(
 
     # Get similar items (unless suppressed or viewing old version)
     similar_items = None
+    similar_offsets = None
     if not no_similar and offset == 0:
         similar_items = kp.get_similar_for_display(actual_id, limit=3, collection=collection)
+        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
 
     typer.echo(_format_item(
         item,
@@ -987,6 +1019,7 @@ def get(
         version_nav=version_nav,
         viewing_offset=offset if offset > 0 else None,
         similar_items=similar_items,
+        similar_offsets=similar_offsets,
     ))
 
 

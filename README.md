@@ -5,7 +5,7 @@
 Index documents and notes. Search by meaning. Track changes over time.
 
 ```bash
-pip install 'keep-skill[local]'
+uv tool install 'keep-skill[local]'
 keep init
 
 # Index content
@@ -39,15 +39,19 @@ Backed by ChromaDB for vectors, SQLite for metadata and versions.
 **Python 3.11–3.13 required.**
 
 ```bash
-# Recommended: local models (works offline)
-pip install 'keep-skill[local]'
-
-# Or with uv (faster):
+# Recommended: uv (isolated environment, fast)
 uv tool install 'keep-skill[local]'
 
-# API-based alternative (requires OPENAI_API_KEY)
-pip install 'keep-skill[openai]'
+# Alternative: pip in a virtual environment
+python -m venv .venv && source .venv/bin/activate
+pip install 'keep-skill[local]'
+
+# API-based (requires OPENAI_API_KEY)
+uv tool install 'keep-skill[openai]'
 ```
+
+> **Note:** Always use an isolated environment (uv or venv). Installing with system pip
+> may cause version conflicts with dependencies like typer.
 
 First run downloads embedding models (~3-5 minutes).
 

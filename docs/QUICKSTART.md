@@ -3,14 +3,15 @@
 ## Installation
 
 ```bash
-# Recommended: Local models (works offline)
+# Recommended: uv (isolated environment, fast)
+uv tool install 'keep-skill[local]'
+
+# Alternative: pip in a virtual environment
+python -m venv .venv && source .venv/bin/activate
 pip install 'keep-skill[local]'
 
 # API-based: OpenAI (requires OPENAI_API_KEY)
-pip install 'keep-skill[openai]'
-
-# Minimal: Core only (configure providers manually)
-pip install keep-skill
+uv tool install 'keep-skill[openai]'
 ```
 
 ## Initialize
