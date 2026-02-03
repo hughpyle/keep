@@ -352,6 +352,25 @@ def search(
     typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
+@app.command("list")
+def list_recent(
+    store: StoreOption = None,
+    collection: CollectionOption = "default",
+    limit: Annotated[int, typer.Option(
+        "--limit", "-n",
+        help="Number of items to show"
+    )] = 10,
+):
+    """
+    List recent items by update time.
+
+    Shows the most recently updated items, newest first.
+    """
+    kp = _get_keeper(store, collection)
+    results = kp.list_recent(limit=limit)
+    typer.echo(_format_items(results, as_json=_get_json_output()))
+
+
 @app.command()
 def tag(
     query: Annotated[Optional[str], typer.Argument(

@@ -1323,7 +1323,7 @@ class Keeper:
     def count(self, *, collection: Optional[str] = None) -> int:
         """
         Count items in a collection.
-        
+
         Returns count from document store if available, else ChromaDB.
         """
         coll = self._resolve_collection(collection)
@@ -1331,7 +1331,36 @@ class Keeper:
         if doc_count > 0:
             return doc_count
         return self._store.count(coll)
-    
+
+    def list_recent(
+        self,
+        limit: int = 10,
+        *,
+        collection: Optional[str] = None,
+    ) -> list[Item]:
+        """
+        List recent items ordered by update time.
+
+        Args:
+            limit: Maximum number to return (default 10)
+            collection: Collection to query (uses default if not specified)
+
+        Returns:
+            List of Items, most recently updated first
+        """
+        coll = self._resolve_collection(collection)
+        records = self._document_store.list_recent(coll, limit)
+
+        return [
+            Item(
+                id=rec.id,
+                summary=rec.summary,
+                tags=rec.tags,
+                score=None,
+            )
+            for rec in records
+        ]
+
     def embedding_cache_stats(self) -> dict:
         """
         Get embedding cache statistics.

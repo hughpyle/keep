@@ -19,6 +19,7 @@ Every stored item has:
 - **Embedding**: Vector representation (for semantic search)
 - **Tags**: Key-value metadata (for filtering)
 - **Timestamps**: Created/updated (auto-managed)
+- **Version History**: Previous versions archived automatically on update
 
 The original document content is **not stored** — only the summary and embedding.
 
@@ -28,22 +29,22 @@ The original document content is **not stored** — only the summary and embeddi
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  API Layer (api.py)                                          │
-│  - Keeper class                                   │
-│  - High-level operations: update(), remember() (API), find() │
+│  API Layer (api.py)                                         │
+│  - Keeper class                                             │
+│  - High-level operations: update(), remember(), find()      │
+│  - Version management: get_version(), list_versions()       │
 └──────────────────┬──────────────────────────────────────────┘
                    │
-        ┌──────────┼──────────┬──────────────┐
-        │          │          │              │
-        ▼          ▼          ▼              ▼
-   ┌────────┐ ┌─────────┐ ┌──────────┐ ┌─────────┐
-   │Document│ │Embedding│ │Summary   │ │Vector   │
-   │Provider│ │Provider │ │Provider  │ │Store    │
-   └────────┘ └─────────┘ └──────────┘ └─────────┘
-       │          │            │             │
-       │          │            │             │
-   fetch()    embed()     summarize()   upsert()/
-   from URI   text→vec   text→summary   query()
+        ┌──────────┼──────────┬──────────────┬───────────┐
+        │          │          │              │           │
+        ▼          ▼          ▼              ▼           ▼
+   ┌────────┐ ┌─────────┐ ┌──────────┐ ┌─────────┐ ┌─────────┐
+   │Document│ │Embedding│ │Summary   │ │Vector   │ │Document │
+   │Provider│ │Provider │ │Provider  │ │Store    │ │Store    │
+   └────────┘ └─────────┘ └──────────┘ └─────────┘ └─────────┘
+       │          │            │             │           │
+   fetch()    embed()     summarize()   vectors/    summaries/
+   from URI   text→vec   text→summary   search      versions
 ```
 
 ### Components
@@ -53,10 +54,15 @@ The original document content is **not stored** — only the summary and embeddi
 - Coordinates providers and store
 - Implements query operations with recency decay
 
-**[store.py](keep/store.py)** — Persistence layer
+**[store.py](keep/store.py)** — Vector persistence
 - `ChromaStore` wraps ChromaDB
 - Handles vector storage, similarity search, metadata queries
-- Automatic timestamp management
+- Versioned embeddings: `{id}@v{version}` for history
+
+**[document_store.py](keep/document_store.py)** — Document persistence
+- `DocumentStore` wraps SQLite
+- Stores summaries, tags, timestamps
+- Version history: archives previous versions on update
 
 **[providers/](keep/providers/)** — Pluggable services
 - **Document**: Fetch content from URIs (file://, https://)
@@ -95,16 +101,23 @@ URI or content
     │         │             │
     └────┬────┴─────────────┘
          │
-         ▼
-    ┌─────────────────┐
-    │ ChromaStore     │
-    │ upsert()        │
-    │ - embedding     │
-    │ - summary       │
-    │ - tags          │
-    │ - timestamps    │
-    └─────────────────┘
+    ┌────┴────────────────┐
+    │                     │
+    ▼                     ▼
+┌─────────────────┐  ┌─────────────────┐
+│ DocumentStore   │  │ ChromaStore     │
+│ upsert()        │  │ upsert()        │
+│ - summary       │  │ - embedding     │
+│ - tags          │  │ - summary       │
+│ - timestamps    │  │ - tags          │
+│ - archive prev  │  │ - version embed │
+└─────────────────┘  └─────────────────┘
 ```
+
+**Versioning on update:**
+- DocumentStore archives current version before updating
+- ChromaStore adds versioned embedding (`{id}@v{N}`) if content changed
+- Same content (hash match) skips duplicate embedding
 
 ### Retrieval: find(query)
 
@@ -165,18 +178,28 @@ query text
 - Source tags filtered before storage
 - Prevents user override of timestamps, etc.
 
+**7. Document Versioning**
+- All documents retain history automatically on update
+- Previous versions archived in SQLite `document_versions` table
+- Content-addressed IDs for text updates enable versioning via tag changes
+- Embeddings stored for all versions (enables temporal search)
+- No auto-pruning: history preserved indefinitely
+
 ---
 
 ## Storage Layout
 
 ```
 store_path/
-├── keep.toml           # Provider configuration
-├── chroma/                 # ChromaDB persistence
+├── keep.toml               # Provider configuration
+├── chroma/                 # ChromaDB persistence (vectors + metadata)
 │   └── [collection]/       # One collection = one namespace
 │       ├── embeddings
 │       ├── metadata
 │       └── documents
+├── document_store.db       # SQLite store (summaries, tags, versions)
+│   ├── documents           # Current version of each document
+│   └── document_versions   # Archived previous versions
 └── embedding_cache.db      # SQLite cache for embeddings
 ```
 
@@ -279,6 +302,11 @@ Fetch content from URIs.
 - Data types (Item, filtering)
 - Context dataclasses
 - No external dependencies
+
+**Document Store Tests**: [tests/test_document_store.py](tests/test_document_store.py)
+- SQLite persistence
+- Version history (archive, retrieval, navigation)
+- Schema migration
 
 **Integration Tests**: [tests/test_integration.py](tests/test_integration.py)
 - End-to-end: remember → find

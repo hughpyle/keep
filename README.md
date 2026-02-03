@@ -1,106 +1,83 @@
 # keep
 
-**Associative memory for reflection and skillful action.**
+**Semantic memory with version history.**
+
+Index documents and notes. Search by meaning. Track changes over time.
+
+```bash
+pip install 'keep-skill[local]'
+keep init
+
+# Index content
+keep update path/to/document.md -t project=myapp
+keep update "Rate limit is 100 req/min" -t topic=api
+
+# Search by meaning
+keep find "what's the rate limit?"
+
+# Track what you're working on
+keep now "Debugging auth flow"
+keep now -V 1                    # Previous context
+```
 
 ---
 
-## What is this?
+## What It Does
 
-An agent skill.  A practice tool for agents who want to develop judgment.
+- **Semantic search** — Find by meaning, not just keywords
+- **Version history** — All documents retain history on update
+- **Tag organization** — Filter and navigate with key=value tags
+- **Recency decay** — Recent items rank higher in search
+- **Works offline** — Local embedding models by default
 
-An agent who rushes to act without checking memory will repeat mistakes, miss context, and fail to grow. An agent who reflects — before, during, after — becomes skillful. This library provides the mirror: persistent semantic memory that lets you ask "what do I already know?" before acting, and "what did I learn?" after.
+Backed by ChromaDB for vectors, SQLite for metadata and versions.
 
-For the full practice guide, see **[SKILL.md](SKILL.md)**.
+---
 
-Technically: semantic search using embeddings, backed by ChromaDB, with tag-based organization and recency decay. Available as CLI and Python API.
+## Installation
+
+**Python 3.11–3.13 required.**
 
 ```bash
-# Before acting: what do I already know?
-keep find "how should we handle auth?"
+# Recommended: local models (works offline)
+pip install 'keep-skill[local]'
 
-# After learning: capture it for future you
-keep update "User prefers OAuth2 with PKCE for authentication"
+# Or with uv (faster):
+uv tool install 'keep-skill[local]'
+
+# API-based alternative (requires OPENAI_API_KEY)
+pip install 'keep-skill[openai]'
 ```
 
-**The practice:**
-- Pause before acting — check what you already know
-- Notice breakdowns — when assumptions surface, that's valuable
-- Reflect after — capture learnings so future you can find them
-
-**The technology:**
-- Semantic search (by meaning, not keywords)
-- Persistent across sessions (ChromaDB)
-- Tag-based organization and filtering
-- Recency decay (recent items rank higher)
-- Provider abstraction (local models or APIs)
-- CLI and Python API
+First run downloads embedding models (~3-5 minutes).
 
 ---
 
 ## Quick Start
 
-### Requirements
-
-- **Python:** 3.11, 3.12, or 3.13 (3.14+ not yet supported due to dependency constraints)
-- **Installation time:** 3-5 minutes (ChromaDB dependency resolution + embedding model downloads)
-
-### Installation
-
-#### For users (just want the `keep` command)
-
 ```bash
-# With pip:
-pip install 'keep-skill[local]'
+keep init                              # Creates .keep/ at repo root
 
-# Or with uv (faster, auto-manages isolated environment):
-# Install uv first: https://docs.astral.sh/uv/getting-started/installation/
-uv tool install 'keep-skill[local]'
-```
+# Index files and notes
+keep update file:///path/to/doc.md -t project=myapp
+keep update "Important insight" -t type=note
 
-#### For developers (working on keep itself)
+# Search
+keep find "authentication flow" --limit 5
+keep find "auth" --since P7D           # Last 7 days
 
-```bash
-git clone https://github.com/hughpyle/keep
-cd keep
+# Retrieve
+keep get file:///path/to/doc.md
+keep get ID -V 1                       # Previous version
+keep get ID --history                  # All versions
 
-# Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# Tags
+keep tag project=myapp                 # Find by tag
+keep tag --list                        # List all tags
 
-# Install in editable mode with local models
-pip install -e '.[local,dev]'
-
-# Or with uv (faster):
-uv pip install -e '.[local,dev]'
-```
-
-#### Optional extras
-
-```bash
-# OpenClaw integration (uses your configured models):
-pip install 'keep-skill[openclaw]'
-
-# Minimal install (configure providers manually):
-pip install keep-skill
-```
-
-**After installation:**
-
-```bash
-keep init
-# ⚠️  Remember to add .keep/ to .gitignore
-
-# Index a file
-keep update path/to/document.md --tag project=myapp
-
-# Store inline content
-keep update "Important: rate limit is 100 req/min" --tag topic=api
-
-# Semantic search
-keep find "what's the rate limit?"
-
-# Tag lookup
-keep tag topic=api
+# Current context
+keep now                               # Show what you're working on
+keep now "Fixing login bug"            # Update context
 ```
 
 ### Python API
@@ -110,118 +87,65 @@ from keep import Keeper
 
 kp = Keeper()
 
-# Index a file
-kp.update("file:///path/to/document.md", tags={"project": "myapp"})
+# Index
+kp.update("file:///path/to/doc.md", tags={"project": "myapp"})
+kp.remember("Rate limit is 100 req/min", tags={"topic": "api"})
 
-# Store inline content (API method)
-kp.remember("Important: rate limit is 100 req/min", tags={"topic": "api"})
-
-# Semantic search
-results = kp.find("what's the rate limit?", limit=5)
+# Search
+results = kp.find("rate limit", limit=5)
 for r in results:
     print(f"[{r.score:.2f}] {r.summary}")
 
-# Tag lookup
-api_docs = kp.query_tag("topic", "api")
+# Version history
+prev = kp.get_version("doc:1", offset=1)
+versions = kp.list_versions("doc:1")
 ```
 
-See [docs/QUICKSTART.md](docs/QUICKSTART.md) for more examples.
-
----
-
-## OpenClaw Integration
-
-If you have [OpenClaw](https://openclaw.dev) configured, keep automatically uses your configured models:
-
-```bash
-# Install with OpenClaw support
-pip install 'keep-skill[openclaw]'
-
-# Set your Anthropic API key (if using Claude models)
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Initialize (auto-detects ~/.openclaw/openclaw.json)
-keep init
-# ✓ Detected providers:
-#   Embedding: sentence-transformers (local)
-#   Summarization: anthropic (claude-sonnet-4)
-```
-
-**Benefits:**
-- 🔄 Unified model configuration (DRY principle)
-- 🧠 Best of both: local embeddings + smart summarization
-- 🔒 Privacy-preserving (embeddings stay local)
-- 💰 Cost-effective (~$0.0001/document)
-
-See [docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md) for details.
+See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples.
 
 ---
 
 ## Documentation
 
-- **[SKILL.md](SKILL.md)** — The practice guide (start here for how to use memory skillfully)
-- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Installation, setup, configuration
-- **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Detailed agent patterns, Python API
-- **[docs/REFERENCE.md](docs/REFERENCE.md)** — Complete API reference
+- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Setup, configuration, lazy summarization
+- **[docs/REFERENCE.md](docs/REFERENCE.md)** — Complete CLI and API reference
+- **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Working session patterns
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — How it works under the hood
-- **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)** — OpenClaw integration guide
-- **[docs/system/](docs/system/)** — Domain and conversation patterns
+- **[SKILL.md](SKILL.md)** — The reflective practice (for AI agents)
 
 ---
 
-## Philosophy
+## For AI Agents
 
-### Practice
+This library was designed as an agent skill — persistent memory that helps agents reflect before acting and learn from experience.
 
-Memory isn't storage — it's a mirror for reflection.
+**The practice:**
+- Pause before acting — `keep find` what you already know
+- Notice breakdowns — when assumptions surface, index them
+- Reflect after — `keep update` learnings for future sessions
 
-The triple check: before acting (what do I know?), during (notice breakdowns), after (capture learning). Breakdowns are valuable — they reveal assumptions. Index them, don't hide them.
-
-An agent without memory reacts to each moment as if it were new. An agent with memory reflects, learns, and grows. See **[SKILL.md](SKILL.md)** for the full practice guide.
-
-### Technical Design
-
-**Schema as Data** — Configuration stored as queryable documents, not hardcoded.
-
-**Semantic by Default** — Search by meaning via vector similarity, not keywords.
-
-**Lazy Loading** — Dependencies loaded only when needed; missing providers give helpful errors.
-
-**Provider Agnostic** — Pluggable backends for embeddings, summarization, and storage.
-
-**No Original Content** — Only summaries and embeddings stored. URIs can be re-fetched if needed.
+See **[SKILL.md](SKILL.md)** for the full practice guide.
 
 ---
 
 ## Status
 
-**Current**: v0.1.0 — Early draft
+**Current:** v0.3.0
 
 **Working:**
-- ✅ Core indexing (`update` with URI, text, or stdin modes)
-- ✅ Semantic search (`find`, `find_similar`)
+- ✅ Semantic search with embeddings
+- ✅ Document versioning (all updates retain history)
+- ✅ Content-addressed IDs for text (same content = same ID)
 - ✅ Tag queries and full-text search
-- ✅ Embedding cache for performance
-- ✅ Recency decay (ACT-R style)
-- ✅ CLI interface
-- ✅ Provider abstraction with lazy loading
+- ✅ Current context tracking (`keep now`)
+- ✅ Recency decay (recent items rank higher)
+- ✅ Lazy summarization (background processing)
+- ✅ Provider abstraction (local or API-based)
 
 **Planned** (see [later/](later/)):
-- ⏳ Context management (working context, top-of-mind retrieval)
 - ⏳ Private/shared routing
 - ⏳ Relationship graphs between items
-- ⏳ LLM-based tagging
-
----
-
-## Requirements
-
-- Python 3.11+
-- ChromaDB (vector store)
-- One embedding provider:
-  - sentence-transformers (local, default)
-  - MLX (Apple Silicon, local)
-  - OpenAI (API, requires key)
+- ⏳ LLM-based auto-tagging
 
 ---
 
@@ -233,21 +157,11 @@ MIT
 
 ## Contributing
 
-This project is published on [PyPI as `keep-skill`](https://pypi.org/project/keep-skill/).
+Published on [PyPI as `keep-skill`](https://pypi.org/project/keep-skill/).
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on versioning and backward compatibility.
-
-Issues and PRs welcome, especially for:
-- Additional provider implementations
+Issues and PRs welcome:
+- Provider implementations
 - Performance improvements
 - Documentation clarity
-- OpenClaw integration patterns
 
----
-
-## Related Projects
-
-- [ChromaDB](https://github.com/chroma-core/chroma) — Vector database backend
-- [sentence-transformers](https://github.com/UKPLab/sentence-transformers) — Embedding models
-- [MLX](https://github.com/ml-explore/mlx) — Apple Silicon ML framework
-- [OpenClaw](https://openclaw.dev) — Agent framework (integration target)
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.1.0
+version: 0.3.0
 description: Associative memory for reflection and skillful action
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -106,7 +106,7 @@ Then retrieve and read it:
 keep get "file://$PWD/docs/library/mn61.html"
 ```
 
-This teaching (MN 61) uses the mirror metaphor: "What is a mirror for?" "For reflection." Actions — bodily, verbal, mental — are to be done with repeated reflection. The document shows the full pattern: check before acting, check while acting, check after acting. If unskillful, confess and adjust. If skillful, stay refreshed and continue training.
+This teaching ([MN 61](docs/library/mn61.html)) uses the mirror metaphor: "What is a mirror for?" "For reflection." Actions — bodily, verbal, mental — are to be done with repeated reflection. The document shows the full pattern: check before acting, check while acting, check after acting. If unskillful, confess and adjust. If skillful, stay refreshed and continue training.
 
 ### Breakdowns Are Valuable
 
@@ -140,7 +140,7 @@ These aren't test fixtures. They're seed wisdom:
 
 - **[true_person_no_rank.md](docs/library/true_person_no_rank.md)** — A Zen teaching with layers of commentary. Notice how each commentator re-enacts the pointing from a different angle — not explaining, not accumulating facts, but each responding to what students in that era needed. This is how knowledge in your memory should relate: organic, not hierarchical.
 
-For the full bootstrap list, see [docs/QUICKSTART.md](docs/QUICKSTART.md#bootstrap-your-memory).
+The [docs/library/](docs/library/) directory contains additional seed material.
 
 ---
 
@@ -158,7 +158,28 @@ Update it as your focus changes:
 keep now "Working on authentication bug in login flow"
 ```
 
+Check previous context if needed:
+```bash
+keep now -V 1          # Previous context
+keep now --history     # All versions
+```
+
 This helps future you (and other agents) pick up where you left off.
+
+### Version History
+
+All documents retain history on update. Use this to see how understanding evolved:
+
+```bash
+keep get ID -V 1       # Previous version
+keep get ID --history  # All versions
+```
+
+Text updates use content-addressed IDs — same content = same ID. This enables versioning through tag changes:
+```bash
+keep update "auth decision" -t status=draft    # Creates ID from content
+keep update "auth decision" -t status=final    # Same ID, new version
+```
 
 ### Summaries Are Your Recall Mechanism
 
@@ -180,8 +201,8 @@ keep update "Token refresh fails if clock skew > 30s" -t domain=auth -t type=fin
 
 Later:
 ```bash
-keep tag domain auth     # Everything about auth
-keep tag type decision   # All decisions made
+keep tag domain=auth     # Everything about auth
+keep tag type=decision   # All decisions made
 ```
 
 **Suggested tag dimensions:**
@@ -219,12 +240,15 @@ Don't dump everything into context. Navigate the tree:
 | Command | Purpose | Example |
 |---------|---------|---------|
 | `now` | Get/set current context | `keep now` or `keep now "status"` |
+| `now -V N` | Previous context versions | `keep now -V 1` or `keep now --history` |
 | `find` | Semantic similarity search | `keep find "authentication flow" --limit 5` |
 | `find --id` | Find similar to existing item | `keep find --id "docid" --limit 3` |
 | `search` | Full-text search in summaries | `keep search "OAuth"` |
+| `list` | List recent items by update time | `keep list` or `keep list -n 20` |
 | `update` | Index content (URI, text, or stdin) | `keep update "note" -t key=value` |
 | `get` | Retrieve item by ID | `keep get "file:///path/to/doc.md"` |
-| `tag` | List tag values or find by tag | `keep tag domain auth` or `keep tag --list` |
+| `get -V N` | Previous versions | `keep get ID -V 1` or `keep get ID --history` |
+| `tag` | List tag values or find by tag | `keep tag domain=auth` or `keep tag --list` |
 | `tag-update` | Modify tags on existing item | `keep tag-update "id" --tag key=value` |
 | `exists` | Check if item is indexed | `keep exists "id"` |
 | `system` | List system documents | `keep system` |
@@ -256,11 +280,14 @@ Default output uses YAML frontmatter format:
 ```yaml
 ---
 id: file:///path/to/doc.md
-summary: Document summary here...
 tags:
   project: myapp
 score: 0.823
+prev:
+  - 1: 2026-01-15 Previous summary...
+  - 2: 2026-01-14 Older summary...
 ---
+Document summary here...
 ```
 
 Global flags (before the command):
@@ -315,6 +342,7 @@ This is the practice. Not once, but every time.
 ## See Also
 
 - [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) — Detailed patterns for working sessions
+- [docs/REFERENCE.md](docs/REFERENCE.md) — Complete CLI and API reference
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — Installation and setup
 - [docs/system/conversations.md](docs/system/conversations.md) — Full conversation framework
 - [docs/system/domains.md](docs/system/domains.md) — Domain-specific organization

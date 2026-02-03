@@ -10,9 +10,9 @@ These tags are actively set and maintained by the system.
 
 **Purpose:** ISO 8601 timestamp of when the item was first indexed.
 
-**Set by:** `ChromaStore.upsert()` in `store.py`
+**Set by:** `DocumentStore.upsert()` in `document_store.py`, `ChromaStore.upsert()` in `store.py`
 
-**Behavior:** Set once on first insert, preserved on updates.
+**Behavior:** Set once on first insert, preserved on updates. Both stores maintain this independently.
 
 **Example:** `"2026-01-15T10:30:00.123456+00:00"`
 
@@ -24,9 +24,9 @@ These tags are actively set and maintained by the system.
 
 **Purpose:** ISO 8601 timestamp of the last modification.
 
-**Set by:** `ChromaStore.upsert()`, `update_summary()`, `update_tags()` in `store.py`
+**Set by:** `DocumentStore.upsert()` in `document_store.py`, `ChromaStore.upsert()` in `store.py`
 
-**Behavior:** Updated on every modification (content, summary, or tags).
+**Behavior:** Updated on every modification (content, summary, or tags). Both stores maintain this independently.
 
 **Example:** `"2026-02-02T14:45:00.789012+00:00"`
 
@@ -38,9 +38,9 @@ These tags are actively set and maintained by the system.
 
 **Purpose:** Date portion of `_updated` for efficient date-based queries.
 
-**Set by:** `ChromaStore.upsert()` in `store.py`
+**Set by:** `DocumentStore.upsert()` in `document_store.py`, `ChromaStore.upsert()` in `store.py`
 
-**Behavior:** Always set alongside `_updated`. Format: `YYYY-MM-DD`
+**Behavior:** Always set alongside `_updated`. Format: `YYYY-MM-DD`. Both stores maintain this independently.
 
 **Example:** `"2026-02-02"`
 
@@ -115,7 +115,22 @@ today = kp.query_tag("_updated_date", "2026-02-02")
 system_docs = kp.query_tag("_system", "true")
 ```
 
+## Versioning and System Tags
+
+When a document is updated, the previous version (including all its system tags) is archived in the `document_versions` table. This preserves the complete tag state at each point in history.
+
+```python
+# Current version has current timestamps
+current = kp.get("doc:1")
+print(current.tags["_updated"])  # "2026-02-02T14:45:00..."
+
+# Previous version has its own timestamps
+prev = kp.get_version("doc:1", offset=1)
+print(prev.tags["_updated"])  # "2026-02-01T10:30:00..."
+```
+
 ## See Also
 
 - [REFERENCE.md](REFERENCE.md) - API reference card
 - [QUICKSTART.md](QUICKSTART.md) - Getting started guide
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture
