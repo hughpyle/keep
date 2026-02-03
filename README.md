@@ -69,6 +69,7 @@ keep find "auth" --since P7D           # Last 7 days
 # Retrieve
 keep get file:///path/to/doc.md
 keep get ID -V 1                       # Previous version
+keep get "ID@V{1}"                     # Same as -V 1 (version identifier)
 keep get ID --history                  # All versions
 
 # Tags

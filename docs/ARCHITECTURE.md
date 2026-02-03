@@ -185,6 +185,13 @@ query text
 - Embeddings stored for all versions (enables temporal search)
 - No auto-pruning: history preserved indefinitely
 
+**8. Version-Based Addressing**
+- Versions addressed by offset from current: 0=current, 1=previous, 2=two ago
+- CLI uses `@V{N}` syntax for shell composition: `keep get "doc:1@V{1}"`
+- Display format (v0, v1, v2) matches retrieval offset (`-V 0`, `-V 1`, `-V 2`)
+- Offset computation assumes `list_versions()` returns newest-first ordering
+- Security: literal ID lookup before `@V{N}` parsing prevents confusion attacks
+
 ---
 
 ## Storage Layout

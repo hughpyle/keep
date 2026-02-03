@@ -1,3 +1,16 @@
+* "tags" in frontmatter: use `[one, two, three]` condensed form, should be fine for yaml
+
+* "nearby:" in frontmatter
+    - the most similar other items
+        - excluding previous versions of this document!
+        - only max one version of other documents too! - even if they are the top similarity.
+    - max 3 in frontmatter
+    - consistent CLI for listing as many similar items as you want
+        (compare the CLI for history)
+    - you don't need to evaluate embeddings to get the similarity result.
+      Only need to do a vector similarity search and rank the results.
+      The results are filtered (for distinct ID) but ranked according to our relevance score.
+
 * filter any 'get' by tag (show the most recent that has that tag; for recents only show the ones that have that tag)
 
 * tags themselves should have summaries and full descriptions
@@ -182,3 +195,5 @@ Done:
     - `keep get --history` and `keep now --history` to list versions
     - text-mode updates use content-addressed IDs (_text:{hash}) for versioning
     - ChromaDB stores versioned embeddings as {id}@v{N}
+. composable history: `keep list` IDs-first, `--ids --history` outputs @V{N} identifiers
+. `keep now --history` and `keep get _now:default --history` produce identical output

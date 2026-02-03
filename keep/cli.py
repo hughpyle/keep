@@ -9,12 +9,17 @@ Usage:
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
 
 import typer
 from typing_extensions import Annotated
+
+
+# Pattern for version identifier suffix: @V{N} where N is digits only
+VERSION_SUFFIX_PATTERN = re.compile(r'@V\{(\d+)\}$')
 
 from .api import Keeper, _text_content_id
 from .document_store import VersionInfo
@@ -38,6 +43,7 @@ def _verbose_callback(value: bool):
 # Global state for CLI options
 _json_output = False
 _ids_output = False
+_full_output = False
 
 
 def _json_callback(value: bool):
@@ -58,6 +64,15 @@ def _get_ids_output() -> bool:
     return _ids_output
 
 
+def _full_callback(value: bool):
+    global _full_output
+    _full_output = value
+
+
+def _get_full_output() -> bool:
+    return _full_output
+
+
 app = typer.Typer(
     name="keep",
     help="Associative memory with semantic search.",
@@ -69,7 +84,7 @@ app = typer.Typer(
 def _format_yaml_frontmatter(
     item: Item,
     version_nav: Optional[dict[str, list[VersionInfo]]] = None,
-    viewing_version: Optional[int] = None,
+    viewing_offset: Optional[int] = None,
 ) -> str:
     """
     Format item as YAML frontmatter with summary as content.
@@ -77,11 +92,15 @@ def _format_yaml_frontmatter(
     Args:
         item: The item to format
         version_nav: Optional version navigation info (prev/next lists)
-        viewing_version: If viewing an old version, the version number
+        viewing_offset: If viewing an old version, the offset (1=previous, 2=two ago)
+
+    Note: Offset computation (v1, v2, etc.) assumes version_nav lists
+    are ordered newest-first, matching list_versions() ordering.
+    Changing that ordering would break the vN = -V N correspondence.
     """
     lines = ["---", f"id: {item.id}"]
-    if viewing_version is not None:
-        lines.append(f"version: {viewing_version}")
+    if viewing_offset is not None:
+        lines.append(f"version: {viewing_offset}")
     if item.tags:
         lines.append("tags:")
         for k, v in sorted(item.tags.items()):
@@ -91,27 +110,33 @@ def _format_yaml_frontmatter(
 
     # Add version navigation if available
     if version_nav:
+        # Current offset (0 if viewing current)
+        current_offset = viewing_offset if viewing_offset is not None else 0
+
         if version_nav.get("prev"):
             lines.append("prev:")
-            for v in version_nav["prev"]:
-                # Show version number, date portion, and truncated summary
+            for i, v in enumerate(version_nav["prev"]):
+                # Offset for this prev item: current_offset + i + 1
+                prev_offset = current_offset + i + 1
                 date_part = v.created_at[:10] if v.created_at else "unknown"
                 summary_preview = v.summary[:40].replace("\n", " ")
                 if len(v.summary) > 40:
                     summary_preview += "..."
-                lines.append(f"  - {v.version}: {date_part} {summary_preview}")
+                lines.append(f"  - v{prev_offset}: {date_part} {summary_preview}")
         if version_nav.get("next"):
             lines.append("next:")
-            for v in version_nav["next"]:
+            for i, v in enumerate(version_nav["next"]):
+                # Offset for this next item: current_offset - i - 1
+                next_offset = current_offset - i - 1
                 date_part = v.created_at[:10] if v.created_at else "unknown"
                 summary_preview = v.summary[:40].replace("\n", " ")
                 if len(v.summary) > 40:
                     summary_preview += "..."
-                lines.append(f"  - {v.version}: {date_part} {summary_preview}")
-        elif viewing_version is not None:
+                lines.append(f"  - v{next_offset}: {date_part} {summary_preview}")
+        elif viewing_offset is not None:
             # Viewing old version and next is empty means current is next
             lines.append("next:")
-            lines.append("  - current")
+            lines.append("  - v0 (current)")
 
     lines.append("---")
     lines.append(item.summary)  # Summary IS the content
@@ -137,6 +162,12 @@ def main_callback(
         "--ids", "-I",
         help="Output only IDs (for piping to xargs)",
         callback=_ids_callback,
+        is_eager=True,
+    )] = False,
+    full_output: Annotated[bool, typer.Option(
+        "--full", "-F",
+        help="Output full items (overrides --ids)",
+        callback=_full_callback,
         is_eager=True,
     )] = False,
 ):
@@ -197,13 +228,19 @@ def _format_item(
     item: Item,
     as_json: bool = False,
     version_nav: Optional[dict[str, list[VersionInfo]]] = None,
-    viewing_version: Optional[int] = None,
+    viewing_offset: Optional[int] = None,
 ) -> str:
     """
     Format an item for display.
 
     Text format: YAML frontmatter (matches docs/system format)
     With --ids: just the ID (for piping)
+
+    Args:
+        item: The item to format
+        as_json: Output as JSON
+        version_nav: Optional version navigation info (prev/next lists)
+        viewing_offset: If viewing an old version, the offset (1=previous, 2=two ago)
     """
     if _get_ids_output():
         return json.dumps(item.id) if as_json else item.id
@@ -215,17 +252,37 @@ def _format_item(
             "tags": item.tags,
             "score": item.score,
         }
-        if viewing_version is not None:
-            result["version"] = viewing_version
+        if viewing_offset is not None:
+            result["version"] = viewing_offset
+            result["vid"] = f"{item.id}@V{{{viewing_offset}}}"
         if version_nav:
-            result["version_nav"] = {
-                k: [{"version": v.version, "created_at": v.created_at, "summary": v.summary[:60]}
-                    for v in versions]
-                for k, versions in version_nav.items()
-            }
+            current_offset = viewing_offset if viewing_offset is not None else 0
+            result["version_nav"] = {}
+            if version_nav.get("prev"):
+                result["version_nav"]["prev"] = [
+                    {
+                        "offset": current_offset + i + 1,
+                        "vid": f"{item.id}@V{{{current_offset + i + 1}}}",
+                        "created_at": v.created_at,
+                        "summary": v.summary[:60],
+                    }
+                    for i, v in enumerate(version_nav["prev"])
+                ]
+            if version_nav.get("next"):
+                result["version_nav"]["next"] = [
+                    {
+                        "offset": current_offset - i - 1,
+                        "vid": f"{item.id}@V{{{current_offset - i - 1}}}",
+                        "created_at": v.created_at,
+                        "summary": v.summary[:60],
+                    }
+                    for i, v in enumerate(version_nav["next"])
+                ]
+            elif viewing_offset is not None:
+                result["version_nav"]["next"] = [{"offset": 0, "vid": f"{item.id}@V{{0}}", "label": "current"}]
         return json.dumps(result)
 
-    return _format_yaml_frontmatter(item, version_nav, viewing_version)
+    return _format_yaml_frontmatter(item, version_nav, viewing_offset)
 
 
 def _format_items(items: list[Item], as_json: bool = False) -> str:
@@ -364,11 +421,22 @@ def list_recent(
     """
     List recent items by update time.
 
-    Shows the most recently updated items, newest first.
+    Shows IDs by default (composable). Use --full for detailed output.
     """
     kp = _get_keeper(store, collection)
     results = kp.list_recent(limit=limit)
-    typer.echo(_format_items(results, as_json=_get_json_output()))
+
+    # Determine output mode: --full > --ids > command default (IDs for list)
+    if _get_json_output():
+        # JSON always outputs full items
+        typer.echo(_format_items(results, as_json=True))
+    elif _get_full_output():
+        # --full flag: full YAML output
+        typer.echo(_format_items(results, as_json=False))
+    else:
+        # Default for list: IDs only (composable)
+        for item in results:
+            typer.echo(item.id)
 
 
 @app.command()
@@ -605,34 +673,46 @@ def now(
         versions = kp.list_versions(NOWDOC_ID, limit=50, collection=collection)
         current = kp.get(NOWDOC_ID, collection=collection)
 
-        if _get_json_output():
+        if _get_ids_output():
+            # Output version identifiers, one per line
+            if current:
+                typer.echo(f"{NOWDOC_ID}@V{{0}}")
+            for i in range(1, len(versions) + 1):
+                typer.echo(f"{NOWDOC_ID}@V{{{i}}}")
+        elif _get_json_output():
             result = {
                 "id": NOWDOC_ID,
                 "current": {
                     "summary": current.summary if current else None,
+                    "offset": 0,
+                    "vid": f"{NOWDOC_ID}@V{{0}}",
                 } if current else None,
                 "versions": [
                     {
+                        "offset": i + 1,
+                        "vid": f"{NOWDOC_ID}@V{{{i + 1}}}",
                         "version": v.version,
                         "summary": v.summary[:60],
                         "created_at": v.created_at,
                     }
-                    for v in versions
+                    for i, v in enumerate(versions)
                 ],
             }
             typer.echo(json.dumps(result, indent=2))
         else:
             if current:
                 summary_preview = current.summary[:60].replace("\n", " ")
-                typer.echo(f"Current: {summary_preview}...")
+                if len(current.summary) > 60:
+                    summary_preview += "..."
+                typer.echo(f"v0 (current): {summary_preview}")
             if versions:
-                typer.echo(f"\nVersion history ({len(versions)} archived):")
-                for v in versions:
+                typer.echo(f"\nArchived:")
+                for i, v in enumerate(versions, start=1):
                     date_part = v.created_at[:10] if v.created_at else "unknown"
                     summary_preview = v.summary[:50].replace("\n", " ")
                     if len(v.summary) > 50:
                         summary_preview += "..."
-                    typer.echo(f"  v{v.version} ({date_part}): {summary_preview}")
+                    typer.echo(f"  v{i} ({date_part}): {summary_preview}")
             else:
                 typer.echo("No version history.")
         return
@@ -642,25 +722,26 @@ def now(
         offset = version
         if offset == 0:
             item = kp.get_now()
-            viewing_version = None
+            internal_version = None
         else:
             item = kp.get_version(NOWDOC_ID, offset, collection=collection)
+            # Get internal version number for API call
             versions = kp.list_versions(NOWDOC_ID, limit=1, collection=collection)
             if versions:
-                viewing_version = versions[0].version - (offset - 1)
+                internal_version = versions[0].version - (offset - 1)
             else:
-                viewing_version = None
+                internal_version = None
 
         if item is None:
             typer.echo(f"Version not found (offset {offset})", err=True)
             raise typer.Exit(1)
 
-        version_nav = kp.get_version_nav(NOWDOC_ID, viewing_version, collection=collection)
+        version_nav = kp.get_version_nav(NOWDOC_ID, internal_version, collection=collection)
         typer.echo(_format_item(
             item,
             as_json=_get_json_output(),
             version_nav=version_nav,
-            viewing_version=viewing_version,
+            viewing_offset=offset if offset > 0 else None,
         ))
         return
 
@@ -712,7 +793,7 @@ def now(
 
 @app.command()
 def get(
-    id: Annotated[str, typer.Argument(help="URI of item to retrieve")],
+    id: Annotated[str, typer.Argument(help="URI of item (append @V{N} for version)")],
     version: Annotated[Optional[int], typer.Option(
         "--version", "-V",
         help="Get specific version (0=current, 1=previous, etc.)"
@@ -727,46 +808,80 @@ def get(
     """
     Retrieve a specific item by ID.
 
+    Version identifiers: Append @V{N} to get a specific version.
+
     Examples:
         keep get doc:1                  # Current version with prev nav
         keep get doc:1 -V 1             # Previous version with prev/next nav
+        keep get "doc:1@V{1}"           # Same as -V 1
         keep get doc:1 --history        # List all versions
     """
     kp = _get_keeper(store, collection)
 
+    # Parse @V{N} version identifier from ID (security: check literal first)
+    actual_id = id
+    version_from_id = None
+
+    if kp.exists(id, collection=collection):
+        # Literal ID exists - use it directly (prevents confusion attacks)
+        actual_id = id
+    else:
+        # Try parsing @V{N} suffix
+        match = VERSION_SUFFIX_PATTERN.search(id)
+        if match:
+            version_from_id = int(match.group(1))
+            actual_id = id[:match.start()]
+
+    # Version from ID only applies if --version not explicitly provided
+    if version is None and version_from_id is not None:
+        version = version_from_id
+
     if history:
         # List all versions
-        versions = kp.list_versions(id, limit=50, collection=collection)
-        current = kp.get(id, collection=collection)
+        versions = kp.list_versions(actual_id, limit=50, collection=collection)
+        current = kp.get(actual_id, collection=collection)
 
-        if _get_json_output():
+        if _get_ids_output():
+            # Output version identifiers, one per line
+            if current:
+                typer.echo(f"{actual_id}@V{{0}}")
+            for i in range(1, len(versions) + 1):
+                typer.echo(f"{actual_id}@V{{{i}}}")
+        elif _get_json_output():
             result = {
-                "id": id,
+                "id": actual_id,
                 "current": {
                     "summary": current.summary if current else None,
                     "tags": current.tags if current else {},
+                    "offset": 0,
+                    "vid": f"{actual_id}@V{{0}}",
                 } if current else None,
                 "versions": [
                     {
+                        "offset": i + 1,
+                        "vid": f"{actual_id}@V{{{i + 1}}}",
                         "version": v.version,
                         "summary": v.summary,
                         "created_at": v.created_at,
                     }
-                    for v in versions
+                    for i, v in enumerate(versions)
                 ],
             }
             typer.echo(json.dumps(result, indent=2))
         else:
             if current:
-                typer.echo(f"Current: {current.summary[:60]}...")
+                summary_preview = current.summary[:60].replace("\n", " ")
+                if len(current.summary) > 60:
+                    summary_preview += "..."
+                typer.echo(f"v0 (current): {summary_preview}")
             if versions:
-                typer.echo(f"\nVersion history ({len(versions)} archived):")
-                for v in versions:
+                typer.echo(f"\nArchived:")
+                for i, v in enumerate(versions, start=1):
                     date_part = v.created_at[:10] if v.created_at else "unknown"
                     summary_preview = v.summary[:50].replace("\n", " ")
                     if len(v.summary) > 50:
                         summary_preview += "..."
-                    typer.echo(f"  v{v.version} ({date_part}): {summary_preview}")
+                    typer.echo(f"  v{i} ({date_part}): {summary_preview}")
             else:
                 typer.echo("No version history.")
         return
@@ -775,32 +890,32 @@ def get(
     offset = version if version is not None else 0
 
     if offset == 0:
-        item = kp.get(id, collection=collection)
-        viewing_version = None
+        item = kp.get(actual_id, collection=collection)
+        internal_version = None
     else:
-        item = kp.get_version(id, offset, collection=collection)
-        # Calculate actual version number for display
-        versions = kp.list_versions(id, limit=1, collection=collection)
+        item = kp.get_version(actual_id, offset, collection=collection)
+        # Calculate internal version number for API call
+        versions = kp.list_versions(actual_id, limit=1, collection=collection)
         if versions:
-            viewing_version = versions[0].version - (offset - 1)
+            internal_version = versions[0].version - (offset - 1)
         else:
-            viewing_version = None
+            internal_version = None
 
     if item is None:
         if offset > 0:
-            typer.echo(f"Version not found: {id} (offset {offset})", err=True)
+            typer.echo(f"Version not found: {actual_id} (offset {offset})", err=True)
         else:
-            typer.echo(f"Not found: {id}", err=True)
+            typer.echo(f"Not found: {actual_id}", err=True)
         raise typer.Exit(1)
 
     # Get version navigation
-    version_nav = kp.get_version_nav(id, viewing_version, collection=collection)
+    version_nav = kp.get_version_nav(actual_id, internal_version, collection=collection)
 
     typer.echo(_format_item(
         item,
         as_json=_get_json_output(),
         version_nav=version_nav,
-        viewing_version=viewing_version,
+        viewing_offset=offset if offset > 0 else None,
     ))
 
 
