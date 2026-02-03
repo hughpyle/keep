@@ -120,7 +120,7 @@ def _format_yaml_frontmatter(
                 summary_preview += "..."
             lines.append(f"  - {sim_item.id} {score_str} {summary_preview}")
 
-    # Add version navigation if available
+    # Add version navigation if available (using addressable ID format)
     if version_nav:
         # Current offset (0 if viewing current)
         current_offset = viewing_offset if viewing_offset is not None else 0
@@ -128,27 +128,17 @@ def _format_yaml_frontmatter(
         if version_nav.get("prev"):
             lines.append("prev:")
             for i, v in enumerate(version_nav["prev"]):
-                # Offset for this prev item: current_offset + i + 1
                 prev_offset = current_offset + i + 1
-                date_part = v.created_at[:10] if v.created_at else "unknown"
-                summary_preview = v.summary[:40].replace("\n", " ")
-                if len(v.summary) > 40:
-                    summary_preview += "..."
-                lines.append(f"  - v{prev_offset}: {date_part} {summary_preview}")
+                lines.append(f"  - {item.id}@V{{{prev_offset}}}")
         if version_nav.get("next"):
             lines.append("next:")
             for i, v in enumerate(version_nav["next"]):
-                # Offset for this next item: current_offset - i - 1
                 next_offset = current_offset - i - 1
-                date_part = v.created_at[:10] if v.created_at else "unknown"
-                summary_preview = v.summary[:40].replace("\n", " ")
-                if len(v.summary) > 40:
-                    summary_preview += "..."
-                lines.append(f"  - v{next_offset}: {date_part} {summary_preview}")
+                lines.append(f"  - {item.id}@V{{{next_offset}}}")
         elif viewing_offset is not None:
             # Viewing old version and next is empty means current is next
             lines.append("next:")
-            lines.append("  - v0 (current)")
+            lines.append(f"  - {item.id}@V{{0}}")
 
     lines.append("---")
     lines.append(item.summary)  # Summary IS the content
