@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "keep-skill"
-version = "0.6.0"
-description = "Semantic memory - remember and search documents by meaning"
+version = "0.7.0"
+description = "Reflective memory - remember and search documents by meaning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "MIT"}

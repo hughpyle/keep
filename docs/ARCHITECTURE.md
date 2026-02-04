@@ -2,7 +2,7 @@
 
 ## What is keep?
 
-**keep** is a semantic memory system providing persistent associative storage with vector similarity search. It's designed as an agent skill for OpenClaw and other agentic environments, enabling agents to remember information across sessions over time.
+**keep** is a reflective memory system providing persistent storage with vector similarity search. It's designed as an agent skill for OpenClaw and other agentic environments, enabling agents to remember information across sessions over time.
 
 Think of it as: **ChromaDB + embeddings + summarization + tagging** wrapped in a simple API.
 

@@ -1,5 +1,5 @@
 """
-Provider interfaces for associative memory services.
+Provider interfaces for reflective memory services.
 
 Each provider type defines a protocol that concrete implementations must follow.
 Providers are configured at store initialization and handle the heavy lifting of:

@@ -1,4 +1,4 @@
-# Associative Memory — Agent Reference Card
+# Reflective Memory — Agent Reference Card
 
 **Purpose:** Persistent memory for documents with semantic search.
 

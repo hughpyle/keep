@@ -1,6 +1,6 @@
 # keep
 
-**Semantic memory with version history.**
+**Reflective memory with version history.**
 
 Index documents and notes. Search by meaning. Track changes over time.
 
@@ -125,32 +125,11 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples
 This library was designed as an agent skill — persistent memory that helps agents reflect before acting and learn from experience.
 
 **The practice:**
-- Pause before acting — `keep find` what you already know
-- Notice breakdowns — when assumptions surface, index them
-- Reflect after — `keep update` learnings for future sessions
+- Before acting, use `keep` to reflect on the context.
+- Notice breakdowns — when assumptions surface, index them.
+- After acting, use `keep` to save your context and intentions.
 
 See **[SKILL.md](SKILL.md)** for the full practice guide.
-
----
-
-## Status
-
-**Current:** v0.3.0
-
-**Working:**
-- ✅ Semantic search with embeddings
-- ✅ Document versioning (all updates retain history)
-- ✅ Content-addressed IDs for text (same content = same ID)
-- ✅ Tag queries and full-text search
-- ✅ Current context tracking (`keep now`)
-- ✅ Recency decay (recent items rank higher)
-- ✅ Lazy summarization (background processing)
-- ✅ Provider abstraction (local or API-based)
-
-**Planned** (see [later/](later/)):
-- ⏳ Private/shared routing
-- ⏳ Relationship graphs between items
-- ⏳ LLM-based auto-tagging
 
 ---
 

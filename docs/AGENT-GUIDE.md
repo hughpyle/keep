@@ -1,6 +1,6 @@
-# Associative Memory — Detailed Agent Guide
+# Reflective Memory — Detailed Agent Guide
 
-This guide provides in-depth patterns for using the associative memory store effectively.
+This guide provides in-depth patterns for using the reflective memory store effectively.
 
 For the practice introduction (why and when), see [../SKILL.md](../SKILL.md).
 For quick API/CLI reference, see [REFERENCE.md](REFERENCE.md).
@@ -9,7 +9,7 @@ For quick API/CLI reference, see [REFERENCE.md](REFERENCE.md).
 
 ## Overview
 
-The associative memory provides persistent storage with semantic search.
+The reflective memory provides persistent storage with semantic search.
 
 **Key principle:** The schema is data. Routing rules, domain patterns, process knowledge — all are documents in the store, queryable and updateable. An agent can be asked "research X and update how you handle X" and the changes persist.
 

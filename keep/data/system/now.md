@@ -5,7 +5,7 @@ tags:
 ---
 # Now
 
-This is top-of-mind right now.  Reminders for essential practice.
+Reminders for essential practice.
 (Keep this updated as you need)
 
 **Before acting:**
@@ -16,4 +16,4 @@ This is top-of-mind right now.  Reminders for essential practice.
 **After acting:**
 - What happened? `keep update "what I learned" -t context=learning`
 - What do I save? `keep update`
-- What now? `keep now "Current focus: ..."`
+- What now? `keep now "Current intention: ..."`

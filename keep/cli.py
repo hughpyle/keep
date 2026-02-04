@@ -1,5 +1,5 @@
 """
-CLI interface for associative memory.
+CLI interface for reflective memory.
 
 Usage:
     keepfind "query text"
@@ -78,7 +78,7 @@ def _get_full_output() -> bool:
 
 app = typer.Typer(
     name="keep",
-    help="Associative memory with semantic search.",
+    help="Reflective memory with semantic search.",
     no_args_is_help=False,
     invoke_without_command=True,
     rich_markup_mode=None,
@@ -232,7 +232,7 @@ def main_callback(
         is_eager=True,
     )] = False,
 ):
-    """Associative memory with semantic search."""
+    """Reflective memory with semantic search."""
     # If no subcommand provided, show the current context (now)
     if ctx.invoked_subcommand is None:
         from .api import NOWDOC_ID

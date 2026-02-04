@@ -388,5 +388,5 @@ class PassthroughTagger:
 _registry = get_registry()
 _registry.register_tagging("keyword", KeywordTagger)
 _registry.register_tagging("none", PassthroughTagger)
-# Note: EmbeddingDomainTagger requires an embedding provider, so it's 
-# instantiated manually in AssociativeMemory rather than via registry
+# Note: EmbeddingDomainTagger requires an embedding provider, so it's
+# instantiated manually in Keeper rather than via registry
