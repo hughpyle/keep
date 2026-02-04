@@ -405,24 +405,25 @@ class Keeper:
         except Exception as e:
             logger.debug("Error scanning old system docs: %s", e)
 
-        # Second pass: create any missing system docs from bundled content
+        # Second pass: create or update system docs from bundled content
         for path in SYSTEM_DOC_DIR.glob("*.md"):
             new_id = SYSTEM_DOC_IDS.get(path.name)
             if new_id is None:
                 logger.debug("Skipping unknown system doc: %s", path.name)
                 continue
 
-            # Skip if already exists
-            if self.exists(new_id):
-                stats["skipped"] += 1
-                continue
-
             try:
                 content, tags = _load_frontmatter(path)
                 tags["category"] = "system"
+                existed = self.exists(new_id)
+                # remember() handles both create and update (with re-summarization)
                 self.remember(content, id=new_id, tags=tags)
-                stats["created"] += 1
-                logger.info("Created system doc: %s", new_id)
+                if existed:
+                    stats["migrated"] += 1
+                    logger.info("Updated system doc: %s", new_id)
+                else:
+                    stats["created"] += 1
+                    logger.info("Created system doc: %s", new_id)
             except FileNotFoundError:
                 # System file missing - skip silently
                 pass
