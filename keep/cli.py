@@ -47,6 +47,7 @@ def _verbose_callback(value: bool):
 _json_output = False
 _ids_output = False
 _full_output = False
+_store_override: Optional[Path] = None
 
 
 def _json_callback(value: bool):
@@ -74,6 +75,16 @@ def _full_callback(value: bool):
 
 def _get_full_output() -> bool:
     return _full_output
+
+
+def _store_callback(value: Optional[Path]):
+    global _store_override
+    if value is not None:
+        _store_override = value
+
+
+def _get_store_override() -> Optional[Path]:
+    return _store_override
 
 
 app = typer.Typer(
@@ -231,6 +242,13 @@ def main_callback(
         callback=_full_callback,
         is_eager=True,
     )] = False,
+    store: Annotated[Optional[Path], typer.Option(
+        "--store", "-s",
+        envvar="KEEP_STORE_PATH",
+        help="Path to the store directory",
+        callback=_store_callback,
+        is_eager=True,
+    )] = None,
 ):
     """Reflective memory with semantic search."""
     # If no subcommand provided, show the current context (now)
@@ -401,9 +419,10 @@ def _format_items(items: list[Item], as_json: bool = False) -> str:
 
 def _get_keeper(store: Optional[Path], collection: str) -> Keeper:
     """Initialize memory, handling errors gracefully."""
-    # store=None is fine — Keeper will use default (git root/.keep)
+    # Check global override from --store on main command
+    actual_store = store if store is not None else _get_store_override()
     try:
-        return Keeper(store, collection=collection)
+        return Keeper(actual_store, collection=collection)
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -464,6 +483,7 @@ def find(
     """
     Find items using semantic similarity search.
 
+    \b
     Examples:
         keep find "authentication"              # Search by text
         keep find --id file:///path/to/doc.md   # Find similar to item
@@ -509,71 +529,76 @@ def list_recent(
         "--limit", "-n",
         help="Number of items to show"
     )] = 10,
-):
-    """
-    List recent items by update time.
-
-    Default: summary lines. Use --ids for IDs only, --full for YAML.
-    """
-    kp = _get_keeper(store, collection)
-    results = kp.list_recent(limit=limit)
-    typer.echo(_format_items(results, as_json=_get_json_output()))
-
-
-@app.command()
-def tag(
-    query: Annotated[Optional[str], typer.Argument(
-        help="Tag key to list values, or key=value to find docs"
+    tag: Annotated[Optional[list[str]], typer.Option(
+        "--tag", "-t",
+        help="Filter by tag (key or key=value, repeatable)"
     )] = None,
-    list_keys: Annotated[bool, typer.Option(
-        "--list", "-l",
-        help="List all distinct tag keys"
-    )] = False,
-    store: StoreOption = None,
-    collection: CollectionOption = "default",
-    limit: LimitOption = 100,
+    tags: Annotated[Optional[str], typer.Option(
+        "--tags", "-T",
+        help="List tag keys (--tags=), or values for KEY (--tags=KEY)"
+    )] = None,
     since: SinceOption = None,
 ):
     """
-    List tag values or find items by tag.
+    List recent items, filter by tags, or list tag keys/values.
 
+    \b
     Examples:
-        keep tag --list              # List all tag keys
-        keep tag project             # List values for 'project' tag
-        keep tag project=myapp       # Find docs with project=myapp
+        keep list                      # Recent items
+        keep list --tag foo            # Items with tag 'foo' (any value)
+        keep list --tag foo=bar        # Items with tag foo=bar
+        keep list --tag foo --tag bar  # Items with both tags
+        keep list --tags=              # List all tag keys
+        keep list --tags=foo           # List values for tag 'foo'
+        keep list --since P3D          # Items updated in last 3 days
     """
     kp = _get_keeper(store, collection)
 
-    # List all keys mode
-    if list_keys or query is None:
-        tags = kp.list_tags(None, collection=collection)
-        if _get_json_output():
-            typer.echo(json.dumps(tags))
-        else:
-            if not tags:
-                typer.echo("No tags found.")
-            else:
-                for t in tags:
-                    typer.echo(t)
-        return
-
-    # Check if query is key=value or just key
-    if "=" in query:
-        # key=value → find documents
-        key, value = query.split("=", 1)
-        results = kp.query_tag(key, value, limit=limit, since=since)
-        typer.echo(_format_items(results, as_json=_get_json_output()))
-    else:
-        # key only → list values
-        values = kp.list_tags(query, collection=collection)
+    # --tags mode: list keys or values
+    if tags is not None:
+        # Empty string means list all keys, otherwise list values for key
+        key = tags if tags else None
+        values = kp.list_tags(key, collection=collection)
         if _get_json_output():
             typer.echo(json.dumps(values))
         else:
             if not values:
-                typer.echo(f"No values for tag '{query}'.")
+                if key:
+                    typer.echo(f"No values for tag '{key}'.")
+                else:
+                    typer.echo("No tags found.")
             else:
                 for v in values:
                     typer.echo(v)
+        return
+
+    # --tag mode: filter items by tag(s)
+    if tag:
+        # Parse each tag as key or key=value
+        # Multiple tags require all to match (AND)
+        results = None
+        for t in tag:
+            if "=" in t:
+                key, value = t.split("=", 1)
+                matches = kp.query_tag(key, value, limit=limit, since=since, collection=collection)
+            else:
+                # Key only - find items with this tag key (any value)
+                matches = kp.query_tag(t, limit=limit, since=since, collection=collection)
+
+            if results is None:
+                results = {item.id: item for item in matches}
+            else:
+                # Intersect with previous results
+                match_ids = {item.id for item in matches}
+                results = {id: item for id, item in results.items() if id in match_ids}
+
+        items = list(results.values()) if results else []
+        typer.echo(_format_items(items[:limit], as_json=_get_json_output()))
+        return
+
+    # Default: recent items
+    results = kp.list_recent(limit=limit, since=since, collection=collection)
+    typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
 @app.command("tag-update")
@@ -595,6 +620,7 @@ def tag_update(
 
     Does not re-process the document - only updates tags.
 
+    \b
     Examples:
         keep tag-update doc:1 --tag project=myapp
         keep tag-update doc:1 doc:2 --tag status=reviewed
@@ -665,12 +691,14 @@ def update(
     """
     Add or update a document in the store.
 
+    \b
     Three input modes (auto-detected):
       keep update file:///path       # URI mode: has ://
       keep update "my note"          # Text mode: content-addressed ID
       keep update -                  # Stdin mode: explicit -
       echo "pipe" | keep update      # Stdin mode: piped input
 
+    \b
     Text mode uses content-addressed IDs for versioning:
       keep update "my note"           # Creates _text:{hash}
       keep update "my note" -t done   # Same ID, new version (tag change)
@@ -737,6 +765,7 @@ def now(
     With no arguments, displays the current context.
     With content, replaces it.
 
+    \b
     Examples:
         keep now                         # Show current context
         keep now "What's important now"  # Update context
@@ -907,6 +936,7 @@ def get(
 
     Version identifiers: Append @V{N} to get a specific version.
 
+    \b
     Examples:
         keep get doc:1                  # Current version with similar items
         keep get doc:1 -V 1             # Previous version with prev/next nav

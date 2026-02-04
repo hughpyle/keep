@@ -59,7 +59,7 @@ class TestCliBasics:
 
     def test_command_help(self, cli):
         """Individual commands have help."""
-        for cmd in ["find", "update", "get", "tag"]:
+        for cmd in ["find", "update", "get", "list"]:
             result = cli(cmd, "--help")
             assert result.returncode == 0, f"{cmd} --help failed"
             assert "Usage" in result.stdout or "usage" in result.stdout.lower()
@@ -336,11 +336,11 @@ class TestApiCliEquivalence:
         assert "ID" in result.stdout or "id" in result.stdout.lower()
         # The CLI get uses mem.get(id)
     
-    def test_tag_maps_to_api_query_tag(self, cli):
-        """'tag' command maps to Keeper.query_tag()."""
-        result = cli("tag", "--help")
-        assert "key" in result.stdout.lower()
-        # The CLI tag uses mem.query_tag(key, value, limit=limit)
+    def test_list_tag_maps_to_api_query_tag(self, cli):
+        """'list --tag' command maps to Keeper.query_tag()."""
+        result = cli("list", "--help")
+        assert "--tag" in result.stdout
+        # The CLI list --tag uses kp.query_tag(key, value, limit=limit)
 
 
 # -----------------------------------------------------------------------------

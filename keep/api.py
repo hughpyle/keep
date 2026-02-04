@@ -1554,6 +1554,7 @@ class Keeper:
         self,
         limit: int = 10,
         *,
+        since: Optional[str] = None,
         collection: Optional[str] = None,
     ) -> list[Item]:
         """
@@ -1561,16 +1562,24 @@ class Keeper:
 
         Args:
             limit: Maximum number to return (default 10)
+            since: Only include items updated since (ISO duration like P3D, or date)
             collection: Collection to query (uses default if not specified)
 
         Returns:
             List of Items, most recently updated first
         """
         coll = self._resolve_collection(collection)
-        records = self._document_store.list_recent(coll, limit)
 
-        return [_record_to_item(rec) for rec in records
-        ]
+        # Fetch extra when filtering by date
+        fetch_limit = limit * 3 if since is not None else limit
+        records = self._document_store.list_recent(coll, fetch_limit)
+        items = [_record_to_item(rec) for rec in records]
+
+        # Apply date filter if specified
+        if since is not None:
+            items = _filter_by_date(items, since)
+
+        return items[:limit]
 
     def embedding_cache_stats(self) -> dict:
         """

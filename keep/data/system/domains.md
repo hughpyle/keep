@@ -145,17 +145,17 @@ Ask about scope before large changes." \
 **Temporal queries using system tags:**
 ```bash
 # Find items updated today
-keep tag _updated_date=2026-01-30
+keep list --tag _updated_date=2026-01-30
 
 # Find all inline content (from remember)
-keep tag _source=inline
+keep list --tag _source=inline
 ```
 
 **Progressive refinement:**
 ```bash
 # Start broad, then narrow
 keep find "authentication"
-keep tag module=auth
+keep list --tag module=auth
 ```
 
 ---
@@ -173,7 +173,7 @@ Only then commit to action. Breakdown risk: Promising too early leads to rework.
   --tag type=conversation_pattern --tag domain=general
 
 # Later, retrieve it
-keep tag type=conversation_pattern
+keep list --tag type=conversation_pattern
 ```
 
 See [conversations.md](conversations.md) for the full framework.

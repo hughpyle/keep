@@ -21,7 +21,7 @@ The reflective memory provides persistent storage with semantic search.
 keep update file:///project/readme.md -t project=myapp
 keep update "User prefers OAuth2 with PKCE" -t topic=auth
 keep find "authentication flow" --limit 5
-keep tag project=myapp
+keep list --tag project=myapp
 keep get file:///project/readme.md
 ```
 
@@ -280,8 +280,8 @@ There are three domains of tags:
 
 **Temporal queries using system tags (CLI):**
 ```bash
-keep tag _updated_date=2026-01-30   # Items updated today
-keep tag _source=inline             # All inline content
+keep list --tag _updated_date=2026-01-30   # Items updated today
+keep list --tag _source=inline             # All inline content
 ```
 
 **Python API:**
