@@ -1,5 +1,5 @@
 """
-Relationship extraction for associative memory.
+Relationship extraction for reflective memory.
 
 Detects references, links, and relationships between items without
 requiring ML models. These are "batteries-included" extractors that

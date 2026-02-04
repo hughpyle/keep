@@ -1,5 +1,5 @@
 """
-Data types for associative memory.
+Data types for reflective memory.
 """
 
 from dataclasses import dataclass, field
@@ -27,7 +27,7 @@ def filter_non_system_tags(tags: dict[str, str]) -> dict[str, str]:
 @dataclass(frozen=True)
 class Item:
     """
-    An item retrieved from the associative memory store.
+    An item retrieved from the reflective memory store.
     
     This is a read-only snapshot. To modify an item, use api.update()
     which returns a new Item with updated values.

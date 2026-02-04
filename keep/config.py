@@ -1,5 +1,5 @@
 """
-Configuration management for associative memory stores.
+Configuration management for reflective memory stores.
 
 The configuration is stored as a TOML file in the store directory.
 It specifies which providers to use and their parameters.

@@ -1,5 +1,5 @@
 """
-CLI tests for associative memory.
+CLI tests for reflective memory.
 
 Tests verify:
 1. CLI commands map to equivalent Python API

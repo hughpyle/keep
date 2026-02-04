@@ -1,7 +1,7 @@
 """
-Keep - Semantic Memory
+Keep - Reflective Memory
 
-A persistent semantic memory with similarity search, full-text search,
+A persistent reflective memory with similarity search, full-text search,
 and tag-based retrieval. Remember everything, find by meaning.
 
 Quick Start:
@@ -40,7 +40,7 @@ if not os.environ.get("KEEP_VERBOSE"):
 from .api import Keeper, NOWDOC_ID
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, INTERNAL_TAGS
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 __all__ = [
     "Keeper",
     "Item",

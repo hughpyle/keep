@@ -1,5 +1,5 @@
 """
-Core API for associative memory.
+Core API for reflective memory.
 
 This is the minimal working implementation focused on:
 - update(): fetch → embed → summarize → store
@@ -269,7 +269,7 @@ def _text_content_id(content: str) -> str:
 
 class Keeper:
     """
-    Semantic memory keeper - persistent storage with similarity search.
+    Reflective memory keeper - persistent storage with similarity search.
 
     Example:
         kp = Keeper()
@@ -284,7 +284,7 @@ class Keeper:
         decay_half_life_days: float = 30.0
     ) -> None:
         """
-        Initialize or open an existing associative memory store.
+        Initialize or open an existing reflective memory store.
 
         Args:
             store_path: Path to store directory. Uses default if not specified.
