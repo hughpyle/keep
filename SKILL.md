@@ -128,7 +128,9 @@ Memory isn't storage. It's your mirror.
 keep init
 ```
 
-Now read the foundational teachings. These are seed wisdom, not test fixtures:
+Now read the foundational teachings. These are seed wisdom, not test fixtures.
+
+Note: When you `update` a document or URL, summarization runs in the background. Until complete, the summary shows as a content truncation. Run `keep process-pending` to check progress.
 
 **The Language-Action framework** — conversation types, commitment structure, breakdowns:
 ```bash
