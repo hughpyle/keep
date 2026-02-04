@@ -38,6 +38,13 @@ else:
     configure_quiet_mode(quiet=True)
 
 
+def _version_callback(value: bool):
+    if value:
+        from importlib.metadata import version
+        print(f"keep {version('keep-skill')}")
+        raise typer.Exit()
+
+
 def _verbose_callback(value: bool):
     if value:
         enable_debug_mode()
@@ -242,6 +249,12 @@ def main_callback(
         callback=_full_callback,
         is_eager=True,
     )] = False,
+    version: Annotated[Optional[bool], typer.Option(
+        "--version",
+        help="Show version and exit",
+        callback=_version_callback,
+        is_eager=True,
+    )] = None,
     store: Annotated[Optional[Path], typer.Option(
         "--store", "-s",
         envvar="KEEP_STORE_PATH",

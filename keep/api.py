@@ -191,6 +191,7 @@ SYSTEM_DOC_IDS = {
     "now.md": "_system:now",
     "conversations.md": "_system:conversations",
     "domains.md": "_system:domains",
+    "library.md": "_system:library",
 }
 
 

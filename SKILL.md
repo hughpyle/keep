@@ -178,6 +178,7 @@ You've read the core patterns (Layer 2). There's more foundational material.
 **Do this now — read and index:**
 ```bash
 keep get "_system:domains"
+keep get "_system:library"
 keep update "file://$PWD/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary
 keep get "file://$PWD/docs/library/true_person_no_rank.md"
 ```
@@ -186,9 +187,9 @@ These aren't test fixtures. They're seed wisdom:
 
 - **`_system:domains`** — How to organize knowledge by domain (software, research, personal). Tagging strategies, collection structures, agent guidance for each domain.
 
-- **[true_person_no_rank.md](docs/library/true_person_no_rank.md)** — A Zen teaching with layers of commentary. Notice how each commentator re-enacts the pointing from a different angle — not explaining, not accumulating facts, but each responding to what students in that era needed. This is how knowledge in your memory should relate: organic, not hierarchical.
+- **`_system:library`** — Index of public domain texts for testing and practice. Contains URI templates for each file. Use this to discover what seed material is available.
 
-The [docs/library/](docs/library/) directory contains additional seed material.
+- **[true_person_no_rank.md](docs/library/true_person_no_rank.md)** — A Zen teaching with layers of commentary. Notice how each commentator re-enacts the pointing from a different angle — not explaining, not accumulating facts, but each responding to what students in that era needed. This is how knowledge in your memory should relate: organic, not hierarchical.
 
 ---
 
