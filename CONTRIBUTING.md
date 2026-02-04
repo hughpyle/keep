@@ -20,9 +20,10 @@ We use [semantic versioning](https://semver.org/):
 
 **Current status:** Pre-1.0 (0.x.y), so minor versions may include breaking changes, but we try to avoid them.
 
-Version is defined in two places (keep in sync):
+Version is defined in three places (keep in sync):
 - `pyproject.toml` → `version = "x.y.z"`
 - `keep/__init__.py` → `__version__ = "x.y.z"`
+- `SKILL.md` frontmatter → `version: x.y.z`
 
 ## Public API
 
@@ -61,9 +62,10 @@ If you must break compatibility:
 Releases are managed by the maintainer. To prepare a release:
 
 ```bash
-# 1. Update version in both places
+# 1. Update version in all three places
 # pyproject.toml: version = "x.y.z"
 # keep/__init__.py: __version__ = "x.y.z"
+# SKILL.md frontmatter: version: x.y.z
 
 # 2. Commit
 git add -A && git commit -m "Release x.y.z"
