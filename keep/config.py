@@ -19,7 +19,7 @@ import tomli_w
 
 CONFIG_FILENAME = "keep.toml"
 CONFIG_VERSION = 3  # Bumped for document versioning support
-SYSTEM_DOCS_VERSION = 2  # Increment when bundled system docs content changes
+SYSTEM_DOCS_VERSION = 3  # Increment when bundled system docs content changes
 
 
 @dataclass
