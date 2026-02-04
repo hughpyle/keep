@@ -101,6 +101,24 @@ def _filter_by_date(items: list, since: str) -> list:
         if item.tags.get("_updated_date", "0000-00-00") >= cutoff
     ]
 
+
+def _record_to_item(rec, score: float = None) -> "Item":
+    """
+    Convert a DocumentRecord to an Item with timestamp tags.
+
+    Adds _updated, _created, _updated_date from the record's columns
+    to ensure consistent timestamp exposure across all retrieval methods.
+    """
+    from .types import Item
+    tags = {
+        **rec.tags,
+        "_updated": rec.updated_at,
+        "_created": rec.created_at,
+        "_updated_date": rec.updated_at[:10] if rec.updated_at else "",
+    }
+    return Item(id=rec.id, summary=rec.summary, tags=tags, score=score)
+
+
 import os
 import subprocess
 import sys
@@ -674,12 +692,8 @@ class Keeper:
 
         # Return the stored item
         doc_record = self._document_store.get(coll, id)
-        return Item(
-            id=doc_record.id,
-            summary=doc_record.summary,
-            tags=doc_record.tags,
-        )
-    
+        return _record_to_item(doc_record)
+
     def remember(
         self,
         content: str,
@@ -852,11 +866,7 @@ class Keeper:
 
         # Return the stored item
         doc_record = self._document_store.get(coll, id)
-        return Item(
-            id=doc_record.id,
-            summary=doc_record.summary,
-            tags=doc_record.tags,
-        )
+        return _record_to_item(doc_record)
 
     # -------------------------------------------------------------------------
     # Query Operations
@@ -1148,7 +1158,7 @@ class Keeper:
             docs = self._document_store.query_by_tag_key(
                 coll, key, limit=limit, since_date=since_date
             )
-            return [Item(id=d.id, summary=d.summary, tags=d.tags) for d in docs]
+            return [_record_to_item(d) for d in docs]
 
         # Build tag filter from positional or keyword args
         tag_filter = {}
@@ -1222,11 +1232,7 @@ class Keeper:
         # Try document store first (canonical)
         doc_record = self._document_store.get(coll, id)
         if doc_record:
-            return Item(
-                id=doc_record.id,
-                summary=doc_record.summary,
-                tags=doc_record.tags,
-            )
+            return _record_to_item(doc_record)
         
         # Fall back to ChromaDB for legacy data
         result = self._store.get(coll, id)
@@ -1563,14 +1569,7 @@ class Keeper:
         coll = self._resolve_collection(collection)
         records = self._document_store.list_recent(coll, limit)
 
-        return [
-            Item(
-                id=rec.id,
-                summary=rec.summary,
-                tags=rec.tags,
-                score=None,
-            )
-            for rec in records
+        return [_record_to_item(rec) for rec in records
         ]
 
     def embedding_cache_stats(self) -> dict:

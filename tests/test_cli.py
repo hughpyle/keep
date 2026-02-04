@@ -155,14 +155,14 @@ class TestHumanOutput:
         assert "A document about testing" in output
     
     def test_human_item_with_score(self):
-        """Human-readable item shows score in YAML frontmatter."""
-        from keep.cli import _format_item
+        """Human-readable item shows score in full YAML mode."""
+        from keep.cli import _format_yaml_frontmatter
         from keep.types import Item
 
         item = Item(id="test:1", summary="Test", score=0.95)
-        output = _format_item(item, as_json=False)
+        output = _format_yaml_frontmatter(item)
 
-        # YAML frontmatter format
+        # YAML frontmatter format includes score
         assert "score: 0.950" in output
         assert "---" in output
     
@@ -174,20 +174,21 @@ class TestHumanOutput:
         assert "No results" in output
     
     def test_human_list_separates_items(self):
-        """Items are separated for easy reading."""
+        """Items are separated by newlines (summary format)."""
         from keep.cli import _format_items
         from keep.types import Item
-        
+
         items = [
             Item(id="test:1", summary="First"),
             Item(id="test:2", summary="Second"),
         ]
         output = _format_items(items, as_json=False)
-        
-        # Items should be separated (double newline)
-        assert "\n\n" in output
-        assert "test:1" in output
-        assert "test:2" in output
+
+        # Items should be on separate lines (summary format: id@V{N} date summary)
+        lines = output.strip().split("\n")
+        assert len(lines) == 2
+        assert "test:1" in lines[0]
+        assert "test:2" in lines[1]
 
 
 # -----------------------------------------------------------------------------

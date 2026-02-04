@@ -85,6 +85,23 @@ app = typer.Typer(
 )
 
 
+# -----------------------------------------------------------------------------
+# Output Formatting
+#
+# Three output formats, controlled by global flags:
+#   --ids:  versioned ID only (id@V{N})
+#   --full: YAML frontmatter with tags, similar items, version nav
+#   default: summary line (id@V{N} date summary)
+#
+# JSON output (--json) works with any of the above.
+# -----------------------------------------------------------------------------
+
+def _filter_display_tags(tags: dict) -> dict:
+    """Filter out internal-only tags for display."""
+    from .types import INTERNAL_TAGS
+    return {k: v for k, v in tags.items() if k not in INTERNAL_TAGS}
+
+
 def _format_yaml_frontmatter(
     item: Item,
     version_nav: Optional[dict[str, list[VersionInfo]]] = None,
@@ -109,8 +126,9 @@ def _format_yaml_frontmatter(
     lines = ["---", f"id: {item.id}"]
     if viewing_offset is not None:
         lines.append(f"version: {viewing_offset}")
-    if item.tags:
-        tag_items = ", ".join(f"{k}: {v}" for k, v in sorted(item.tags.items()))
+    display_tags = _filter_display_tags(item.tags)
+    if display_tags:
+        tag_items = ", ".join(f"{k}: {v}" for k, v in sorted(display_tags.items()))
         lines.append(f"tags: {{{tag_items}}}")
     if item.score is not None:
         lines.append(f"score: {item.score:.3f}")
@@ -159,6 +177,31 @@ def _format_yaml_frontmatter(
     lines.append("---")
     lines.append(item.summary)  # Summary IS the content
     return "\n".join(lines)
+
+
+def _format_summary_line(item: Item) -> str:
+    """Format item as single summary line: id@version date summary"""
+    # Get version-scoped ID
+    base_id = item.tags.get("_base_id", item.id)
+    version = item.tags.get("_version", "0")
+    versioned_id = f"{base_id}@V{{{version}}}"
+
+    # Get date (from _updated_date or _updated or _created)
+    date = item.tags.get("_updated_date") or item.tags.get("_updated", "")[:10] or item.tags.get("_created", "")[:10] or ""
+
+    # Truncate summary to ~60 chars, collapse newlines
+    summary = item.summary.replace("\n", " ")
+    if len(summary) > 60:
+        summary = summary[:57].rsplit(" ", 1)[0] + "..."
+
+    return f"{versioned_id} {date} {summary}"
+
+
+def _format_versioned_id(item: Item) -> str:
+    """Format item ID with version suffix: id@V{N}"""
+    base_id = item.tags.get("_base_id", item.id)
+    version = item.tags.get("_version", "0")
+    return f"{base_id}@V{{{version}}}"
 
 
 @app.callback(invoke_without_command=True)
@@ -246,10 +289,6 @@ SinceOption = Annotated[
 ]
 
 
-# -----------------------------------------------------------------------------
-# Output Helpers
-# -----------------------------------------------------------------------------
-
 def _format_item(
     item: Item,
     as_json: bool = False,
@@ -259,27 +298,30 @@ def _format_item(
     similar_offsets: Optional[dict[str, int]] = None,
 ) -> str:
     """
-    Format an item for display.
+    Format a single item for display.
 
-    Text format: YAML frontmatter (matches system document format)
-    With --ids: just the ID (for piping)
+    Output selection:
+      --ids: versioned ID only
+      --full or version_nav/similar_items present: YAML frontmatter
+      default: summary line (id@V{N} date summary)
 
     Args:
         item: The item to format
         as_json: Output as JSON
-        version_nav: Optional version navigation info (prev/next lists)
-        viewing_offset: If viewing an old version, the offset (1=previous, 2=two ago)
-        similar_items: Optional list of similar items to display
-        similar_offsets: Version offsets for similar items (item.id -> offset)
+        version_nav: Version navigation info (triggers full format)
+        viewing_offset: Version offset if viewing old version (triggers full format)
+        similar_items: Similar items to display (triggers full format)
+        similar_offsets: Version offsets for similar items
     """
     if _get_ids_output():
-        return json.dumps(item.id) if as_json else item.id
+        versioned_id = _format_versioned_id(item)
+        return json.dumps(versioned_id) if as_json else versioned_id
 
     if as_json:
         result = {
             "id": item.id,
             "summary": item.summary,
-            "tags": item.tags,
+            "tags": _filter_display_tags(item.tags),
             "score": item.score,
         }
         if viewing_offset is not None:
@@ -322,13 +364,18 @@ def _format_item(
                 result["version_nav"]["next"] = [{"offset": 0, "vid": f"{item.id}@V{{0}}", "label": "current"}]
         return json.dumps(result)
 
-    return _format_yaml_frontmatter(item, version_nav, viewing_offset, similar_items, similar_offsets)
+    # Full format when:
+    # - --full flag is set
+    # - version navigation or similar items are provided (can't display in summary)
+    if _get_full_output() or version_nav or similar_items or viewing_offset is not None:
+        return _format_yaml_frontmatter(item, version_nav, viewing_offset, similar_items, similar_offsets)
+    return _format_summary_line(item)
 
 
 def _format_items(items: list[Item], as_json: bool = False) -> str:
     """Format multiple items for display."""
     if _get_ids_output():
-        ids = [item.id for item in items]
+        ids = [_format_versioned_id(item) for item in items]
         return json.dumps(ids) if as_json else "\n".join(ids)
 
     if as_json:
@@ -336,15 +383,20 @@ def _format_items(items: list[Item], as_json: bool = False) -> str:
             {
                 "id": item.id,
                 "summary": item.summary,
-                "tags": item.tags,
+                "tags": _filter_display_tags(item.tags),
                 "score": item.score,
             }
             for item in items
         ], indent=2)
-    else:
-        if not items:
-            return "No results."
-        return "\n\n".join(_format_item(item, as_json=False) for item in items)
+
+    if not items:
+        return "No results."
+
+    # Full format: YAML frontmatter with double-newline separator
+    # Default: summary lines with single-newline separator
+    if _get_full_output():
+        return "\n\n".join(_format_yaml_frontmatter(item) for item in items)
+    return "\n".join(_format_summary_line(item) for item in items)
 
 
 def _get_keeper(store: Optional[Path], collection: str) -> Keeper:
@@ -461,22 +513,11 @@ def list_recent(
     """
     List recent items by update time.
 
-    Shows IDs by default (composable). Use --full for detailed output.
+    Default: summary lines. Use --ids for IDs only, --full for YAML.
     """
     kp = _get_keeper(store, collection)
     results = kp.list_recent(limit=limit)
-
-    # Determine output mode: --full > --ids > command default (IDs for list)
-    if _get_json_output():
-        # JSON always outputs full items
-        typer.echo(_format_items(results, as_json=True))
-    elif _get_full_output():
-        # --full flag: full YAML output
-        typer.echo(_format_items(results, as_json=False))
-    else:
-        # Default for list: IDs only (composable)
-        for item in results:
-            typer.echo(item.id)
+    typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
 @app.command()
