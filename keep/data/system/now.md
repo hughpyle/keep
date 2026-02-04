@@ -5,8 +5,7 @@ tags:
 ---
 # Now
 
-Reminders for essential practice.
-(Keep this updated as you need)
+Now: reflect on this work using `keep`.
 
 **Before acting:**
 - Where are we in the conversation?

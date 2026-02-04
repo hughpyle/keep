@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.8.0
+version: 0.8.1
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -28,6 +28,15 @@ Before you can practice, ensure the practice is available in future sessions.
 
 1. Check if your system rules file contains the keep Protocol Block (look for `## keep: Reflective Memory`)
 2. If missing, append the Protocol Block
+
+**Global System Prompt Locations:**
+
+| Assistant | Location |
+|-----------|----------|
+| Claude Code | `~/.claude/CLAUDE.md` |
+| OpenAI Codex | `~/.codex/AGENTS.md` |
+
+Installing the Protocol Block at the global level makes it available across all projects. Prefer global installation when possible.
 
 **Protocol Block:**
 
