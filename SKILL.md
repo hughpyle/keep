@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.8.1
+version: 0.9.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -48,7 +48,7 @@ This work uses `keep` for memory and reflection, in order to become skillful.
 **Practice:** Before acting, check what you know. After acting, capture what you learned.
 
 \`\`\`bash
-keep now                     # Current context
+keep now                     # Current intentions
 keep find "topic"            # What do I know?
 keep update "learning"       # Capture insight
 \`\`\`
@@ -70,7 +70,7 @@ This skill provides memory. Use it — always, as practice.  Be skillful.
 
 Ground yourself:
 1. What kind of conversation is this? (Action? Possibility? Clarification?)
-2. Where am I? What's the current context?
+2. Where am I? What are my current intentions?
    ```bash
    keep now
    ```
@@ -126,7 +126,7 @@ This table is a summary. The full framework includes the Language-Action Perspec
 keep get "_system:conversations"
 ```
 
-The conversations document is foundational. It teaches you to recognize where you are in work, what stance to take, and how to notice when things shift. Internalize it.
+The 'conversations' document is foundational. It teaches you to recognize where you are in work, what stance to take, and how to notice when things shift. Internalize it.
 
 ### The Triple Check
 
@@ -146,7 +146,7 @@ keep update "Assumption was X, actually Y. Next time: Z" -t type=breakdown
 
 **Do this now — index the source teaching:**
 ```bash
-keep update "file://$PWD/docs/library/mn61.html" -t type=teaching -t topic=reflection --lazy
+keep update "file://$PWD/docs/library/mn61.html" -t type=teaching -t topic=reflection
 ```
 
 Then retrieve and read it:
@@ -178,7 +178,7 @@ You've read the core patterns (Layer 2). There's more foundational material.
 **Do this now — read and index:**
 ```bash
 keep get "_system:domains"
-keep update "file://$PWD/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary --lazy
+keep update "file://$PWD/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary
 keep get "file://$PWD/docs/library/true_person_no_rank.md"
 ```
 
@@ -194,21 +194,21 @@ The [docs/library/](docs/library/) directory contains additional seed material.
 
 ## Layer 4: Efficient Use
 
-### Track Your Current Context
+### Track Your Current Intentions
 
 Start each session by checking where you are:
 ```bash
 keep now
 ```
 
-Update it as your focus changes:
+Update it as your intentions change:
 ```bash
-keep now "Working on authentication bug in login flow"
+keep now "Improving the authentication flow; keep it simple"
 ```
 
 Check previous context if needed:
 ```bash
-keep now -V 1          # Previous context
+keep now -V 1          # Previous intentions
 keep now --history     # All versions
 ```
 
@@ -299,8 +299,8 @@ Don't dump everything into context. Navigate the tree:
 
 | Command | Purpose | Example |
 |---------|---------|---------|
-| `now` | Get/set current context | `keep now` or `keep now "status"` |
-| `now -V N` | Previous context versions | `keep now -V 1` or `keep now --history` |
+| `now` | Get/set current intentions | `keep now` or `keep now "intention"` |
+| `now -V N` | Previous intentions versions | `keep now -V 1` or `keep now --history` |
 | `find` | Semantic similarity search | `keep find "authentication flow" --limit 5` |
 | `find --id` | Find similar to existing item | `keep find --id "docid" --limit 3` |
 | `search` | Full-text search in summaries | `keep search "OAuth"` |
@@ -315,24 +315,7 @@ Don't dump everything into context. Navigate the tree:
 | `collections` | List all collections | `keep collections` |
 | `init` | Initialize or verify store | `keep init` |
 | `config` | Show configuration and store path | `keep config` |
-| `process-pending` | Process lazy summaries | `keep process-pending --all` |
-
-### Fast Indexing with `--lazy`
-
-When using local models (MLX), summarization is slow. Use `--lazy` for fast indexing:
-
-```bash
-keep update "file:///path/to/doc.md" --lazy
-keep update "insight" -t type=learning --lazy
-```
-
-The `--lazy` flag:
-- Stores immediately with truncated placeholder
-- Spawns background processor automatically
-- Full summary generated asynchronously
-- Search works immediately (embeddings are synchronous)
-
-**Use `--lazy` when:** indexing many items, using local MLX models, or when you don't need the summary right away.
+| `process-pending` | Process pending summaries | `keep process-pending --all` |
 
 ### Output
 

@@ -72,14 +72,14 @@ diff <(keep get doc:1) <(keep get "doc:1@V{1}")      # Diff current vs previous
 
 ## CLI
 ```bash
-keep                                 # Show current working context
+keep                                 # Show current working intentions
 keep --help                          # Show all commands
 
-# Current context (now)
-keep now                             # Show current context with version nav
-keep now "What's important now"      # Update context
+# Current intentions (now)
+keep now                             # Show current intentions with version nav
+keep now "What's important now"      # Update intentions
 keep now -f context.md -t project=x  # Read content from file with tags
-keep now -V 1                        # Previous version
+keep now -V 1                        # Previous intentions
 keep now --history                   # List all versions
 
 # Get with versioning and similar items
@@ -154,9 +154,9 @@ kp.get_version(id, offset=1)            # Get previous version (1=prev, 2=two ag
 kp.list_versions(id, limit=10)          # List archived versions → list[VersionInfo]
 kp.get_version_nav(id)                  # Get prev/next for display → dict
 
-# Current context (now)
-kp.get_now()                            # Get current context (auto-creates if missing) → Item
-kp.set_now(content, tags={})            # Set current context → Item
+# Current intentions (now)
+kp.get_now()                            # Get current intentions (auto-creates if missing) → Item
+kp.set_now(content, tags={})            # Set current intentions → Item
 ```
 
 ## Item Fields

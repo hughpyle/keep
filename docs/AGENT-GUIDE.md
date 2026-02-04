@@ -85,8 +85,8 @@ Use the nowdoc as a scratchpad to track where you are in the work. This isn't en
 
 **Session lifecycle (CLI):**
 ```bash
-# 1. Starting work — check current context (shows version history too)
-keep now                                    # Show current context with prev versions
+# 1. Starting work — check current intentions (shows version history too)
+keep now                                    # Show current intentions with prev versions
 
 # 2. Update context as work evolves
 keep now "Diagnosing flaky test in auth module"
@@ -102,7 +102,7 @@ keep update "Flaky timing fix: mock time instead of real assertions" -t type=lea
 
 **Python API equivalent:**
 ```python
-# 1. Starting work — check current context
+# 1. Starting work — check current intentions
 now = kp.get_now()
 print(now.summary)  # What are we working on?
 
@@ -132,8 +132,8 @@ kp.set_now("Completed flaky test fix.", tags={"state": "completed"})
 
 **Starting a session (CLI):**
 ```bash
-keep now                              # Check current context with version history
-keep now --history                    # See how context evolved
+keep now                              # Check current intentions with version history
+keep now --history                    # See how intentions evolved
 keep find "recent work" --since P1D   # Last 24 hours
 ```
 

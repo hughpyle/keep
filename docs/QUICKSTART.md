@@ -42,14 +42,14 @@ keep list --tags=                      # List all tag keys
 keep tag-update ID --tag status=done   # Update tags
 ```
 
-## Current Context
+## Current Intentions
 
 Track what you're working on:
 
 ```bash
-keep now                               # Show current context
-keep now "Working on auth bug"         # Update context
-keep now -V 1                          # Previous context
+keep now                               # Show current intentions
+keep now "Working on auth bug"         # Update intentions
+keep now -V 1                          # Previous intentions
 keep now --history                     # All versions
 ```
 
@@ -94,14 +94,16 @@ prev = kp.get_version("doc:1", offset=1)     # Previous version
 versions = kp.list_versions("doc:1")          # All versions
 ```
 
-## Lazy Summarization
+## Async Summarization
 
-Local MLX summarization is slow. Use `--lazy` for fast indexing:
+For large content, summarization happens automatically in the background:
 
 ```bash
-keep update file:///doc.md --lazy    # Stores immediately, summarizes in background
+keep update file:///large-doc.md     # Stores immediately, summarizes in background
 keep process-pending                  # Check/process pending summaries
 ```
+
+Short content uses the text verbatim as its summary (no processing needed).
 
 ## Configuration
 
@@ -137,7 +139,7 @@ OPENAI_API_KEY=sk-...                # For OpenAI providers
 
 **ChromaDB errors:** Delete `.keep/chroma/` to reset.
 
-**Slow local summarization:** Use `--lazy` flag.
+**Slow local summarization:** Large content is summarized in the background automatically.
 
 ## Next Steps
 

@@ -251,7 +251,7 @@ def main_callback(
     )] = None,
 ):
     """Reflective memory with semantic search."""
-    # If no subcommand provided, show the current context (now)
+    # If no subcommand provided, show the current intentions (now)
     if ctx.invoked_subcommand is None:
         from .api import NOWDOC_ID
         kp = _get_keeper(None, "default")
@@ -683,10 +683,6 @@ def update(
         "--summary",
         help="User-provided summary (skips auto-summarization)"
     )] = None,
-    lazy: Annotated[bool, typer.Option(
-        "--lazy",
-        help="Fast mode: use truncated summary, queue for later processing"
-    )] = False,
 ):
     """
     Add or update a document in the store.
@@ -715,15 +711,15 @@ def update(
         parsed_tags = {**frontmatter_tags, **parsed_tags}  # CLI tags override
         # Use content-addressed ID for stdin text (enables versioning)
         doc_id = id or _text_content_id(content)
-        item = kp.remember(content, id=doc_id, summary=summary, tags=parsed_tags or None, lazy=lazy)
+        item = kp.remember(content, id=doc_id, summary=summary, tags=parsed_tags or None)
     elif source and _URI_SCHEME_PATTERN.match(source):
         # URI mode: fetch from URI (ID is the URI itself)
-        item = kp.update(source, tags=parsed_tags or None, summary=summary, lazy=lazy)
+        item = kp.update(source, tags=parsed_tags or None, summary=summary)
     elif source:
         # Text mode: inline content (no :// in source)
         # Use content-addressed ID for text (enables versioning)
         doc_id = id or _text_content_id(source)
-        item = kp.remember(source, id=doc_id, summary=summary, tags=parsed_tags or None, lazy=lazy)
+        item = kp.remember(source, id=doc_id, summary=summary, tags=parsed_tags or None)
     else:
         typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
         raise typer.Exit(1)
@@ -760,15 +756,15 @@ def now(
     )] = None,
 ):
     """
-    Get or set the current working context.
+    Get or set the current working intentions.
 
-    With no arguments, displays the current context.
+    With no arguments, displays the current intentions.
     With content, replaces it.
 
     \b
     Examples:
-        keep now                         # Show current context
-        keep now "What's important now"  # Update context
+        keep now                         # Show current intentions
+        keep now "What's important now"  # Update intentions
         keep now -f context.md           # Read content from file
         keep now --reset                 # Reset to default from system
         keep now -V 1                    # Previous version
@@ -891,7 +887,7 @@ def now(
         item = kp.set_now(new_content, tags=parsed_tags or None)
         typer.echo(_format_item(item, as_json=_get_json_output()))
     else:
-        # Get current context with version navigation and similar items
+        # Get current intentions with version navigation and similar items
         item = kp.get_now()
         version_nav = kp.get_version_nav(NOWDOC_ID, None, collection=collection)
         similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection=collection)
