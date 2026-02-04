@@ -1778,10 +1778,18 @@ class Keeper:
 
     def close(self) -> None:
         """
-        Close resources (embedding cache connection, pending queue, etc.).
+        Close resources (stores, caches, queues).
 
         Good practice to call when done, though Python's GC will clean up eventually.
         """
+        # Close ChromaDB store
+        if hasattr(self, '_store') and self._store is not None:
+            self._store.close()
+
+        # Close document store (SQLite)
+        if hasattr(self, '_document_store') and self._document_store is not None:
+            self._document_store.close()
+
         # Close embedding cache if it was loaded
         if self._embedding_provider is not None:
             if hasattr(self._embedding_provider, '_cache'):
@@ -1804,4 +1812,7 @@ class Keeper:
 
     def __del__(self):
         """Cleanup on deletion."""
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass  # Suppress errors during garbage collection

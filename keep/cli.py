@@ -298,6 +298,7 @@ CollectionOption = Annotated[
     str,
     typer.Option(
         "--collection", "-c",
+        envvar="KEEP_COLLECTION",
         help="Collection name"
     )
 ]

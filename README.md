@@ -9,7 +9,7 @@ uv tool install 'keep-skill[local]'
 keep init
 
 # Index content
-keep update path/to/document.md -t project=myapp
+keep update file:///path/to/document.md -t project=myapp
 keep update "Rate limit is 100 req/min" -t topic=api
 
 # Search by meaning
@@ -64,6 +64,7 @@ keep init                              # Creates .keep/ at repo root
 
 # Index files and notes
 keep update file:///path/to/doc.md -t project=myapp
+keep update "Token refresh needs clock sync" -t topic=auth
 keep update "Important insight" -t type=note
 
 # Search
@@ -78,6 +79,7 @@ keep get ID --history                  # All versions
 
 # Tags
 keep list --tag project=myapp          # Find by tag
+keep find "auth" -t topic=auth         # Cross-project topic search
 keep list --tags=                      # List all tag keys
 
 # Current intentions

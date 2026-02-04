@@ -21,8 +21,11 @@ The reflective memory provides persistent storage with semantic search.
 keep update file:///project/readme.md -t project=myapp
 keep update "User prefers OAuth2 with PKCE" -t topic=auth
 keep find "authentication flow" --limit 5
+keep find "auth" -t project=myapp              # Semantic search + tag filter
 keep list --tag project=myapp
 keep get file:///project/readme.md
+keep get ID -t project=myapp                    # Verify item has tag
+keep now -t project=myapp                       # Find now version with tag
 ```
 
 **Python API:**
@@ -79,49 +82,73 @@ if kp.exists("file:///project/readme.md"):
 
 ---
 
+## The Practice
+
+This guide assumes familiarity with the reflective practice in [SKILL.md](../SKILL.md). The key points:
+
+**Reflect before acting:** Check your current work context and intentions.
+- What kind of conversation is this? (Action? Possibility? Clarification?)
+- What do I already know?
+```bash
+keep now                    # Current context
+keep find "this situation"  # Prior knowledge
+```
+
+**While acting:** Is this leading to harm? If yes: give it up.
+
+**Reflect after acting:** What happened? What did I learn?
+```bash
+keep update "what I learned" -t type=learning
+```
+
+This cycle — reflect, act, reflect — is the mirror teaching. Memory isn't storage; it's how you develop skillful judgment.
+
+---
+
 ## Working Session Pattern
 
 Use the nowdoc as a scratchpad to track where you are in the work. This isn't enforced structure — it's a convention that helps you (and future agents) maintain perspective.
 
 **Session lifecycle (CLI):**
 ```bash
-# 1. Starting work — check current intentions (shows version history too)
-keep now                                    # Show current intentions with prev versions
+# 1. Starting work — check your current work context and intentions
+keep now                                    # What am I working on? What kind of conversation is this?
 
-# 2. Update context as work evolves
-keep now "Diagnosing flaky test in auth module"
-keep now "Found timing issue" -t state=investigating
+# 2. Update context as work evolves (tag by project and topic)
+keep now "Diagnosing flaky test in auth module" -t project=myapp -t topic=testing
+keep now "Found timing issue" -t project=myapp -t state=investigating
 
 # 3. Check previous context if needed
 keep now -V 1                               # Previous version
 keep now --history                          # List all versions
+keep now -t project=myapp                   # Find recent now with project tag
 
-# 4. Record learnings separately
-keep update "Flaky timing fix: mock time instead of real assertions" -t type=learning
+# 4. Record learnings (cross-project knowledge uses topic only)
+keep update "Flaky timing fix: mock time instead of real assertions" -t topic=testing -t type=learning
 ```
 
 **Python API equivalent:**
 ```python
-# 1. Starting work — check current intentions
+# 1. Starting work — check your current work context and intentions
 now = kp.get_now()
-print(now.summary)  # What are we working on?
+print(now.summary)  # What am I working on? What kind of conversation is this?
 
-# 2. Update context as work evolves
+# 2. Update context as work evolves (tag by project and topic)
 kp.set_now(
     "Diagnosing flaky test in auth module. Likely timing issue.",
-    tags={"topic": "testing", "state": "investigating"}
+    tags={"project": "myapp", "topic": "testing", "state": "investigating"}
 )
 
 # 3. Check previous context if needed
 prev = kp.get_version("_now:default", offset=1)  # Previous version
 versions = kp.list_versions("_now:default")       # All versions
 
-# 4. Record the learning
+# 4. Record cross-project learning (topic only, no project)
 kp.remember(
     content="Flaky timing in CI → mock time instead of real assertions.",
-    tags={"type": "learning", "domain": "testing"}
+    tags={"topic": "testing", "type": "learning"}
 )
-kp.set_now("Completed flaky test fix.", tags={"state": "completed"})
+kp.set_now("Completed flaky test fix.", tags={"project": "myapp", "state": "completed"})
 ```
 
 **Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first. All updates create version history automatically.
@@ -168,6 +195,18 @@ recent = kp.find("", since="P1D")                    # Last day
 auth_items = kp.find("authentication", since="P7D") # Last week
 today = kp.query_tag("_updated_date", "2026-01-30") # Today
 ```
+
+---
+
+## Breakdowns as Learning
+
+When the normal flow is interrupted — expected response doesn't come, ambiguity surfaces — an assumption has been revealed. **First:** complete the immediate conversation. **Then record:**
+
+```bash
+keep update "Assumed user wanted full rewrite. Actually: minimal patch." -t type=breakdown
+```
+
+Breakdowns are how agents learn.
 
 ---
 

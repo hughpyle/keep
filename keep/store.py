@@ -556,3 +556,34 @@ class ChromaStore:
         """Return the number of items in a collection."""
         coll = self._get_collection(collection)
         return coll.count()
+
+    # -------------------------------------------------------------------------
+    # Resource Management
+    # -------------------------------------------------------------------------
+
+    def close(self) -> None:
+        """
+        Close ChromaDB client and release resources.
+
+        Good practice to call when done, though Python's GC will clean up eventually.
+        """
+        self._collections.clear()
+        # ChromaDB PersistentClient doesn't have explicit close(),
+        # but clearing references allows garbage collection
+        self._client = None
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - close resources."""
+        self.close()
+        return False
+
+    def __del__(self):
+        """Cleanup on deletion."""
+        try:
+            self.close()
+        except Exception:
+            pass  # Suppress errors during garbage collection

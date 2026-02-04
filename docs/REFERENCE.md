@@ -108,12 +108,18 @@ keep find "query" --since 2026-01-15 # Since specific date
 keep find --id ID --since P30D       # Similar items from last 30 days
 keep search "text" --since P3D       # Full-text search, last 3 days
 
-# Tag filtering (via list)
+# Tag filtering
 keep list --tags=                    # List all tag keys
 keep list --tags=project             # List values for 'project' tag
 keep list --tag project=myapp        # Find docs with project=myapp
 keep list --tag project --since P7D  # Filter by tag and recency
 keep list --tag foo --tag bar        # Items with both tags
+
+# Tag filtering on search commands
+keep find "auth" -t project=myapp    # Semantic search + tag filter
+keep find "auth" -t project -t done  # Multiple tags (AND logic)
+keep get ID -t project=myapp         # Verify item has tag (error if not)
+keep now -t project=myapp            # Find recent now version with tag
 
 keep tag-update ID --tag key=value   # Add/update tag
 keep tag-update ID --remove key      # Remove tag
@@ -207,6 +213,44 @@ kp.query_tag("project")                      # Any doc with 'project' tag
 kp.list_tags()                               # All distinct tag keys
 kp.list_tags("project")                      # All values for 'project'
 ```
+
+### Organizing by Project and Topic
+
+Two tags help organize work across boundaries:
+
+| Tag | Scope | Examples |
+|-----|-------|----------|
+| `project` | Bounded work context | `myapp`, `api-v2`, `migration` |
+| `topic` | Cross-project subject area | `auth`, `testing`, `performance` |
+
+**Usage patterns:**
+```bash
+# Project-specific knowledge
+keep update "OAuth2 with PKCE chosen" -t project=myapp -t topic=auth
+
+# Cross-project knowledge (topic only)
+keep update "Token refresh needs clock sync" -t topic=auth
+
+# Search within a project
+keep find "authentication" -t project=myapp
+
+# Search across projects by topic
+keep find "authentication" -t topic=auth
+
+# Big picture (no project filter)
+keep find "recent work" --since P1D
+```
+
+**For complete segregation**, use collections with `KEEP_COLLECTION`:
+```bash
+export KEEP_COLLECTION=work
+keep now "work context"
+
+export KEEP_COLLECTION=personal
+keep now "personal context"
+```
+
+Collections are separate stores. Tags are overlays within a store.
 
 ## System Tags (auto-managed)
 

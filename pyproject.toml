@@ -65,6 +65,7 @@ openclaw = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "google-genai>=1.0.0",
 ]
 
 [project.scripts]
@@ -79,4 +80,13 @@ include = [
     "/SKILL.md",
     "/README.md",
     "/LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".venv", "dist", ".git"]
+addopts = "-m 'not slow'"
+markers = [
+    "slow: marks tests as slow (require ML models)",
+    "e2e: marks tests as end-to-end (require real providers)",
 ]
