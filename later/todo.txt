@@ -70,10 +70,6 @@
 * multi-embeddings
     - background task can detect current config and maintain compat
 
-* review how system documents (e.g. "metaschema") are used today, if any
-    - use `keep tag category=system` to list system docs
-    - consider adding `-n` limit and `--since` filters to `keep tag` command 
-
 * review the CLI completely.  Can the common tasks have single-letter aliases for their commands?
 
 * "relevance / focus scores" are to be decveloped within the context of "topics / projects"
@@ -114,10 +110,6 @@
 * compare the openclaw plugin against the other memory plugins on the hub
 
 * move plugin into a `plugins` directory? yuk name, these are not "plugins for keep", so what?
-
-* `context` text alongside summaries?
-    - optional field for "why this matters" or additional notes
-    - completely optional, not a priority
 
 ----
 
@@ -182,3 +174,6 @@ Done:
 . AN5.57 URLs added to INDEX.md
 . consolidated three output formats: --ids (versioned ID), --full (YAML frontmatter), default (summary line)
 . self-healing install: Layer 0 in SKILL.md teaches agents to install Protocol Block in system rules
+x `context` text alongside summaries? (no, summary is good now)
+. review how system documents (e.g. "metaschema") are used today, if any
+. consolidated `keep tag` into `keep list`: --tag for filtering, --tags for listing, --since for time filtering

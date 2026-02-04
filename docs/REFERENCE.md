@@ -61,7 +61,7 @@ Version numbers are **offsets**: @V{0} = current, @V{1} = previous, @V{2} = two 
 
 ```bash
 keep --ids find "auth" | xargs keep get              # Get full details
-keep --ids tag project=foo | xargs keep tag-update --tag status=done
+keep --ids list --tag project=foo | xargs keep tag-update --tag status=done
 keep --json --ids find "query"                       # JSON array: ["id@V{0}", ...]
 
 # Version history composition
@@ -108,11 +108,12 @@ keep find "query" --since 2026-01-15 # Since specific date
 keep find --id ID --since P30D       # Similar items from last 30 days
 keep search "text" --since P3D       # Full-text search, last 3 days
 
-# Tag commands
-keep tag --list                      # List all tag keys
-keep tag project                     # List values for 'project' tag
-keep tag project=myapp               # Find docs with project=myapp
-keep tag project=myapp --since P7D   # Filter by recency
+# Tag filtering (via list)
+keep list --tags=                    # List all tag keys
+keep list --tags=project             # List values for 'project' tag
+keep list --tag project=myapp        # Find docs with project=myapp
+keep list --tag project --since P7D  # Filter by tag and recency
+keep list --tag foo --tag bar        # Items with both tags
 
 keep tag-update ID --tag key=value   # Add/update tag
 keep tag-update ID --remove key      # Remove tag

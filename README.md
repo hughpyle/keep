@@ -77,8 +77,8 @@ keep get "ID@V{1}"                     # Same as -V 1 (version identifier)
 keep get ID --history                  # All versions
 
 # Tags
-keep tag project=myapp                 # Find by tag
-keep tag --list                        # List all tags
+keep list --tag project=myapp          # Find by tag
+keep list --tags=                      # List all tag keys
 
 # Current context
 keep now                               # Show what you're working on

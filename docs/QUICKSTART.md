@@ -37,8 +37,8 @@ keep get file:///path/to/doc.md
 keep get ID --no-similar             # Without similar items
 
 # Tags
-keep tag project=myapp                 # Find by tag
-keep tag --list                        # List all tags
+keep list --tag project=myapp          # Find by tag
+keep list --tags=                      # List all tag keys
 keep tag-update ID --tag status=done   # Update tags
 ```
 

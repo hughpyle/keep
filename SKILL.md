@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.7.0
+version: 0.8.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -252,8 +252,8 @@ keep update "Token refresh fails if clock skew > 30s" -t domain=auth -t type=fin
 
 Later:
 ```bash
-keep tag domain=auth     # Everything about auth
-keep tag type=decision   # All decisions made
+keep list --tag domain=auth     # Everything about auth
+keep list --tag type=decision   # All decisions made
 ```
 
 **Suggested tag dimensions:**
@@ -300,7 +300,8 @@ Don't dump everything into context. Navigate the tree:
 | `get` | Retrieve item (shows similar items) | `keep get "file:///path/to/doc.md"` |
 | `get --similar` | List similar items | `keep get ID --similar` or `-n 20` for more |
 | `get -V N` | Previous versions | `keep get ID -V 1` or `keep get ID --history` |
-| `tag` | List tag values or find by tag | `keep tag domain=auth` or `keep tag --list` |
+| `list --tag` | Filter items by tag | `keep list --tag domain=auth` |
+| `list --tags` | List tag keys or values | `keep list --tags=` or `keep list --tags=domain` |
 | `tag-update` | Modify tags on existing item | `keep tag-update "id" --tag key=value` |
 | `collections` | List all collections | `keep collections` |
 | `init` | Initialize or verify store | `keep init` |
@@ -360,7 +361,7 @@ keep -v find "auth"        # Debug logging
 Use `--ids` for Unix-style composition:
 ```bash
 keep --ids find "auth" | xargs keep get         # Get full details of matches
-keep --ids tag project=foo | xargs keep tag-update --tag status=done
+keep --ids list --tag project=foo | xargs keep tag-update --tag status=done
 keep --ids list | xargs -I{} keep get "{}"      # Get details for recent items
 ```
 
