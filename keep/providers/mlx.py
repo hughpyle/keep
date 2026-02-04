@@ -81,14 +81,18 @@ class MLXSummarization:
     Requires: pip install mlx-lm
     """
     
-    SYSTEM_PROMPT = """You are a precise summarization assistant. 
+    SYSTEM_PROMPT = """You are a precise summarization assistant.
 Create a concise summary of the provided document that captures:
 - The main purpose or topic
 - Key points or functionality
 - Important details that would help someone decide if this document is relevant
 
-Be factual and specific. Do not include phrases like "This document" - just state the content directly.
-Keep the summary under 200 words."""
+IMPORTANT: Start the summary directly with the content. Do NOT begin with phrases like:
+- "Here is a concise summary"
+- "This document describes"
+- "The document covers"
+- "Summary:"
+Just state the facts directly. Keep the summary under 200 words."""
     
     def __init__(
         self,
@@ -151,8 +155,27 @@ Keep the summary under 200 words."""
             max_tokens=self.max_tokens,
             verbose=False,
         )
-        
-        return response.strip()
+
+        return self._strip_preamble(response.strip())
+
+    def _strip_preamble(self, text: str) -> str:
+        """Remove common LLM preambles from summaries."""
+        import re
+        # Common preambles to strip (case-insensitive)
+        preambles = [
+            r"^here is a concise summary[^:]*:\s*",
+            r"^here is the summary[^:]*:\s*",
+            r"^here's a summary[^:]*:\s*",
+            r"^summary:\s*",
+            r"^the document describes\s+",
+            r"^this document describes\s+",
+            r"^the document covers\s+",
+            r"^this document covers\s+",
+        ]
+        result = text
+        for pattern in preambles:
+            result = re.sub(pattern, "", result, flags=re.IGNORECASE)
+        return result
 
 
 class MLXTagging:
