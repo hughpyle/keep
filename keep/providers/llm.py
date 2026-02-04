@@ -6,7 +6,13 @@ import json
 import os
 from typing import Any
 
-from .base import SummarizationProvider, TaggingProvider, get_registry
+from .base import (
+    SummarizationProvider,
+    TaggingProvider,
+    get_registry,
+    SUMMARIZATION_SYSTEM_PROMPT,
+    strip_summary_preamble,
+)
 
 
 # -----------------------------------------------------------------------------
@@ -16,18 +22,10 @@ from .base import SummarizationProvider, TaggingProvider, get_registry
 class AnthropicSummarization:
     """
     Summarization provider using Anthropic's Claude API.
-    
+
     Requires: ANTHROPIC_API_KEY environment variable.
     Optionally reads from OpenClaw config via OPENCLAW_CONFIG env var.
     """
-    
-    SYSTEM_PROMPT = """You are a precise summarization assistant. 
-Create a concise summary of the provided document that captures:
-- The main purpose or topic
-- Key points or functionality
-- Important details that would help someone decide if this document is relevant
-
-Be factual and specific. Do not include phrases like "This document" - just state the content directly."""
     
     def __init__(
         self,
@@ -56,22 +54,22 @@ Be factual and specific. Do not include phrases like "This document" - just stat
         """Generate summary using Anthropic Claude."""
         # Truncate very long content
         truncated = content[:50000] if len(content) > 50000 else content
-        
+
         try:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                system=self.SYSTEM_PROMPT,
+                system=SUMMARIZATION_SYSTEM_PROMPT,
                 messages=[
                     {"role": "user", "content": truncated}
                 ],
             )
-            
+
             # Extract text from response
             if response.content and len(response.content) > 0:
-                return response.content[0].text
+                return strip_summary_preamble(response.content[0].text)
             return truncated[:500]  # Fallback
-        except Exception as e:
+        except Exception:
             # Fallback to truncation on error
             return truncated[:500]
 
@@ -79,18 +77,10 @@ Be factual and specific. Do not include phrases like "This document" - just stat
 class OpenAISummarization:
     """
     Summarization provider using OpenAI's chat API.
-    
+
     Requires: KEEP_OPENAI_API_KEY or OPENAI_API_KEY environment variable.
     """
-    
-    SYSTEM_PROMPT = """You are a precise summarization assistant. 
-Create a concise summary of the provided document that captures:
-- The main purpose or topic
-- Key points or functionality
-- Important details that would help someone decide if this document is relevant
 
-Be factual and specific. Do not include phrases like "This document" - just state the content directly."""
-    
     def __init__(
         self,
         model: str = "gpt-4o-mini",
@@ -101,41 +91,39 @@ Be factual and specific. Do not include phrases like "This document" - just stat
             from openai import OpenAI
         except ImportError:
             raise RuntimeError("OpenAISummarization requires 'openai' library")
-        
+
         self.model = model
         self.max_tokens = max_tokens
-        
+
         key = api_key or os.environ.get("KEEP_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise ValueError("OpenAI API key required")
-        
+
         self._client = OpenAI(api_key=key)
-    
+
     def summarize(self, content: str, *, max_length: int = 500) -> str:
         """Generate a summary using OpenAI."""
         # Truncate very long content to avoid token limits
         truncated = content[:50000] if len(content) > 50000 else content
-        
+
         response = self._client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
                 {"role": "user", "content": truncated},
             ],
             max_tokens=self.max_tokens,
             temperature=0.3,
         )
-        
-        return response.choices[0].message.content.strip()
+
+        return strip_summary_preamble(response.choices[0].message.content.strip())
 
 
 class OllamaSummarization:
     """
     Summarization provider using Ollama's local API.
     """
-    
-    SYSTEM_PROMPT = OpenAISummarization.SYSTEM_PROMPT
-    
+
     def __init__(
         self,
         model: str = "llama3.2",
@@ -143,27 +131,27 @@ class OllamaSummarization:
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
-    
+
     def summarize(self, content: str, *, max_length: int = 500) -> str:
         """Generate a summary using Ollama."""
         import requests
-        
+
         truncated = content[:50000] if len(content) > 50000 else content
-        
+
         response = requests.post(
             f"{self.base_url}/api/chat",
             json={
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
                     {"role": "user", "content": truncated},
                 ],
                 "stream": False,
             },
         )
         response.raise_for_status()
-        
-        return response.json()["message"]["content"].strip()
+
+        return strip_summary_preamble(response.json()["message"]["content"].strip())
 
 
 class PassthroughSummarization:

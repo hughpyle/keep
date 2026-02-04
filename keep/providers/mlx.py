@@ -10,7 +10,13 @@ Requires: pip install mlx-lm mlx
 import os
 from typing import Any
 
-from .base import EmbeddingProvider, SummarizationProvider, get_registry
+from .base import (
+    EmbeddingProvider,
+    SummarizationProvider,
+    get_registry,
+    SUMMARIZATION_SYSTEM_PROMPT,
+    strip_summary_preamble,
+)
 
 
 class MLXEmbedding:
@@ -75,25 +81,12 @@ class MLXEmbedding:
 class MLXSummarization:
     """
     Summarization provider using MLX-LM on Apple Silicon.
-    
+
     Runs local LLMs optimized for Apple Silicon. No API key required.
-    
+
     Requires: pip install mlx-lm
     """
-    
-    SYSTEM_PROMPT = """You are a precise summarization assistant.
-Create a concise summary of the provided document that captures:
-- The main purpose or topic
-- Key points or functionality
-- Important details that would help someone decide if this document is relevant
 
-IMPORTANT: Start the summary directly with the content. Do NOT begin with phrases like:
-- "Here is a concise summary"
-- "This document describes"
-- "The document covers"
-- "Summary:"
-Just state the facts directly. Keep the summary under 200 words."""
-    
     def __init__(
         self,
         model: str = "mlx-community/Llama-3.2-3B-Instruct-4bit",
@@ -126,27 +119,27 @@ Just state the facts directly. Keep the summary under 200 words."""
     def summarize(self, content: str, *, max_length: int = 500) -> str:
         """Generate a summary using MLX-LM."""
         from mlx_lm import generate
-        
+
         # Truncate very long content to fit context window
         # Most models have 4k-8k context, leave room for prompt and response
         max_content_chars = 12000
         truncated = content[:max_content_chars] if len(content) > max_content_chars else content
-        
+
         # Format as chat (works with instruction-tuned models)
         if hasattr(self._tokenizer, "apply_chat_template"):
             messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Summarize the following:\n\n{truncated}"},
             ]
             prompt = self._tokenizer.apply_chat_template(
-                messages, 
-                tokenize=False, 
+                messages,
+                tokenize=False,
                 add_generation_prompt=True
             )
         else:
             # Fallback for models without chat template
-            prompt = f"{self.SYSTEM_PROMPT}\n\nDocument:\n{truncated}\n\nSummary:"
-        
+            prompt = f"{SUMMARIZATION_SYSTEM_PROMPT}\n\nDocument:\n{truncated}\n\nSummary:"
+
         # Generate
         response = generate(
             self._model,
@@ -156,26 +149,7 @@ Just state the facts directly. Keep the summary under 200 words."""
             verbose=False,
         )
 
-        return self._strip_preamble(response.strip())
-
-    def _strip_preamble(self, text: str) -> str:
-        """Remove common LLM preambles from summaries."""
-        import re
-        # Common preambles to strip (case-insensitive)
-        preambles = [
-            r"^here is a concise summary[^:]*:\s*",
-            r"^here is the summary[^:]*:\s*",
-            r"^here's a summary[^:]*:\s*",
-            r"^summary:\s*",
-            r"^the document describes\s+",
-            r"^this document describes\s+",
-            r"^the document covers\s+",
-            r"^this document covers\s+",
-        ]
-        result = text
-        for pattern in preambles:
-            result = re.sub(pattern, "", result, flags=re.IGNORECASE)
-        return result
+        return strip_summary_preamble(response.strip())
 
 
 class MLXTagging:
