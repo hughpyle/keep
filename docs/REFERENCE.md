@@ -10,65 +10,64 @@
 
 ```bash
 keep --json <cmd>   # Output as JSON
-keep --ids <cmd>    # Output only IDs (for piping to xargs)
-keep --full <cmd>   # Output full items (overrides --ids)
+keep --ids <cmd>    # Output only versioned IDs (for piping)
+keep --full <cmd>   # Output full YAML frontmatter
 keep -v <cmd>       # Enable debug logging to stderr
 ```
 
 ## Output Formats
 
-Default output uses YAML frontmatter:
+Three output formats, consistent across all commands:
+
+### Default: Summary Lines
+One line per item: `id@V{N} date summary`
+```
+file:///path/to/doc.md@V{0} 2026-01-15 Document about authentication patterns...
+_text:a1b2c3d4@V{0} 2026-01-14 URI detection should use proper scheme validation...
+```
+
+### With `--ids`: Versioned IDs Only
+```
+file:///path/to/doc.md@V{0}
+_text:a1b2c3d4@V{0}
+```
+
+### With `--full`: YAML Frontmatter
+Full details with tags, similar items, and version navigation:
 ```yaml
 ---
 id: file:///path/to/doc.md
 tags: {project: myapp, status: reviewed}
 similar:
-  - doc:related-auth (0.89)
-  - doc:token-notes (0.85)
+  - doc:related-auth@V{0} (0.89) 2026-01-14 Related authentication...
+  - doc:token-notes@V{0} (0.85) 2026-01-13 Token handling notes...
 score: 0.823
 prev:
-  - v1: 2026-01-15 Previous summary text...
+  - @V{1} 2026-01-14 Previous summary text...
 ---
 Document summary here...
 ```
 
-When viewing an old version (`-V N` or `@V{N}`):
-```yaml
----
-id: file:///path/to/doc.md
-version: 1
-prev:
-  - v2: 2026-01-14 Previous summary...
-next:
-  - v0 (current)
----
-```
+**Note:** `keep get` and `keep now` default to full format since they display a single item.
 
-Version numbers in output are **offsets**: v0 = current, v1 = previous, v2 = two versions ago.
-
-With `--json`:
+### With `--json`: JSON Output
 ```json
 {"id": "...", "summary": "...", "tags": {...}, "score": 0.823}
 ```
 
-With `--ids` (one ID per line, for piping):
-```
-file:///path/to/doc.md
-mem:2026-01-15T10:30:00
-```
+Version numbers are **offsets**: @V{0} = current, @V{1} = previous, @V{2} = two versions ago.
 
 ### Pipe Composition
 
 ```bash
-keep --ids system | xargs keep get
-keep --ids find "auth" | xargs keep get
+keep --ids find "auth" | xargs keep get              # Get full details
 keep --ids tag project=foo | xargs keep tag-update --tag status=done
-keep --json --ids find "query"  # JSON array of IDs: ["id1", "id2"]
+keep --json --ids find "query"                       # JSON array: ["id@V{0}", ...]
 
 # Version history composition
-keep --ids now --history | xargs -I{} keep get "{}"   # Get all versions
-keep list | xargs -I{} keep get "{}"                   # Get details for recent items
-diff <(keep get doc:1) <(keep get "doc:1@V{1}")        # Diff current vs previous
+keep --ids now --history | xargs -I{} keep get "{}"  # Get all versions
+keep --ids list | xargs -I{} keep get "{}"           # Get details for recent items
+diff <(keep get doc:1) <(keep get "doc:1@V{1}")      # Diff current vs previous
 ```
 
 ## CLI
@@ -92,10 +91,11 @@ keep get ID --similar                # List similar items (default 10)
 keep get ID --no-similar             # Suppress similar items
 keep get ID --similar -n 20          # List 20 similar items
 
-# List recent items (IDs by default for composability - changed in 0.3.1)
-keep list                            # Show 10 most recent item IDs
-keep list -n 20                      # Show 20 most recent item IDs
-keep --full list                     # Show full items (pre-0.3.1 behavior)
+# List recent items
+keep list                            # Show 10 most recent (summary lines)
+keep list -n 20                      # Show 20 most recent
+keep --ids list                      # IDs only (for piping)
+keep --full list                     # Full YAML frontmatter
 
 # Debug mode
 keep -v <cmd>                        # Enable debug logging to stderr

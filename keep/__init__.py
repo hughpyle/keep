@@ -38,13 +38,14 @@ if not os.environ.get("KEEP_VERBOSE"):
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 from .api import Keeper, NOWDOC_ID
-from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX
+from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, INTERNAL_TAGS
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 __all__ = [
     "Keeper",
     "Item",
     "NOWDOC_ID",
     "filter_non_system_tags",
     "SYSTEM_TAG_PREFIX",
+    "INTERNAL_TAGS",
 ]

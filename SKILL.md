@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.4.1
+version: 0.6.0
 description: Associative memory for reflection and skillful action
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -260,7 +260,7 @@ Don't dump everything into context. Navigate the tree:
 | `find` | Semantic similarity search | `keep find "authentication flow" --limit 5` |
 | `find --id` | Find similar to existing item | `keep find --id "docid" --limit 3` |
 | `search` | Full-text search in summaries | `keep search "OAuth"` |
-| `list` | List recent item IDs | `keep list` or `keep --full list` |
+| `list` | List recent items | `keep list` or `keep --ids list` for IDs only |
 | `update` | Index content (URI, text, or stdin) | `keep update "note" -t key=value` |
 | `get` | Retrieve item (shows similar items) | `keep get "file:///path/to/doc.md"` |
 | `get --similar` | List similar items | `keep get ID --similar` or `-n 20` for more |
@@ -291,17 +291,23 @@ The `--lazy` flag:
 
 ### Output
 
-Default output uses YAML frontmatter format:
+Three formats, consistent across all commands:
+
+**Default: Summary lines** (one per item)
+```
+file:///doc.md@V{0} 2026-01-15 Document about authentication...
+_text:a1b2c3d4@V{0} 2026-01-14 URI detection patterns...
+```
+
+**With `--full`: YAML frontmatter** (`keep get` and `keep now` default to this)
 ```yaml
 ---
 id: file:///path/to/doc.md
 tags: {project: myapp, domain: auth}
 similar:
-  - doc:related-auth (0.89)
-  - doc:token-notes (0.85)
-score: 0.823
+  - doc:related-auth@V{0} (0.89) 2026-01-15 Related authentication...
 prev:
-  - v1: 2026-01-15 Previous summary...
+  - @V{1} 2026-01-14 Previous summary...
 ---
 Document summary here...
 ```
@@ -310,7 +316,7 @@ Global flags (before the command):
 ```bash
 keep --json find "auth"    # JSON output
 keep --ids find "auth"     # IDs only (for piping)
-keep --full list           # Full items (overrides IDs-only default)
+keep --full list           # Full YAML frontmatter
 keep -v find "auth"        # Debug logging
 ```
 
@@ -318,9 +324,9 @@ keep -v find "auth"        # Debug logging
 
 Use `--ids` for Unix-style composition:
 ```bash
-keep --ids system | xargs keep get              # Get all system docs
 keep --ids find "auth" | xargs keep get         # Get full details of matches
 keep --ids tag project=foo | xargs keep tag-update --tag status=done
+keep --ids list | xargs -I{} keep get "{}"      # Get details for recent items
 ```
 
 ### Store Location
