@@ -1,5 +1,5 @@
 """
-Tests for pending summaries queue and lazy summarization.
+Tests for pending summaries queue and async summarization.
 """
 
 import os
@@ -133,11 +133,11 @@ class TestPendingSummaryQueue:
             queue.close()
 
 
-class TestLazySummarization:
-    """Tests for lazy summarization in Keeper API."""
+class TestAsyncSummarization:
+    """Tests for automatic async summarization of large content."""
 
-    def test_update_lazy_uses_truncated_summary(self):
-        """Should use truncated content as summary when lazy=True."""
+    def test_update_large_content_uses_truncated_summary(self):
+        """Large content should use truncated summary and queue for async processing."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a minimal store setup
             store_path = Path(tmpdir) / ".keep"
@@ -177,17 +177,17 @@ class TestLazySummarization:
                 # Reset mock to ignore calls from system doc loading during init
                 mock_summ_provider.reset_mock()
 
-                # Lazy update
-                item = kp.update("file:///test.txt", lazy=True)
+                # Update with large content (async summarization is automatic)
+                item = kp.update("file:///test.txt")
 
-                # Should NOT call summarize for lazy update
+                # Should NOT call summarize synchronously for large content
                 mock_summ_provider.summarize.assert_not_called()
 
                 # Summary should be truncated content
                 assert len(item.summary) == TRUNCATE_LENGTH + 3  # +3 for "..."
                 assert item.summary.endswith("...")
 
-                # Should be queued
+                # Should be queued for async processing
                 assert kp.pending_count() == 1
 
                 kp.close()
@@ -202,7 +202,7 @@ class TestLazySummarization:
                  patch("keep.api.CachingEmbeddingProvider") as mock_cache:
                 mock_doc_provider = MagicMock()
                 mock_doc_provider.fetch.return_value = MagicMock(
-                    content="Test content for summarization",
+                    content="A" * 1000,  # Long content to trigger async
                     content_type="text/plain"
                 )
 
@@ -229,8 +229,8 @@ class TestLazySummarization:
                 # Reset mock to ignore calls from system doc loading during init
                 mock_summ_provider.reset_mock()
 
-                # Lazy update
-                kp.update("file:///test.txt", lazy=True)
+                # Update with large content (triggers async summarization)
+                kp.update("file:///test.txt")
                 assert kp.pending_count() == 1
 
                 # Process pending

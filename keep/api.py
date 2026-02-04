@@ -534,12 +534,16 @@ class Keeper:
         summary: Optional[str] = None,
         source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
         collection: Optional[str] = None,
-        lazy: bool = False
     ) -> Item:
         """
         Insert or update a document in the store.
 
         Fetches the document, generates embeddings and summary, then stores it.
+
+        **Summary behavior:**
+        - If summary is provided, use it (skips auto-summarization)
+        - For large content, summarization is async (truncated placeholder
+          stored immediately, real summary generated in background)
 
         **Update behavior:**
         - Summary: Replaced with user-provided or newly generated summary
@@ -553,9 +557,6 @@ class Keeper:
             summary: User-provided summary (skips auto-summarization if given)
             source_tags: Deprecated alias for 'tags'
             collection: Target collection (uses default if None)
-            lazy: If True, use truncated placeholder summary and queue for
-                  background processing. Use `process_pending()` to generate
-                  real summaries later. Ignored if summary is provided.
 
         Returns:
             The stored Item with merged tags and new summary
@@ -615,17 +616,14 @@ class Keeper:
                 )
                 summary = summary[:max_len]
             final_summary = summary
-        elif lazy:
-            # Truncated placeholder for lazy mode
+        else:
+            # Large content: async summarization (truncated placeholder now, real summary later)
             if len(doc.content) > max_len:
                 final_summary = doc.content[:max_len] + "..."
+                # Queue for background processing
+                self._pending_queue.enqueue(id, coll, doc.content)
             else:
                 final_summary = doc.content
-            # Queue for background processing
-            self._pending_queue.enqueue(id, coll, doc.content)
-        else:
-            # Auto-generate summary
-            final_summary = self._get_summarization_provider().summarize(doc.content)
 
         # Build tags: existing → config → env → user (later wins on collision)
         merged_tags = {**existing_tags}
@@ -686,8 +684,8 @@ class Keeper:
                     tags=old_doc.tags,
                 )
 
-        # Spawn background processor if lazy (only if summary wasn't user-provided and content changed)
-        if lazy and summary is None and not content_unchanged:
+        # Spawn background processor if content was queued (large content, no user summary, content changed)
+        if summary is None and len(doc.content) > max_len and not content_unchanged:
             self._spawn_processor()
 
         # Return the stored item
@@ -703,7 +701,6 @@ class Keeper:
         tags: Optional[dict[str, str]] = None,
         source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
         collection: Optional[str] = None,
-        lazy: bool = False
     ) -> Item:
         """
         Store inline content directly (without fetching from a URI).
@@ -713,7 +710,8 @@ class Keeper:
         **Smart summary behavior:**
         - If summary is provided, use it (skips auto-summarization)
         - If content is short (≤ max_summary_length), use content verbatim
-        - Otherwise, generate summary via summarization provider
+        - For large content, summarization is async (truncated placeholder
+          stored immediately, real summary generated in background)
 
         **Update behavior (when id already exists):**
         - Summary: Replaced with user-provided, content, or generated summary
@@ -728,9 +726,6 @@ class Keeper:
             tags: User-provided tags to merge with existing tags
             source_tags: Deprecated alias for 'tags'
             collection: Target collection (uses default if None)
-            lazy: If True and content is long, use truncated placeholder summary
-                  and queue for background processing. Ignored if content is
-                  short or summary is provided.
 
         Returns:
             The stored Item with merged tags and new summary
@@ -794,14 +789,11 @@ class Keeper:
         elif len(content) <= max_len:
             # Content is short enough - use verbatim (smart summary)
             final_summary = content
-        elif lazy:
-            # Content is long and lazy mode - truncated placeholder
+        else:
+            # Content is long - async summarization (truncated placeholder now, real summary later)
             final_summary = content[:max_len] + "..."
             # Queue for background processing
             self._pending_queue.enqueue(id, coll, content)
-        else:
-            # Content is long - generate summary
-            final_summary = self._get_summarization_provider().summarize(content)
 
         # Build tags: existing → config → env → user (later wins on collision)
         merged_tags = {**existing_tags}
@@ -860,8 +852,8 @@ class Keeper:
                     tags=old_doc.tags,
                 )
 
-        # Spawn background processor if lazy and content was queued (only if content changed)
-        if lazy and summary is None and len(content) > max_len and not content_unchanged:
+        # Spawn background processor if content was queued (large content, no user summary, content changed)
+        if summary is None and len(content) > max_len and not content_unchanged:
             self._spawn_processor()
 
         # Return the stored item
@@ -1366,14 +1358,14 @@ class Keeper:
 
     def get_now(self) -> Item:
         """
-        Get the current working context.
+        Get the current working intentions.
 
         A singleton document representing what you're currently working on.
         If it doesn't exist, creates one with default content and tags from
         the bundled system now.md file.
 
         Returns:
-            The current context Item (never None - auto-creates if missing)
+            The current intentions Item (never None - auto-creates if missing)
         """
         item = self.get(NOWDOC_ID)
         if item is None:
@@ -1394,13 +1386,13 @@ class Keeper:
         tags: Optional[dict[str, str]] = None,
     ) -> Item:
         """
-        Set the current working context.
+        Set the current working intentions.
 
-        Updates the singleton context with new content. Uses remember()
+        Updates the singleton intentions with new content. Uses remember()
         internally with the fixed NOWDOC_ID.
 
         Args:
-            content: New content for the current context
+            content: New content for the current intentions
             tags: Optional additional tags to apply
 
         Returns:

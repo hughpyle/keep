@@ -17,7 +17,7 @@ keep find "what's the rate limit?"
 
 # Track what you're working on
 keep now "Debugging auth flow"
-keep now -V 1                    # Previous context
+keep now -V 1                    # Previous intentions
 ```
 
 ---
@@ -80,9 +80,9 @@ keep get ID --history                  # All versions
 keep list --tag project=myapp          # Find by tag
 keep list --tags=                      # List all tag keys
 
-# Current context
+# Current intentions
 keep now                               # Show what you're working on
-keep now "Fixing login bug"            # Update context
+keep now "Fixing login bug"            # Update intentions
 ```
 
 ### Python API
