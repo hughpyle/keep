@@ -1,4 +1,18 @@
+
 * filter any 'get' by tag (show the most recent that has that tag; for recents only show the ones that have that tag)
+    - applies to "now" and "get" and "find" and "list"
+    - resolve the conflict where "now" (for updating) has a tags flag already,
+      but we want to add a new feature for "now" (get the most-current nowdoc that has the specific tags)
+
+* document how to segregate your work
+    - apply `project` tag for now/update to identify things that relate to a specific project
+    - some things live outside a project and are more general, that's ok
+    - use tag-based searching by project, and also "now without tags" to find the big picture
+    - for complete segregation use collections
+    - add an envvar to set the current collection
+
+
+
 
 * tags themselves should have summaries and full descriptions
     i.e. somewhere in the "system" store is a docuemnt that describes a tag
@@ -177,3 +191,6 @@ Done:
 x `context` text alongside summaries? (no, summary is good now)
 . review how system documents (e.g. "metaschema") are used today, if any
 . consolidated `keep tag` into `keep list`: --tag for filtering, --tags for listing, --since for time filtering
+. changed "context" to "intentions" in `keep now` docs and docstrings
+. `keep --version` flag to show version and exit
+. `_system:library` document with URI templates for library files
