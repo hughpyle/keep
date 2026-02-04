@@ -455,6 +455,28 @@ def _parse_tags(tags: Optional[list[str]]) -> dict[str, str]:
     return parsed
 
 
+def _filter_by_tags(items: list, tags: list[str]) -> list:
+    """
+    Filter items by tag specifications (AND logic).
+
+    Each tag can be:
+    - "key" - item must have this tag key (any value)
+    - "key=value" - item must have this exact tag
+    """
+    if not tags:
+        return items
+
+    result = items
+    for t in tags:
+        if "=" in t:
+            key, value = t.split("=", 1)
+            result = [item for item in result if item.tags.get(key) == value]
+        else:
+            # Key only - check if key exists
+            result = [item for item in result if t in item.tags]
+    return result
+
+
 def _timestamp() -> str:
     """Generate timestamp for auto-generated IDs."""
     from datetime import datetime, timezone
@@ -488,6 +510,10 @@ def find(
     include_self: Annotated[bool, typer.Option(
         help="Include the queried item (only with --id)"
     )] = False,
+    tag: Annotated[Optional[list[str]], typer.Option(
+        "--tag", "-t",
+        help="Filter by tag (key or key=value, repeatable)"
+    )] = None,
     store: StoreOption = None,
     collection: CollectionOption = "default",
     limit: LimitOption = 10,
@@ -500,6 +526,7 @@ def find(
     Examples:
         keep find "authentication"              # Search by text
         keep find --id file:///path/to/doc.md   # Find similar to item
+        keep find "auth" -t project=myapp       # Search + filter by tag
     """
     if id and query:
         typer.echo("Error: Specify either a query or --id, not both", err=True)
@@ -510,12 +537,19 @@ def find(
 
     kp = _get_keeper(store, collection)
 
-    if id:
-        results = kp.find_similar(id, limit=limit, since=since, include_self=include_self)
-    else:
-        results = kp.find(query, limit=limit, since=since)
+    # Search with higher limit if filtering, then post-filter
+    search_limit = limit * 5 if tag else limit
 
-    typer.echo(_format_items(results, as_json=_get_json_output()))
+    if id:
+        results = kp.find_similar(id, limit=search_limit, since=since, include_self=include_self)
+    else:
+        results = kp.find(query, limit=search_limit, since=since)
+
+    # Post-filter by tags if specified
+    if tag:
+        results = _filter_by_tags(results, tag)
+
+    typer.echo(_format_items(results[:limit], as_json=_get_json_output()))
 
 
 @app.command()
@@ -765,7 +799,7 @@ def now(
     collection: CollectionOption = "default",
     tags: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
-        help="Tag as key=value (can be repeated)"
+        help="Set tag (with content) or filter (without content)"
     )] = None,
 ):
     """
@@ -774,10 +808,16 @@ def now(
     With no arguments, displays the current intentions.
     With content, replaces it.
 
+    Tags behave differently based on mode:
+    - With content: -t sets tags on the update
+    - Without content: -t filters version history
+
     \b
     Examples:
         keep now                         # Show current intentions
         keep now "What's important now"  # Update intentions
+        keep now "Auth work" -t project=myapp  # Update with tag
+        keep now -t project=myapp        # Find version with tag
         keep now -f context.md           # Read content from file
         keep now --reset                 # Reset to default from system
         keep now -V 1                    # Previous version
@@ -900,18 +940,70 @@ def now(
         item = kp.set_now(new_content, tags=parsed_tags or None)
         typer.echo(_format_item(item, as_json=_get_json_output()))
     else:
-        # Get current intentions with version navigation and similar items
-        item = kp.get_now()
-        version_nav = kp.get_version_nav(NOWDOC_ID, None, collection=collection)
-        similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection=collection)
-        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-        typer.echo(_format_item(
-            item,
-            as_json=_get_json_output(),
-            version_nav=version_nav,
-            similar_items=similar_items,
-            similar_offsets=similar_offsets,
-        ))
+        # Get current intentions (or search version history if tags specified)
+        if tags:
+            # Search version history for most recent version with matching tags
+            item = _find_now_version_by_tags(kp, tags, collection)
+            if item is None:
+                typer.echo("No version found matching tags", err=True)
+                raise typer.Exit(1)
+            # No version nav or similar items for filtered results
+            typer.echo(_format_item(item, as_json=_get_json_output()))
+        else:
+            # Standard: get current with version navigation and similar items
+            item = kp.get_now()
+            version_nav = kp.get_version_nav(NOWDOC_ID, None, collection=collection)
+            similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection=collection)
+            similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+            typer.echo(_format_item(
+                item,
+                as_json=_get_json_output(),
+                version_nav=version_nav,
+                similar_items=similar_items,
+                similar_offsets=similar_offsets,
+            ))
+
+
+def _find_now_version_by_tags(kp, tags: list[str], collection: str):
+    """
+    Search nowdoc version history for most recent version matching all tags.
+
+    Checks current version first, then scans archived versions.
+    """
+    from .api import NOWDOC_ID
+
+    # Parse tag filters
+    tag_filters = []
+    for t in tags:
+        if "=" in t:
+            key, value = t.split("=", 1)
+            tag_filters.append((key, value))
+        else:
+            tag_filters.append((t, None))  # Key only
+
+    def matches_tags(item_tags: dict) -> bool:
+        for key, value in tag_filters:
+            if value is not None:
+                if item_tags.get(key) != value:
+                    return False
+            else:
+                if key not in item_tags:
+                    return False
+        return True
+
+    # Check current version first
+    current = kp.get_now()
+    if current and matches_tags(current.tags):
+        return current
+
+    # Scan archived versions (newest first)
+    versions = kp.list_versions(NOWDOC_ID, limit=100, collection=collection)
+    for i, v in enumerate(versions):
+        if matches_tags(v.tags):
+            # Found match - get full item at this version offset
+            return kp.get_version(NOWDOC_ID, i + 1, collection=collection)
+
+    return None
 
 
 @app.command()
@@ -933,6 +1025,10 @@ def get(
         "--no-similar",
         help="Suppress similar items in output"
     )] = False,
+    tag: Annotated[Optional[list[str]], typer.Option(
+        "--tag", "-t",
+        help="Require tag (key or key=value, repeatable)"
+    )] = None,
     limit: Annotated[int, typer.Option(
         "--limit", "-n",
         help="Max items for --history or --similar (default: 10)"
@@ -953,6 +1049,7 @@ def get(
         keep get doc:1 --history        # List all versions
         keep get doc:1 --similar        # List similar items
         keep get doc:1 --no-similar     # Suppress similar items
+        keep get doc:1 -t project=myapp # Only if tag matches
     """
     kp = _get_keeper(store, collection)
 
@@ -1086,6 +1183,13 @@ def get(
         else:
             typer.echo(f"Not found: {actual_id}", err=True)
         raise typer.Exit(1)
+
+    # Check tag filter if specified
+    if tag:
+        filtered = _filter_by_tags([item], tag)
+        if not filtered:
+            typer.echo(f"Tag filter not matched: {actual_id}", err=True)
+            raise typer.Exit(1)
 
     # Get version navigation
     version_nav = kp.get_version_nav(actual_id, internal_version, collection=collection)
