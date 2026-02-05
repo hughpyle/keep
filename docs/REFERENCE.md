@@ -2,7 +2,7 @@
 
 **Purpose:** Persistent memory for documents with semantic search.
 
-**Default store:** `.keep/` at git repo root (auto-created)
+**Default store:** `~/.keep/` in user home (auto-created)
 
 **Key principle:** Lightweight but extremely flexible functionality.  A minimal and extensible metaschema.
 

@@ -294,7 +294,7 @@ StoreOption = Annotated[
     typer.Option(
         "--store", "-s",
         envvar="KEEP_STORE_PATH",
-        help="Path to the store directory (default: .keep/ at repo root)"
+        help="Path to the store directory (default: ~/.keep/)"
     )
 ]
 
@@ -435,12 +435,33 @@ def _format_items(items: list[Item], as_json: bool = False) -> str:
     return "\n".join(_format_summary_line(item) for item in items)
 
 
+NO_PROVIDER_ERROR = """
+No embedding provider configured.
+
+To use keep, configure a provider:
+
+  API-based (recommended):
+    export VOYAGE_API_KEY=...      # Get at dash.voyageai.com
+    export ANTHROPIC_API_KEY=...   # Optional: for better summaries
+
+  Local (macOS Apple Silicon):
+    pip install 'keep-skill[local]'
+
+See: https://github.com/hughpyle/keep#installation
+"""
+
+
 def _get_keeper(store: Optional[Path], collection: str) -> Keeper:
     """Initialize memory, handling errors gracefully."""
     # Check global override from --store on main command
     actual_store = store if store is not None else _get_store_override()
     try:
-        return Keeper(actual_store, collection=collection)
+        kp = Keeper(actual_store, collection=collection)
+        # Check for missing embedding provider
+        if kp._config and kp._config.embedding is None:
+            typer.echo(NO_PROVIDER_ERROR.strip(), err=True)
+            raise typer.Exit(1)
+        return kp
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -1237,46 +1258,9 @@ def list_collections(
                 typer.echo(c)
 
 
-@app.command()
-def init(
-    reset_system_docs: Annotated[bool, typer.Option(
-        "--reset-system-docs",
-        help="Force reload system documents from bundled content (overwrites modifications)"
-    )] = False,
-    store: StoreOption = None,
-    collection: CollectionOption = "default",
-):
-    """
-    Initialize or verify the store is ready.
-    """
-    kp = _get_keeper(store, collection)
-
-    # Handle reset if requested
-    if reset_system_docs:
-        stats = kp.reset_system_documents()
-        typer.echo(f"Reset {stats['reset']} system documents")
-
-    # Show config and store paths
-    config = kp._config
-    config_path = config.config_path if config else None
-    store_path = kp._store_path
-
-    # Show paths
-    typer.echo(f"Config: {config_path}")
-    if config and config.config_dir and config.config_dir.resolve() != store_path.resolve():
-        typer.echo(f"Store:  {store_path}")
-
-    typer.echo(f"Collections: {kp.list_collections()}")
-
-    # Show detected providers
-    if config:
-        typer.echo(f"\nProviders:")
-        typer.echo(f"  Embedding: {config.embedding.name}")
-        typer.echo(f"  Summarization: {config.summarization.name}")
 
 
-
-def _get_config_value(kp: Keeper, path: str):
+def _get_config_value(cfg, store_path: Path, path: str):
     """
     Get config value by dotted path.
 
@@ -1294,17 +1278,21 @@ def _get_config_value(kp: Keeper, path: str):
         summarization.* - summarization config details
         tags - default tags
     """
-    cfg = kp._config
-
     # Special built-in paths (not in TOML)
     if path == "file":
         return str(cfg.config_path) if cfg else None
     if path == "tool":
         return str(get_tool_directory())
     if path == "store":
-        return str(kp._store_path)
+        return str(store_path)
     if path == "collections":
-        return kp.list_collections()
+        # Use ChromaStore directly to avoid full Keeper init
+        from .store import ChromaStore
+        try:
+            chroma = ChromaStore(store_path)
+            return chroma.list_collections()
+        except Exception:
+            return []
 
     # Provider shortcuts
     if path == "providers":
@@ -1358,42 +1346,63 @@ AVAILABLE_SETTINGS = {
 }
 
 
-def _format_config_with_defaults(kp: Keeper) -> str:
+def _format_config_with_defaults(cfg, store_path: Path) -> str:
     """Format config output with commented defaults for unused settings."""
-    cfg = kp._config
     config_path = cfg.config_path if cfg else None
-    store_path = kp._store_path
     lines = []
+
+    # Get collections using ChromaStore directly (no API calls)
+    from .store import ChromaStore
+    try:
+        chroma = ChromaStore(store_path)
+        collections = chroma.list_collections()
+    except Exception:
+        collections = []
 
     # Show paths
     lines.append(f"file: {config_path}")
     lines.append(f"tool: {get_tool_directory()}")
-    if cfg and cfg.config_dir and cfg.config_dir.resolve() != store_path.resolve():
-        lines.append(f"store: {store_path}")
-    else:
-        lines.append(f"store: {store_path}")
-
-    lines.append(f"collections: {kp.list_collections()}")
+    lines.append(f"store: {store_path}")
+    lines.append(f"collections: {collections}")
 
     if cfg:
         lines.append("")
         lines.append("providers:")
-        lines.append(f"  embedding: {cfg.embedding.name}")
-        lines.append(f"  summarization: {cfg.summarization.name}")
-        lines.append(f"  document: {cfg.document.name}")
+        lines.append(f"  embedding: {cfg.embedding.name if cfg.embedding else 'none'}")
+        if cfg.embedding and cfg.embedding.params.get("model"):
+            lines.append(f"    model: {cfg.embedding.params['model']}")
+        lines.append(f"  summarization: {cfg.summarization.name if cfg.summarization else 'none'}")
+        if cfg.summarization and cfg.summarization.params.get("model"):
+            lines.append(f"    model: {cfg.summarization.params['model']}")
 
-        # Show configured tags if any
+        # Show configured tags or example
         if cfg.default_tags:
             lines.append("")
             lines.append("tags:")
             for key, value in cfg.default_tags.items():
                 lines.append(f"  {key}: {value}")
         else:
-            # Show commented example for tags
             lines.append("")
             lines.append("# tags:")
             lines.append("#   project: myproject")
-            lines.append("#   topic: mytopic")
+
+        # Show available options as comments
+        lines.append("")
+        lines.append("# --- Configuration Options ---")
+        lines.append("#")
+        lines.append("# API Keys (set in environment):")
+        lines.append("#   VOYAGE_API_KEY     → embedding: voyage (Anthropic's partner)")
+        lines.append("#   ANTHROPIC_API_KEY  → summarization: anthropic")
+        lines.append("#   OPENAI_API_KEY     → embedding: openai, summarization: openai")
+        lines.append("#   GEMINI_API_KEY     → embedding: gemini, summarization: gemini")
+        lines.append("#")
+        lines.append("# Models (configure in keep.toml):")
+        lines.append("#   voyage: voyage-3.5-lite (default), voyage-3-large, voyage-code-3")
+        lines.append("#   anthropic: claude-3-haiku-20240307 (default), claude-3-5-haiku-20241022")
+        lines.append("#   openai embedding: text-embedding-3-small (default), text-embedding-3-large")
+        lines.append("#   openai summarization: gpt-4o-mini (default)")
+        lines.append("#   gemini embedding: text-embedding-004 (default)")
+        lines.append("#   gemini summarization: gemini-3-flash-preview (default)")
 
     return "\n".join(lines)
 
@@ -1403,6 +1412,10 @@ def config(
     path: Annotated[Optional[str], typer.Argument(
         help="Config path to get (e.g., 'file', 'tool', 'store', 'providers.embedding')"
     )] = None,
+    reset_system_docs: Annotated[bool, typer.Option(
+        "--reset-system-docs",
+        help="Force reload system documents from bundled content (overwrites modifications)"
+    )] = False,
     store: StoreOption = None,
 ):
     """
@@ -1416,17 +1429,33 @@ def config(
         keep config store        # Store path
         keep config providers    # All provider config
         keep config providers.embedding  # Embedding provider name
+        keep config --reset-system-docs  # Reset bundled system docs
     """
-    kp = _get_keeper(store, "default")
+    # Handle system docs reset - requires full Keeper initialization
+    if reset_system_docs:
+        kp = _get_keeper(store, "default")
+        stats = kp.reset_system_documents()
+        typer.echo(f"Reset {stats['reset']} system documents")
+        return
 
-    cfg = kp._config
+    # For config display, use lightweight path (no API calls)
+    from .config import load_or_create_config
+    from .paths import get_config_dir, get_default_store_path
+
+    actual_store = store if store is not None else _get_store_override()
+    if actual_store is not None:
+        config_dir = Path(actual_store).resolve()
+    else:
+        config_dir = get_config_dir()
+
+    cfg = load_or_create_config(config_dir)
     config_path = cfg.config_path if cfg else None
-    store_path = kp._store_path
+    store_path = get_default_store_path(cfg) if actual_store is None else actual_store
 
     # If a specific path is requested, return just that value
     if path:
         try:
-            value = _get_config_value(kp, path)
+            value = _get_config_value(cfg, store_path, path)
         except typer.BadParameter as e:
             typer.echo(str(e), err=True)
             raise typer.Exit(1)
@@ -1443,11 +1472,19 @@ def config(
 
     # Full config output
     if _get_json_output():
+        # Get collections using ChromaStore directly (no API calls)
+        from .store import ChromaStore
+        try:
+            chroma = ChromaStore(store_path)
+            collections = chroma.list_collections()
+        except Exception:
+            collections = []
+
         result = {
             "file": str(config_path) if config_path else None,
             "tool": str(get_tool_directory()),
             "store": str(store_path),
-            "collections": kp.list_collections(),
+            "collections": collections,
             "providers": {
                 "embedding": cfg.embedding.name if cfg else None,
                 "summarization": cfg.summarization.name if cfg else None,
@@ -1458,7 +1495,7 @@ def config(
             result["tags"] = cfg.default_tags
         typer.echo(json.dumps(result, indent=2))
     else:
-        typer.echo(_format_config_with_defaults(kp))
+        typer.echo(_format_config_with_defaults(cfg, store_path))
 
 
 @app.command("process-pending")
@@ -1507,8 +1544,8 @@ def process_pending(
 
             # Process all items until queue empty or shutdown requested
             while not shutdown_requested:
-                processed = kp.process_pending(limit=50)
-                if processed == 0:
+                result = kp.process_pending(limit=50)
+                if result["processed"] == 0 and result["failed"] == 0:
                     break
 
         finally:
@@ -1533,35 +1570,62 @@ def process_pending(
 
     if all_items:
         # Process all items in batches
-        total_processed = 0
+        totals = {"processed": 0, "failed": 0, "abandoned": 0, "errors": []}
         while True:
-            processed = kp.process_pending(limit=50)
-            total_processed += processed
-            if processed == 0:
+            result = kp.process_pending(limit=50)
+            totals["processed"] += result["processed"]
+            totals["failed"] += result["failed"]
+            totals["abandoned"] += result["abandoned"]
+            totals["errors"].extend(result["errors"])
+            if result["processed"] == 0 and result["failed"] == 0:
                 break
             if not _get_json_output():
-                typer.echo(f"  Processed {total_processed}...")
+                typer.echo(f"  Processed {totals['processed']}...")
 
         remaining = kp.pending_count()
         if _get_json_output():
             typer.echo(json.dumps({
-                "processed": total_processed,
-                "remaining": remaining
+                "processed": totals["processed"],
+                "failed": totals["failed"],
+                "abandoned": totals["abandoned"],
+                "remaining": remaining,
+                "errors": totals["errors"][:10],  # Limit error output
             }))
         else:
-            typer.echo(f"✓ Processed {total_processed} items, {remaining} remaining")
+            msg = f"✓ Processed {totals['processed']} items"
+            if totals["failed"]:
+                msg += f", {totals['failed']} failed"
+            if totals["abandoned"]:
+                msg += f", {totals['abandoned']} abandoned"
+            msg += f", {remaining} remaining"
+            typer.echo(msg)
+            # Show first few errors
+            for err in totals["errors"][:3]:
+                typer.echo(f"  Error: {err}", err=True)
     else:
         # Process limited batch
-        processed = kp.process_pending(limit=limit)
+        result = kp.process_pending(limit=limit)
         remaining = kp.pending_count()
 
         if _get_json_output():
             typer.echo(json.dumps({
-                "processed": processed,
-                "remaining": remaining
+                "processed": result["processed"],
+                "failed": result["failed"],
+                "abandoned": result["abandoned"],
+                "remaining": remaining,
+                "errors": result["errors"][:10],
             }))
         else:
-            typer.echo(f"✓ Processed {processed} items, {remaining} remaining")
+            msg = f"✓ Processed {result['processed']} items"
+            if result["failed"]:
+                msg += f", {result['failed']} failed"
+            if result["abandoned"]:
+                msg += f", {result['abandoned']} abandoned"
+            msg += f", {remaining} remaining"
+            typer.echo(msg)
+            # Show first few errors
+            for err in result["errors"][:3]:
+                typer.echo(f"  Error: {err}", err=True)
 
 
 # -----------------------------------------------------------------------------

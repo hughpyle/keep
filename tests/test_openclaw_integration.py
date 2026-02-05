@@ -126,7 +126,7 @@ class TestDetectDefaultProviders:
             with patch.dict(os.environ, env, clear=False):
                 providers = detect_default_providers()
                 assert providers["embedding"].name == "gemini"
-                assert providers["embedding"].params.get("model") == "text-embedding-004"
+                # Model uses provider default (text-embedding-004)
         finally:
             os.unlink(temp_path)
 
@@ -155,7 +155,7 @@ class TestDetectDefaultProviders:
             with patch.dict(os.environ, env, clear=False):
                 providers = detect_default_providers()
                 assert providers["embedding"].name == "openai"
-                assert providers["embedding"].params.get("model") == "text-embedding-3-small"
+                # Model uses provider default (text-embedding-3-small)
         finally:
             os.unlink(temp_path)
 

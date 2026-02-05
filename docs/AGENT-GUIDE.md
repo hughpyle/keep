@@ -17,7 +17,7 @@ The reflective memory provides persistent storage with semantic search.
 
 **CLI:**
 ```bash
-# Uses .keep/ at repo root by default
+# Uses ~/.keep/ by default (or KEEP_STORE_PATH)
 keep update "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
 keep update https://inguz.substack.com/p/keep -t topic=practice
 keep update "User prefers OAuth2 with PKCE" -t topic=auth
@@ -33,7 +33,7 @@ keep now -t project=myapp                       # Find now version with tag
 ```python
 from keep import Keeper, Item
 
-# Initialize (defaults to .keep/ at git repo root)
+# Initialize (defaults to ~/.keep/)
 kp = Keeper()
 
 # Index a document from file or URL (fetches, embeds, summarizes, tags automatically)
@@ -67,9 +67,9 @@ if kp.exists("file:///project/readme.md"):
 
 **Item fields:** `id` (URI or custom), `summary` (str), `tags` (dict), `score` (float, search results only). Timestamps are in tags: `item.created` and `item.updated` are property accessors.
 
-**Prerequisites:** Python 3.11+, `uv tool install 'keep-skill[local]'` (or pip in a venv)
+**Prerequisites:** Python 3.11+, `pip install keep-skill` (with API key) or `pip install 'keep-skill[local]'` (no API needed)
 
-**Default store location:** `.keep/` at the git repository root (created automatically). Override with `KEEP_STORE_PATH` or explicit path argument. Add `.keep/` to `.gitignore` if the store should not be committed.
+**Default store location:** `~/.keep/` in the user's home directory (created automatically). Override with `KEEP_STORE_PATH` or explicit path argument.
 
 **Patterns documentation** (bundled system docs, access via `keep get`):
 - `_system:domains` — domain-specific organization (software dev, research, etc.)
@@ -505,19 +505,19 @@ See [QUICKSTART.md](QUICKSTART.md#provider-options) for available embedding, sum
 
 ## Initialization
 
-See [QUICKSTART.md](QUICKSTART.md) for details.
+The store auto-initializes on first use. See [QUICKSTART.md](QUICKSTART.md) for provider setup.
 
 **CLI:**
 ```bash
-keep init                          # Initialize at .keep/ in repo root
-keep init -s /path/to/store        # Explicit store path
-KEEP_STORE_PATH=/path keep init    # Via environment
+# Store created automatically at ~/.keep/
+keep update "first note"           # Auto-initializes store
+KEEP_STORE_PATH=/path keep update "note"  # Custom location via env
 ```
 
 **Python API:**
 ```python
 from keep import Keeper
 
-kp = Keeper()                      # Uses .keep/ at repo root
-kp = Keeper("/path/to/store")      # Explicit path
+kp = Keeper()                      # Uses ~/.keep/ (auto-creates)
+kp = Keeper("/path/to/store")      # Explicit path (auto-creates)
 ```

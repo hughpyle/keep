@@ -1701,7 +1701,7 @@ class Keeper:
     # Pending Summaries
     # -------------------------------------------------------------------------
 
-    def process_pending(self, limit: int = 10) -> int:
+    def process_pending(self, limit: int = 10) -> dict:
         """
         Process pending summaries queued by lazy update/remember.
 
@@ -1718,10 +1718,10 @@ class Keeper:
             limit: Maximum number of items to process in this batch
 
         Returns:
-            Number of items successfully processed
+            Dict with: processed (int), failed (int), abandoned (int), errors (list)
         """
         items = self._pending_queue.dequeue(limit=limit)
-        processed = 0
+        result = {"processed": 0, "failed": 0, "abandoned": 0, "errors": []}
 
         for item in items:
             # Skip items that have failed too many times
@@ -1729,6 +1729,11 @@ class Keeper:
             if item.attempts >= MAX_SUMMARY_ATTEMPTS:
                 # Give up - remove from queue, keep truncated placeholder
                 self._pending_queue.complete(item.id, item.collection)
+                result["abandoned"] += 1
+                logger.warning(
+                    "Abandoned pending summary after %d attempts: %s",
+                    item.attempts, item.id
+                )
                 continue
 
             try:
@@ -1754,13 +1759,17 @@ class Keeper:
 
                 # Remove from queue
                 self._pending_queue.complete(item.id, item.collection)
-                processed += 1
+                result["processed"] += 1
 
-            except Exception:
+            except Exception as e:
                 # Leave in queue for retry (attempt counter already incremented)
-                pass
+                result["failed"] += 1
+                error_msg = f"{item.id}: {type(e).__name__}: {e}"
+                result["errors"].append(error_msg)
+                logger.warning("Failed to summarize %s (attempt %d): %s",
+                             item.id, item.attempts, e)
 
-        return processed
+        return result
 
     def pending_count(self) -> int:
         """Get count of pending summaries awaiting processing."""

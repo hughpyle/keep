@@ -20,16 +20,19 @@ keep can automatically integrate with OpenClaw's configured models when both are
 
 **For embeddings**, keep checks in this order:
 
-1. **OpenClaw `memorySearch.provider`** — if set to `openai` or `gemini` and API key available
-2. **Auto mode** — if `memorySearch.provider` is `auto`, uses OpenAI if key present, else Gemini
-3. **Fallback** — sentence-transformers (local, always works)
+1. **Voyage** — if `VOYAGE_API_KEY` set (Anthropic's recommended partner)
+2. **OpenAI** — if `OPENAI_API_KEY` set
+3. **Gemini** — if `GEMINI_API_KEY` set
+4. **MLX** — Apple Silicon local models
+5. **Fallback** — sentence-transformers (local, always works)
 
 **For summarization**, keep checks in this order:
 
-1. **OpenClaw integration** (if `~/.openclaw/openclaw.json` exists and `ANTHROPIC_API_KEY` set)
-2. **MLX** (Apple Silicon local models)
-3. **OpenAI** (if `OPENAI_API_KEY` set)
-4. **Fallback** (truncate)
+1. **Anthropic** — if `ANTHROPIC_API_KEY` set
+2. **OpenAI** — if `OPENAI_API_KEY` set
+3. **Gemini** — if `GEMINI_API_KEY` set
+4. **MLX** — Apple Silicon local models
+5. **Fallback** — truncate (first 500 chars)
 
 ### What Gets Shared
 
@@ -40,7 +43,7 @@ keep can automatically integrate with OpenClaw's configured models when both are
 - Provider routing (automatically detects Anthropic models)
 
 **Stays local:**
-- **Store** remains in `.keep/` (not shared with OpenClaw)
+- **Store** remains in `~/.keep/` (not shared with OpenClaw)
 - Falls back to **sentence-transformers** if no API keys available
 
 **API keys** are resolved from:
@@ -53,49 +56,40 @@ keep can automatically integrate with OpenClaw's configured models when both are
 
 > **Note:** Use `uv tool install` or a virtual environment to avoid dependency conflicts.
 
-### Option 1: Automatic (Recommended)
-
-If you already have OpenClaw configured:
+### Option 1: API Providers (Recommended)
 
 ```bash
-# 1. Install keep with Anthropic support
-uv tool install 'keep-skill[openclaw]'
+# 1. Install keep (API SDKs included)
+pip install keep-skill
 
-# 2. Set your Anthropic API key
-export ANTHROPIC_API_KEY=sk-ant-...
+# 2. Set API key(s) - simplest is OpenAI (does both embeddings + summarization)
+export OPENAI_API_KEY=sk-...
 
-# 3. Initialize (auto-detects OpenClaw config)
-keep init
+# 3. First use auto-initializes
+keep update "test note"
 ```
 
-**Output:**
-```
-✓ Store ready: /path/to/workspace/.keep
-✓ Collections: ['default']
-
-✓ Detected providers:
-  Embedding: sentence-transformers (local)
-  Summarization: anthropic (claude-sonnet-4)
-
-To customize, edit .keep/keep.toml
+For best quality embeddings with Anthropic summarization:
+```bash
+export VOYAGE_API_KEY=...       # Embeddings (Anthropic's partner)
+export ANTHROPIC_API_KEY=...    # Summarization
+keep update "test note"
 ```
 
-### Option 2: Manual Override
+### Option 2: Local Models (No API)
+
+```bash
+pip install 'keep-skill[local]'
+keep update "test note"         # MLX on Apple Silicon, sentence-transformers elsewhere
+```
+
+### Option 3: Manual Override
 
 Set `OPENCLAW_CONFIG` to use a different config file:
 
 ```bash
 export OPENCLAW_CONFIG=/custom/path/to/openclaw.json
-keep init
-```
-
-### Option 3: Disable Integration
-
-Don't set `ANTHROPIC_API_KEY`, or remove `~/.openclaw/openclaw.json`:
-
-```bash
-# Will fall back to MLX (Apple Silicon) or sentence-transformers
-keep init
+keep update "test note"
 ```
 
 ---
@@ -121,7 +115,7 @@ Default: `~/.openclaw/openclaw.json`
 
 ### keep Config Location
 
-Created at: `.keep/keep.toml` (workspace root)
+Created at: `~/.keep/keep.toml` (user home)
 
 **Example (OpenClaw integration active):**
 ```toml
@@ -159,11 +153,14 @@ OpenClaw uses short model names. keep maps them to actual Anthropic API names:
 
 ## Environment Variables
 
-| Variable | Purpose | Required |
-|----------|---------|----------|
-| `ANTHROPIC_API_KEY` | Anthropic API authentication | For Anthropic provider |
-| `OPENCLAW_CONFIG` | Override default config location | Optional |
-| `KEEP_STORE_PATH` | Override store location | Optional |
+| Variable | Purpose | Embeddings | Summarization |
+|----------|---------|------------|---------------|
+| `VOYAGE_API_KEY` | Voyage AI (Anthropic's partner) | ✓ | - |
+| `OPENAI_API_KEY` | OpenAI API | ✓ | ✓ |
+| `GEMINI_API_KEY` | Google Gemini API | ✓ | ✓ |
+| `ANTHROPIC_API_KEY` | Anthropic API | - | ✓ |
+| `OPENCLAW_CONFIG` | Override OpenClaw config location | - | - |
+| `KEEP_STORE_PATH` | Override store location | - | - |
 
 ---
 
@@ -171,75 +168,76 @@ OpenClaw uses short model names. keep maps them to actual Anthropic API names:
 
 ### What Stays Local
 
-✅ **Embeddings** — Always computed locally (sentence-transformers)  
-✅ **Vector database** — ChromaDB runs locally  
-✅ **Embedding cache** — Cached embeddings never leave your machine  
-✅ **Configuration** — Stored in `.keep/` locally
+✅ **Vector database** — ChromaDB runs locally
+✅ **Embedding cache** — Cached embeddings stored locally
+✅ **Configuration** — Stored in `~/.keep/` locally
+✅ **Original documents** — Never stored, only summaries and embeddings
 
-### What Uses API (Optional)
+### What May Use API
 
-⚠️ **Summarization** — Only if Anthropic provider configured  
-⚠️ **Tagging** — Only if using `anthropic` tagging provider (off by default)
+⚠️ **Embeddings** — Local by default (`[local]` install), or API (Voyage/OpenAI/Gemini)
+⚠️ **Summarization** — Local with MLX, or API (Anthropic/OpenAI/Gemini)
 
-**Original documents are never stored** — Only summaries and embeddings.
+For maximum privacy, use `pip install 'keep-skill[local]'` with no API keys set.
 
 ---
 
 ## Use Cases
 
-### Scenario 1: OpenClaw User (Local-First + Smart Summarization)
+### Scenario 1: Single API Key (Simplest)
 
 **Setup:**
 ```bash
-pip install 'keep-skill[openclaw]'
-export ANTHROPIC_API_KEY=sk-ant-...
-keep init
+pip install keep-skill
+export OPENAI_API_KEY=sk-...
+keep update "test"
 ```
 
 **Result:**
-- Embeddings: Local (sentence-transformers)
-- Summarization: Anthropic Claude (configured in OpenClaw)
-- Cost: ~$0.0001 per document summary
-- Privacy: Embeddings local, only summaries sent to API
+- Embeddings: OpenAI (text-embedding-3-small)
+- Summarization: OpenAI (gpt-4o-mini)
+- Cost: ~$0.0001 per document
+- Privacy: Content sent to OpenAI API
 
 ---
 
-### Scenario 2: Pure Local (No API Calls)
+### Scenario 2: Best Quality (Voyage + Anthropic)
 
 **Setup:**
 ```bash
-pip install 'keep-skill[local]'  # No API dependencies
-keep init
+pip install keep-skill
+export VOYAGE_API_KEY=...
+export ANTHROPIC_API_KEY=...
+keep update "test"
+```
+
+**Result:**
+- Embeddings: Voyage (voyage-3.5-lite) — Anthropic's recommended partner
+- Summarization: Anthropic (claude-3-haiku)
+- Cost: ~$0.0001 per document
+- Privacy: Content sent to Voyage and Anthropic APIs
+
+---
+
+### Scenario 3: Pure Local (No API Calls)
+
+**Setup:**
+```bash
+pip install 'keep-skill[local]'
+keep update "test"
 ```
 
 **Result (Apple Silicon):**
-- Embeddings: Local (sentence-transformers)
-- Summarization: Local (MLX + Llama 3.2)
+- Embeddings: MLX or sentence-transformers (local)
+- Summarization: MLX (local LLM)
 - Cost: $0 (all local)
 - Privacy: Nothing leaves your machine
 
 **Result (Other platforms):**
-- Embeddings: Local (sentence-transformers)
+- Embeddings: sentence-transformers (local)
 - Summarization: Truncate (first 500 chars)
 - Cost: $0
 - Privacy: Nothing leaves your machine
-
----
-
-### Scenario 3: OpenAI User (No OpenClaw)
-
-**Setup:**
-```bash
-pip install 'keep-skill[openai]'
-export OPENAI_API_KEY=sk-...
-keep init
-```
-
-**Result:**
-- Embeddings: Local (sentence-transformers)
-- Summarization: OpenAI (gpt-4o-mini)
-- Cost: ~$0.0001 per document summary
-- Privacy: Embeddings local, only summaries sent to API
 
 ---
 
@@ -247,7 +245,7 @@ keep init
 
 ### Override Provider After Init
 
-Edit `.keep/keep.toml`:
+Edit `~/.keep/keep.toml`:
 
 ```toml
 [summarization]
@@ -264,37 +262,39 @@ Not yet supported. Roadmap feature for v0.2.
 
 ## Troubleshooting
 
-### "OpenClaw config found but Anthropic provider not used"
+### "No embedding provider configured"
 
-**Cause:** `ANTHROPIC_API_KEY` not set
+**Cause:** No API key set and local models not installed
 
-**Fix:**
+**Fix (API):**
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-rm -rf .keep  # Delete old config
-keep init  # Re-initialize
+export OPENAI_API_KEY=sk-...    # Or VOYAGE_API_KEY, GEMINI_API_KEY
+keep update "test"
+```
+
+**Fix (Local):**
+```bash
+pip install 'keep-skill[local]'
+keep update "test"
 ```
 
 ---
 
-### "AnthropicSummarization requires 'anthropic' library"
+### "Anthropic/OpenAI/Gemini API key required"
 
-**Cause:** Package not installed
+**Cause:** Trying to use a provider without the required API key
 
-**Fix:**
-```bash
-pip install 'keep-skill[openclaw]'
-```
+**Fix:** Set the appropriate environment variable, or use a different provider.
 
 ---
 
-### "Want to use OpenClaw integration but don't have API key"
+### "Want local-only operation"
 
-**Solution:** Use local-first mode. OpenClaw config is ignored if no API key present.
+**Solution:** Install with `[local]` extra and don't set any API keys.
 
 ```bash
-pip install 'keep-skill[local]'  # MLX on Apple Silicon
-keep init
+pip install 'keep-skill[local]'
+keep update "test"              # Uses MLX on Apple Silicon
 ```
 
 ---
@@ -336,43 +336,36 @@ Summaries are computed once per document. Using an API:
 ## Example: Full Workflow
 
 ```bash
-# 1. Install with OpenClaw integration
-pip install 'keep-skill[openclaw]'
+# 1. Install keep (API SDKs included)
+pip install keep-skill
 
-# 2. Set API key (from Anthropic console)
-export ANTHROPIC_API_KEY=sk-ant-api03-...
+# 2. Set API key(s)
+export OPENAI_API_KEY=sk-...    # Simplest: does both embeddings + summarization
 
-# 3. Initialize (detects OpenClaw config automatically)
-keep init
-# ✓ Store ready: /Users/hugh/clawd/.keep
-# ✓ Detected providers:
-#   Embedding: sentence-transformers (local)
-#   Summarization: anthropic (claude-sonnet-4)
-
-# 4. Index a document
+# 3. First use auto-initializes
 keep update "file://./README.md" -t type=docs
+# Store created at ~/.keep/
 
-# 5. Search semantically
+# 4. Search semantically
 keep find "installation instructions" --limit 3
 
-# 6. Verify costs are reasonable
-# Claude Haiku: ~$0.0001 per summary
-# 1000 documents = ~$0.10 total
+# 5. Check configuration
+keep config
+# Shows detected providers, store location, etc.
 ```
 
 ---
 
 ## Summary
 
-**With OpenClaw integration:**
-- 🧠 Best of both worlds: local embeddings + smart summarization
-- 🔄 Unified configuration (DRY principle)
-- 💰 Cost-effective ($0.0001/document vs $0.001 for OpenAI embeddings)
-- 🔒 Privacy-preserving (embeddings + queries stay local)
+**API providers (recommended for quality):**
+- 🧠 Best summarization quality with LLM providers
+- 💰 Cost-effective (~$0.0001/document)
+- ⚡ Simple setup: just set API key(s)
 
-**Without OpenClaw:**
+**Local providers (recommended for privacy):**
 - 🏠 Pure local-first (MLX on Apple Silicon)
 - 💸 Zero cost
-- 🔒 Maximum privacy
+- 🔒 Maximum privacy — nothing leaves your machine
 
-**Recommendation:** Use OpenClaw integration if you already have it configured. Otherwise, local-first mode is excellent for privacy and zero cost.
+**Recommendation:** Use `OPENAI_API_KEY` for simplest setup (one key does both). Use Voyage + Anthropic for best quality. Use `[local]` install for maximum privacy.

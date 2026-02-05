@@ -7,7 +7,7 @@ and tag-based retrieval. Remember everything, find by meaning.
 Quick Start:
     from keep import Keeper
 
-    kp = Keeper()  # uses .keep/ at git repo root
+    kp = Keeper()  # uses ~/.keep/ by default
     kp.update("file:///path/to/document.md", source_tags={"project": "myproject"})
     results = kp.find("something similar to this query")
 
@@ -17,7 +17,7 @@ CLI Usage:
     keep collections --json
 
 Default Store:
-    .keep/ at the git repository root (created automatically).
+    ~/.keep/ in the user's home directory (created automatically).
     Override with KEEP_STORE_PATH or explicit path argument.
 
 Environment Variables:

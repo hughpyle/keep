@@ -26,13 +26,19 @@ class AnthropicSummarization:
 
     Requires: ANTHROPIC_API_KEY environment variable.
     Optionally reads from OpenClaw config via OPENCLAW_CONFIG env var.
+
+    Default model is claude-3-haiku (cheapest: $0.25/$1.25 per MTok).
+    Configure via keep.toml [summarization] section for other models:
+    - claude-3-haiku-20240307: Cheapest, fast, good for summaries
+    - claude-3-5-haiku-20241022: Better quality, 3x cost
+    - claude-haiku-4-5-20251001: Latest, best quality, 4x cost
     """
-    
+
     def __init__(
         self,
-        model: str = "claude-3-5-haiku-20241022",
+        model: str = "claude-3-haiku-20240307",
         api_key: str | None = None,
-        max_tokens: int = 200,
+        max_tokens: int = 150,
     ):
         try:
             from anthropic import Anthropic
@@ -71,23 +77,21 @@ class AnthropicSummarization:
             "Follow the instructions in the user message."
         )
 
-        try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=system,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-            )
+        # The Anthropic SDK has built-in retry with exponential backoff for rate limits.
+        # Let rate limit errors propagate so pending queue can retry later.
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            system=system,
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+        )
 
-            # Extract text from response
-            if response.content and len(response.content) > 0:
-                return strip_summary_preamble(response.content[0].text)
-            return truncated[:500]  # Fallback
-        except Exception:
-            # Fallback to truncation on error
-            return truncated[:500]
+        # Extract text from response
+        if response.content and len(response.content) > 0:
+            return strip_summary_preamble(response.content[0].text)
+        return truncated[:500]  # Fallback for empty response
 
 
 class OpenAISummarization:
@@ -200,6 +204,54 @@ class OllamaSummarization:
         return strip_summary_preamble(response.json()["message"]["content"].strip())
 
 
+class GeminiSummarization:
+    """
+    Summarization provider using Google's Gemini API.
+
+    Requires: GEMINI_API_KEY or GOOGLE_API_KEY environment variable.
+    """
+
+    def __init__(
+        self,
+        model: str = "gemini-3-flash-preview",
+        api_key: str | None = None,
+        max_tokens: int = 150,
+    ):
+        try:
+            from google import genai
+        except ImportError:
+            raise RuntimeError("GeminiSummarization requires 'google-genai' library")
+
+        self.model = model
+        self.max_tokens = max_tokens
+
+        key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not key:
+            raise ValueError("Gemini API key required. Set GEMINI_API_KEY or GOOGLE_API_KEY")
+
+        self._client = genai.Client(api_key=key)
+
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int = 500,
+        context: str | None = None,
+    ) -> str:
+        """Generate summary using Google Gemini."""
+        truncated = content[:50000] if len(content) > 50000 else content
+
+        # Build prompt with optional context
+        prompt = build_summarization_prompt(truncated, context)
+
+        # Let errors propagate so pending queue can retry
+        response = self._client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+        )
+        return strip_summary_preamble(response.text)
+
+
 class PassthroughSummarization:
     """
     Summarization provider that returns the first N characters.
@@ -231,8 +283,11 @@ class PassthroughSummarization:
 class AnthropicTagging:
     """
     Tagging provider using Anthropic's Claude API with JSON output.
+
+    Default model is claude-3-haiku (cheapest). See AnthropicSummarization
+    for model options and pricing.
     """
-    
+
     SYSTEM_PROMPT = """Analyze the document and generate relevant tags as a JSON object.
 
 Generate tags for these categories when applicable:
@@ -244,10 +299,10 @@ Generate tags for these categories when applicable:
 Only include tags that clearly apply. Values should be lowercase.
 
 Respond with a JSON object only, no explanation."""
-    
+
     def __init__(
         self,
-        model: str = "claude-3-5-haiku-20241022",
+        model: str = "claude-3-haiku-20240307",
         api_key: str | None = None,
     ):
         try:
@@ -404,6 +459,7 @@ _registry = get_registry()
 _registry.register_summarization("anthropic", AnthropicSummarization)
 _registry.register_summarization("openai", OpenAISummarization)
 _registry.register_summarization("ollama", OllamaSummarization)
+_registry.register_summarization("gemini", GeminiSummarization)
 _registry.register_summarization("passthrough", PassthroughSummarization)
 _registry.register_tagging("anthropic", AnthropicTagging)
 _registry.register_tagging("openai", OpenAITagging)

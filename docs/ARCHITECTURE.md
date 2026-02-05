@@ -222,20 +222,23 @@ store_path/
 ### Embedding Providers
 Generate vector representations for semantic search.
 
-- **sentence-transformers**: Local, CPU/GPU, no API key (default)
+- **voyage**: API-based, Anthropic's recommended partner (VOYAGE_API_KEY)
+- **openai**: API-based, high quality (OPENAI_API_KEY)
+- **gemini**: API-based, Google (GEMINI_API_KEY)
+- **sentence-transformers**: Local, CPU/GPU, no API key
 - **MLX**: Apple Silicon optimized, local, no API key
-- **OpenAI**: API-based, requires key, high quality
 
 Dimension determined by model. Must be consistent across indexing and queries.
 
 ### Summarization Providers
 Generate human-readable summaries from content.
 
-- **truncate**: Simple text truncation (default)
-- **first_paragraph**: Extract first meaningful chunk
-- **passthrough**: Store content as-is (with length limit)
+- **anthropic**: LLM-based, cheapest good option (ANTHROPIC_API_KEY)
+- **openai**: LLM-based, high quality (OPENAI_API_KEY)
+- **gemini**: LLM-based, Google (GEMINI_API_KEY)
 - **MLX**: LLM-based, local, no API key
-- **OpenAI**: LLM-based, API, high quality
+- **truncate**: Simple text truncation (fallback)
+- **passthrough**: Store content as-is (with length limit)
 
 **Contextual Summarization:**
 
