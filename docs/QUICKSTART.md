@@ -24,8 +24,9 @@ keep init --store ./data     # Custom location
 ## Basic Usage
 
 ```bash
-# Index content
-keep update file:///path/to/doc.md -t project=myapp
+# Index content (files, URLs, or inline text)
+keep update "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
+keep update https://inguz.substack.com/p/keep -t topic=practice
 keep update "Meeting notes from today" -t type=meeting
 
 # Search
@@ -33,7 +34,8 @@ keep find "authentication" --limit 5
 keep find "auth" --since P7D           # Last 7 days
 
 # Retrieve (shows similar items by default)
-keep get file:///path/to/doc.md
+keep get "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
+keep get https://inguz.substack.com/p/keep
 keep get ID --no-similar             # Without similar items
 
 # Tags
@@ -77,8 +79,9 @@ from keep import Keeper
 
 kp = Keeper()  # Uses .keep/ at repo root
 
-# Index
+# Index from file or URL
 kp.update("file:///path/to/doc.md", tags={"project": "myapp"})
+kp.update("https://inguz.substack.com/p/keep", tags={"topic": "practice"})
 kp.remember("Important insight about auth patterns")
 
 # Search

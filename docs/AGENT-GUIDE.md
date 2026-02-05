@@ -18,7 +18,8 @@ The reflective memory provides persistent storage with semantic search.
 **CLI:**
 ```bash
 # Uses .keep/ at repo root by default
-keep update file:///project/readme.md -t project=myapp
+keep update "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
+keep update https://inguz.substack.com/p/keep -t topic=practice
 keep update "User prefers OAuth2 with PKCE" -t topic=auth
 keep find "authentication flow" --limit 5
 keep find "auth" -t project=myapp              # Semantic search + tag filter
@@ -35,8 +36,9 @@ from keep import Keeper, Item
 # Initialize (defaults to .keep/ at git repo root)
 kp = Keeper()
 
-# Index a document from URI (fetches, embeds, summarizes, tags automatically)
+# Index a document from file or URL (fetches, embeds, summarizes, tags automatically)
 item = kp.update("file:///project/readme.md", tags={"project": "myapp"})
+item = kp.update("https://inguz.substack.com/p/keep", tags={"topic": "practice"})
 
 # Store inline content via API (conversations, notes, insights)
 kp.remember(

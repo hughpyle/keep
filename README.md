@@ -122,6 +122,14 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples
 
 ---
 
+## Background
+
+Why build memory for AI agents? What does "reflective practice" mean here?
+
+I wrote a story: **[Wisdom, or Prompt-Engineering?](https://inguz.substack.com/p/keep)**
+
+---
+
 ## For AI Agents
 
 This library was designed as an agent skill — persistent memory that helps agents reflect before acting and learn from experience.
