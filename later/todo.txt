@@ -1,3 +1,5 @@
+* Measure some outcomes.  Describe behavior in openclaw, in claude code, etc.  Show where it works.
+
 * relationships as a separate first-class thing
     - X and Y with a bidirectional edge
     (needs more thought about the approach, benefits, etc.)
@@ -32,7 +34,7 @@
     - want this to be pluggable, guide the model-driven tagging from a sysdoc that defines how it works
     - want "references" for this too... maybe later
 
-* compare openclaw 'memory-lancedb' plugin
+* compare openclaw 'memory-lancedb' plugin and others
 
 * check - what is your emotional response when encountering this project the first time?
 
