@@ -237,6 +237,30 @@ Generate human-readable summaries from content.
 - **MLX**: LLM-based, local, no API key
 - **OpenAI**: LLM-based, API, high quality
 
+**Contextual Summarization:**
+
+When documents have user tags (domain, topic, project, etc.), the summarizer
+receives context from related items. This produces summaries that highlight
+relevance to the tagged context rather than generic descriptions.
+
+How it works:
+1. When processing pending summaries, the system checks for user tags
+2. Finds similar items that share any of those tags (OR-union)
+3. Boosts scores for items sharing multiple tags (+20% per additional match)
+4. Top 5 related summaries are passed as context to the LLM
+5. The summary reflects what's relevant to that context
+
+Example: Indexing a medieval text with `domain=practice` produces a summary
+highlighting its relevance to contemplative practice, not just "a 13th-century
+guide for anchoresses."
+
+**Tag changes trigger re-summarization:** When user tags are added, removed, or
+changed on an existing document, it's re-queued for contextual summarization
+even if content is unchanged. The existing summary is preserved until the new
+one is ready.
+
+Non-LLM providers (truncate, first_paragraph, passthrough) ignore context.
+
 ### Document Providers
 Fetch content from URIs with content regularization.
 

@@ -249,6 +249,25 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _user_tags_changed(old_tags: dict, new_tags: dict) -> bool:
+    """
+    Check if non-system tags differ between old and new.
+
+    Used for contextual re-summarization: when user tags change,
+    the summary context changes and should be regenerated.
+
+    Args:
+        old_tags: Existing tags from document store
+        new_tags: New merged tags being applied
+
+    Returns:
+        True if user (non-system) tags differ
+    """
+    old_user = {k: v for k, v in old_tags.items() if not k.startswith('_')}
+    new_user = {k: v for k, v in new_tags.items() if not k.startswith('_')}
+    return old_user != new_user
+
+
 def _text_content_id(content: str) -> str:
     """
     Generate a content-addressed ID for text updates.
@@ -471,6 +490,74 @@ class Keeper:
             )
         return self._summarization_provider
 
+    def _gather_context(
+        self,
+        id: str,
+        collection: str,
+        tags: dict[str, str],
+    ) -> str | None:
+        """
+        Gather related item summaries that share any user tag.
+
+        Uses OR union (any tag matches), not AND intersection.
+        Boosts score when multiple tags match.
+
+        Args:
+            id: ID of the item being summarized (to exclude from results)
+            collection: Collection to search
+            tags: User tags from the item being summarized
+
+        Returns:
+            Formatted context string, or None if no related items found
+        """
+        if not tags:
+            return None
+
+        # Get similar items (broader search, we'll filter by tags)
+        try:
+            similar = self.find_similar(id, limit=20, collection=collection)
+        except KeyError:
+            # Item not found yet (first indexing) - no context available
+            return None
+
+        # Score each item: similarity * (1 + matching_tag_count * boost)
+        TAG_BOOST = 0.2  # 20% boost per matching tag
+        scored: list[tuple[float, int, Item]] = []
+
+        for item in similar:
+            if item.id == id:
+                continue
+
+            # Count matching tags (OR: at least one must match)
+            matching = sum(
+                1 for k, v in tags.items()
+                if item.tags.get(k) == v
+            )
+            if matching == 0:
+                continue  # No tag overlap, skip
+
+            # Boost score by number of matching tags
+            base_score = item.score if item.score is not None else 0.5
+            boosted_score = base_score * (1 + matching * TAG_BOOST)
+            scored.append((boosted_score, matching, item))
+
+        if not scored:
+            return None
+
+        # Sort by boosted score, take top 5
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = scored[:5]
+
+        # Format context
+        lines = []
+        for _, match_count, item in top:
+            # Truncate long summaries
+            summary = item.summary[:100] + "..." if len(item.summary) > 100 else item.summary
+            tag_note = f" ({match_count} tags)" if match_count > 1 else ""
+            lines.append(f"- {summary}{tag_note}")
+
+        return "\n".join(lines)
+
     def _validate_embedding_identity(self, provider: EmbeddingProvider) -> None:
         """
         Validate embedding provider matches stored identity, or record it.
@@ -596,38 +683,8 @@ class Keeper:
         # Generate embedding
         embedding = self._get_embedding_provider().embed(doc.content)
 
-        # Determine summary - skip if content unchanged
-        max_len = self._config.max_summary_length
-        content_unchanged = (
-            existing_doc is not None
-            and existing_doc.content_hash == new_hash
-        )
-
-        if content_unchanged and summary is None:
-            # Content unchanged - preserve existing summary
-            logger.debug("Content unchanged, skipping summarization for %s", id)
-            final_summary = existing_doc.summary
-        elif summary is not None:
-            # User-provided summary - validate length
-            if len(summary) > max_len:
-                import warnings
-                warnings.warn(
-                    f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
-                    UserWarning,
-                    stacklevel=2
-                )
-                summary = summary[:max_len]
-            final_summary = summary
-        else:
-            # Large content: async summarization (truncated placeholder now, real summary later)
-            if len(doc.content) > max_len:
-                final_summary = doc.content[:max_len] + "..."
-                # Queue for background processing
-                self._pending_queue.enqueue(id, coll, doc.content)
-            else:
-                final_summary = doc.content
-
-        # Build tags: existing → config → env → user (later wins on collision)
+        # Build tags first (needed for tags_changed check)
+        # Order: existing → config → env → user (later wins on collision)
         merged_tags = {**existing_tags}
 
         # Merge config default tags
@@ -646,6 +703,47 @@ class Keeper:
         merged_tags["_source"] = "uri"
         if doc.content_type:
             merged_tags["_content_type"] = doc.content_type
+
+        # Determine summary - skip if content AND tags unchanged
+        max_len = self._config.max_summary_length
+        content_unchanged = (
+            existing_doc is not None
+            and existing_doc.content_hash == new_hash
+        )
+        tags_changed = (
+            existing_doc is not None
+            and _user_tags_changed(existing_doc.tags, merged_tags)
+        )
+
+        if content_unchanged and not tags_changed and summary is None:
+            # Content and tags unchanged - preserve existing summary
+            logger.debug("Content and tags unchanged, skipping summarization for %s", id)
+            final_summary = existing_doc.summary
+        elif summary is not None:
+            # User-provided summary - validate length
+            if len(summary) > max_len:
+                import warnings
+                warnings.warn(
+                    f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
+                    UserWarning,
+                    stacklevel=2
+                )
+                summary = summary[:max_len]
+            final_summary = summary
+        elif content_unchanged and tags_changed:
+            # Tags changed but content unchanged - keep existing summary, queue for re-summarization
+            logger.debug("Tags changed, queueing re-summarization for %s", id)
+            final_summary = existing_doc.summary
+            if len(doc.content) > max_len:
+                self._pending_queue.enqueue(id, coll, doc.content)
+        else:
+            # New or changed content
+            if len(doc.content) > max_len:
+                final_summary = doc.content[:max_len] + "..."
+                # Queue for background processing
+                self._pending_queue.enqueue(id, coll, doc.content)
+            else:
+                final_summary = doc.content
 
         # Get existing doc info for versioning before upsert
         old_doc = self._document_store.get(coll, id)
@@ -686,8 +784,8 @@ class Keeper:
                     tags=old_doc.tags,
                 )
 
-        # Spawn background processor if content was queued (large content, no user summary, content changed)
-        if summary is None and len(doc.content) > max_len and not content_unchanged:
+        # Spawn background processor if content was queued (large content, no user summary, content or tags changed)
+        if summary is None and len(doc.content) > max_len and (not content_unchanged or tags_changed):
             self._spawn_processor()
 
         # Return the stored item
@@ -766,38 +864,8 @@ class Keeper:
         # Generate embedding
         embedding = self._get_embedding_provider().embed(content)
 
-        # Determine summary (smart behavior for remember) - skip if content unchanged
-        max_len = self._config.max_summary_length
-        content_unchanged = (
-            existing_doc is not None
-            and existing_doc.content_hash == new_hash
-        )
-
-        if content_unchanged and summary is None:
-            # Content unchanged - preserve existing summary
-            logger.debug("Content unchanged, skipping summarization for %s", id)
-            final_summary = existing_doc.summary
-        elif summary is not None:
-            # User-provided summary - validate length
-            if len(summary) > max_len:
-                import warnings
-                warnings.warn(
-                    f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
-                    UserWarning,
-                    stacklevel=2
-                )
-                summary = summary[:max_len]
-            final_summary = summary
-        elif len(content) <= max_len:
-            # Content is short enough - use verbatim (smart summary)
-            final_summary = content
-        else:
-            # Content is long - async summarization (truncated placeholder now, real summary later)
-            final_summary = content[:max_len] + "..."
-            # Queue for background processing
-            self._pending_queue.enqueue(id, coll, content)
-
-        # Build tags: existing → config → env → user (later wins on collision)
+        # Build tags first (needed for tags_changed check)
+        # Order: existing → config → env → user (later wins on collision)
         merged_tags = {**existing_tags}
 
         # Merge config default tags
@@ -814,6 +882,47 @@ class Keeper:
 
         # Add system tags
         merged_tags["_source"] = "inline"
+
+        # Determine summary (smart behavior for remember) - skip if content AND tags unchanged
+        max_len = self._config.max_summary_length
+        content_unchanged = (
+            existing_doc is not None
+            and existing_doc.content_hash == new_hash
+        )
+        tags_changed = (
+            existing_doc is not None
+            and _user_tags_changed(existing_doc.tags, merged_tags)
+        )
+
+        if content_unchanged and not tags_changed and summary is None:
+            # Content and tags unchanged - preserve existing summary
+            logger.debug("Content and tags unchanged, skipping summarization for %s", id)
+            final_summary = existing_doc.summary
+        elif summary is not None:
+            # User-provided summary - validate length
+            if len(summary) > max_len:
+                import warnings
+                warnings.warn(
+                    f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
+                    UserWarning,
+                    stacklevel=2
+                )
+                summary = summary[:max_len]
+            final_summary = summary
+        elif content_unchanged and tags_changed:
+            # Tags changed but content unchanged - keep existing summary, queue for re-summarization
+            logger.debug("Tags changed, queueing re-summarization for %s", id)
+            final_summary = existing_doc.summary
+            if len(content) > max_len:
+                self._pending_queue.enqueue(id, coll, content)
+        elif len(content) <= max_len:
+            # Content is short enough - use verbatim (smart summary)
+            final_summary = content
+        else:
+            # Content is long - async summarization (truncated placeholder now, real summary later)
+            final_summary = content[:max_len] + "..."
+            # Queue for background processing
+            self._pending_queue.enqueue(id, coll, content)
 
         # Get existing doc info for versioning before upsert
         old_doc = self._document_store.get(coll, id)
@@ -854,8 +963,8 @@ class Keeper:
                     tags=old_doc.tags,
                 )
 
-        # Spawn background processor if content was queued (large content, no user summary, content changed)
-        if summary is None and len(content) > max_len and not content_unchanged:
+        # Spawn background processor if content was queued (large content, no user summary, content or tags changed)
+        if summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
             self._spawn_processor()
 
         # Return the stored item
@@ -1599,6 +1708,9 @@ class Keeper:
         Generates real summaries for items that were indexed with
         truncated placeholders. Updates the stored items in place.
 
+        When items have user tags (non-system tags), context is gathered
+        from similar items with matching tags to produce contextual summaries.
+
         Items that fail MAX_SUMMARY_ATTEMPTS times are removed from
         the queue (the truncated placeholder remains in the store).
 
@@ -1620,8 +1732,21 @@ class Keeper:
                 continue
 
             try:
-                # Generate real summary
-                summary = self._get_summarization_provider().summarize(item.content)
+                # Get item's tags for contextual summarization
+                doc = self._document_store.get(item.collection, item.id)
+                context = None
+                if doc:
+                    # Filter to user tags (non-system)
+                    user_tags = filter_non_system_tags(doc.tags)
+                    if user_tags:
+                        context = self._gather_context(
+                            item.id, item.collection, user_tags
+                        )
+
+                # Generate real summary (with optional context)
+                summary = self._get_summarization_provider().summarize(
+                    item.content, context=context
+                )
 
                 # Update summary in both stores
                 self._document_store.update_summary(item.collection, item.id, summary)

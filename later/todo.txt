@@ -17,6 +17,10 @@
       - placeholder descriptions for these are fine initially
       - load from 'docs/system'
 
+    * the summary can be determined by the content that is tagged
+      (or provided directly)
+      and should be updated occasionally (not every time!! - how?) when the tagged content changes.
+
     then when displaying a tag, mark it up with an asterisk if exists a definition-for-that-tag doc
     and give a shortcut `keep tag --describe` or something
 
@@ -174,3 +178,4 @@ x `context` text alongside summaries? (no, summary is good now)
 . enhanced `keep config`: get any setting from CLI, added file/tool paths, test with `ls $(keep config tool)`
 . HTML content regularization: HttpDocumentProvider extracts text from HTML at fetch time (matching FileDocumentProvider), fixing web URL summarization
 . tag-based filtering: -t flag on list/find/get/similar filters by tag; --tags lists distinct tag values; --since for time filtering
+. contextual summarization: user tags provide context for LLM summaries; _gather_context finds similar items with matching tags (OR-union, score boosted per tag match); tag changes trigger re-summarization

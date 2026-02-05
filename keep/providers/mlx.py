@@ -15,6 +15,7 @@ from .base import (
     SummarizationProvider,
     get_registry,
     SUMMARIZATION_SYSTEM_PROMPT,
+    build_summarization_prompt,
     strip_summary_preamble,
 )
 
@@ -116,7 +117,13 @@ class MLXSummarization:
         # Load model and tokenizer (downloads on first use)
         self._model, self._tokenizer = load(model)
     
-    def summarize(self, content: str, *, max_length: int = 500) -> str:
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int = 500,
+        context: str | None = None,
+    ) -> str:
         """Generate a summary using MLX-LM."""
         from mlx_lm import generate
 
@@ -125,11 +132,20 @@ class MLXSummarization:
         max_content_chars = 12000
         truncated = content[:max_content_chars] if len(content) > max_content_chars else content
 
+        # Build prompt with optional context
+        user_content = build_summarization_prompt(truncated, context)
+
+        # Use base system prompt when context is included in user message
+        system = SUMMARIZATION_SYSTEM_PROMPT if not context else (
+            "You are a helpful assistant that summarizes documents. "
+            "Follow the instructions in the user message."
+        )
+
         # Format as chat (works with instruction-tuned models)
         if hasattr(self._tokenizer, "apply_chat_template"):
             messages = [
-                {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Summarize the following:\n\n{truncated}"},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
             ]
             prompt = self._tokenizer.apply_chat_template(
                 messages,
@@ -138,7 +154,7 @@ class MLXSummarization:
             )
         else:
             # Fallback for models without chat template
-            prompt = f"{SUMMARIZATION_SYSTEM_PROMPT}\n\nDocument:\n{truncated}\n\nSummary:"
+            prompt = f"{system}\n\n{user_content}\n\nSummary:"
 
         # Generate
         response = generate(

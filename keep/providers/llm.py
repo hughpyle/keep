@@ -11,6 +11,7 @@ from .base import (
     TaggingProvider,
     get_registry,
     SUMMARIZATION_SYSTEM_PROMPT,
+    build_summarization_prompt,
     strip_summary_preamble,
 )
 
@@ -50,18 +51,33 @@ class AnthropicSummarization:
         
         self.client = Anthropic(api_key=key)
     
-    def summarize(self, content: str) -> str:
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int = 500,
+        context: str | None = None,
+    ) -> str:
         """Generate summary using Anthropic Claude."""
         # Truncate very long content
         truncated = content[:50000] if len(content) > 50000 else content
+
+        # Build prompt with optional context
+        prompt = build_summarization_prompt(truncated, context)
+
+        # Use base system prompt when context is included in user message
+        system = SUMMARIZATION_SYSTEM_PROMPT if not context else (
+            "You are a helpful assistant that summarizes documents. "
+            "Follow the instructions in the user message."
+        )
 
         try:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                system=SUMMARIZATION_SYSTEM_PROMPT,
+                system=system,
                 messages=[
-                    {"role": "user", "content": truncated}
+                    {"role": "user", "content": prompt}
                 ],
             )
 
@@ -101,16 +117,31 @@ class OpenAISummarization:
 
         self._client = OpenAI(api_key=key)
 
-    def summarize(self, content: str, *, max_length: int = 500) -> str:
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int = 500,
+        context: str | None = None,
+    ) -> str:
         """Generate a summary using OpenAI."""
         # Truncate very long content to avoid token limits
         truncated = content[:50000] if len(content) > 50000 else content
 
+        # Build prompt with optional context
+        prompt = build_summarization_prompt(truncated, context)
+
+        # Use base system prompt when context is included in user message
+        system = SUMMARIZATION_SYSTEM_PROMPT if not context else (
+            "You are a helpful assistant that summarizes documents. "
+            "Follow the instructions in the user message."
+        )
+
         response = self._client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
-                {"role": "user", "content": truncated},
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
             ],
             max_tokens=self.max_tokens,
             temperature=0.3,
@@ -132,19 +163,34 @@ class OllamaSummarization:
         self.model = model
         self.base_url = base_url.rstrip("/")
 
-    def summarize(self, content: str, *, max_length: int = 500) -> str:
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int = 500,
+        context: str | None = None,
+    ) -> str:
         """Generate a summary using Ollama."""
         import requests
 
         truncated = content[:50000] if len(content) > 50000 else content
+
+        # Build prompt with optional context
+        prompt = build_summarization_prompt(truncated, context)
+
+        # Use base system prompt when context is included in user message
+        system = SUMMARIZATION_SYSTEM_PROMPT if not context else (
+            "You are a helpful assistant that summarizes documents. "
+            "Follow the instructions in the user message."
+        )
 
         response = requests.post(
             f"{self.base_url}/api/chat",
             json={
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": truncated},
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
                 ],
                 "stream": False,
             },
@@ -157,15 +203,21 @@ class OllamaSummarization:
 class PassthroughSummarization:
     """
     Summarization provider that returns the first N characters.
-    
+
     Useful for testing or when LLM summarization is not needed.
     """
-    
+
     def __init__(self, max_chars: int = 500):
         self.max_chars = max_chars
-    
-    def summarize(self, content: str, *, max_length: int = 500) -> str:
-        """Return truncated content as summary."""
+
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int = 500,
+        context: str | None = None,
+    ) -> str:
+        """Return truncated content as summary (ignores context)."""
         limit = min(self.max_chars, max_length)
         if len(content) <= limit:
             return content
