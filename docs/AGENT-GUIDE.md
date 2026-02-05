@@ -226,6 +226,14 @@ The full original document is not stored in this service.
 
 The services that implement embedding, summarization and tagging are configured at initialization time. This skill itself is provider-agnostic.
 
+**Contextual Summarization:**
+
+When you provide user tags (domain, topic, project, etc.) during indexing, LLM-based summarizers use context from related items to produce more relevant summaries. Tags aren't just for organization — they shape how new items are understood.
+
+For example, indexing a document with `-t domain=practice` will produce a summary highlighting what's relevant to that practice context, drawing on existing items tagged with the same domain.
+
+Changing tags on an existing document triggers re-summarization with the new context. Simple providers (truncate, first_paragraph) ignore context and produce generic summaries.
+
 ## Document Versioning
 
 All documents retain version history automatically. When you update a document, the previous version is archived.

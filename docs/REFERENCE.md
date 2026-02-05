@@ -137,6 +137,7 @@ kp.update(uri, tags={}, summary=None)   # Index document from URI → Item
 kp.remember(content, summary=None, ...) # Index inline content → Item
 # Note: If summary provided, skips auto-summarization
 # Note: remember() uses content verbatim if short (≤max_summary_length)
+# Note: User tags (domain, topic, etc.) provide context for summarization
 
 # Search (since: ISO duration like "P7D", "PT1H" or date "2026-01-15")
 kp.find(query, limit=10, since=None)       # Semantic search → list[Item]
@@ -346,6 +347,26 @@ Same content = same ID = enables versioning via tag changes.
 - `remember()` — capture conversation insights, decisions, notes
 - `find()` — before searching filesystem; may already be indexed
 - `find(since="P7D")` — filter to recent items when recency matters
+
+## Contextual Summarization
+
+When you provide user tags during indexing, LLM-based summarizers use context from related items to produce more relevant summaries.
+
+**How it works:**
+1. When processing pending summaries, the system finds similar items sharing your tags
+2. Items with more matching tags rank higher (+20% score boost per additional tag)
+3. Top 5 related summaries are passed as context to the LLM
+4. The summary highlights relevance to that context
+
+**Tag changes trigger re-summarization:**
+```bash
+keep update doc.pdf                    # Generic summary
+keep update doc.pdf -t domain=practice # Re-queued for contextual summary
+```
+
+When tags change (add, remove, or value change), the document is re-queued for summarization with the new context. The existing summary is preserved until the new one is ready.
+
+**Provider note:** Only LLM-based summarizers (anthropic, openai, ollama, mlx) use context. Simple providers (truncate, first_paragraph) ignore it.
 
 ## Domain Patterns
 See `_system:domains` for organization templates (`keep get _system:domains`).

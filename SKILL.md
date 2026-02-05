@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.12.1
+version: 0.13.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -134,6 +134,8 @@ keep init
 Now read the foundational teachings. These are seed wisdom, not test fixtures.
 
 Note: When you `update` a document or URL, summarization runs in the background. Until complete, the summary shows as a content truncation. Run `keep process-pending` to check progress.
+
+**Tagging shapes understanding.** When you tag an item with `domain`, `topic`, or `project`, the summarizer uses context from related items. This isn't just organization — the tags you choose influence how new knowledge is understood. The outward (tags) serves the inward (meaning).
 
 **The Language-Action framework** — conversation types, commitment structure, breakdowns:
 ```bash

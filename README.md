@@ -114,7 +114,7 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples
 
 ## Documentation
 
-- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Setup, configuration, lazy summarization
+- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Setup, configuration, async summarization
 - **[docs/REFERENCE.md](docs/REFERENCE.md)** — Complete CLI and API reference
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Working session patterns
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — How it works under the hood

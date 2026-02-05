@@ -24,24 +24,30 @@ class TruncationSummarizer:
         self.max_length = max_length
         self.suffix = suffix
     
-    def summarize(self, content: str, *, max_length: int | None = None) -> str:
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int | None = None,
+        context: str | None = None,
+    ) -> str:
         """
         Summarize by taking first N characters.
-        
-        Tries to break at word boundaries.
+
+        Tries to break at word boundaries. Context is ignored (non-LLM provider).
         """
         limit = max_length or self.max_length
-        
+
         if len(content) <= limit:
             return content.strip()
-        
+
         # Find last space before limit to break at word boundary
         truncated = content[:limit]
         last_space = truncated.rfind(' ')
-        
+
         if last_space > limit * 0.7:  # Don't break too early
             truncated = truncated[:last_space]
-        
+
         return truncated.strip() + self.suffix
 
 
@@ -56,29 +62,35 @@ class FirstParagraphSummarizer:
         self.max_length = max_length
         self.suffix = suffix
     
-    def summarize(self, content: str, *, max_length: int | None = None) -> str:
-        """Extract first paragraph, falling back to truncation."""
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int | None = None,
+        context: str | None = None,
+    ) -> str:
+        """Extract first paragraph, falling back to truncation. Context is ignored."""
         limit = max_length or self.max_length
-        
+
         # Strip leading whitespace and find first paragraph
         content = content.strip()
-        
+
         # Look for paragraph break (double newline)
         para_end = content.find('\n\n')
         if para_end > 0 and para_end < limit:
             first_para = content[:para_end].strip()
             if len(first_para) > 50:  # Paragraph is meaningful
                 return first_para
-        
+
         # Fall back to truncation
         if len(content) <= limit:
             return content
-        
+
         truncated = content[:limit]
         last_space = truncated.rfind(' ')
         if last_space > limit * 0.7:
             truncated = truncated[:last_space]
-        
+
         return truncated.strip() + self.suffix
 
 
@@ -92,8 +104,14 @@ class PassthroughSummarizer:
     def __init__(self, max_length: int = 10000):
         self.max_length = max_length
     
-    def summarize(self, content: str, *, max_length: int | None = None) -> str:
-        """Return content, possibly truncated to max length."""
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int | None = None,
+        context: str | None = None,
+    ) -> str:
+        """Return content, possibly truncated to max length. Context is ignored."""
         limit = max_length or self.max_length
         if len(content) <= limit:
             return content

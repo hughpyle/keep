@@ -159,6 +159,38 @@ Bad: "The main purpose of this document is to describe Keep, which is..."
 Include what it does, key features, and why someone might find it useful."""
 
 
+def build_summarization_prompt(content: str, context: str | None = None) -> str:
+    """
+    Build the summarization prompt, optionally including context.
+
+    When context is provided, the summary should highlight what's relevant
+    to the related items. This enables contextual summarization based on tags.
+
+    Args:
+        content: The document content to summarize
+        context: Optional context from related items (summaries of similar items)
+
+    Returns:
+        The complete prompt string for the LLM
+    """
+    if context:
+        return f"""Summarize this document in under 200 words.
+
+Context from related items in this collection:
+{context}
+
+Summarize in a way that highlights what's relevant to this context.
+
+Begin with the subject or topic directly - do not start with meta-phrases like "This document describes..." or "The main purpose is...".
+
+Include what it does, key features, and why someone might find it useful.
+
+Document:
+{content}"""
+    else:
+        return content
+
+
 def strip_summary_preamble(text: str) -> str:
     """
     Remove common LLM preambles from summaries.
@@ -168,6 +200,7 @@ def strip_summary_preamble(text: str) -> str:
     """
     import re
     preambles = [
+        r"^here is a summary[^:]*[:.]\s*",
         r"^here is a concise summary[^:]*:\s*",
         r"^here is the summary[^:]*:\s*",
         r"^here's a summary[^:]*:\s*",
@@ -213,14 +246,21 @@ class SummarizationProvider(Protocol):
                 return response.choices[0].message.content
     """
     
-    def summarize(self, content: str, *, max_length: int = 500) -> str:
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int = 500,
+        context: str | None = None,
+    ) -> str:
         """
         Generate a summary of the content.
-        
+
         Args:
             content: The full document content
             max_length: Approximate maximum length in characters
-            
+            context: Optional context from related items (for contextual summarization)
+
         Returns:
             A concise summary of the content
         """
