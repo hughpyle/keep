@@ -8,6 +8,7 @@ avoiding redundant embedding calls for unchanged content.
 import hashlib
 import json
 import sqlite3
+import struct
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,7 +67,21 @@ class EmbeddingCache:
         """Generate cache key from model name and content."""
         key_input = f"{model_name}:{content}"
         return hashlib.sha256(key_input.encode("utf-8")).hexdigest()
-    
+
+    @staticmethod
+    def _serialize_embedding(embedding: list[float]) -> bytes:
+        """Serialize embedding to binary format (little-endian float32)."""
+        return struct.pack(f"<{len(embedding)}f", *embedding)
+
+    @staticmethod
+    def _deserialize_embedding(data: bytes | str) -> list[float]:
+        """Deserialize embedding from binary or legacy JSON format."""
+        if isinstance(data, bytes):
+            n = len(data) // 4
+            return list(struct.unpack(f"<{n}f", data))
+        # Legacy JSON format
+        return json.loads(data)
+
     def get(self, model_name: str, content: str) -> Optional[list[float]]:
         """
         Get cached embedding if it exists.
@@ -91,8 +106,7 @@ class EmbeddingCache:
                 )
                 self._conn.commit()
 
-                # Deserialize embedding
-                return json.loads(row[0])
+                return self._deserialize_embedding(row[0])
 
         return None
     
@@ -109,7 +123,7 @@ class EmbeddingCache:
         """
         content_hash = self._hash_key(model_name, content)
         now = datetime.now(timezone.utc).isoformat()
-        embedding_blob = json.dumps(embedding)
+        embedding_blob = self._serialize_embedding(embedding)
 
         with self._lock:
             self._conn.execute("""
@@ -144,22 +158,52 @@ class EmbeddingCache:
     def stats(self) -> dict:
         """Get cache statistics."""
         cursor = self._conn.execute("""
-            SELECT COUNT(*), COUNT(DISTINCT model_name) 
+            SELECT COUNT(*), COUNT(DISTINCT model_name)
             FROM embedding_cache
         """)
         count, models = cursor.fetchone()
-        return {
+        result = {
             "entries": count,
             "models": models,
             "max_entries": self._max_entries,
             "cache_path": str(self._cache_path),
         }
+        cursor = self._conn.execute(
+            "SELECT COUNT(*) FROM embedding_cache WHERE typeof(embedding) = 'text'"
+        )
+        legacy_count = cursor.fetchone()[0]
+        if legacy_count > 0:
+            result["legacy_json_entries"] = legacy_count
+        return result
     
     def clear(self) -> None:
         """Clear all cached embeddings."""
         with self._lock:
             self._conn.execute("DELETE FROM embedding_cache")
             self._conn.commit()
+
+    def migrate(self) -> int:
+        """Bulk-convert legacy JSON embeddings to binary format.
+
+        Returns number of entries migrated.
+        """
+        migrated = 0
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT content_hash, embedding FROM embedding_cache"
+            )
+            for content_hash, data in cursor.fetchall():
+                if isinstance(data, str):
+                    embedding = json.loads(data)
+                    binary = self._serialize_embedding(embedding)
+                    self._conn.execute(
+                        "UPDATE embedding_cache SET embedding = ? WHERE content_hash = ?",
+                        (binary, content_hash)
+                    )
+                    migrated += 1
+            if migrated:
+                self._conn.commit()
+        return migrated
 
     def close(self) -> None:
         """Close the database connection."""
