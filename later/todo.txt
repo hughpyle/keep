@@ -1,3 +1,7 @@
+* relationships as a separate first-class thing
+    - X and Y with a bidirectional edge
+    (needs more thought about the approach, benefits, etc.)
+
 * tags themselves should have summaries and full descriptions
     i.e. somewhere in the "system" store is a docuemnt that describes a tag
     of course it's optional, you can just tag things in an open-ended way
@@ -15,21 +19,6 @@
 
     then when displaying a tag, mark it up with an asterisk if exists a definition-for-that-tag doc
     and give a shortcut `keep tag --describe` or something
-
-* filter "one for each tag"?
-    - with "projects", "topics" tags
-    - this replaces all the "top-of-mind" stuff in `later/` (except for "recent")
-        - the later thing for "topics" is more explicit than using tasks/projects, but same goal
-        - actually "topics" is a much better word than "tasks" because this is not really a task-focused skill
-    - maybe "project" and "topic" tags (literally) are enough
-        - we'll use them by convention, but show them in all the examples
-        - concrete examples of using the nowdoc by project/topic
-        - need a way to "list current topics", "list current projects" as well as just "get the nowdoc"
-            - maybe that's the default in `keep` with no args:
-              get the no-project/no-topic nowdoc (or default it)
-              get the list of distinct projects, distinct topics, within a reasonable time and count limit
-            - limit 10, and limit to the last 7 days, should be enough for a default?
-                - "last N days" is subtle, not part of this task, don't have any time-limited behavior yet
 
 * tag-by-model ("auto-tag")?
     - is there a model-supported tagging? what would that need to be useful? (specific domains??)
@@ -182,3 +171,6 @@ x `context` text alongside summaries? (no, summary is good now)
 . document project/topic segregation: SKILL.md, README.md, REFERENCE.md, AGENT-GUIDE.md; KEEP_COLLECTION envvar
 . reviewed library content and docs for alignment with teachings (AN5.57, impermanence verse, forty-two chapters all support the practice)
 . restructured SKILL.md Layers 1 & 2: integrated Language-Action (ground) + MN61 (mirror) teachings without duplication
+. enhanced `keep config`: get any setting from CLI, added file/tool paths, test with `ls $(keep config tool)`
+. HTML content regularization: HttpDocumentProvider extracts text from HTML at fetch time (matching FileDocumentProvider), fixing web URL summarization
+. tag-based filtering: -t flag on list/find/get/similar filters by tag; --tags lists distinct tag values; --since for time filtering

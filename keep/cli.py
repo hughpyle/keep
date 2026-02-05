@@ -142,9 +142,9 @@ def _format_yaml_frontmatter(
     are ordered newest-first, matching list_versions() ordering.
     Changing that ordering would break the vN = -V N correspondence.
     """
-    lines = ["---", f"id: {item.id}"]
-    if viewing_offset is not None:
-        lines.append(f"version: {viewing_offset}")
+    version = viewing_offset if viewing_offset is not None else 0
+    version_suffix = f"@V{{{version}}}" if version > 0 else ""
+    lines = ["---", f"id: {item.id}{version_suffix}"]
     display_tags = _filter_display_tags(item.tags)
     if display_tags:
         tag_items = ", ".join(f"{k}: {v}" for k, v in sorted(display_tags.items()))
@@ -163,7 +163,8 @@ def _format_yaml_frontmatter(
             summary_preview = sim_item.summary[:40].replace("\n", " ")
             if len(sim_item.summary) > 40:
                 summary_preview += "..."
-            lines.append(f"  - {base_id}@V{{{offset}}} {score_str} {date_part} {summary_preview}")
+            version_suffix = f"@V{{{offset}}}" if offset > 0 else ""
+            lines.append(f"  - {base_id}{version_suffix} {score_str} {date_part} {summary_preview}")
 
     # Add version navigation (just @V{N} since ID is shown at top, with date + summary)
     if version_nav:
@@ -199,11 +200,12 @@ def _format_yaml_frontmatter(
 
 
 def _format_summary_line(item: Item) -> str:
-    """Format item as single summary line: id@version date summary"""
-    # Get version-scoped ID
+    """Format item as single summary line: id date summary (with @V{N} only for old versions)"""
+    # Get version-scoped ID (omit @V{0} for current version)
     base_id = item.tags.get("_base_id", item.id)
     version = item.tags.get("_version", "0")
-    versioned_id = f"{base_id}@V{{{version}}}"
+    version_suffix = f"@V{{{version}}}" if version != "0" else ""
+    versioned_id = f"{base_id}{version_suffix}"
 
     # Get date (from _updated_date or _updated or _created)
     date = item.tags.get("_updated_date") or item.tags.get("_updated", "")[:10] or item.tags.get("_created", "")[:10] or ""
@@ -217,10 +219,11 @@ def _format_summary_line(item: Item) -> str:
 
 
 def _format_versioned_id(item: Item) -> str:
-    """Format item ID with version suffix: id@V{N}"""
+    """Format item ID with version suffix only for old versions: id or id@V{N}"""
     base_id = item.tags.get("_base_id", item.id)
     version = item.tags.get("_version", "0")
-    return f"{base_id}@V{{{version}}}"
+    version_suffix = f"@V{{{version}}}" if version != "0" else ""
+    return f"{base_id}{version_suffix}"
 
 
 @app.callback(invoke_without_command=True)

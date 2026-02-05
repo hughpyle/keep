@@ -92,8 +92,13 @@ URI or content
 ┌─────────────────┐
 │ Fetch/Use input │ ← DocumentProvider (for URIs only)
 └────────┬────────┘
-         │ content (text)
-         │
+         │ raw bytes
+         ▼
+┌─────────────────┐
+│ Content Regular-│ ← Extract text from HTML/PDF
+│ ization         │   (scripts/styles removed)
+└────────┬────────┘
+         │ clean text
     ┌────┴────┬─────────────┐
     │         │             │
     ▼         ▼             ▼
@@ -233,10 +238,17 @@ Generate human-readable summaries from content.
 - **OpenAI**: LLM-based, API, high quality
 
 ### Document Providers
-Fetch content from URIs.
+Fetch content from URIs with content regularization.
 
 - **composite**: Handles file://, https:// (default)
 - Extensible for s3://, gs://, etc.
+
+**Content Regularization:**
+- **PDF**: text extracted via pypdf
+- **HTML**: text extracted via BeautifulSoup (scripts/styles removed)
+- **Other formats**: treated as plain text
+
+This ensures both embedding and summarization receive clean text.
 
 ---
 
