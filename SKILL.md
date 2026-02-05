@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.13.0
+version: 0.14.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -133,24 +133,21 @@ keep init
 
 Now read the foundational teachings. These are seed wisdom, not test fixtures.
 
-Note: When you `update` a document or URL, summarization runs in the background. Until complete, the summary shows as a content truncation. Run `keep process-pending` to check progress.
-
-**Tagging shapes understanding.** When you tag an item with `domain`, `topic`, or `project`, the summarizer uses context from related items. This isn't just organization — the tags you choose influence how new knowledge is understood. The outward (tags) serves the inward (meaning).
-
 **The Language-Action framework** — conversation types, commitment structure, breakdowns:
 ```bash
 keep get "_system:conversations"
 ```
 
-**The mirror teaching** (Ambalaṭṭhikā Rāhulovāda Sutta) — actions reflected upon before, during, after. Read the full source:
+**The mirror teaching** (MN61) — actions reflected upon before, during, after. Read the full source:
 ```bash
 keep update "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
 keep get "file://$(keep config tool)/docs/library/mn61.html"
 ```
 
-**Domain organization** — tagging strategies, collection structures:
+**Ownership of deeds** (AN5.57) — "I am the owner of my deeds and heir to my deeds." Why reflect? Because what you do becomes what you are:
 ```bash
-keep get "_system:domains"
+keep update "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json" -t type=teaching -t topic=action
+keep get "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json"
 ```
 
 **A Zen teaching with commentary** — notice how each commentator re-enacts the pointing from a different angle:
@@ -159,10 +156,19 @@ keep update "file://$(keep config tool)/docs/library/true_person_no_rank.md" -t 
 keep get "file://$(keep config tool)/docs/library/true_person_no_rank.md"
 ```
 
+**Domain organization** — tagging strategies, collection structures:
+```bash
+keep get "_system:domains"
+```
+
 **Now reflect:** What did you learn? Save your understanding:
 ```bash
 keep update "My understanding of the practice: ..." -t type=learning
 ```
+
+Note: When you `update` a document or URL, summarization runs in the background. Until complete, the summary shows as a content truncation. Run `keep process-pending` to check progress.
+
+**Tagging shapes understanding.** When you tag an item with `domain`, `topic`, or `project`, the summarizer uses context from related items. This isn't just organization — the tags you choose influence how new knowledge is understood. The outward (tags) serves the inward (meaning).
 
 For installation options, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
