@@ -9,7 +9,8 @@ uv tool install 'keep-skill[local]'
 keep init
 
 # Index content
-keep update file:///path/to/document.md -t project=myapp
+keep update https://inguz.substack.com/p/keep -t topic=practice
+keep update "file://$(keep config tool)/docs/library/impermanence_verse.txt" -t type=teaching
 keep update "Rate limit is 100 req/min" -t topic=api
 
 # Search by meaning
@@ -62,10 +63,10 @@ First run downloads embedding models (~3-5 minutes).
 ```bash
 keep init                              # Creates .keep/ at repo root
 
-# Index files and notes
-keep update file:///path/to/doc.md -t project=myapp
+# Index URLs, files, and notes
+keep update https://inguz.substack.com/p/keep -t topic=practice
+keep update "file://$(keep config tool)/docs/library/impermanence_verse.txt" -t type=teaching
 keep update "Token refresh needs clock sync" -t topic=auth
-keep update "Important insight" -t type=note
 
 # Search
 keep find "authentication flow" --limit 5
