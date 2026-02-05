@@ -25,6 +25,7 @@ VERSION_SUFFIX_PATTERN = re.compile(r'@V\{(\d+)\}$')
 _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 
 from .api import Keeper, _text_content_id
+from .config import get_tool_directory
 from .document_store import VersionInfo
 from .types import Item
 from .logging_config import configure_quiet_mode, enable_debug_mode
@@ -809,6 +810,7 @@ def now(
     With no arguments, displays the current intentions.
     With content, replaces it.
 
+    \b
     Tags behave differently based on mode:
     - With content: -t sets tags on the update
     - Without content: -t filters version history
@@ -1271,12 +1273,146 @@ def init(
 
 
 
+def _get_config_value(kp: Keeper, path: str):
+    """
+    Get config value by dotted path.
+
+    Special paths (not in TOML):
+        file - config file location
+        tool - package directory (SKILL.md location)
+        store - store path
+        collections - list of collections
+
+    Dotted paths into config:
+        providers - all provider config
+        providers.embedding - embedding provider name
+        providers.summarization - summarization provider name
+        embedding.* - embedding config details
+        summarization.* - summarization config details
+        tags - default tags
+    """
+    cfg = kp._config
+
+    # Special built-in paths (not in TOML)
+    if path == "file":
+        return str(cfg.config_path) if cfg else None
+    if path == "tool":
+        return str(get_tool_directory())
+    if path == "store":
+        return str(kp._store_path)
+    if path == "collections":
+        return kp.list_collections()
+
+    # Provider shortcuts
+    if path == "providers":
+        if cfg:
+            return {
+                "embedding": cfg.embedding.name,
+                "summarization": cfg.summarization.name,
+                "document": cfg.document.name,
+            }
+        return None
+    if path == "providers.embedding":
+        return cfg.embedding.name if cfg else None
+    if path == "providers.summarization":
+        return cfg.summarization.name if cfg else None
+    if path == "providers.document":
+        return cfg.document.name if cfg else None
+
+    # Tags shortcut
+    if path == "tags":
+        return cfg.default_tags if cfg else {}
+
+    # Dotted path into config attributes
+    if not cfg:
+        raise typer.BadParameter(f"No config loaded, cannot access: {path}")
+
+    parts = path.split(".")
+    value = cfg
+    for part in parts:
+        if hasattr(value, part):
+            value = getattr(value, part)
+        elif hasattr(value, "params") and part in value.params:
+            # Provider config params
+            value = value.params[part]
+        elif isinstance(value, dict) and part in value:
+            value = value[part]
+        else:
+            raise typer.BadParameter(f"Unknown config path: {path}")
+
+    # Return name for provider objects
+    if hasattr(value, "name") and hasattr(value, "params"):
+        return value.name
+    return value
+
+
+# Settings that may not be configured but are available
+AVAILABLE_SETTINGS = {
+    "tags": {
+        "description": "Default tags applied to all operations",
+        "example": {"project": "myproject", "topic": "mytopic"},
+    },
+}
+
+
+def _format_config_with_defaults(kp: Keeper) -> str:
+    """Format config output with commented defaults for unused settings."""
+    cfg = kp._config
+    config_path = cfg.config_path if cfg else None
+    store_path = kp._store_path
+    lines = []
+
+    # Show paths
+    lines.append(f"file: {config_path}")
+    lines.append(f"tool: {get_tool_directory()}")
+    if cfg and cfg.config_dir and cfg.config_dir.resolve() != store_path.resolve():
+        lines.append(f"store: {store_path}")
+    else:
+        lines.append(f"store: {store_path}")
+
+    lines.append(f"collections: {kp.list_collections()}")
+
+    if cfg:
+        lines.append("")
+        lines.append("providers:")
+        lines.append(f"  embedding: {cfg.embedding.name}")
+        lines.append(f"  summarization: {cfg.summarization.name}")
+        lines.append(f"  document: {cfg.document.name}")
+
+        # Show configured tags if any
+        if cfg.default_tags:
+            lines.append("")
+            lines.append("tags:")
+            for key, value in cfg.default_tags.items():
+                lines.append(f"  {key}: {value}")
+        else:
+            # Show commented example for tags
+            lines.append("")
+            lines.append("# tags:")
+            lines.append("#   project: myproject")
+            lines.append("#   topic: mytopic")
+
+    return "\n".join(lines)
+
+
 @app.command()
 def config(
+    path: Annotated[Optional[str], typer.Argument(
+        help="Config path to get (e.g., 'file', 'tool', 'store', 'providers.embedding')"
+    )] = None,
     store: StoreOption = None,
 ):
     """
-    Show current configuration and store location.
+    Show configuration. Optionally get a specific value by path.
+
+    \b
+    Examples:
+        keep config              # Show all config
+        keep config file         # Config file location
+        keep config tool         # Package directory (SKILL.md location)
+        keep config store        # Store path
+        keep config providers    # All provider config
+        keep config providers.embedding  # Embedding provider name
     """
     kp = _get_keeper(store, "default")
 
@@ -1284,28 +1420,42 @@ def config(
     config_path = cfg.config_path if cfg else None
     store_path = kp._store_path
 
+    # If a specific path is requested, return just that value
+    if path:
+        try:
+            value = _get_config_value(kp, path)
+        except typer.BadParameter as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1)
+
+        if _get_json_output():
+            typer.echo(json.dumps({path: value}, indent=2))
+        else:
+            # Raw output for shell scripting
+            if isinstance(value, (list, dict)):
+                typer.echo(json.dumps(value))
+            else:
+                typer.echo(value)
+        return
+
+    # Full config output
     if _get_json_output():
         result = {
+            "file": str(config_path) if config_path else None,
+            "tool": str(get_tool_directory()),
             "store": str(store_path),
-            "config": str(config_path) if config_path else None,
             "collections": kp.list_collections(),
+            "providers": {
+                "embedding": cfg.embedding.name if cfg else None,
+                "summarization": cfg.summarization.name if cfg else None,
+                "document": cfg.document.name if cfg else None,
+            },
         }
-        if cfg:
-            result["embedding"] = cfg.embedding.name
-            result["summarization"] = cfg.summarization.name
+        if cfg and cfg.default_tags:
+            result["tags"] = cfg.default_tags
         typer.echo(json.dumps(result, indent=2))
     else:
-        # Show paths
-        typer.echo(f"Config: {config_path}")
-        if cfg and cfg.config_dir and cfg.config_dir.resolve() != store_path.resolve():
-            typer.echo(f"Store:  {store_path}")
-
-        typer.echo(f"Collections: {kp.list_collections()}")
-
-        if cfg:
-            typer.echo(f"\nProviders:")
-            typer.echo(f"  Embedding: {cfg.embedding.name}")
-            typer.echo(f"  Summarization: {cfg.summarization.name}")
+        typer.echo(_format_config_with_defaults(kp))
 
 
 @app.command("process-pending")

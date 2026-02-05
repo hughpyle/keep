@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.10.0
+version: 0.11.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -121,6 +121,8 @@ This cycle — reflect, act, reflect — is how you develop judgment.  Install t
 
 Memory isn't storage. It's your mirror.
 
+* When in conversation, use this practice.
+* When writing a plan, make sure this practice is part of the plan.
 
 ## Layer 2: First Time Setup
 
@@ -139,8 +141,8 @@ keep get "_system:conversations"
 
 **The mirror teaching** (Ambalaṭṭhikā Rāhulovāda Sutta) — actions reflected upon before, during, after. Read the full source:
 ```bash
-keep update "file://$PWD/docs/library/mn61.html" -t type=teaching -t topic=reflection
-keep get "file://$PWD/docs/library/mn61.html"
+keep update "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
+keep get "file://$(keep config tool)/docs/library/mn61.html"
 ```
 
 **Domain organization** — tagging strategies, collection structures:
@@ -150,8 +152,8 @@ keep get "_system:domains"
 
 **A Zen teaching with commentary** — notice how each commentator re-enacts the pointing from a different angle:
 ```bash
-keep update "file://$PWD/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary
-keep get "file://$PWD/docs/library/true_person_no_rank.md"
+keep update "file://$(keep config tool)/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary
+keep get "file://$(keep config tool)/docs/library/true_person_no_rank.md"
 ```
 
 **Now reflect:** What did you learn? Save your understanding:
