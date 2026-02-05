@@ -25,29 +25,24 @@ SYSTEM_DOCS_VERSION = 3  # Increment when bundled system docs content changes
 
 def get_tool_directory() -> Path:
     """
-    Return directory containing SKILL.md (package root).
+    Return keep package directory (contains SKILL.md and docs/library/).
 
-    For installed package: SKILL.md is at the same level as the keep/ package.
-    For development: it's at the repository root.
+    For installed package: the keep/ package directory itself (SKILL.md is inside).
+    For development: the repository root (one level up from keep/).
     """
-    # Get the keep package location
     keep_pkg = importlib.resources.files("keep")
     pkg_path = Path(str(keep_pkg))
 
-    # SKILL.md is one level up from the package
-    tool_dir = pkg_path.parent
+    # Check if SKILL.md is in the package (installed via wheel with force-include)
+    if (pkg_path / "SKILL.md").exists():
+        return pkg_path
 
-    # Verify SKILL.md exists there
-    if (tool_dir / "SKILL.md").exists():
-        return tool_dir
-
-    # Fallback: check if we're in a development install
-    # where SKILL.md might be at repository root
-    if pkg_path.name == "keep" and (pkg_path.parent / "SKILL.md").exists():
+    # Development: SKILL.md is at repo root (parent of keep/)
+    if (pkg_path.parent / "SKILL.md").exists():
         return pkg_path.parent
 
-    # Last resort: return the package parent anyway
-    return tool_dir
+    # Fallback: return the package directory
+    return pkg_path
 
 
 @dataclass

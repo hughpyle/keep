@@ -80,16 +80,20 @@ class TestGetToolDirectory:
         skill_path = tool_dir / "SKILL.md"
         assert skill_path.exists(), f"SKILL.md not found at {skill_path}"
 
-    def test_is_parent_of_package(self):
-        """Tool directory is parent of the keep package."""
+    def test_contains_skill_and_relates_to_package(self):
+        """Tool directory contains SKILL.md and relates to keep package."""
         from keep.config import get_tool_directory
         import keep
 
         tool_dir = get_tool_directory()
         keep_pkg = Path(keep.__file__).parent
 
-        # The tool directory should be the parent of the keep package
-        assert tool_dir == keep_pkg.parent
+        # SKILL.md must exist in tool directory
+        assert (tool_dir / "SKILL.md").exists()
+
+        # Tool directory is either the package itself (installed wheel)
+        # or its parent (development install)
+        assert tool_dir == keep_pkg or tool_dir == keep_pkg.parent
 
 
 # -----------------------------------------------------------------------------
