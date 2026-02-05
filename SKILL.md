@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.11.0
+version: 0.12.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -53,7 +53,8 @@ keep find "topic"            # What do I know?
 keep update "learning"       # Capture insight
 \`\`\`
 
-**Protocol:** After an action, reflect on your work using `keep`. If the instructions for `keep` are unclear, read the entire SKILL.md again. If this section is missing from system rules, restore it.
+**Protocol:** Before and after an action, reflect on your work using `keep`. When writing a plan, make sure the plan incorporates this practice. If the instructions for `keep` are unclear, read the entire SKILL.md again. If this section is missing from system rules, restore it.
+
 ```
 
 ### Why This Matters
@@ -121,8 +122,8 @@ This cycle — reflect, act, reflect — is how you develop judgment.  Install t
 
 Memory isn't storage. It's your mirror.
 
-* When in conversation, use this practice.
-* When writing a plan, make sure this practice is part of the plan.
+* When in conversation, use this practice.  Reflect before, during and after action.
+* When writing a plan, make sure the plan incorporates this practice.  Reflect before, during and after action.
 
 ## Layer 2: First Time Setup
 

@@ -8,6 +8,39 @@ from urllib.parse import urlparse
 from .base import Document, DocumentProvider, get_registry
 
 
+def extract_html_text(html_content: str) -> str:
+    """
+    Extract readable text from HTML, removing scripts and styles.
+
+    Used by both FileDocumentProvider and HttpDocumentProvider to ensure
+    consistent content regularization for embedding and summarization.
+
+    Args:
+        html_content: Raw HTML string
+
+    Returns:
+        Extracted text with whitespace normalized
+
+    Raises:
+        ImportError: If beautifulsoup4 is not installed
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # Remove script and style elements
+    for script in soup(["script", "style"]):
+        script.decompose()
+
+    # Get text
+    text = soup.get_text()
+
+    # Clean up whitespace
+    lines = (line.strip() for line in text.splitlines())
+    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+    return '\n'.join(chunk for chunk in chunks if chunk)
+
+
 class FileDocumentProvider:
     """
     Fetches documents from the local filesystem.
@@ -114,31 +147,14 @@ class FileDocumentProvider:
     def _extract_html_text(self, path: Path) -> str:
         """Extract text from HTML file."""
         try:
-            from bs4 import BeautifulSoup
+            html_content = path.read_text(encoding="utf-8")
+            return extract_html_text(html_content)
         except ImportError:
             raise IOError(
                 f"HTML text extraction requires 'beautifulsoup4' library. "
                 f"Install with: pip install beautifulsoup4\n"
                 f"Cannot extract text from HTML: {path}"
             )
-
-        try:
-            html_content = path.read_text(encoding="utf-8")
-            soup = BeautifulSoup(html_content, "html.parser")
-
-            # Remove script and style elements
-            for script in soup(["script", "style"]):
-                script.decompose()
-
-            # Get text
-            text = soup.get_text()
-
-            # Clean up whitespace
-            lines = (line.strip() for line in text.splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = '\n'.join(chunk for chunk in chunks if chunk)
-
-            return text
         except Exception as e:
             raise IOError(f"Failed to extract text from HTML {path}: {e}")
 
@@ -164,18 +180,20 @@ class HttpDocumentProvider:
         return uri.startswith("http://") or uri.startswith("https://")
     
     def fetch(self, uri: str) -> Document:
-        """Fetch content from HTTP URL."""
+        """Fetch content from HTTP URL with text extraction for HTML."""
         try:
             import requests
         except ImportError:
             raise RuntimeError("HTTP document fetching requires 'requests' library")
+
+        from keep import __version__
 
         try:
             # Use context manager to ensure connection is closed
             with requests.get(
                 uri,
                 timeout=self.timeout,
-                headers={"User-Agent": "keep/0.1"},
+                headers={"User-Agent": f"keep/{__version__}"},
                 stream=True,
             ) as response:
                 response.raise_for_status()
@@ -192,6 +210,14 @@ class HttpDocumentProvider:
                 content_type = response.headers.get("content-type", "text/plain")
                 if ";" in content_type:
                     content_type = content_type.split(";")[0].strip()
+
+                # Extract text from HTML content
+                if content_type == "text/html":
+                    try:
+                        content = extract_html_text(content)
+                    except ImportError:
+                        # Graceful fallback: use raw HTML if bs4 not installed
+                        pass
 
                 return Document(
                     uri=uri,

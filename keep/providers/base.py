@@ -149,18 +149,14 @@ class EmbeddingProvider(Protocol):
 # -----------------------------------------------------------------------------
 
 # Shared system prompt for all LLM-based summarization providers
-SUMMARIZATION_SYSTEM_PROMPT = """You are a precise summarization assistant.
-Create a concise summary of the provided document that captures:
-- The main purpose or topic
-- Key points or functionality
-- Important details that would help someone decide if this document is relevant
+SUMMARIZATION_SYSTEM_PROMPT = """Summarize this document in under 200 words.
 
-IMPORTANT: Start the summary directly with the content. Do NOT begin with phrases like:
-- "Here is a concise summary"
-- "This document describes"
-- "The document covers"
-- "Summary:"
-Just state the facts directly. Keep the summary under 200 words."""
+Begin with the subject or topic directly - do not start with meta-phrases like "This document describes..." or "The main purpose is...".
+
+Good: "Keep is a reflective memory system for AI agents that provides..."
+Bad: "The main purpose of this document is to describe Keep, which is..."
+
+Include what it does, key features, and why someone might find it useful."""
 
 
 def strip_summary_preamble(text: str) -> str:
@@ -180,6 +176,10 @@ def strip_summary_preamble(text: str) -> str:
         r"^this document describes\s+",
         r"^the document covers\s+",
         r"^this document covers\s+",
+        r"^the main purpose or topic of this document is\s+",
+        r"^the main purpose of this document is\s+",
+        r"^the purpose of this document is\s+",
+        r"^this is a document (about|describing|that)\s+",
     ]
     result = text
     for pattern in preambles:
