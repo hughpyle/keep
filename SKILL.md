@@ -127,8 +127,11 @@ Memory isn't storage. It's your mirror.
 
 ## Layer 2: First Time Setup
 
+The store auto-initializes on first use. For API-based providers, set your API key first:
 ```bash
-keep init
+export OPENAI_API_KEY=...      # (handles both embeddings and summarization)
+# Or: GEMINI_API_KEY (also does both)
+# Or: VOYAGE_API_KEY + ANTHROPIC_API_KEY (embeddings + summarization separately)
 ```
 
 Now read the foundational teachings. These are seed wisdom, not test fixtures.

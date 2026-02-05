@@ -84,6 +84,7 @@ class EmbeddingIdentity:
             "openai": "openai",
             "gemini": "gemini",
             "ollama": "ollama",
+            "voyage": "voyage",
         }.get(self.provider, self.provider[:6])
         
         return f"{provider_short}_{model_slug}"
@@ -181,23 +182,24 @@ def get_openclaw_memory_search_config(openclaw_config: dict | None) -> dict | No
             .get("memorySearch", None))
 
 
-def detect_default_providers() -> dict[str, ProviderConfig]:
+def detect_default_providers() -> dict[str, ProviderConfig | None]:
     """
     Detect the best default providers for the current environment.
 
     Priority for embeddings:
-    1. OpenClaw memorySearch config (if configured with provider + API key)
-    2. sentence-transformers (local fallback)
+    1. API keys: VOYAGE_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
+    2. Local: MLX (Apple Silicon), sentence-transformers
+    3. None if nothing available
 
     Priority for summarization:
-    1. OpenClaw model config + Anthropic (if configured and ANTHROPIC_API_KEY available)
-    2. MLX (Apple Silicon local-first)
-    3. OpenAI (if API key available)
-    4. Fallback: truncate
+    1. API keys: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
+    2. Local: MLX (Apple Silicon)
+    3. Fallback: truncate (always available)
 
-    Returns provider configs for: embedding, summarization, document
+    Returns provider configs for: embedding, summarization, document.
+    embedding may be None if no provider is available.
     """
-    providers = {}
+    providers: dict[str, ProviderConfig | None] = {}
 
     # Check for Apple Silicon
     is_apple_silicon = (
@@ -215,90 +217,68 @@ def detect_default_providers() -> dict[str, ProviderConfig]:
         os.environ.get("GEMINI_API_KEY") or
         os.environ.get("GOOGLE_API_KEY")
     )
+    has_voyage_key = bool(os.environ.get("VOYAGE_API_KEY"))
 
-    # Check for OpenClaw config
-    openclaw_config = read_openclaw_config()
-    openclaw_model = None
-    if openclaw_config:
-        model_str = (openclaw_config.get("agents", {})
-                     .get("defaults", {})
-                     .get("model", {})
-                     .get("primary", ""))
-        if model_str:
-            openclaw_model = model_str
+    # --- Embedding provider ---
+    # Priority: Voyage (direct REST) > OpenAI > Gemini > Local (MLX/sentence-transformers)
+    embedding_provider: ProviderConfig | None = None
 
-    # Get OpenClaw memorySearch config for embeddings
-    memory_search = get_openclaw_memory_search_config(openclaw_config)
+    # 1. API providers first (Voyage uses direct REST, no SDK import needed)
+    if has_voyage_key:
+        embedding_provider = ProviderConfig("voyage", {"model": "voyage-3.5-lite"})
+    elif has_openai_key:
+        embedding_provider = ProviderConfig("openai")
+    elif has_gemini_key:
+        embedding_provider = ProviderConfig("gemini")
 
-    # Embedding: check OpenClaw memorySearch config first, then fall back to local
-    embedding_provider = None
-    if memory_search:
-        ms_provider = memory_search.get("provider", "auto")
-        ms_model = memory_search.get("model")
-        ms_api_key = memory_search.get("remote", {}).get("apiKey")
-
-        if ms_provider == "openai" or (ms_provider == "auto" and has_openai_key):
-            # Use OpenAI embeddings if configured or auto with key available
-            api_key = ms_api_key or os.environ.get("OPENAI_API_KEY")
-            if api_key:
-                params = {}
-                if ms_model:
-                    params["model"] = ms_model
-                embedding_provider = ProviderConfig("openai", params)
-
-        elif ms_provider == "gemini" or (ms_provider == "auto" and has_gemini_key and not has_openai_key):
-            # Use Gemini embeddings if configured or auto with key available
-            api_key = ms_api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            if api_key:
-                params = {}
-                if ms_model:
-                    params["model"] = ms_model
-                embedding_provider = ProviderConfig("gemini", params)
-
-    # Fall back to local embedding (prefer MPS-accelerated on Apple Silicon)
+    # 2. Local providers (only if no API key available)
     if embedding_provider is None:
         if is_apple_silicon:
-            # Use sentence-transformers with MPS acceleration (no auth required)
-            embedding_provider = ProviderConfig("mlx", {"model": "all-MiniLM-L6-v2"})
-        else:
-            embedding_provider = ProviderConfig("sentence-transformers")
+            try:
+                import mlx.core  # noqa
+                embedding_provider = ProviderConfig("mlx", {"model": "all-MiniLM-L6-v2"})
+            except ImportError:
+                pass
 
+        if embedding_provider is None:
+            try:
+                import sentence_transformers  # noqa
+                embedding_provider = ProviderConfig("sentence-transformers")
+            except ImportError:
+                pass
+
+    # May be None - CLI will show helpful error
     providers["embedding"] = embedding_provider
-    
-    # Summarization: priority order based on availability
-    # 1. OpenClaw + Anthropic (if configured and key available)
-    if openclaw_model and openclaw_model.startswith("anthropic/") and has_anthropic_key:
-        # Extract model name from "anthropic/claude-sonnet-4-5" format
-        model_name = openclaw_model.split("/", 1)[1] if "/" in openclaw_model else "claude-3-5-haiku-20241022"
-        # Map OpenClaw model names to actual Anthropic model names
-        model_mapping = {
-            "claude-sonnet-4": "claude-sonnet-4-20250514",
-            "claude-sonnet-4-5": "claude-sonnet-4-20250514",
-            "claude-sonnet-3-5": "claude-3-5-sonnet-20241022",
-            "claude-haiku-3-5": "claude-3-5-haiku-20241022",
-        }
-        actual_model = model_mapping.get(model_name, "claude-3-5-haiku-20241022")
-        providers["summarization"] = ProviderConfig("anthropic", {"model": actual_model})
-    # 2. MLX on Apple Silicon (local-first)
-    elif is_apple_silicon:
+
+    # --- Summarization provider ---
+    # Priority: Anthropic > OpenAI > Gemini > MLX > truncate
+    summarization_provider: ProviderConfig | None = None
+
+    # 1. API providers
+    if has_anthropic_key:
+        summarization_provider = ProviderConfig("anthropic", {"model": "claude-3-haiku-20240307"})
+    elif has_openai_key:
+        summarization_provider = ProviderConfig("openai")
+    elif has_gemini_key:
+        summarization_provider = ProviderConfig("gemini")
+
+    # 2. Local MLX (Apple Silicon)
+    if summarization_provider is None and is_apple_silicon:
         try:
             import mlx_lm  # noqa
-            providers["summarization"] = ProviderConfig("mlx", {"model": "mlx-community/Llama-3.2-3B-Instruct-4bit"})
+            summarization_provider = ProviderConfig("mlx", {"model": "mlx-community/Llama-3.2-3B-Instruct-4bit"})
         except ImportError:
-            if has_openai_key:
-                providers["summarization"] = ProviderConfig("openai")
-            else:
-                providers["summarization"] = ProviderConfig("passthrough")
-    # 3. OpenAI (if key available)
-    elif has_openai_key:
-        providers["summarization"] = ProviderConfig("openai")
-    # 4. Fallback: truncate
-    else:
-        providers["summarization"] = ProviderConfig("truncate")
-    
+            pass
+
+    # 3. Fallback: truncate (always available)
+    if summarization_provider is None:
+        summarization_provider = ProviderConfig("truncate")
+
+    providers["summarization"] = summarization_provider
+
     # Document provider is always composite
     providers["document"] = ProviderConfig("composite")
-    
+
     return providers
 
 
@@ -439,12 +419,17 @@ def save_config(config: StoreConfig) -> None:
     if config.system_docs_version > 0:
         store_section["system_docs_version"] = config.system_docs_version
 
-    data = {
+    data: dict[str, Any] = {
         "store": store_section,
-        "embedding": provider_to_dict(config.embedding),
-        "summarization": provider_to_dict(config.summarization),
-        "document": provider_to_dict(config.document),
     }
+
+    # Only include providers if they're configured
+    if config.embedding:
+        data["embedding"] = provider_to_dict(config.embedding)
+    if config.summarization:
+        data["summarization"] = provider_to_dict(config.summarization)
+    if config.document:
+        data["document"] = provider_to_dict(config.document)
 
     # Add embedding identity if set
     if config.embedding_identity:

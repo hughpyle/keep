@@ -221,7 +221,7 @@ class OllamaEmbedding:
 
     Requires: Ollama running locally (default: http://localhost:11434)
     """
-    
+
     def __init__(
         self,
         model: str = "nomic-embed-text",
@@ -235,7 +235,7 @@ class OllamaEmbedding:
         self.model_name = model
         self.base_url = base_url.rstrip("/")
         self._dimension: int | None = None
-    
+
     @property
     def dimension(self) -> int:
         """Get embedding dimension (determined on first embed call)."""
@@ -244,27 +244,189 @@ class OllamaEmbedding:
             test_embedding = self.embed("test")
             self._dimension = len(test_embedding)
         return self._dimension
-    
+
     def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text."""
         import requests
-        
+
         response = requests.post(
             f"{self.base_url}/api/embeddings",
             json={"model": self.model_name, "prompt": text},
         )
         response.raise_for_status()
-        
+
         embedding = response.json()["embedding"]
-        
+
         if self._dimension is None:
             self._dimension = len(embedding)
-        
+
         return embedding
-    
+
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts (sequential for Ollama)."""
         return [self.embed(text) for text in texts]
+
+
+class VoyageEmbedding:
+    """
+    Embedding provider using Voyage AI's REST API.
+
+    Voyage AI is Anthropic's recommended embedding partner.
+    Works well in Claude Desktop and other Anthropic-integrated environments.
+
+    Uses direct HTTP calls - no voyageai SDK needed (avoids heavy dependencies).
+    Includes automatic retry with exponential backoff for rate limits.
+
+    Requires: VOYAGE_API_KEY environment variable.
+    """
+
+    # Model dimensions (as of 2025)
+    # All current models default to 1024 dims
+    MODEL_DIMENSIONS = {
+        "voyage-3-large": 1024,
+        "voyage-3.5": 1024,
+        "voyage-3.5-lite": 1024,
+        "voyage-code-3": 1024,
+    }
+
+    API_URL = "https://api.voyageai.com/v1/embeddings"
+
+    # Retry settings
+    MAX_RETRIES = 5
+    INITIAL_BACKOFF = 1.0  # seconds
+    MAX_BACKOFF = 60.0  # seconds
+
+    def __init__(
+        self,
+        model: str = "voyage-3.5-lite",
+        api_key: str | None = None,
+    ):
+        """
+        Args:
+            model: Voyage embedding model name
+            api_key: API key (defaults to environment variable)
+        """
+        self.model_name = model
+        # Use lookup table if available, otherwise detect lazily from first embedding
+        self._dimension = self.MODEL_DIMENSIONS.get(model)
+
+        # Resolve API key
+        self._api_key = api_key or os.environ.get("VOYAGE_API_KEY")
+        if not self._api_key:
+            raise ValueError(
+                "Voyage API key required. Set VOYAGE_API_KEY environment variable.\n"
+                "Get your API key at: https://dash.voyageai.com/"
+            )
+
+    @property
+    def dimension(self) -> int:
+        """Get embedding dimension for the model (detected lazily if unknown)."""
+        if self._dimension is None:
+            # Unknown model: detect from first embedding
+            test_embedding = self.embed("dimension test")
+            self._dimension = len(test_embedding)
+        return self._dimension
+
+    def _request_with_retry(self, payload: dict, timeout: int) -> dict:
+        """Make API request with exponential backoff retry for rate limits."""
+        import time
+        import requests
+
+        backoff = self.INITIAL_BACKOFF
+        last_exception = None
+
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                response = requests.post(
+                    self.API_URL,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=timeout,
+                )
+
+                # Handle rate limiting (429)
+                if response.status_code == 429:
+                    # Check for Retry-After header
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait_time = float(retry_after)
+                        except ValueError:
+                            wait_time = backoff
+                    else:
+                        wait_time = backoff
+
+                    wait_time = min(wait_time, self.MAX_BACKOFF)
+                    time.sleep(wait_time)
+                    backoff = min(backoff * 2, self.MAX_BACKOFF)
+                    continue
+
+                response.raise_for_status()
+                return response.json()
+
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                error_msg = str(e).lower()
+
+                # Network errors - provide helpful message
+                if "connection" in error_msg or "network" in error_msg or "resolve" in error_msg:
+                    raise RuntimeError(
+                        f"Cannot reach Voyage AI API: {e}\n\n"
+                        "If running in a sandboxed environment (e.g., Claude Desktop):\n"
+                        "Add api.voyageai.com to your network allowlist."
+                    ) from e
+
+                # Other request errors - retry with backoff
+                if attempt < self.MAX_RETRIES - 1:
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, self.MAX_BACKOFF)
+                    continue
+                raise
+
+        # Exhausted retries
+        raise RuntimeError(
+            f"Voyage AI API rate limit exceeded after {self.MAX_RETRIES} retries. "
+            "Please wait and try again."
+        ) from last_exception
+
+    def embed(self, text: str) -> list[float]:
+        """Generate embedding for a single text."""
+        data = self._request_with_retry(
+            payload={
+                "input": [text],
+                "model": self.model_name,
+                "input_type": "document",
+            },
+            timeout=60,
+        )
+
+        embedding = data["data"][0]["embedding"]
+
+        # Cache dimension if not yet known
+        if self._dimension is None:
+            self._dimension = len(embedding)
+        return embedding
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple texts."""
+        if not texts:
+            return []
+
+        data = self._request_with_retry(
+            payload={
+                "input": texts,
+                "model": self.model_name,
+                "input_type": "document",
+            },
+            timeout=120,
+        )
+
+        # Sort by index to ensure order matches input
+        sorted_data = sorted(data["data"], key=lambda x: x["index"])
+        return [d["embedding"] for d in sorted_data]
 
 
 # Register providers
@@ -273,3 +435,4 @@ _registry.register_embedding("sentence-transformers", SentenceTransformerEmbeddi
 _registry.register_embedding("openai", OpenAIEmbedding)
 _registry.register_embedding("gemini", GeminiEmbedding)
 _registry.register_embedding("ollama", OllamaEmbedding)
+_registry.register_embedding("voyage", VoyageEmbedding)

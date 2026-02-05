@@ -5,10 +5,10 @@
 Index documents and notes. Search by meaning. Track changes over time.
 
 ```bash
-uv tool install 'keep-skill[local]'
-keep init
+pip install keep-skill
+export VOYAGE_API_KEY=...        # Or OPENAI_API_KEY, GEMINI_API_KEY
 
-# Index content
+# Index content (store auto-initializes on first use)
 keep update https://inguz.substack.com/p/keep -t topic=practice
 keep update "file://$(keep config tool)/docs/library/impermanence_verse.txt" -t type=teaching
 keep update "Rate limit is 100 req/min" -t topic=api
@@ -40,30 +40,29 @@ Backed by ChromaDB for vectors, SQLite for metadata and versions.
 **Python 3.11–3.13 required.**
 
 ```bash
-# Recommended: uv (isolated environment, fast)
-uv tool install 'keep-skill[local]'
-
-# Alternative: pip in a virtual environment
-python -m venv .venv && source .venv/bin/activate
-pip install 'keep-skill[local]'
-
-# API-based (requires OPENAI_API_KEY)
-uv tool install 'keep-skill[openai]'
+pip install keep-skill
 ```
 
-> **Note:** Always use an isolated environment (uv or venv). Installing with system pip
-> may cause version conflicts with dependencies like typer.
+API SDKs for Voyage, OpenAI, Anthropic, and Gemini are included. Set an API key:
 
-First run downloads embedding models (~3-5 minutes).
+```bash
+export VOYAGE_API_KEY=...      # Recommended (Anthropic's partner)
+# Or: export OPENAI_API_KEY=... or GEMINI_API_KEY=...
+```
+
+For local models (no API keys needed):
+```bash
+pip install 'keep-skill[local]'   # macOS Apple Silicon optimized
+```
+
+See [docs/QUICKSTART.md](docs/QUICKSTART.md) for all provider options.
 
 ---
 
 ## Quick Start
 
 ```bash
-keep init                              # Creates .keep/ at repo root
-
-# Index URLs, files, and notes
+# Index URLs, files, and notes (store auto-initializes on first use)
 keep update https://inguz.substack.com/p/keep -t topic=practice
 keep update "file://$(keep config tool)/docs/library/impermanence_verse.txt" -t type=teaching
 keep update "Token refresh needs clock sync" -t topic=auth

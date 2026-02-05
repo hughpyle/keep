@@ -27,6 +27,10 @@ dependencies = [
     "chromadb>=0.4",
     "typer>=0.9",
     "tomli-w>=1.0",
+    # Lightweight API SDKs (~2MB total, no heavy deps)
+    "openai>=1.0",
+    "anthropic>=0.40.0",
+    "google-genai>=1.0.0",
 ]
 
 [project.urls]
@@ -34,38 +38,23 @@ Homepage = "https://github.com/hughpyle/keep"
 Repository = "https://github.com/hughpyle/keep"
 
 [project.optional-dependencies]
-openai = ["openai>=1.0"]
-anthropic = ["anthropic>=0.40.0"]
-gemini = ["google-genai>=1.0.0"]
-sentence-transformers = ["sentence-transformers>=2.2"]
-documents = [
-    # Document text extraction (PDF, HTML)
-    "pypdf>=5.0",
-    "beautifulsoup4>=4.9",
-]
-mlx = [
-    "mlx>=0.10",
-    "mlx-lm>=0.10",
-]
+# Local models (macOS Apple Silicon optimized, ~500MB with PyTorch)
 local = [
-    # Apple Silicon: MLX for embedding/summarization
     "mlx>=0.10; platform_system == 'Darwin' and platform_machine == 'arm64'",
     "mlx-lm>=0.10; platform_system == 'Darwin' and platform_machine == 'arm64'",
-    # Fallback: sentence-transformers for embedding
     "sentence-transformers>=2.2",
-    # Document extraction
     "pypdf>=5.0",
     "beautifulsoup4>=4.9",
 ]
-openclaw = [
-    # For OpenClaw integration: use configured models
-    "anthropic>=0.18.0",
-    "google-genai>=1.0.0",
+# Document extraction only (for API users who want PDF support)
+documents = [
+    "pypdf>=5.0",
+    "beautifulsoup4>=4.9",
 ]
+# Development
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "google-genai>=1.0.0",
 ]
 
 [project.scripts]
