@@ -5,6 +5,7 @@ The configuration is stored as a TOML file in the store directory.
 It specifies which providers to use and their parameters.
 """
 
+import importlib.resources
 import os
 import platform
 import tomllib
@@ -20,6 +21,33 @@ import tomli_w
 CONFIG_FILENAME = "keep.toml"
 CONFIG_VERSION = 3  # Bumped for document versioning support
 SYSTEM_DOCS_VERSION = 3  # Increment when bundled system docs content changes
+
+
+def get_tool_directory() -> Path:
+    """
+    Return directory containing SKILL.md (package root).
+
+    For installed package: SKILL.md is at the same level as the keep/ package.
+    For development: it's at the repository root.
+    """
+    # Get the keep package location
+    keep_pkg = importlib.resources.files("keep")
+    pkg_path = Path(str(keep_pkg))
+
+    # SKILL.md is one level up from the package
+    tool_dir = pkg_path.parent
+
+    # Verify SKILL.md exists there
+    if (tool_dir / "SKILL.md").exists():
+        return tool_dir
+
+    # Fallback: check if we're in a development install
+    # where SKILL.md might be at repository root
+    if pkg_path.name == "keep" and (pkg_path.parent / "SKILL.md").exists():
+        return pkg_path.parent
+
+    # Last resort: return the package parent anyway
+    return tool_dir
 
 
 @dataclass

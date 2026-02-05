@@ -13,8 +13,8 @@ The content, as well as the format, is relevant to the practice of this skill.
 The library files are located in the `docs/library/` directory of the keep package.
 To construct URIs for these files:
 
-1. **In a cloned repo:** Use `file://$PWD/docs/library/{filename}`
-2. **With installed package:** Use Python to find the path:
+1. **From shell:** Use `file://$(keep config tool)/docs/library/{filename}`
+2. **In Python:**
    ```python
    from importlib.resources import files
    library_path = files("keep").parent / "docs" / "library"
