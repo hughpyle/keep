@@ -1,9 +1,8 @@
-* Embedding cache stores vectors as JSON blobs (10x larger than binary)
-    - A 1024-dimensional float vector stored as JSON text is ~10KB vs ~4KB binary
-    - For 50,000 cache entries, that's significant
-    - Currently uses json.dumps/json.loads in embedding_cache.py
-    - Should use struct.pack/numpy.tobytes for binary storage
-    - Migration path: read old JSON format, write new binary format
+* re-test the gemini path
+
+* dynamically detect available models using the provider's API?
+    - we could do this, but when?
+    - no capability for "model migration and re-embedding" yet
 
 * Measure some outcomes.  Describe behavior in openclaw, in claude code, etc.  Show where it works.
 
@@ -190,4 +189,5 @@ x `context` text alongside summaries? (no, summary is good now)
 . contextual summarization: user tags provide context for LLM summaries; _gather_context finds similar items with matching tags (OR-union, score boosted per tag match); tag changes trigger re-summarization
 . remove `keep init`, streamline API and key selection, and add VoyageAI support for embeddings
 . check functionality using Claude Desktop
+. binary embedding cache: struct.pack float32 replaces json.dumps (~3.3x smaller), transparent migration, migrate() for bulk conversion
 
