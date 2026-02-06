@@ -548,15 +548,18 @@ class Keeper:
         scored.sort(key=lambda x: x[0], reverse=True)
         top = scored[:5]
 
-        # Format context
-        lines = []
-        for _, match_count, item in top:
-            # Truncate long summaries
-            summary = item.summary[:100] + "..." if len(item.summary) > 100 else item.summary
-            tag_note = f" ({match_count} tags)" if match_count > 1 else ""
-            lines.append(f"- {summary}{tag_note}")
+        # Format context as topic keywords only (not summaries).
+        # Including raw summary text causes small models to parrot
+        # phrases from context into the new summary (contamination).
+        topic_values = set()
+        for _, _, item in top:
+            for k, v in filter_non_system_tags(item.tags).items():
+                topic_values.add(v)
 
-        return "\n".join(lines)
+        if not topic_values:
+            return None
+
+        return "Related topics: " + ", ".join(sorted(topic_values))
 
     def _validate_embedding_identity(self, provider: EmbeddingProvider) -> None:
         """

@@ -153,8 +153,8 @@ SUMMARIZATION_SYSTEM_PROMPT = """Summarize this document in under 200 words.
 
 Begin with the subject or topic directly - do not start with meta-phrases like "This document describes..." or "The main purpose is...".
 
-Good: "Keep is a reflective memory system for AI agents that provides..."
-Bad: "The main purpose of this document is to describe Keep, which is..."
+Good: Start with the name of the subject, then say what it is.
+Bad: "This document describes..." or "The main purpose is..."
 
 Include what it does, key features, and why someone might find it useful."""
 
@@ -163,8 +163,8 @@ def build_summarization_prompt(content: str, context: str | None = None) -> str:
     """
     Build the summarization prompt, optionally including context.
 
-    When context is provided, the summary should highlight what's relevant
-    to the related items. This enables contextual summarization based on tags.
+    When context is provided (as topic keywords), it gives the LLM
+    thematic context without leaking specific phrases from other summaries.
 
     Args:
         content: The document content to summarize
@@ -176,10 +176,9 @@ def build_summarization_prompt(content: str, context: str | None = None) -> str:
     if context:
         return f"""Summarize this document in under 200 words.
 
-Context from related items in this collection:
-{context}
+This document is part of a collection about: {context}
 
-Summarize in a way that highlights what's relevant to this context.
+Summarize only the document itself.
 
 Begin with the subject or topic directly - do not start with meta-phrases like "This document describes..." or "The main purpose is...".
 
