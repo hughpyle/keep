@@ -273,3 +273,54 @@ class TestNowdoc:
 
         with pytest.raises(FileNotFoundError):
             _load_frontmatter(SYSTEM_DOC_DIR / "nonexistent.md")
+
+
+# -----------------------------------------------------------------------------
+# Summarization Prompt Tests
+# -----------------------------------------------------------------------------
+
+class TestSummarizationPrompts:
+    """Tests for summarization prompt construction (contamination prevention)."""
+
+    def test_system_prompt_does_not_mention_keep(self):
+        """System prompt must not prime the LLM with keep's identity."""
+        from keep.providers.base import SUMMARIZATION_SYSTEM_PROMPT
+        assert "keep" not in SUMMARIZATION_SYSTEM_PROMPT.lower().split()
+
+    def test_system_prompt_has_no_product_names(self):
+        """System prompt examples must not name specific products (haiku will parrot them)."""
+        from keep.providers.base import SUMMARIZATION_SYSTEM_PROMPT
+        # Any quoted example containing a real product name will contaminate summaries
+        import re
+        # Check that no quoted string in the prompt contains what looks like a product pitch
+        quoted = re.findall(r'"([^"]+)"', SUMMARIZATION_SYSTEM_PROMPT)
+        for q in quoted:
+            # Quoted examples should be meta-instructions, not product descriptions
+            assert len(q.split()) < 10, f"Quoted example too long (could contaminate): {q!r}"
+
+    def test_build_prompt_without_context(self):
+        """Without context, prompt is just the content."""
+        from keep.providers.base import build_summarization_prompt
+        result = build_summarization_prompt("Some document text.")
+        assert result == "Some document text."
+
+    def test_build_prompt_with_context_contains_boundary(self):
+        """With context, prompt must instruct LLM to summarize only the document."""
+        from keep.providers.base import build_summarization_prompt
+        context = "Related topics: widgets, hardware"
+        result = build_summarization_prompt("Doc about gadgets.", context=context)
+        assert "Summarize only the document itself" in result
+        assert "collection about:" in result
+
+    def test_build_prompt_with_context_includes_document(self):
+        """With context, prompt still includes the actual document."""
+        from keep.providers.base import build_summarization_prompt
+        result = build_summarization_prompt("My doc content.", context="- ctx")
+        assert "My doc content." in result
+
+    def test_strip_summary_preamble(self):
+        """strip_summary_preamble removes common LLM preambles."""
+        from keep.providers.base import strip_summary_preamble
+        assert strip_summary_preamble("Here is a summary: Redis is fast.") == "Redis is fast."
+        assert strip_summary_preamble("This document describes a system.") == "a system."
+        assert strip_summary_preamble("Redis is fast.") == "Redis is fast."

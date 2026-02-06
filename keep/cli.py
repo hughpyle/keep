@@ -210,10 +210,14 @@ def _format_summary_line(item: Item) -> str:
     # Get date (from _updated_date or _updated or _created)
     date = item.tags.get("_updated_date") or item.tags.get("_updated", "")[:10] or item.tags.get("_created", "")[:10] or ""
 
-    # Truncate summary to ~60 chars, collapse newlines
+    # Truncate summary to fit terminal width, collapse newlines
+    import shutil
+    cols = shutil.get_terminal_size((120, 24)).columns
+    prefix_len = len(versioned_id) + 1 + len(date) + 1  # "id date "
+    max_summary = max(cols - prefix_len, 20)
     summary = item.summary.replace("\n", " ")
-    if len(summary) > 60:
-        summary = summary[:57].rsplit(" ", 1)[0] + "..."
+    if len(summary) > max_summary:
+        summary = summary[:max_summary - 3].rsplit(" ", 1)[0] + "..."
 
     return f"{versioned_id} {date} {summary}"
 

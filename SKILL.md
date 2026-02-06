@@ -45,11 +45,17 @@ Installing the Protocol Block at the global level makes it available across all 
 
 This work uses `keep` for memory and reflection, in order to become skillful.
 
-**Practice:** Before acting, check what you know. After acting, capture what you learned.
+**Before acting:** check what you know.
 
 \`\`\`bash
 keep now                     # Current intentions
 keep find "topic"            # What do I know?
+\`\`\`
+
+**After acting:** update intentions, capture what you learned.
+
+\`\`\`bash
+keep now "what's true now"   # Clear the mirror
 keep update "learning"       # Capture insight
 \`\`\`
 

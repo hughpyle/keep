@@ -1,3 +1,18 @@
+* USECASES.md "what is this great at"
+    lesson zero: the context window doesn't really matter if you have exponentially-good navigation
+        (tiny chunks loosely joined)
+
+    lesson one: embeddings plus tagging plus summaries is a whole new thing, actually
+        (especially for capturing knowledge about many document, links, references)
+
+    so, the great use cases?
+        - personal agent:
+            - first, like a bookmark-manager with superpowers
+            - or a research-assistant with superpowers
+        - what else?
+
+
+
 * re-test the gemini path
 
 * dynamically detect available models using the provider's API?
@@ -190,4 +205,6 @@ x `context` text alongside summaries? (no, summary is good now)
 . remove `keep init`, streamline API and key selection, and add VoyageAI support for embeddings
 . check functionality using Claude Desktop
 . binary embedding cache: struct.pack float32 replaces json.dumps (~3.3x smaller), transparent migration, migrate() for bulk conversion
+. fix summarizer contamination: removed product-name example from system prompt, context passes topic keywords not raw summaries, boundary instruction in contextual prompt
+. terminal-width-aware summary lines: shutil.get_terminal_size with 120-col default for agents, real terminal width for humans
 
