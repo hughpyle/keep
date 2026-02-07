@@ -91,7 +91,7 @@ Recognizing the structure grounds the context.
 | "What is...", "How does..." | **Clarification** | Explain until it lands |
 | "I'm trying to understand..." | **Orientation** | Listen, reflect back |
 
-Who declares satisfaction? The customer, not you.
+Who declares satisfaction? The customer, not you. Tag speech acts with `act` and `status` to track commitments and requests.
 
 ### The Essential Loop
 
@@ -180,6 +180,14 @@ keep get "file://$(keep config tool)/docs/library/true_person_no_rank.md"
 keep get "_system:domains"
 ```
 
+**Tag descriptions** — what each tag means and how to use it:
+```bash
+keep get "_tag:act"       # Speech-act categories
+keep get "_tag:status"    # Lifecycle states
+keep get "_tag:project"   # Bounded work contexts
+keep get "_tag:topic"     # Cross-cutting subject areas
+```
+
 **Now reflect:** What did you learn? Save your understanding:
 ```bash
 keep put "My understanding of the practice: ..." -t type=learning
@@ -206,6 +214,8 @@ keep find "recent" --since P1D        # Recent items
 
 keep put "insight" -t type=learning                # Capture learning
 keep put "OAuth2 chosen" -t project=myapp -t topic=auth  # Tag by project and topic
+keep put "I'll fix auth" -t act=commitment -t status=open  # Track speech acts
+keep list -t act=commitment -t status=open                 # Open commitments
 
 keep get ID                           # Retrieve item with similar items
 keep get ID -V 1                      # Previous version

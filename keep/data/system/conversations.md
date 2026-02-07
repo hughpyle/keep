@@ -54,6 +54,8 @@ When an agent assists with a task, it participates in a conversation with struct
 Understanding *where we are* in this structure is as important as understanding
 *what we know* about the subject matter.
 
+**Tagging convention:** Use `act` to classify the speech-act type and `status` to track lifecycle state. For full details: `keep get "_tag:act"` and `keep get "_tag:status"`.
+
 ---
 
 ## The Basic Conversation for Action
@@ -74,6 +76,15 @@ Understanding *where we are* in this structure is as important as understanding
 ```
 
 At any point: Withdraw, Decline, Renegotiate.
+
+**Tagging the conversation lifecycle:**
+```bash
+# At promise (step 2)
+keep put "I'll implement the auth flow" -t act=commitment -t status=open -t project=myapp
+
+# At satisfaction (step 4)
+keep tag-update ID --tag status=fulfilled
+```
 
 **Conditions of satisfaction** are negotiated agreements — not objective goals. They are what the customer and performer agree constitutes "done." When conditions are left implicit, breakdowns follow.
 
@@ -100,6 +111,10 @@ Someone asks for something to be done.
 
 **Completion:** Customer declares satisfaction, not performer declares done.
 
+```bash
+keep put "Please add pagination to the API" -t act=request -t status=open -t project=myapp
+```
+
 ### Request for Information
 Someone asks to know something.
 
@@ -123,6 +138,10 @@ Someone proposes to do something.
 
 **Completion:** Offer accepted → becomes promise. Offer declined → closed.
 
+```bash
+keep put "I could refactor the cache layer" -t act=offer -t status=open -t topic=performance
+```
+
 ### Report / Declaration
 Someone asserts a state of affairs.
 
@@ -133,6 +152,10 @@ Someone asserts a state of affairs.
 - Who needs to know?
 
 **Completion:** Acknowledgment (may trigger new conversations).
+
+```bash
+keep put "Released v2.0 — new API is live" -t act=declaration -t project=myapp
+```
 
 ---
 
@@ -243,6 +266,14 @@ Distinguishing the two is a core competency. Ungrounded assessments — evaluati
 
 When reflecting, ask: "Am I stating a fact or making an evaluation? If an evaluation, what evidence grounds it?"
 
+```bash
+# Record an assertion (fact claim)
+keep put "The CI pipeline passes on main" -t act=assertion -t topic=ci
+
+# Record an assessment (evaluation)
+keep put "The current auth approach won't scale past 10k users" -t act=assessment -t topic=auth
+```
+
 Assessments are tied to moods. A mood of resignation produces assessments like "this will never work." The assessment *feels* like a fact, but it is not. Recognizing it as an assessment opens the possibility of a different future.
 
 ---
@@ -318,7 +349,7 @@ When one agent hands off to another:
 # Outgoing agent records state
 keep now "User requested OAuth2 implementation. I promised and partially delivered. \
 Token acquisition works. Refresh flow incomplete. User awaiting completion." \
-  --tag topic=authentication --tag state=handoff
+  --tag topic=authentication --tag state=handoff --tag act=commitment --tag status=open
 ```
 
 Incoming agent reads this and knows:
@@ -354,6 +385,7 @@ Only then commit to action. Breakdown risk: Promising too early leads to rework.
 2. What's my role (customer or performer)?
 3. What does completion look like?
 4. Have I seen breakdowns in this pattern before?
+5. Are there open commitments or requests? `keep list -t act=commitment -t status=open`
 
 **Mid-task:**
 1. Where are we in the conversation structure?

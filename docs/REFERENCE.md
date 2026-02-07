@@ -257,6 +257,50 @@ keep now "personal context"
 
 Collections are separate stores. Tags are overlays within a store.
 
+### Speech-Act Tags
+
+Two tags make the commitment structure of work visible:
+
+**`act` — speech-act category:**
+
+| Value | What it marks | Example |
+|-------|---------------|---------|
+| `commitment` | A promise to act | "I'll fix auth by Friday" |
+| `request` | Asking someone to act | "Please review the PR" |
+| `offer` | Proposing to act | "I could refactor the cache" |
+| `assertion` | A claim of fact | "The tests pass on main" |
+| `assessment` | A judgment | "This approach is risky" |
+| `declaration` | Changing reality | "Released v2.0" |
+
+**`status` — lifecycle state (for commitments, requests, offers):**
+
+| Value | Meaning |
+|-------|---------|
+| `open` | Active, unfulfilled |
+| `fulfilled` | Completed and satisfied |
+| `declined` | Not accepted |
+| `withdrawn` | Cancelled by originator |
+| `renegotiated` | Terms changed |
+
+**Usage:**
+```bash
+# Track a commitment
+keep put "I'll fix the auth bug" -t act=commitment -t status=open -t project=myapp
+
+# Query open commitments and requests
+keep list -t act=commitment -t status=open
+keep list -t act=request -t status=open
+
+# Mark fulfilled
+keep tag-update ID --tag status=fulfilled
+
+# Record an assertion or assessment (no lifecycle)
+keep put "The tests pass" -t act=assertion
+keep put "This approach is risky" -t act=assessment -t topic=architecture
+```
+
+For full details: `keep get "_tag:act"` and `keep get "_tag:status"`.
+
 ## System Tags (auto-managed)
 
 Protected tags prefixed with `_`. Users cannot modify these directly.

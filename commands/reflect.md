@@ -53,7 +53,9 @@ Work is commitment management. Recognize the structure of what is happening.
 ```bash
 keep find "commitment" --since P30D
 keep find "pattern" -t type=pattern
-keep find "always" -t type=commitment
+keep find "always" -t act=commitment
+keep list -t act=commitment -t status=open
+keep list -t act=request -t status=open
 ```
 These are the "as always, please..." requests — promises that persist across sessions. Are they being honored?
 
@@ -91,6 +93,11 @@ keep put "What I learned" -t type=learning
 If conversation patterns were recognized:
 ```bash
 keep put "Pattern observed" -t type=conversation_pattern
+```
+
+If commitments need tracking:
+```bash
+keep put "I'll address the performance issue next session" -t act=commitment -t status=open
 ```
 
 Present a brief summary of the reflection to the user. The value is in the reflection itself, not in lengthy output.

@@ -192,6 +192,10 @@ SYSTEM_DOC_IDS = {
     "conversations.md": "_system:conversations",
     "domains.md": "_system:domains",
     "library.md": "_system:library",
+    "tag-act.md": "_tag:act",
+    "tag-status.md": "_tag:status",
+    "tag-project.md": "_tag:project",
+    "tag-topic.md": "_tag:topic",
 }
 
 
