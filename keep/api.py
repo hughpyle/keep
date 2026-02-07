@@ -1466,6 +1466,53 @@ class Keeper:
         chroma_deleted = self._store.delete(coll, id, delete_versions=delete_versions)
         return doc_deleted or chroma_deleted
 
+    def revert(self, id: str, *, collection: Optional[str] = None) -> Optional[Item]:
+        """
+        Revert to the previous version, or delete if no versions exist.
+
+        Returns the restored item, or None if the item was fully deleted.
+        """
+        coll = self._resolve_collection(collection)
+
+        version_count = self._document_store.version_count(coll, id)
+
+        if version_count == 0:
+            # No history — full delete
+            self.delete(id, collection=collection)
+            return None
+
+        # Get the versioned ChromaDB ID we need to promote
+        versioned_chroma_id = f"{id}@v{version_count}"
+
+        # Get the archived embedding from ChromaDB
+        archived_embedding = self._store.get_embedding(coll, versioned_chroma_id)
+
+        # Restore in DocumentStore (promotes latest version to current)
+        restored = self._document_store.restore_latest_version(coll, id)
+
+        if restored is None:
+            # Shouldn't happen given version_count > 0, but be safe
+            self.delete(id, collection=collection)
+            return None
+
+        # Update ChromaDB: replace current with restored version's data
+        if archived_embedding:
+            self._store.upsert(
+                collection=coll, id=id,
+                embedding=archived_embedding,
+                summary=restored.summary,
+                tags=restored.tags,
+            )
+
+        # Delete the versioned entry from ChromaDB
+        chroma_coll = self._store._get_collection(coll)
+        try:
+            chroma_coll.delete(ids=[versioned_chroma_id])
+        except Exception:
+            pass  # May not exist if it was a tag-only change
+
+        return self.get(id, collection=collection)
+
     # -------------------------------------------------------------------------
     # Current Working Context (Now)
     # -------------------------------------------------------------------------

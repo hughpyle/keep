@@ -27,6 +27,7 @@ keep list --tag project=myapp
 keep get file:///project/readme.md
 keep get ID -t project=myapp                    # Verify item has tag
 keep now -t project=myapp                       # Find now version with tag
+keep delete ID                                   # Remove item or revert to previous version
 ```
 
 **Python API:**
@@ -294,7 +295,7 @@ within a collection:
 
 > NOTE: update tasks are serialized to avoid any concurrency issues.
 
-> NOTE: Items cannot be deleted through the public API. To remove tags, use `tag()` with empty string values.
+`delete(id)` / `revert(id)` - if the item has version history, reverts to the previous version (the current version is discarded). If no history exists, removes the item completely from both stores.
 
 `find(query: str)` - locate items using a semantic-similarity query for any text
 

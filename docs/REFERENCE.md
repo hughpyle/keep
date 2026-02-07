@@ -124,6 +124,9 @@ keep now -t project=myapp            # Find recent now version with tag
 keep tag-update ID --tag key=value   # Add/update tag
 keep tag-update ID --remove key      # Remove tag
 keep tag-update ID1 ID2 --tag k=v    # Tag multiple docs
+
+# Delete / revert
+keep delete ID                       # Remove item (or revert to previous version)
 ```
 
 ## Python API

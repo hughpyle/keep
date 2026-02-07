@@ -200,6 +200,7 @@ keep update "OAuth2 chosen" -t project=myapp -t topic=auth  # Tag by project and
 keep get ID                           # Retrieve item with similar items
 keep get ID -V 1                      # Previous version
 keep list --tag domain=auth           # Filter by tag
+keep delete ID                        # Remove item or revert to previous version
 ```
 
 Use `project` for bounded work, `topic` for cross-cutting knowledge. Use `KEEP_COLLECTION` for complete segregation.

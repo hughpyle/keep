@@ -348,6 +348,60 @@ class DocumentStore:
 
         return cursor.rowcount > 0
     
+    def restore_latest_version(self, collection: str, id: str) -> Optional[DocumentRecord]:
+        """
+        Restore the most recent archived version as current.
+
+        Replaces the current document with the latest version from history,
+        then deletes that version row.
+
+        Returns:
+            The restored DocumentRecord, or None if no versions exist.
+        """
+        with self._lock:
+            # Get the most recent archived version
+            cursor = self._conn.execute("""
+                SELECT version, summary, tags_json, content_hash, created_at
+                FROM document_versions
+                WHERE id = ? AND collection = ?
+                ORDER BY version DESC LIMIT 1
+            """, (id, collection))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+
+            version = row["version"]
+            summary = row["summary"]
+            tags = json.loads(row["tags_json"])
+            content_hash = row["content_hash"]
+            created_at = row["created_at"]
+
+            # Get the original created_at from the current document
+            existing = self._get_unlocked(collection, id)
+            original_created_at = existing.created_at if existing else created_at
+
+            # Replace current document with the archived version
+            self._conn.execute("""
+                INSERT OR REPLACE INTO documents
+                (id, collection, summary, tags_json, created_at, updated_at, content_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (id, collection, summary, json.dumps(tags, ensure_ascii=False),
+                  original_created_at, created_at, content_hash))
+
+            # Delete the version row we just restored
+            self._conn.execute("""
+                DELETE FROM document_versions
+                WHERE id = ? AND collection = ? AND version = ?
+            """, (id, collection, version))
+
+            self._conn.commit()
+
+        return DocumentRecord(
+            id=id, collection=collection, summary=summary,
+            tags=tags, created_at=original_created_at,
+            updated_at=created_at, content_hash=content_hash,
+        )
+
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         """
         Delete a document record and optionally its version history.
