@@ -27,7 +27,7 @@ understanding *how work proceeds*, not just *what we know*.
 - `language` — python, typescript, rust, etc.
 - `layer` — frontend, backend, infra, database, cli
 - `module` — auth, api, ui, core, tests
-- `status` — working, broken, needs_review, deprecated
+- `status` — working, broken, needs_review, deprecated (domain-specific values coexist with speech-act lifecycle values like `open`, `fulfilled`; see `keep get "_tag:status"`)
 
 **Common conversation patterns:** (see conversations.md)
 - Bug report → Diagnosis → Fix → Verify
@@ -140,6 +140,20 @@ keep now "Working on feature X" --tag topic=feature_x
 keep put "Assumed user wanted full rewrite, actually wanted minimal fix. \
 Ask about scope before large changes." \
   --tag type=breakdown --tag conversation_type=code_change_request
+```
+
+**Speech-act tracking:**
+```bash
+# Track commitments and requests across work
+keep put "I'll fix the flaky test suite by Friday" \
+  -t act=commitment -t status=open -t project=myapp -t topic=testing
+
+# Check open commitments at session start
+keep list -t act=commitment -t status=open
+keep list -t act=request -t status=open
+
+# Mark fulfilled when done
+keep tag-update ID --tag status=fulfilled
 ```
 
 **Temporal queries using system tags:**

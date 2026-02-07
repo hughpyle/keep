@@ -75,6 +75,10 @@ if kp.exists("file:///project/readme.md"):
 **Patterns documentation** (bundled system docs, access via `keep get`):
 - `_system:domains` — domain-specific organization (software dev, research, etc.)
 - `_system:conversations` — process knowledge: how work proceeds
+- `_tag:act` — speech-act categories (commitment, request, offer, assertion, assessment, declaration)
+- `_tag:status` — lifecycle states (open, fulfilled, declined, withdrawn, renegotiated)
+- `_tag:project` — bounded work contexts
+- `_tag:topic` — cross-cutting subject areas
 
 **When to use:**
 - CLI: `keep put` for all content (URI, inline text, or stdin)
@@ -298,6 +302,8 @@ An item has:
 * Version history (previous versions archived automatically on update)
 
 The full original document is not stored in this service.
+
+**Speech-act tags:** Items can be classified by speech-act type (`act=commitment`, `act=request`, etc.) and tracked through a lifecycle (`status=open` → `status=fulfilled`). This makes the commitment structure of work visible and queryable. See `keep get "_tag:act"` for details.
 
 The services that implement embedding, summarization and tagging are configured at initialization time. This skill itself is provider-agnostic.
 
