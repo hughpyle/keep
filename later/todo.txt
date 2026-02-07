@@ -1,3 +1,4 @@
+
 * Use initialization to install hooks and the protocol block - from python code (any "keep" command)
     - save this in config:
         - a line if we prompted the user (or did it), e.g. "installed_claude_hooks: true"
@@ -15,6 +16,10 @@
 
     Review this first by looking at the question: how do the plugins in /Users/hugh/play/knowledge-work-plugins
     get installed so that claude code has the hooks and skills
+
+* Some tools (e.g. VS Code) don't really have a global config.
+  But if keep is running within a git project, in one of these tools,
+  and there's no keep "hook" within the project itself, should we prompt to install it?
 
 
 * USECASES.md "what is this great at"
@@ -259,3 +264,6 @@ x `context` text alongside summaries? (no, summary is good now)
 . add `keep reflect` command with reflection instructions
 . better plugin-hooks for claude code
 . better readme: BLUF "what this is and why" replaces "what it does" tagline
+. auto-install integrations: keep/integrations.py with TOOL_CONFIGS pattern, Claude Code hooks auto-installed on first run
+. now.md onboarding: default nowdoc guides agents to read SKILL.md and foundational teachings (SYSTEM_DOCS_VERSION 4)
+. TTY-gated reflect prompt: "As an agent, you should reflect" only shown when stdout is not a TTY

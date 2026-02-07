@@ -346,6 +346,17 @@ keep update "different note"       # Different ID (new document)
 
 Same content = same ID = enables versioning via tag changes.
 
+## Environment Variables
+
+```bash
+KEEP_STORE_PATH=/path/to/store       # Override store location
+KEEP_CONFIG=/path/to/.keep           # Override config directory
+KEEP_COLLECTION=name                 # Collection name (default: "default")
+KEEP_TAG_PROJECT=myapp               # Auto-apply tags (any KEEP_TAG_* variable)
+KEEP_VERBOSE=1                       # Debug logging to stderr
+KEEP_NO_SETUP=1                      # Skip auto-install of tool integrations
+```
+
 ## When to Use
 - `update()` — when referencing any file/URL worth remembering
 - `remember()` — capture conversation insights, decisions, notes

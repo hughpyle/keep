@@ -465,6 +465,13 @@ def _get_keeper(store: Optional[Path], collection: str) -> Keeper:
         if kp._config and kp._config.embedding is None:
             typer.echo(NO_PROVIDER_ERROR.strip(), err=True)
             raise typer.Exit(1)
+        # Check tool integrations (fast path: dict lookup, no I/O)
+        if kp._config:
+            from .integrations import check_and_install
+            try:
+                check_and_install(kp._config)
+            except Exception:
+                pass  # Never block normal operation
         return kp
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
@@ -989,8 +996,8 @@ def now(
             similar_items=similar_items if similar_items else None,
             similar_offsets=similar_offsets if similar_items else None,
         ))
-        if not _get_json_output() and not _get_ids_output():
-            typer.echo("\nNow reflect! (`keep reflect`)")
+        if not _get_json_output() and not _get_ids_output() and not sys.stdout.isatty():
+            typer.echo("\nAs an agent, you should reflect on this work. (run: `keep reflect`)")
     else:
         # Get current intentions (or search version history if tags specified)
         if tags:
@@ -1014,8 +1021,8 @@ def now(
                 similar_items=similar_items,
                 similar_offsets=similar_offsets,
             ))
-            if not _get_json_output() and not _get_ids_output():
-                typer.echo("\nNow reflect! (`keep reflect`)")
+            if not _get_json_output() and not _get_ids_output() and not sys.stdout.isatty():
+                typer.echo("\nAs an agent, you should reflect on this work. (run: `keep reflect`)")
 
 
 def _find_now_version_by_tags(kp, tags: list[str], collection: str):
@@ -1468,6 +1475,24 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
             lines.append("")
             lines.append("# tags:")
             lines.append("#   project: myproject")
+
+        # Show integrations status
+        from .integrations import TOOL_CONFIGS
+        if cfg.integrations:
+            lines.append("")
+            lines.append("integrations:")
+            for tool_key in TOOL_CONFIGS:
+                if tool_key in cfg.integrations:
+                    status = cfg.integrations[tool_key]
+                    lines.append(f"  {tool_key}: {status}")
+            for tool_key in TOOL_CONFIGS:
+                if tool_key not in cfg.integrations:
+                    lines.append(f"  # {tool_key}: false")
+        else:
+            lines.append("")
+            lines.append("# integrations:")
+            for tool_key in TOOL_CONFIGS:
+                lines.append(f"#   {tool_key}: false")
 
         # Show available options as comments
         lines.append("")

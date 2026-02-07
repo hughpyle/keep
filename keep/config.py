@@ -20,7 +20,7 @@ import tomli_w
 
 CONFIG_FILENAME = "keep.toml"
 CONFIG_VERSION = 3  # Bumped for document versioning support
-SYSTEM_DOCS_VERSION = 3  # Increment when bundled system docs content changes
+SYSTEM_DOCS_VERSION = 4  # Increment when bundled system docs content changes
 
 
 def get_tool_directory() -> Path:
@@ -115,6 +115,9 @@ class StoreConfig:
 
     # System docs version (tracks which bundled docs have been applied to this store)
     system_docs_version: int = 0
+
+    # Tool integrations tracking (presence of key = handled, value = installed or skipped)
+    integrations: dict[str, Any] = field(default_factory=dict)
 
     @property
     def config_path(self) -> Path:
@@ -361,6 +364,9 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse system_docs_version (default 0 for stores that predate this feature)
     system_docs_version = data.get("store", {}).get("system_docs_version", 0)
 
+    # Parse integrations section (presence = handled)
+    integrations = data.get("integrations", {})
+
     return StoreConfig(
         path=actual_store,
         config_dir=config_dir,
@@ -374,6 +380,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         default_tags=default_tags,
         max_summary_length=max_summary_length,
         system_docs_version=system_docs_version,
+        integrations=integrations,
     )
 
 
@@ -442,6 +449,10 @@ def save_config(config: StoreConfig) -> None:
     # Add default tags if set
     if config.default_tags:
         data["tags"] = config.default_tags
+
+    # Add integrations tracking if set
+    if config.integrations:
+        data["integrations"] = config.integrations
 
     with open(config.config_path, "wb") as f:
         tomli_w.dump(data, f)
