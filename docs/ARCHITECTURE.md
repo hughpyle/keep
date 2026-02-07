@@ -149,6 +149,25 @@ query text
     list[Item] (sorted by effective score)
 ```
 
+### Delete / Revert: delete(id) or revert(id)
+
+```
+delete(id)
+    │
+    ▼
+  version_count(id)
+    │
+    ├── 0 versions → full delete from both stores
+    │
+    └── N versions → revert to previous
+            │
+            ├─ get archived embedding from ChromaDB (id@vN)
+            ├─ restore_latest_version() in DocumentStore
+            │    (promote latest version row to current, delete version row)
+            ├─ upsert restored embedding as current in ChromaDB
+            └─ delete versioned entry (id@vN) from ChromaDB
+```
+
 ---
 
 ## Key Design Decisions

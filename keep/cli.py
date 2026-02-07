@@ -801,7 +801,16 @@ def update(
         typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
         raise typer.Exit(1)
 
-    typer.echo(_format_item(item, as_json=_get_json_output()))
+    # Surface similar items (occasion for reflection)
+    similar_items = kp.get_similar_for_display(item.id, limit=3, collection=collection)
+    similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+
+    typer.echo(_format_item(
+        item,
+        as_json=_get_json_output(),
+        similar_items=similar_items if similar_items else None,
+        similar_offsets=similar_offsets if similar_items else None,
+    ))
 
 
 @app.command()
@@ -969,7 +978,17 @@ def now(
                 parsed_tags[k] = v
 
         item = kp.set_now(new_content, tags=parsed_tags or None)
-        typer.echo(_format_item(item, as_json=_get_json_output()))
+
+        # Surface similar items (occasion for reflection)
+        similar_items = kp.get_similar_for_display(item.id, limit=3, collection=collection)
+        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+
+        typer.echo(_format_item(
+            item,
+            as_json=_get_json_output(),
+            similar_items=similar_items if similar_items else None,
+            similar_offsets=similar_offsets if similar_items else None,
+        ))
     else:
         # Get current intentions (or search version history if tags specified)
         if tags:
@@ -1240,6 +1259,47 @@ def get(
         similar_items=similar_items,
         similar_offsets=similar_offsets,
     ))
+
+
+@app.command()
+def delete(
+    id: Annotated[str, typer.Argument(help="ID of item to delete")],
+    store: StoreOption = None,
+    collection: CollectionOption = "default",
+):
+    """
+    Delete the current version of an item.
+
+    If the item has version history, reverts to the previous version.
+    If no history exists, removes the item completely.
+
+    \b
+    Examples:
+        keep delete _text:abc123def456   # Remove a text note
+        keep delete _now:default         # Revert now to previous
+    """
+    kp = _get_keeper(store, collection)
+
+    item = kp.get(id, collection=collection)
+    if item is None:
+        typer.echo(f"Not found: {id}", err=True)
+        raise typer.Exit(1)
+
+    restored = kp.revert(id, collection=collection)
+
+    if restored is None:
+        # Fully deleted
+        typer.echo(_format_summary_line(item))
+    else:
+        # Reverted — show the restored version with similar items
+        similar_items = kp.get_similar_for_display(restored.id, limit=3, collection=collection)
+        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+        typer.echo(_format_item(
+            restored,
+            as_json=_get_json_output(),
+            similar_items=similar_items if similar_items else None,
+            similar_offsets=similar_offsets if similar_items else None,
+        ))
 
 
 @app.command("collections")

@@ -11,6 +11,12 @@
             - or a research-assistant with superpowers
         - what else?
 
+    And, how do we suggest the agents to /create higher structures/ as they work?
+        - tags: locate your stuff by project, topic
+        - update with all relevant documents as you research
+        - update with all relevant URLs as you research
+        - more tags?  update with descriptions-of-tags?  auto-summarize to make descriptions-of-tags?
+        - or do we actually benefit from "edges" here?
 
 
 * re-test the gemini path
@@ -20,6 +26,29 @@
     - no capability for "model migration and re-embedding" yet
 
 * Measure some outcomes.  Describe behavior in openclaw, in claude code, etc.  Show where it works.
+
+* Surface similar items on create/update ("occasions for reflection")
+    - when `remember` or `update` stores a new item, return similar items in the output
+      (same mechanism as `get --similar`, applied at write-time)
+    - the agent or human sees the juxtaposition and can make connections
+    - this is low-effort, high-leverage: the store doesn't interpret, it just holds up a mirror
+    - consider: should `find` results also show per-item similar? or is that too noisy?
+
+* Speech acts and commitments (Winograd/Flores perspective)
+    - skill-level documentation: how to recognize and track speech acts
+      - requests, promises, assertions, declarations, assessments
+      - the "conversation for action" lifecycle: request → promise → performance → satisfaction
+    - consider what tagging looks like through this lens:
+      - "project" ≈ a domain of concern (a "conversation" in the W/F sense)
+      - "topic" ≈ a recurrent theme or breakdown
+      - what about: commitment, request, assessment, declaration?
+      - are these tags? or a different axis entirely?
+    - tracking commitments across sessions is a concrete use case
+      - "you said you'd revisit X" — requires recognizing a promise
+      - "this contradicts what you said on Jan 15" — requires recognizing assertions
+    - the store doesn't need to do the recognition; the agent does
+      - but the store needs enough structure to hold what the agent notices
+    - this is Tier 3 territory: the practice improving itself
 
 * relationships as a separate first-class thing
     - X and Y with a bidirectional edge
