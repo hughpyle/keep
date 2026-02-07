@@ -18,7 +18,7 @@ The content, as well as the format, is relevant to the practice of this skill.
 
 ---
 
-### impermanence_verse.txt
+### han_verse.txt
 - **Title:** 版の偈 (Han Verse / Inscription on the Zen Sounding Board)
 - **Date:** Traditional Zen verse; origins in Chinese Chan monastic codes (Song dynasty onward)
 - **Language:** Japanese (Kanji), with romanization and multiple English translations
