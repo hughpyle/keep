@@ -39,12 +39,12 @@ To construct URIs for these files:
 
 ### impermanence_verse.txt
 - **URI template:** `file://{keep_library}/impermanence_verse.txt`
-- **Title:** 無常偈 (Impermanence Verse / Closing Verse)
-- **Date:** Traditional Zen liturgy (exact origin uncertain)
-- **Language:** Japanese (Kanji/Kana), with romanization and multiple English translations
-- **Source:** Soto Zen liturgy
+- **Title:** 版の偈 (Han Verse / Inscription on the Zen Sounding Board)
+- **Date:** Traditional Zen verse; origins in Chinese Chan monastic codes (Song dynasty onward)
+- **Language:** Japanese (Kanji), with romanization and multiple English translations
+- **Source:** Pan-Zen tradition (Soto, Rinzai, Obaku); Chinese Chan monastic codes
 - **Status:** Traditional teaching, freely shared
-- **Description:** Four-line verse chanted at the end of Zen practice sessions. "Great is the matter of birth and death / Life slips quickly by / Time waits for no one / Wake up! Wake up!" Includes character-by-character breakdown, cultural context, and linguistic notes.
+- **Description:** Four-line verse inscribed on the han (wooden sounding board) struck to signal practice periods. "Great is the matter of birth and death / Impermanence is swift / Each of us must awaken / Don't be careless." Includes Soto and Rinzai variants, character-by-character breakdown, cultural context, and linguistic notes.
 
 ---
 
