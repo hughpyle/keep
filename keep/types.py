@@ -11,7 +11,7 @@ SYSTEM_TAG_PREFIX = "_"
 
 # Tags used internally but hidden from display output
 # These exist for efficient queries/sorting but aren't user-facing
-INTERNAL_TAGS = frozenset({"_updated_date"})
+INTERNAL_TAGS = frozenset({"_updated_date", "_accessed_date"})
 
 
 def filter_non_system_tags(tags: dict[str, str]) -> dict[str, str]:
@@ -43,8 +43,10 @@ class Item:
     
     System tags (managed automatically, in tags dict):
         _created: ISO timestamp when first indexed
-        _updated: ISO timestamp when last indexed  
+        _updated: ISO timestamp when last indexed
         _updated_date: Date portion for easier queries
+        _accessed: ISO timestamp when last retrieved
+        _accessed_date: Date portion for easier queries
         _content_type: MIME type if known
         _source: How content was obtained (uri, inline)
         _session: Session that last touched this item
@@ -63,6 +65,11 @@ class Item:
     def updated(self) -> str | None:
         """ISO timestamp when last indexed (from _updated tag)."""
         return self.tags.get("_updated")
+
+    @property
+    def accessed(self) -> str | None:
+        """ISO timestamp when last retrieved (from _accessed tag)."""
+        return self.tags.get("_accessed")
     
     def __str__(self) -> str:
         score_str = f" [{self.score:.3f}]" if self.score is not None else ""
