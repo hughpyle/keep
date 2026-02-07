@@ -989,6 +989,8 @@ def now(
             similar_items=similar_items if similar_items else None,
             similar_offsets=similar_offsets if similar_items else None,
         ))
+        if not _get_json_output() and not _get_ids_output():
+            typer.echo("\nReflection practice: `keep reflect`")
     else:
         # Get current intentions (or search version history if tags specified)
         if tags:
@@ -1012,6 +1014,8 @@ def now(
                 similar_items=similar_items,
                 similar_offsets=similar_offsets,
             ))
+            if not _get_json_output() and not _get_ids_output():
+                typer.echo("\nReflection practice: `keep reflect`")
 
 
 def _find_now_version_by_tags(kp, tags: list[str], collection: str):
@@ -1054,6 +1058,21 @@ def _find_now_version_by_tags(kp, tags: list[str], collection: str):
             return kp.get_version(NOWDOC_ID, i + 1, collection=collection)
 
     return None
+
+
+@app.command()
+def reflect():
+    """Print the reflection practice guide."""
+    # Installed package (copied by hatch force-include)
+    reflect_path = Path(__file__).parent / "data" / "reflect.md"
+    if not reflect_path.exists():
+        # Development fallback: read from repo root
+        reflect_path = Path(__file__).parent.parent / "commands" / "reflect.md"
+    if reflect_path.exists():
+        typer.echo(reflect_path.read_text())
+    else:
+        typer.echo("Reflection practice not found.", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()

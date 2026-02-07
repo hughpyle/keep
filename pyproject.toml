@@ -66,11 +66,13 @@ packages = ["keep"]
 [tool.hatch.build.targets.wheel.force-include]
 "SKILL.md" = "keep/SKILL.md"
 "docs/library" = "keep/docs/library"
+"commands/reflect.md" = "keep/data/reflect.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
     "/keep",
     "/docs/library",
+    "/commands/reflect.md",
     "/SKILL.md",
     "/README.md",
     "/LICENSE",
