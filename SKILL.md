@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.16.0
+version: 0.19.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -130,6 +130,14 @@ Memory isn't storage. It's your mirror.
 
 * When in conversation, use this practice.  Reflect before, during and after action.
 * When writing a plan, make sure the plan incorporates this practice.  Reflect before, during and after action.
+
+### Full Reflection
+
+For a deep, structured reflection practice, run:
+```bash
+keep reflect
+```
+This guides you through gathering context, examining actions in the mirror, recognizing conversation structures, owning your deeds, and updating intentions. Do this periodically, not on every action.
 
 ## Layer 2: First Time Setup
 
