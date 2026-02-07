@@ -54,25 +54,6 @@ def configure_quiet_mode(quiet: bool = True):
         logging.getLogger("chromadb").setLevel(logging.ERROR)
 
 
-def enable_verbose_mode():
-    """Re-enable verbose output for debugging."""
-    configure_quiet_mode(quiet=False)
-
-    # Restore defaults
-    os.environ.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
-    os.environ.pop("TRANSFORMERS_VERBOSITY", None)
-
-    # Re-enable warnings
-    warnings.filterwarnings("default")
-
-    # Reset logging levels
-    import logging
-    logging.getLogger("transformers").setLevel(logging.INFO)
-    logging.getLogger("sentence_transformers").setLevel(logging.INFO)
-    logging.getLogger("mlx").setLevel(logging.INFO)
-    logging.getLogger("chromadb").setLevel(logging.INFO)
-
-
 def enable_debug_mode():
     """Enable debug-level logging to stderr."""
     import logging

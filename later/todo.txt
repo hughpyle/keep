@@ -1,4 +1,10 @@
 
+* rename for compact usage:
+        keep update --> keep put
+        keep delete --> keep del
+    leave the old names as aliases, but hidden.
+    make sure to update all the docs to use the new names.
+
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
@@ -7,9 +13,32 @@
     (and make sure that `keep list/find` --> `keep get` is there too)
     - use tags for commitment, etc - the language/action 
 
-* Last-accessed rank bump.  (Not just last-updated).
-    Needs to be super efficient (ofc)
-    Research: good strategies for access versus update weighting?
+    also: whenEVER you come across documents (local or remote) that are important to the user
+    or important to the task, be sure to put them in `keep` and tag appropriately.
+
+    What is this document? why is it important?
+
+* edges thinking again
+    why don't we do edges, first, as a special think that just links a document to the "now" doc?
+    (maybe not very useful.. still need to capture the /reason/ that it's linked, which is where
+    the semantics all live)
+
+* let's explore some semantic relationships that are important
+    - a meeting or other event
+    - people
+    - places
+    - events in the world
+    do we want to go down the whole "entity extraction" thing? really?
+    but we absolutely do need to handle "hey, note about XYZ, ...." whare XYZ is a capital-E Entity
+    maybe the entity-extraction is done by the AGENT, huh?
+    - so the agent should tag "entities" in a consistent way, but it's just a convention, not rules
+        -t class=Person entity=Daniel
+
+* let's explore the macOS native entities:
+    - contacts
+    - music
+    - health data
+    (etc)...
 
 * Some tools (e.g. VS Code) don't really have a global config.
   But if keep is running within a git project, in one of these tools,
@@ -260,3 +289,6 @@ x `context` text alongside summaries? (no, summary is good now)
 . auto-install integrations: keep/integrations.py with TOOL_CONFIGS pattern, Claude Code hooks auto-installed on first run
 . now.md onboarding: default nowdoc guides agents to read SKILL.md and foundational teachings (SYSTEM_DOCS_VERSION 4)
 . TTY-gated reflect prompt: "As an agent, you should reflect" only shown when stdout is not a TTY
+. shell-safe ID quoting: _shell_quote_id() wraps IDs with special chars in single quotes (text output only, not JSON)
+. last-accessed rank bump: accessed_at column, touch/touch_many, --sort accessed on list, schema v2 migration
+. codebase cleanup: removed dead modules (indexing.py, chunking.py, context.py), dead code (_timestamp, AVAILABLE_SETTINGS, enable_verbose_mode), fixed mock signatures, consolidated tag parsing, unified tag-update output

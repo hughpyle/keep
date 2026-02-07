@@ -1083,8 +1083,12 @@ class Keeper:
         if since is not None:
             items = _filter_by_date(items, since)
 
-        return items[:limit]
-    
+        final = items[:limit]
+        # Touch accessed_at for returned items
+        if final:
+            self._document_store.touch_many(coll, [i.id for i in final])
+        return final
+
     def find_similar(
         self,
         id: str,
@@ -1130,7 +1134,11 @@ class Keeper:
         if since is not None:
             items = _filter_by_date(items, since)
 
-        return items[:limit]
+        final = items[:limit]
+        # Touch accessed_at for returned items
+        if final:
+            self._document_store.touch_many(coll, [i.id for i in final])
+        return final
 
     def get_similar_for_display(
         self,
@@ -1241,8 +1249,12 @@ class Keeper:
         if since is not None:
             items = _filter_by_date(items, since)
 
-        return items[:limit]
-    
+        final = items[:limit]
+        # Touch accessed_at for returned items
+        if final:
+            self._document_store.touch_many(coll, [i.id for i in final])
+        return final
+
     def query_tag(
         self,
         key: Optional[str] = None,
@@ -1350,16 +1362,18 @@ class Keeper:
     def get(self, id: str, *, collection: Optional[str] = None) -> Optional[Item]:
         """
         Retrieve a specific item by ID.
-        
+
         Reads from document store (canonical), falls back to ChromaDB for legacy data.
+        Touches accessed_at on successful retrieval.
         """
         coll = self._resolve_collection(collection)
-        
+
         # Try document store first (canonical)
         doc_record = self._document_store.get(coll, id)
         if doc_record:
+            self._document_store.touch(coll, id)
             return _record_to_item(doc_record)
-        
+
         # Fall back to ChromaDB for legacy data
         result = self._store.get(coll, id)
         if result is None:
@@ -1728,24 +1742,26 @@ class Keeper:
         limit: int = 10,
         *,
         since: Optional[str] = None,
+        order_by: str = "updated",
         collection: Optional[str] = None,
     ) -> list[Item]:
         """
-        List recent items ordered by update time.
+        List recent items ordered by timestamp.
 
         Args:
             limit: Maximum number to return (default 10)
             since: Only include items updated since (ISO duration like P3D, or date)
+            order_by: Sort order - "updated" (default) or "accessed"
             collection: Collection to query (uses default if not specified)
 
         Returns:
-            List of Items, most recently updated first
+            List of Items, most recent first
         """
         coll = self._resolve_collection(collection)
 
         # Fetch extra when filtering by date
         fetch_limit = limit * 3 if since is not None else limit
-        records = self._document_store.list_recent(coll, fetch_limit)
+        records = self._document_store.list_recent(coll, fetch_limit, order_by=order_by)
         items = [_record_to_item(rec) for rec in records]
 
         # Apply date filter if specified

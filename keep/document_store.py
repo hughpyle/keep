@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -54,6 +54,7 @@ class DocumentRecord:
     created_at: str
     updated_at: str
     content_hash: Optional[str] = None
+    accessed_at: Optional[str] = None
 
 
 class DocumentStore:
@@ -154,6 +155,28 @@ class DocumentStore:
                 ON document_versions(id, collection, version DESC)
             """)
 
+            self._conn.execute("PRAGMA user_version = 1")
+            self._conn.commit()
+
+        if current_version < 2:
+            # Add accessed_at column for last-access tracking
+            cursor = self._conn.execute("PRAGMA table_info(documents)")
+            columns = {row[1] for row in cursor.fetchall()}
+            if "accessed_at" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE documents ADD COLUMN accessed_at TEXT"
+                )
+                # Backfill: set accessed_at = updated_at for existing rows
+                self._conn.execute(
+                    "UPDATE documents SET accessed_at = updated_at "
+                    "WHERE accessed_at IS NULL"
+                )
+                # Index for access-ordered listing
+                self._conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_documents_accessed
+                    ON documents(accessed_at)
+                """)
+
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
     
@@ -164,7 +187,7 @@ class DocumentStore:
     def _get_unlocked(self, collection: str, id: str) -> Optional[DocumentRecord]:
         """Get a document by ID without acquiring the lock (for use within locked contexts)."""
         cursor = self._conn.execute("""
-            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE id = ? AND collection = ?
         """, (id, collection))
@@ -181,8 +204,9 @@ class DocumentStore:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             content_hash=row["content_hash"],
+            accessed_at=row["accessed_at"],
         )
-    
+
     # -------------------------------------------------------------------------
     # Write Operations
     # -------------------------------------------------------------------------
@@ -233,9 +257,9 @@ class DocumentStore:
 
             self._conn.execute("""
                 INSERT OR REPLACE INTO documents
-                (id, collection, summary, tags_json, created_at, updated_at, content_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (id, collection, summary, tags_json, created_at, now, content_hash))
+                (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (id, collection, summary, tags_json, created_at, now, content_hash, now))
             self._conn.commit()
 
         return DocumentRecord(
@@ -246,6 +270,7 @@ class DocumentStore:
             created_at=created_at,
             updated_at=now,
             content_hash=content_hash,
+            accessed_at=now,
         ), content_changed
 
     def _archive_current_unlocked(
@@ -347,7 +372,28 @@ class DocumentStore:
             self._conn.commit()
 
         return cursor.rowcount > 0
-    
+
+    def touch(self, collection: str, id: str) -> None:
+        """Update accessed_at timestamp without changing updated_at."""
+        now = self._now()
+        self._conn.execute("""
+            UPDATE documents SET accessed_at = ?
+            WHERE id = ? AND collection = ?
+        """, (now, id, collection))
+        self._conn.commit()
+
+    def touch_many(self, collection: str, ids: list[str]) -> None:
+        """Update accessed_at for multiple documents in one statement."""
+        if not ids:
+            return
+        now = self._now()
+        placeholders = ",".join("?" * len(ids))
+        self._conn.execute(f"""
+            UPDATE documents SET accessed_at = ?
+            WHERE collection = ? AND id IN ({placeholders})
+        """, (now, collection, *ids))
+        self._conn.commit()
+
     def restore_latest_version(self, collection: str, id: str) -> Optional[DocumentRecord]:
         """
         Restore the most recent archived version as current.
@@ -380,13 +426,14 @@ class DocumentStore:
             existing = self._get_unlocked(collection, id)
             original_created_at = existing.created_at if existing else created_at
 
+            now = self._now()
             # Replace current document with the archived version
             self._conn.execute("""
                 INSERT OR REPLACE INTO documents
-                (id, collection, summary, tags_json, created_at, updated_at, content_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (id, collection, summary, json.dumps(tags, ensure_ascii=False),
-                  original_created_at, created_at, content_hash))
+                  original_created_at, created_at, content_hash, now))
 
             # Delete the version row we just restored
             self._conn.execute("""
@@ -400,6 +447,7 @@ class DocumentStore:
             id=id, collection=collection, summary=summary,
             tags=tags, created_at=original_created_at,
             updated_at=created_at, content_hash=content_hash,
+            accessed_at=now,
         )
 
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
@@ -446,7 +494,7 @@ class DocumentStore:
             DocumentRecord if found, None otherwise
         """
         cursor = self._conn.execute("""
-            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE id = ? AND collection = ?
         """, (id, collection))
@@ -463,6 +511,7 @@ class DocumentStore:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             content_hash=row["content_hash"],
+            accessed_at=row["accessed_at"],
         )
 
     def get_version(
@@ -663,7 +712,7 @@ class DocumentStore:
 
         placeholders = ",".join("?" * len(ids))
         cursor = self._conn.execute(f"""
-            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ? AND id IN ({placeholders})
         """, (collection, *ids))
@@ -678,10 +727,11 @@ class DocumentStore:
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
+                accessed_at=row["accessed_at"],
             )
 
         return results
-    
+
     def exists(self, collection: str, id: str) -> bool:
         """Check if a document exists."""
         cursor = self._conn.execute("""
@@ -725,22 +775,25 @@ class DocumentStore:
         self,
         collection: str,
         limit: int = 10,
+        order_by: str = "updated",
     ) -> list[DocumentRecord]:
         """
-        List recent documents ordered by update time.
+        List recent documents ordered by timestamp.
 
         Args:
             collection: Collection name
             limit: Maximum number to return
+            order_by: Sort column - "updated" (default) or "accessed"
 
         Returns:
-            List of DocumentRecords, most recently updated first
+            List of DocumentRecords, most recent first
         """
-        cursor = self._conn.execute("""
-            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
+        order_col = "accessed_at" if order_by == "accessed" else "updated_at"
+        cursor = self._conn.execute(f"""
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ?
-            ORDER BY updated_at DESC
+            ORDER BY {order_col} DESC
             LIMIT ?
         """, (collection, limit))
 
@@ -753,6 +806,7 @@ class DocumentStore:
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
+                accessed_at=row["accessed_at"],
             )
             for row in cursor
         ]
@@ -786,7 +840,7 @@ class DocumentStore:
             List of matching DocumentRecords
         """
         cursor = self._conn.execute("""
-            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ? AND id LIKE ?
             ORDER BY id
@@ -802,6 +856,7 @@ class DocumentStore:
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
+                accessed_at=row["accessed_at"],
             ))
 
         return results
@@ -881,7 +936,7 @@ class DocumentStore:
         params: list[Any] = [collection, f"$.{key}"]
 
         sql = """
-            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ?
               AND json_extract(tags_json, ?) IS NOT NULL
@@ -907,6 +962,7 @@ class DocumentStore:
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
+                accessed_at=row["accessed_at"],
             ))
 
         return results
