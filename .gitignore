@@ -61,5 +61,5 @@ coverage.xml
 .keep/
 test_extraction_store/
 .DS_Store
-.claude/
+.claude/settings.local.json
 .agents/

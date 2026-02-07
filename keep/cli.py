@@ -990,7 +990,7 @@ def now(
             similar_offsets=similar_offsets if similar_items else None,
         ))
         if not _get_json_output() and not _get_ids_output():
-            typer.echo("\nReflection practice: `keep reflect`")
+            typer.echo("\nNow reflect! (`keep reflect`)")
     else:
         # Get current intentions (or search version history if tags specified)
         if tags:
@@ -1015,7 +1015,7 @@ def now(
                 similar_offsets=similar_offsets,
             ))
             if not _get_json_output() and not _get_ids_output():
-                typer.echo("\nReflection practice: `keep reflect`")
+                typer.echo("\nNow reflect! (`keep reflect`)")
 
 
 def _find_now_version_by_tags(kp, tags: list[str], collection: str):
