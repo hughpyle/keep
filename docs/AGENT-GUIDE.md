@@ -114,6 +114,74 @@ This cycle — reflect, act, reflect — is the mirror teaching. Memory isn't st
 
 ---
 
+## Reading the Output
+
+CLI commands produce structured output. Understanding this format lets you navigate effectively.
+
+### Search results
+
+`keep find "reflection"` returns one line per result — `id date summary`:
+
+```
+_now:default 2026-02-07 Finished reading MN61. The mirror teaching: ...
+file:///.../library/mn61.html 2026-02-07 The Exhortation to Rāhula...
+https://inguz.substack.com/p/keep 2026-02-07 Keep: A Reflective Memory...
+file:///.../library/true_person_no_rank.md 2026-02-07 The True Person...
+```
+
+Each ID in the results can be passed directly to `keep get`.
+
+### Full output (frontmatter format)
+
+`keep get`, `keep now`, and `keep update` produce YAML frontmatter followed by the document body:
+
+```
+---
+id: file:///.../library/mn61.html
+tags: {_source: uri, _updated: 2026-02-07T15:14:28+00:00, topic: reflection, type: teaching}
+similar:
+  - https://inguz.substack.com/p/keep (0.47) 2026-02-07 Keep: A Reflective Memory...
+  - _now:default (0.45) 2026-02-07 Finished reading MN61. The mirror teachi...
+  - file:///.../library/true_person_no_rank.md (0.44) 2026-02-07 The True Person...
+prev:
+  - @V{1} 2026-02-07 Previous version summary...
+---
+The Exhortation to Rāhula at Mango Stone is a Buddhist sutra that teaches...
+```
+
+**Field reference:**
+
+| Field | Meaning | How to use |
+|-------|---------|------------|
+| `id` | Document identifier (URI, content hash, or system ID) | Pass to `keep get ID` |
+| `tags` | User tags + system tags (`_created`, `_updated`, `_source`, etc.) | Filter with `--tag key=value` |
+| `similar` | Related items with similarity scores (0–1) | `keep get <similar-id>` to follow links |
+| `prev` | Older versions, shown as `@V{N}` offsets | `keep get ID -V 1` for previous version |
+| `next` | Newer versions (shown when viewing an older version) | `keep get ID -V 0` to return to current |
+
+**Navigating from output:**
+- See an interesting similar item? → `keep get <that-id>`
+- Want the previous version? → `keep get ID -V 1` (the `@V{1}` offset)
+- `@V{N}` is a version offset: 0 = current, 1 = previous, 2 = two versions ago
+
+### Version history
+
+`keep now --history` or `keep get ID --history` shows a compact version list:
+
+```
+v0 (current): Finished reading MN61. The mirror teaching: reflect before, ...
+
+Archived:
+  v1 (2026-02-07): Reading the first teachings. Exploring MN61 and th...
+```
+
+### Other formats
+
+- `--json` — machine-readable JSON output
+- `--ids` — bare IDs only (useful for piping)
+
+---
+
 ## Working Session Pattern
 
 Use the nowdoc as a scratchpad to track where you are in the work. This isn't enforced structure — it's a convention that helps you (and future agents) maintain perspective.

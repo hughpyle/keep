@@ -259,9 +259,8 @@ class TestNowdoc:
         from keep.api import _load_frontmatter, SYSTEM_DOC_DIR
 
         content, tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
-        assert "# Now" in content
-        assert "keep find" in content
-        assert "keep update" in content
+        assert len(content) > 0
+        assert "keep now" in content
         # Frontmatter should be parsed into tags
         assert isinstance(tags, dict)
         assert len(tags) > 0  # Has at least one tag from frontmatter

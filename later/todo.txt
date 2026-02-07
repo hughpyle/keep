@@ -1,26 +1,19 @@
 
-* Use initialization to install hooks and the protocol block - from python code (any "keep" command)
-    - save this in config:
-        - a line if we prompted the user (or did it), e.g. "installed_claude_hooks: true"
-        - if this line is not present, AND if it applies, then prompt the user
-            e.g. if they are running in claude code then we want the claude code hooks
-            other hooks will apply to different environments, will need testing
-    - for claude:
-        install the protocol block into ~/.claude/
-        install the hooks (same place)
-    - for codex: install the protocol block into ~/.codex/
-    - for vs code: (etc)
-    - test tool existence by looking for its global settings or equivalent?
+* lectio
+    - encourage "deep reflection" on items that were important
+      e.g. URLs and files that were captured recently
 
-    The persistent block can still be in the skill, but we can help it along.
+* Show exactly how to use tags in the 'reflect.md'
+    (and make sure that `keep list/find` --> `keep get` is there too)
+    - use tags for commitment, etc - the language/action 
 
-    Review this first by looking at the question: how do the plugins in /Users/hugh/play/knowledge-work-plugins
-    get installed so that claude code has the hooks and skills
+* Last-accessed rank bump.  (Not just last-updated).
+    Needs to be super efficient (ofc)
+    Research: good strategies for access versus update weighting?
 
 * Some tools (e.g. VS Code) don't really have a global config.
   But if keep is running within a git project, in one of these tools,
   and there's no keep "hook" within the project itself, should we prompt to install it?
-
 
 * USECASES.md "what is this great at"
     lesson zero: the context window doesn't really matter if you have exponentially-good navigation

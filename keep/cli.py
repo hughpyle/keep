@@ -457,10 +457,14 @@ See: https://github.com/hughpyle/keep#installation
 
 def _get_keeper(store: Optional[Path], collection: str) -> Keeper:
     """Initialize memory, handling errors gracefully."""
+    import atexit
+
     # Check global override from --store on main command
     actual_store = store if store is not None else _get_store_override()
     try:
         kp = Keeper(actual_store, collection=collection)
+        # Ensure close() runs before interpreter shutdown to release model locks
+        atexit.register(kp.close)
         # Check for missing embedding provider
         if kp._config and kp._config.embedding is None:
             typer.echo(NO_PROVIDER_ERROR.strip(), err=True)
@@ -1631,12 +1635,20 @@ def process_pending(
     """
     kp = _get_keeper(store, "default")
 
-    # Daemon mode: write PID, process all, remove PID, exit silently
+    # Daemon mode: acquire singleton lock, process all, clean up
     if daemon:
         import signal
+        from .model_lock import ModelLock
 
         pid_path = kp._processor_pid_path
+        processor_lock = ModelLock(kp._store_path / ".processor.lock")
         shutdown_requested = False
+
+        # Acquire exclusive lock (non-blocking) — ensures true singleton
+        if not processor_lock.acquire(blocking=False):
+            # Another daemon is already running
+            kp.close()
+            return
 
         def handle_signal(signum, frame):
             nonlocal shutdown_requested
@@ -1647,7 +1659,7 @@ def process_pending(
         signal.signal(signal.SIGINT, handle_signal)
 
         try:
-            # Write PID file
+            # Write PID file (informational, lock is authoritative)
             pid_path.write_text(str(os.getpid()))
 
             # Process all items until queue empty or shutdown requested
@@ -1662,8 +1674,10 @@ def process_pending(
                 pid_path.unlink()
             except OSError:
                 pass
-            # Close resources
+            # Close resources (releases model locks via provider release())
             kp.close()
+            # Release processor singleton lock
+            processor_lock.release()
         return
 
     # Interactive mode

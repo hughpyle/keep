@@ -69,7 +69,7 @@ keep update "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
 keep update https://inguz.substack.com/p/keep -t topic=practice
 keep update "Meeting notes from today" -t type=meeting
 
-# Search
+# Search (returns: id date summary)
 keep find "authentication" --limit 5
 keep find "auth" --since P7D           # Last 7 days
 
@@ -83,6 +83,42 @@ keep list --tag project=myapp          # Find by tag
 keep list --tags=                      # List all tag keys
 keep tag-update ID --tag status=done   # Update tags
 ```
+
+## Reading the Output
+
+Commands produce output in a distinctive format. Here's what to expect.
+
+**Search results** (`keep find`) show one line per result — `id date summary`:
+
+```
+_now:default 2026-02-07 Finished reading MN61. The mirror teaching: ...
+file:///.../library/mn61.html 2026-02-07 The Exhortation to Rāhula...
+https://inguz.substack.com/p/keep 2026-02-07 Keep: A Reflective Memory...
+file:///.../library/true_person_no_rank.md 2026-02-07 The True Person...
+```
+
+**Full output** (`keep get`, `keep now`) uses YAML frontmatter with the document body below:
+
+```
+---
+id: file:///.../library/mn61.html
+tags: {_source: uri, _updated: 2026-02-07T15:14:28+00:00, topic: reflection, type: teaching}
+similar:
+  - https://inguz.substack.com/p/keep (0.47) 2026-02-07 Keep: A Reflective Memory...
+  - _now:default (0.45) 2026-02-07 Finished reading MN61. The mirror teachi...
+  - file:///.../library/true_person_no_rank.md (0.44) 2026-02-07 The True Person...
+prev:
+  - @V{1} 2026-02-07 Previous version summary...
+---
+The Exhortation to Rāhula at Mango Stone is a Buddhist sutra that teaches...
+```
+
+Key fields:
+- **`similar:`** — related items with similarity scores (0–1). Each ID can be passed to `keep get`
+- **`prev:`** / **`next:`** — version navigation. `@V{1}` means "one version back", usable with `-V 1`
+- **`tags:`** — user tags and system tags (`_created`, `_updated`, `_source`, etc.)
+
+Other output formats: `--json` for machine-readable JSON, `--ids` for bare IDs only.
 
 ## Current Intentions
 

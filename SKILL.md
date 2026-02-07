@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.20.0
+version: 0.21.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
