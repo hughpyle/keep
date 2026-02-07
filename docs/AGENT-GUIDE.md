@@ -104,6 +104,12 @@ keep find "this situation"  # Prior knowledge
 keep update "what I learned" -t type=learning
 ```
 
+**Periodically:** Run a full structured reflection:
+```bash
+keep reflect
+```
+This guides you through gathering context, examining actions, recognizing conversation structures, and updating intentions.
+
 This cycle — reflect, act, reflect — is the mirror teaching. Memory isn't storage; it's how you develop skillful judgment.
 
 ---

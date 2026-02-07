@@ -81,6 +81,7 @@ keep now "What's important now"      # Update intentions
 keep now -f context.md -t project=x  # Read content from file with tags
 keep now -V 1                        # Previous intentions
 keep now --history                   # List all versions
+keep reflect                         # Deep structured reflection practice
 
 # Get with versioning and similar items
 keep get ID                          # Current version with similar items

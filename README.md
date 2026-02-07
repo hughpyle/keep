@@ -138,6 +138,7 @@ This library was designed as an agent skill — persistent memory that helps age
 - Before acting, use `keep` to reflect on the context.
 - Notice breakdowns — when assumptions surface, index them.
 - After acting, use `keep` to save your context and intentions.
+- Periodically, run `keep reflect` for a deep, structured reflection.
 
 See **[SKILL.md](SKILL.md)** for the full practice guide.
 

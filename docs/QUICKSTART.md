@@ -93,6 +93,7 @@ keep now                               # Show current intentions
 keep now "Working on auth bug"         # Update intentions
 keep now -V 1                          # Previous intentions
 keep now --history                     # All versions
+keep reflect                           # Deep structured reflection
 ```
 
 ## Version History

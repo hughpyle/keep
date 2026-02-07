@@ -16,3 +16,5 @@ Now: reflect on this work using `keep`.
 - What happened? `keep update "what I learned" -t context=learning`
 - What do I save? `keep update`
 - What now? `keep now "Current intention: ..."`
+
+**Periodically:** `keep reflect` — deep structured reflection on actions, conversations, and intentions.
