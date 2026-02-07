@@ -370,3 +370,88 @@ class TestOptions:
         # --json is now a global flag, visible in main help
         result = cli("--help")
         assert "--json" in result.stdout or "-j" in result.stdout
+
+
+# -----------------------------------------------------------------------------
+# Shell-safe ID Quoting Tests
+# -----------------------------------------------------------------------------
+
+class TestShellQuoteId:
+    """Tests for _shell_quote_id() helper."""
+
+    def test_safe_id_not_quoted(self):
+        """IDs with only shell-safe chars are returned as-is."""
+        from keep.cli import _shell_quote_id
+        assert _shell_quote_id("_text:abc123def456") == "_text:abc123def456"
+        assert _shell_quote_id("file:///path/to/doc.md") == "file:///path/to/doc.md"
+        assert _shell_quote_id("https://example.com/path") == "https://example.com/path"
+        assert _shell_quote_id("_now:default@V{3}") == "_now:default@V{3}"
+
+    def test_space_id_quoted(self):
+        """IDs with spaces get single-quoted."""
+        from keep.cli import _shell_quote_id
+        result = _shell_quote_id("file:///Application Data/foo")
+        assert result == "'file:///Application Data/foo'"
+
+    def test_special_chars_quoted(self):
+        """IDs with shell-special chars get single-quoted."""
+        from keep.cli import _shell_quote_id
+        assert _shell_quote_id("test$var") == "'test$var'"
+        assert _shell_quote_id("test&bg") == "'test&bg'"
+        assert _shell_quote_id("test;cmd") == "'test;cmd'"
+
+    def test_single_quote_escaped(self):
+        """IDs containing single quotes use '\\'' escaping."""
+        from keep.cli import _shell_quote_id
+        result = _shell_quote_id("it's a test")
+        assert result == "'it'\\''s a test'"
+
+    def test_summary_line_quotes_unsafe_id(self):
+        """_format_summary_line quotes IDs with spaces."""
+        from keep.cli import _format_summary_line
+        from keep.types import Item
+        item = Item(
+            id="file:///Application Data/doc.md",
+            summary="A doc",
+            tags={"_updated": "2026-01-15T00:00:00Z"},
+        )
+        output = _format_summary_line(item)
+        assert "'file:///Application Data/doc.md'" in output
+
+    def test_summary_line_no_quotes_safe_id(self):
+        """_format_summary_line does not quote safe IDs."""
+        from keep.cli import _format_summary_line
+        from keep.types import Item
+        item = Item(
+            id="_text:abc123",
+            summary="A note",
+            tags={"_updated": "2026-01-15T00:00:00Z"},
+        )
+        output = _format_summary_line(item)
+        assert "_text:abc123" in output
+        assert "'" not in output.split(" ")[0]  # ID portion not quoted
+
+    def test_versioned_id_quotes_unsafe(self):
+        """_format_versioned_id quotes IDs with spaces."""
+        from keep.cli import _format_versioned_id
+        from keep.types import Item
+        item = Item(
+            id="file:///my docs/test.md",
+            summary="Test",
+            tags={},
+        )
+        output = _format_versioned_id(item)
+        assert output == "'file:///my docs/test.md'"
+
+    def test_json_output_not_quoted(self):
+        """JSON output does NOT shell-quote IDs."""
+        from keep.cli import _format_item
+        from keep.types import Item
+        item = Item(
+            id="file:///Application Data/doc.md",
+            summary="A doc",
+            tags={},
+        )
+        output = _format_item(item, as_json=True)
+        parsed = json.loads(output)
+        assert parsed["id"] == "file:///Application Data/doc.md"  # Raw, no quoting

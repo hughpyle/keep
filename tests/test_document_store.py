@@ -461,3 +461,79 @@ class TestVersioning:
 
         versions = store.list_versions("default", "doc:1")
         assert len(versions) == 0
+
+
+class TestAccessedAt:
+    """Last-accessed timestamp tracking."""
+
+    @pytest.fixture
+    def store(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "documents.db"
+            with DocumentStore(db_path) as store:
+                yield store
+
+    def test_upsert_sets_accessed_at(self, store: DocumentStore) -> None:
+        """upsert() sets accessed_at alongside updated_at."""
+        record, _ = store.upsert("default", "doc:1", "Summary", {})
+        assert record.accessed_at is not None
+        assert record.accessed_at == record.updated_at
+
+    def test_touch_updates_accessed_at(self, store: DocumentStore) -> None:
+        """touch() updates accessed_at without changing updated_at."""
+        record, _ = store.upsert("default", "doc:1", "Summary", {})
+        original_updated = record.updated_at
+
+        import time
+        time.sleep(0.01)
+
+        store.touch("default", "doc:1")
+        doc = store.get("default", "doc:1")
+
+        assert doc.updated_at == original_updated  # Unchanged
+        assert doc.accessed_at > original_updated   # Bumped
+
+    def test_touch_many(self, store: DocumentStore) -> None:
+        """touch_many() updates accessed_at for multiple docs."""
+        store.upsert("default", "doc:1", "S1", {})
+        store.upsert("default", "doc:2", "S2", {})
+        store.upsert("default", "doc:3", "S3", {})
+
+        import time
+        time.sleep(0.01)
+
+        store.touch_many("default", ["doc:1", "doc:3"])
+
+        d1 = store.get("default", "doc:1")
+        d2 = store.get("default", "doc:2")
+        d3 = store.get("default", "doc:3")
+
+        # doc:1 and doc:3 should have newer accessed_at than updated_at
+        assert d1.accessed_at > d1.updated_at
+        assert d3.accessed_at > d3.updated_at
+        # doc:2 should be unchanged
+        assert d2.accessed_at == d2.updated_at
+
+    def test_list_recent_order_by_accessed(self, store: DocumentStore) -> None:
+        """list_recent(order_by='accessed') sorts by accessed_at."""
+        store.upsert("default", "doc:1", "First", {})
+
+        import time
+        time.sleep(0.01)
+        store.upsert("default", "doc:2", "Second", {})
+
+        time.sleep(0.01)
+        # Touch doc:1 so it has newer accessed_at than doc:2
+        store.touch("default", "doc:1")
+
+        # Default order (updated) should put doc:2 first
+        by_updated = store.list_recent("default", order_by="updated")
+        assert by_updated[0].id == "doc:2"
+
+        # Access order should put doc:1 first (just touched)
+        by_accessed = store.list_recent("default", order_by="accessed")
+        assert by_accessed[0].id == "doc:1"
+
+    def test_touch_many_empty_ids(self, store: DocumentStore) -> None:
+        """touch_many() with empty list is a no-op."""
+        store.touch_many("default", [])  # Should not raise

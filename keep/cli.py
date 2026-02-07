@@ -104,6 +104,23 @@ app = typer.Typer(
 )
 
 
+# Shell-safe character set for IDs (no quoting needed)
+_SHELL_SAFE_PATTERN = re.compile(r'^[a-zA-Z0-9_./:@{}\-]+$')
+
+
+def _shell_quote_id(id: str) -> str:
+    """Quote an ID for safe shell usage if it contains non-shell-safe characters.
+
+    IDs containing only [a-zA-Z0-9_./:@{}-] are returned as-is.
+    Others are wrapped in single quotes with internal single quotes escaped.
+    """
+    if _SHELL_SAFE_PATTERN.match(id):
+        return id
+    # Escape any single quotes within the ID: ' → '\''
+    escaped = id.replace("'", "'\\''")
+    return f"'{escaped}'"
+
+
 # -----------------------------------------------------------------------------
 # Output Formatting
 #
@@ -144,7 +161,7 @@ def _format_yaml_frontmatter(
     """
     version = viewing_offset if viewing_offset is not None else 0
     version_suffix = f"@V{{{version}}}" if version > 0 else ""
-    lines = ["---", f"id: {item.id}{version_suffix}"]
+    lines = ["---", f"id: {_shell_quote_id(item.id)}{version_suffix}"]
     display_tags = _filter_display_tags(item.tags)
     if display_tags:
         tag_items = ", ".join(f"{k}: {v}" for k, v in sorted(display_tags.items()))
@@ -205,7 +222,7 @@ def _format_summary_line(item: Item) -> str:
     base_id = item.tags.get("_base_id", item.id)
     version = item.tags.get("_version", "0")
     version_suffix = f"@V{{{version}}}" if version != "0" else ""
-    versioned_id = f"{base_id}{version_suffix}"
+    versioned_id = f"{_shell_quote_id(base_id)}{version_suffix}"
 
     # Get date (from _updated_date or _updated or _created)
     date = item.tags.get("_updated_date") or item.tags.get("_updated", "")[:10] or item.tags.get("_created", "")[:10] or ""
@@ -227,7 +244,7 @@ def _format_versioned_id(item: Item) -> str:
     base_id = item.tags.get("_base_id", item.id)
     version = item.tags.get("_version", "0")
     version_suffix = f"@V{{{version}}}" if version != "0" else ""
-    return f"{base_id}{version_suffix}"
+    return f"{_shell_quote_id(base_id)}{version_suffix}"
 
 
 @app.callback(invoke_without_command=True)
@@ -518,12 +535,6 @@ def _filter_by_tags(items: list, tags: list[str]) -> list:
     return result
 
 
-def _timestamp() -> str:
-    """Generate timestamp for auto-generated IDs."""
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
-
-
 def _parse_frontmatter(text: str) -> tuple[str, dict[str, str]]:
     """Parse YAML frontmatter from text, return (content, tags)."""
     if text.startswith("---"):
@@ -613,10 +624,7 @@ def search(
 def list_recent(
     store: StoreOption = None,
     collection: CollectionOption = "default",
-    limit: Annotated[int, typer.Option(
-        "--limit", "-n",
-        help="Number of items to show"
-    )] = 10,
+    limit: LimitOption = 10,
     tag: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Filter by tag (key or key=value, repeatable)"
@@ -625,6 +633,10 @@ def list_recent(
         "--tags", "-T",
         help="List tag keys (--tags=), or values for KEY (--tags=KEY)"
     )] = None,
+    sort: Annotated[str, typer.Option(
+        "--sort",
+        help="Sort order: 'updated' (default) or 'accessed'"
+    )] = "updated",
     since: SinceOption = None,
 ):
     """
@@ -632,7 +644,8 @@ def list_recent(
 
     \b
     Examples:
-        keep list                      # Recent items
+        keep list                      # Recent items (by update time)
+        keep list --sort accessed      # Recent items (by access time)
         keep list --tag foo            # Items with tag 'foo' (any value)
         keep list --tag foo=bar        # Items with tag foo=bar
         keep list --tag foo --tag bar  # Items with both tags
@@ -685,7 +698,7 @@ def list_recent(
         return
 
     # Default: recent items
-    results = kp.list_recent(limit=limit, since=since, collection=collection)
+    results = kp.list_recent(limit=limit, since=since, order_by=sort, collection=collection)
     typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
@@ -718,14 +731,7 @@ def tag_update(
     kp = _get_keeper(store, collection)
 
     # Parse tags from key=value format
-    tag_changes: dict[str, str] = {}
-    if tags:
-        for tag in tags:
-            if "=" not in tag:
-                typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value (or key= to remove)", err=True)
-                raise typer.Exit(1)
-            k, v = tag.split("=", 1)
-            tag_changes[k] = v  # Empty v means delete
+    tag_changes = _parse_tags(tags)
 
     # Add explicit removals as empty strings
     if remove:
@@ -745,11 +751,7 @@ def tag_update(
         else:
             results.append(item)
 
-    if _get_json_output():
-        typer.echo(_format_items(results, as_json=True))
-    else:
-        for item in results:
-            typer.echo(_format_item(item, as_json=False))
+    typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
 @app.command()
@@ -980,13 +982,7 @@ def now(
             parsed_tags = {}
 
         # Parse user-provided tags (merge with default if reset)
-        if tags:
-            for tag in tags:
-                if "=" not in tag:
-                    typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value", err=True)
-                    raise typer.Exit(1)
-                k, v = tag.split("=", 1)
-                parsed_tags[k] = v
+        parsed_tags.update(_parse_tags(tags))
 
         item = kp.set_now(new_content, tags=parsed_tags or None)
 
@@ -1429,15 +1425,6 @@ def _get_config_value(cfg, store_path: Path, path: str):
     if hasattr(value, "name") and hasattr(value, "params"):
         return value.name
     return value
-
-
-# Settings that may not be configured but are available
-AVAILABLE_SETTINGS = {
-    "tags": {
-        "description": "Default tags applied to all operations",
-        "example": {"project": "myproject", "topic": "mytopic"},
-    },
-}
 
 
 def _format_config_with_defaults(cfg, store_path: Path) -> str:

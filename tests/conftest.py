@@ -176,20 +176,37 @@ class MockDocumentStore:
         self._data: dict[str, dict] = {}  # collection -> {id -> record}
 
     def upsert(self, collection: str, id: str, summary: str, tags: dict,
-               content_hash: str = None) -> tuple[bool, int | None]:
+               content_hash: str = None) -> tuple["DocumentRecord", bool]:
         if collection not in self._data:
             self._data[collection] = {}
         existed = id in self._data[collection]
+        content_changed = (
+            existed
+            and content_hash is not None
+            and self._data[collection][id].get("content_hash") != content_hash
+        )
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
+        created_at = self._data[collection].get(id, {}).get("created_at", now)
         self._data[collection][id] = {
             "summary": summary,
             "tags": tags,
             "content_hash": content_hash,
-            "created_at": self._data[collection].get(id, {}).get("created_at", now),
+            "created_at": created_at,
             "updated_at": now,
         }
-        return (not existed, None)
+        # Return a record-like object matching DocumentStore.upsert() signature
+        class Record:
+            pass
+        r = Record()
+        r.id = id
+        r.collection = collection
+        r.summary = summary
+        r.tags = tags
+        r.content_hash = content_hash
+        r.created_at = created_at
+        r.updated_at = now
+        return (r, content_changed)
 
     def get(self, collection: str, id: str):
         if collection not in self._data or id not in self._data[collection]:
@@ -210,7 +227,7 @@ class MockDocumentStore:
     def exists(self, collection: str, id: str) -> bool:
         return collection in self._data and id in self._data[collection]
 
-    def delete(self, collection: str, id: str, preserve_versions: bool = False) -> bool:
+    def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         if collection in self._data and id in self._data[collection]:
             del self._data[collection][id]
             return True
@@ -225,8 +242,95 @@ class MockDocumentStore:
             return len(self._data.get(collection, {}))
         return sum(len(c) for c in self._data.values())
 
+    def version_count(self, collection: str, id: str) -> int:
+        return 0
+
+    def update_tags(self, collection: str, id: str, tags: dict) -> bool:
+        if collection in self._data and id in self._data[collection]:
+            self._data[collection][id]["tags"] = tags
+            return True
+        return False
+
+    def update_summary(self, collection: str, id: str, summary: str) -> bool:
+        if collection in self._data and id in self._data[collection]:
+            self._data[collection][id]["summary"] = summary
+            return True
+        return False
+
+    def list_recent(self, collection: str, limit: int = 10, order_by: str = "updated") -> list:
+        if collection not in self._data:
+            return []
+        records = []
+        for id, rec in list(self._data[collection].items())[:limit]:
+            class Record:
+                pass
+            r = Record()
+            r.id = id
+            r.collection = collection
+            r.summary = rec["summary"]
+            r.tags = rec["tags"]
+            r.content_hash = rec.get("content_hash")
+            r.created_at = rec["created_at"]
+            r.updated_at = rec["updated_at"]
+            records.append(r)
+        return records
+
+    def query_by_tag_key(self, collection: str, key: str, limit: int = 100,
+                         since_date: str = None) -> list:
+        if collection not in self._data:
+            return []
+        results = []
+        for id, rec in self._data[collection].items():
+            if key in rec["tags"]:
+                class Record:
+                    pass
+                r = Record()
+                r.id = id
+                r.collection = collection
+                r.summary = rec["summary"]
+                r.tags = rec["tags"]
+                r.content_hash = rec.get("content_hash")
+                r.created_at = rec["created_at"]
+                r.updated_at = rec["updated_at"]
+                results.append(r)
+        return results[:limit]
+
+    def list_distinct_tag_keys(self, collection: str) -> list[str]:
+        keys = set()
+        for rec in self._data.get(collection, {}).values():
+            for k in rec["tags"]:
+                if not k.startswith("_"):
+                    keys.add(k)
+        return sorted(keys)
+
+    def list_distinct_tag_values(self, collection: str, key: str) -> list[str]:
+        values = set()
+        for rec in self._data.get(collection, {}).values():
+            if key in rec["tags"]:
+                values.add(rec["tags"][key])
+        return sorted(values)
+
+    def get_version(self, collection: str, id: str, offset: int = 0):
+        return None
+
+    def list_versions(self, collection: str, id: str, limit: int = 10) -> list:
+        return []
+
+    def get_version_nav(self, collection: str, id: str,
+                        current_version=None, limit: int = 3) -> dict:
+        return {"prev": []}
+
+    def restore_latest_version(self, collection: str, id: str):
+        return None
+
     def list_collections(self) -> list[str]:
         return list(self._data.keys())
+
+    def touch(self, collection: str, id: str) -> None:
+        pass
+
+    def touch_many(self, collection: str, ids: list[str]) -> None:
+        pass
 
     def close(self) -> None:
         self._data.clear()
