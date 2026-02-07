@@ -459,6 +459,10 @@ class Keeper:
 
         This allows read-only operations to work offline without loading
         the embedding model (which may try to reach HuggingFace).
+
+        For MLX (local GPU) providers, wraps with a lifecycle lock that
+        serializes model access across processes to prevent GPU memory
+        exhaustion.
         """
         if self._embedding_provider is None:
             registry = get_registry()
@@ -466,6 +470,13 @@ class Keeper:
                 self._config.embedding.name,
                 self._config.embedding.params,
             )
+            # Wrap local GPU providers with lifecycle lock
+            if self._config.embedding.name == "mlx":
+                from .model_lock import LockedEmbeddingProvider
+                base_provider = LockedEmbeddingProvider(
+                    base_provider,
+                    self._store_path / ".embedding.lock",
+                )
             cache_path = self._store_path / "embedding_cache.db"
             self._embedding_provider = CachingEmbeddingProvider(
                 base_provider,
@@ -481,13 +492,22 @@ class Keeper:
     def _get_summarization_provider(self) -> SummarizationProvider:
         """
         Get summarization provider, creating it lazily on first use.
+
+        For MLX (local GPU) providers, wraps with a lifecycle lock.
         """
         if self._summarization_provider is None:
             registry = get_registry()
-            self._summarization_provider = registry.create_summarization(
+            provider = registry.create_summarization(
                 self._config.summarization.name,
                 self._config.summarization.params,
             )
+            if self._config.summarization.name == "mlx":
+                from .model_lock import LockedSummarizationProvider
+                provider = LockedSummarizationProvider(
+                    provider,
+                    self._store_path / ".summarization.lock",
+                )
+            self._summarization_provider = provider
         return self._summarization_provider
 
     def _gather_context(
@@ -1839,36 +1859,35 @@ class Keeper:
         return self._store_path / "processor.pid"
 
     def _is_processor_running(self) -> bool:
-        """Check if a processor is already running."""
-        pid_path = self._processor_pid_path
-        if not pid_path.exists():
-            return False
+        """Check if a processor is already running via lock probe."""
+        from .model_lock import ModelLock
 
-        try:
-            pid = int(pid_path.read_text().strip())
-            # Check if process is alive by sending signal 0
-            os.kill(pid, 0)
-            return True
-        except (ValueError, ProcessLookupError, PermissionError):
-            # PID file invalid, process dead, or permission issue
-            # Clean up stale PID file
-            try:
-                pid_path.unlink()
-            except OSError:
-                pass
-            return False
+        lock = ModelLock(self._store_path / ".processor.lock")
+        return lock.is_locked()
 
     def _spawn_processor(self) -> bool:
         """
         Spawn a background processor if not already running.
 
+        Uses an exclusive file lock to prevent TOCTOU race conditions
+        where two processes could both check, find no processor, and
+        both spawn one.
+
         Returns True if a new processor was spawned, False if one was
         already running or spawn failed.
         """
-        if self._is_processor_running():
+        from .model_lock import ModelLock
+
+        spawn_lock = ModelLock(self._store_path / ".processor_spawn.lock")
+
+        # Non-blocking: if another process is already spawning, let it handle it
+        if not spawn_lock.acquire(blocking=False):
             return False
 
         try:
+            if self._is_processor_running():
+                return False
+
             # Spawn detached process
             # Use sys.executable to ensure we use the same Python
             cmd = [
@@ -1899,6 +1918,8 @@ class Keeper:
             # Spawn failed - log for debugging, queue will be processed later
             logger.warning("Failed to spawn background processor: %s", e)
             return False
+        finally:
+            spawn_lock.release()
 
     def reconcile(
         self,
@@ -1964,8 +1985,20 @@ class Keeper:
         """
         Close resources (stores, caches, queues).
 
-        Good practice to call when done, though Python's GC will clean up eventually.
+        Releases model locks (freeing GPU memory) before releasing file locks,
+        ensuring the next process gets a clean GPU.
         """
+        # Release locked model providers (frees GPU memory + gc before flock release)
+        if self._embedding_provider is not None:
+            # The locked provider may be inside a CachingEmbeddingProvider
+            inner = getattr(self._embedding_provider, '_provider', None)
+            if hasattr(inner, 'release'):
+                inner.release()
+
+        if self._summarization_provider is not None:
+            if hasattr(self._summarization_provider, 'release'):
+                self._summarization_provider.release()
+
         # Close ChromaDB store
         if hasattr(self, '_store') and self._store is not None:
             self._store.close()
