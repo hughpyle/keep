@@ -165,11 +165,24 @@ model = "claude-3-haiku-20240307"
 | **Local** | Embeddings | `all-MiniLM-L6-v2` (sentence-transformers) |
 | **Local** | Summarization | MLX models (Apple Silicon only) |
 
+## Tool Integrations
+
+On first use, `keep` detects coding tools and installs a protocol block and hooks into their global configuration. This happens once and is tracked in `keep.toml`.
+
+| Tool | Protocol Block | Hooks |
+|------|---------------|-------|
+| Claude Code (`~/.claude/`) | `CLAUDE.md` — reflective practice prompt | `settings.json` — `keep now` on session start |
+| OpenAI Codex (`~/.codex/`) | `AGENTS.md` — reflective practice prompt | — |
+| Kiro (`~/.kiro/`) | detection only | detection only |
+
+Run `keep config` to see integration status. Set `KEEP_NO_SETUP=1` to skip auto-install.
+
 ## Environment Variables
 
 ```bash
 KEEP_STORE_PATH=/path/to/store       # Override store location
 KEEP_TAG_PROJECT=myapp               # Auto-apply tags
+KEEP_NO_SETUP=1                      # Skip auto-install of tool integrations
 VOYAGE_API_KEY=pa-...                # For Voyage embeddings
 ANTHROPIC_API_KEY=sk-ant-...         # For Anthropic summarization
 OPENAI_API_KEY=sk-...                # For OpenAI providers

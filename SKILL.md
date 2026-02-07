@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.19.1
+version: 0.20.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -66,6 +66,8 @@ keep update "learning"       # Capture insight
 ### Why This Matters
 
 An agent that loses skill context on restart cannot develop mastery. By installing the Protocol Block, the practice becomes part of the project.  This is meta-reflection: the skill maintains its own presence.
+
+Note: `keep` auto-installs the Protocol Block and session hooks on first use when it detects a supported tool. Check status with `keep config`.
 
 ---
 
