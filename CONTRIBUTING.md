@@ -36,7 +36,7 @@ The following are considered public API — changes require version bumps and de
 - Anything exported in `keep/__init__.py`
 
 **CLI:**
-- All commands (`keep find`, `keep update`, `keep get`, etc.)
+- All commands (`keep find`, `keep put`, `keep get`, etc.)
 - Command-line argument names and behavior
 
 **Not public API** (can change without notice):

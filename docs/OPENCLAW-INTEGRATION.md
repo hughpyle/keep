@@ -66,21 +66,21 @@ pip install keep-skill
 export OPENAI_API_KEY=sk-...
 
 # 3. First use auto-initializes
-keep update "test note"
+keep put "test note"
 ```
 
 For best quality embeddings with Anthropic summarization:
 ```bash
 export VOYAGE_API_KEY=...       # Embeddings (Anthropic's partner)
 export ANTHROPIC_API_KEY=...    # Summarization
-keep update "test note"
+keep put "test note"
 ```
 
 ### Option 2: Local Models (No API)
 
 ```bash
 pip install 'keep-skill[local]'
-keep update "test note"         # MLX on Apple Silicon, sentence-transformers elsewhere
+keep put "test note"         # MLX on Apple Silicon, sentence-transformers elsewhere
 ```
 
 ### Option 3: Manual Override
@@ -89,7 +89,7 @@ Set `OPENCLAW_CONFIG` to use a different config file:
 
 ```bash
 export OPENCLAW_CONFIG=/custom/path/to/openclaw.json
-keep update "test note"
+keep put "test note"
 ```
 
 ---
@@ -190,7 +190,7 @@ For maximum privacy, use `pip install 'keep-skill[local]'` with no API keys set.
 ```bash
 pip install keep-skill
 export OPENAI_API_KEY=sk-...
-keep update "test"
+keep put "test"
 ```
 
 **Result:**
@@ -208,7 +208,7 @@ keep update "test"
 pip install keep-skill
 export VOYAGE_API_KEY=...
 export ANTHROPIC_API_KEY=...
-keep update "test"
+keep put "test"
 ```
 
 **Result:**
@@ -224,7 +224,7 @@ keep update "test"
 **Setup:**
 ```bash
 pip install 'keep-skill[local]'
-keep update "test"
+keep put "test"
 ```
 
 **Result (Apple Silicon):**
@@ -269,13 +269,13 @@ Not yet supported. Roadmap feature for v0.2.
 **Fix (API):**
 ```bash
 export OPENAI_API_KEY=sk-...    # Or VOYAGE_API_KEY, GEMINI_API_KEY
-keep update "test"
+keep put "test"
 ```
 
 **Fix (Local):**
 ```bash
 pip install 'keep-skill[local]'
-keep update "test"
+keep put "test"
 ```
 
 ---
@@ -294,7 +294,7 @@ keep update "test"
 
 ```bash
 pip install 'keep-skill[local]'
-keep update "test"              # Uses MLX on Apple Silicon
+keep put "test"              # Uses MLX on Apple Silicon
 ```
 
 ---
@@ -343,7 +343,7 @@ pip install keep-skill
 export OPENAI_API_KEY=sk-...    # Simplest: does both embeddings + summarization
 
 # 3. First use auto-initializes
-keep update "file://./README.md" -t type=docs
+keep put "file://./README.md" -t type=docs
 # Store created at ~/.keep/
 
 # 4. Search semantically

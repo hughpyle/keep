@@ -127,7 +127,7 @@ keep tag-update ID --remove key      # Remove tag
 keep tag-update ID1 ID2 --tag k=v    # Tag multiple docs
 
 # Delete / revert
-keep delete ID                       # Remove item (or revert to previous version)
+keep del ID                       # Remove item (or revert to previous version)
 ```
 
 ## Python API
@@ -193,7 +193,7 @@ Set tags via environment variables with the `KEEP_TAG_` prefix:
 ```bash
 export KEEP_TAG_PROJECT=myapp
 export KEEP_TAG_OWNER=alice
-keep update "deployment note"  # auto-tagged with project=myapp, owner=alice
+keep put "deployment note"  # auto-tagged with project=myapp, owner=alice
 ```
 
 ### Config-Based Default Tags
@@ -231,10 +231,10 @@ Two tags help organize work across boundaries:
 **Usage patterns:**
 ```bash
 # Project-specific knowledge
-keep update "OAuth2 with PKCE chosen" -t project=myapp -t topic=auth
+keep put "OAuth2 with PKCE chosen" -t project=myapp -t topic=auth
 
 # Cross-project knowledge (topic only)
-keep update "Token refresh needs clock sync" -t topic=auth
+keep put "Token refresh needs clock sync" -t topic=auth
 
 # Search within a project
 keep find "authentication" -t project=myapp
@@ -339,9 +339,9 @@ keep --ids now --history
 
 Text-mode updates use content-addressed IDs for versioning:
 ```bash
-keep update "my note"              # Creates _text:a1b2c3d4e5f6
-keep update "my note" -t done      # Same ID, new version (tag change)
-keep update "different note"       # Different ID (new document)
+keep put "my note"              # Creates _text:a1b2c3d4e5f6
+keep put "my note" -t done      # Same ID, new version (tag change)
+keep put "different note"       # Different ID (new document)
 ```
 
 Same content = same ID = enables versioning via tag changes.
@@ -375,8 +375,8 @@ When you provide user tags during indexing, LLM-based summarizers use context fr
 
 **Tag changes trigger re-summarization:**
 ```bash
-keep update doc.pdf                    # Generic summary
-keep update doc.pdf -t domain=practice # Re-queued for contextual summary
+keep put doc.pdf                    # Generic summary
+keep put doc.pdf -t domain=practice # Re-queued for contextual summary
 ```
 
 When tags change (add, remove, or value change), the document is re-queued for summarization with the new context. The existing summary is preserved until the new one is ready.

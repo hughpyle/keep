@@ -27,7 +27,7 @@ For each significant action taken since the last reflection, ask:
 
 - If unskillful: name it honestly. What assumption was wrong? What should be done differently? Capture the breakdown:
   ```bash
-  keep update "Assumed X, actually Y. Next time: Z" -t type=breakdown
+  keep put "Assumed X, actually Y. Next time: Z" -t type=breakdown
   ```
 
 - If skillful: stay refreshed and joyful. What made it work? Continue training.
@@ -85,12 +85,12 @@ keep now "Updated intentions based on reflection"
 
 If there are learnings to capture:
 ```bash
-keep update "What I learned" -t type=learning
+keep put "What I learned" -t type=learning
 ```
 
 If conversation patterns were recognized:
 ```bash
-keep update "Pattern observed" -t type=conversation_pattern
+keep put "Pattern observed" -t type=conversation_pattern
 ```
 
 Present a brief summary of the reflection to the user. The value is in the reflection itself, not in lengthy output.

@@ -2,9 +2,9 @@
 CLI interface for reflective memory.
 
 Usage:
-    keepfind "query text"
-    keepupdate file:///path/to/doc.md
-    keepget file:///path/to/doc.md
+    keep find "query text"
+    keep put file:///path/to/doc.md
+    keep get file:///path/to/doc.md
 """
 
 import json
@@ -754,8 +754,8 @@ def tag_update(
     typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
-@app.command()
-def update(
+@app.command("put")
+def put(
     source: Annotated[Optional[str], typer.Argument(
         help="URI to fetch, text content, or '-' for stdin"
     )] = None,
@@ -779,16 +779,16 @@ def update(
 
     \b
     Three input modes (auto-detected):
-      keep update file:///path       # URI mode: has ://
-      keep update "my note"          # Text mode: content-addressed ID
-      keep update -                  # Stdin mode: explicit -
-      echo "pipe" | keep update      # Stdin mode: piped input
+      keep put file:///path       # URI mode: has ://
+      keep put "my note"          # Text mode: content-addressed ID
+      keep put -                  # Stdin mode: explicit -
+      echo "pipe" | keep put      # Stdin mode: piped input
 
     \b
     Text mode uses content-addressed IDs for versioning:
-      keep update "my note"           # Creates _text:{hash}
-      keep update "my note" -t done   # Same ID, new version (tag change)
-      keep update "different note"    # Different ID (new doc)
+      keep put "my note"           # Creates _text:{hash}
+      keep put "my note" -t done   # Same ID, new version (tag change)
+      keep put "different note"    # Different ID (new doc)
     """
     kp = _get_keeper(store, collection)
     parsed_tags = _parse_tags(tags)
@@ -824,6 +824,19 @@ def update(
         similar_items=similar_items if similar_items else None,
         similar_offsets=similar_offsets if similar_items else None,
     ))
+
+
+@app.command("update", hidden=True)
+def update(
+    source: Annotated[Optional[str], typer.Argument(help="URI to fetch, text content, or '-' for stdin")] = None,
+    id: Annotated[Optional[str], typer.Option("--id", "-i")] = None,
+    store: StoreOption = None,
+    collection: CollectionOption = "default",
+    tags: Annotated[Optional[list[str]], typer.Option("--tag", "-t")] = None,
+    summary: Annotated[Optional[str], typer.Option("--summary")] = None,
+):
+    """Add or update a document (alias for 'put')."""
+    put(source=source, id=id, store=store, collection=collection, tags=tags, summary=summary)
 
 
 @app.command()
@@ -1287,8 +1300,8 @@ def get(
     ))
 
 
-@app.command()
-def delete(
+@app.command("del")
+def del_cmd(
     id: Annotated[str, typer.Argument(help="ID of item to delete")],
     store: StoreOption = None,
     collection: CollectionOption = "default",
@@ -1301,8 +1314,8 @@ def delete(
 
     \b
     Examples:
-        keep delete _text:abc123def456   # Remove a text note
-        keep delete _now:default         # Revert now to previous
+        keep del _text:abc123def456   # Remove a text note
+        keep del _now:default         # Revert now to previous
     """
     kp = _get_keeper(store, collection)
 
@@ -1326,6 +1339,16 @@ def delete(
             similar_items=similar_items if similar_items else None,
             similar_offsets=similar_offsets if similar_items else None,
         ))
+
+
+@app.command("delete", hidden=True)
+def delete(
+    id: Annotated[str, typer.Argument(help="ID of item to delete")],
+    store: StoreOption = None,
+    collection: CollectionOption = "default",
+):
+    """Delete the current version of an item (alias for 'del')."""
+    del_cmd(id=id, store=store, collection=collection)
 
 
 @app.command("collections")

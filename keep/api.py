@@ -273,9 +273,9 @@ def _text_content_id(content: str) -> str:
     Generate a content-addressed ID for text updates.
 
     This makes text updates versioned by content:
-    - `keep update "my note"` → ID = _text:{hash[:12]}
-    - `keep update "my note" -t status=done` → same ID, new version
-    - `keep update "different note"` → different ID
+    - `keep put "my note"` → ID = _text:{hash[:12]}
+    - `keep put "my note" -t status=done` → same ID, new version
+    - `keep put "different note"` → different ID
 
     Args:
         content: The text content

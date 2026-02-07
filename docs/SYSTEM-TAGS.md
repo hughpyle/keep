@@ -58,7 +58,7 @@ These tags are actively set and maintained by the system.
 
 **Example:** `"text/markdown"`, `"text/html"`, `"application/pdf"`
 
-**Note:** Not set for inline content (CLI: `keep update "text"`, API: `kp.remember()`).
+**Note:** Not set for inline content (CLI: `keep put "text"`, API: `kp.remember()`).
 
 ---
 
@@ -69,8 +69,8 @@ These tags are actively set and maintained by the system.
 **Set by:** `Keeper.update()` and `Keeper.remember()` in `api.py`
 
 **Values:**
-- `"uri"` - Content fetched from a URI (CLI: `keep update <uri>`, API: `kp.update()`)
-- `"inline"` - Inline content (CLI: `keep update "text"`, API: `kp.remember()`)
+- `"uri"` - Content fetched from a URI (CLI: `keep put <uri>`, API: `kp.update()`)
+- `"inline"` - Inline content (CLI: `keep put "text"`, API: `kp.remember()`)
 
 **Usage:** Query with `kp.query_tag("_source", "inline")` to find remembered content.
 

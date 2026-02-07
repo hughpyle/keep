@@ -13,7 +13,7 @@ Quick Start:
 
 CLI Usage:
     keep find "query text"
-    keep update file:///path/to/doc.md -t category=docs
+    keep put file:///path/to/doc.md -t category=docs
     keep collections --json
 
 Default Store:

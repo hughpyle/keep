@@ -18,7 +18,7 @@ cat "$(keep config tool)/SKILL.md"
 ```bash
 keep get "_system:conversations"
 keep get "_system:domains"
-keep update "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
+keep put "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
 keep get "file://$(keep config tool)/docs/library/mn61.html"
 ```
 

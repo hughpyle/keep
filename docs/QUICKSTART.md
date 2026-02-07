@@ -30,13 +30,13 @@ Set environment variables for your preferred providers:
 ```bash
 export VOYAGE_API_KEY=...      # Embeddings (Anthropic's partner)
 export ANTHROPIC_API_KEY=...   # Summarization (cheapest: claude-3-haiku)
-keep update "test"             # Store auto-initializes on first use
+keep put "test"             # Store auto-initializes on first use
 ```
 
 **Single provider** (if you only have one API key):
 ```bash
 export OPENAI_API_KEY=...      # Does both embeddings + summarization
-keep update "test"
+keep put "test"
 ```
 
 ### Local Providers
@@ -44,7 +44,7 @@ keep update "test"
 For offline operation (macOS Apple Silicon):
 ```bash
 pip install 'keep-skill[local]'
-keep update "test"             # No API key needed
+keep put "test"             # No API key needed
 ```
 
 ### Claude Desktop Setup
@@ -65,9 +65,9 @@ Alternatively, for best quality embeddings with Anthropic summarization:
 
 ```bash
 # Index content (files, URLs, or inline text)
-keep update "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
-keep update https://inguz.substack.com/p/keep -t topic=practice
-keep update "Meeting notes from today" -t type=meeting
+keep put "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
+keep put https://inguz.substack.com/p/keep -t topic=practice
+keep put "Meeting notes from today" -t type=meeting
 
 # Search (returns: id date summary)
 keep find "authentication" --limit 5
@@ -144,9 +144,9 @@ keep get ID --history        # List all versions
 
 Text updates use content-addressed IDs:
 ```bash
-keep update "my note"              # Creates ID from content hash
-keep update "my note" -t done      # Same ID, new version (tag change)
-keep update "different note"       # Different ID (new document)
+keep put "my note"              # Creates ID from content hash
+keep put "my note" -t done      # Same ID, new version (tag change)
+keep put "different note"       # Different ID (new document)
 ```
 
 ## Python API

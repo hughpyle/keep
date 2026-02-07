@@ -1,10 +1,4 @@
 
-* rename for compact usage:
-        keep update --> keep put
-        keep delete --> keep del
-    leave the old names as aliases, but hidden.
-    make sure to update all the docs to use the new names.
-
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
@@ -34,11 +28,13 @@
     - so the agent should tag "entities" in a consistent way, but it's just a convention, not rules
         -t class=Person entity=Daniel
 
-* let's explore the macOS native entities:
+* let's explore the macOS native entities (not just the filesystem things):
     - contacts
-    - music
+    - music (albums, artists, tracks, ...)
+    - notes
     - health data
     (etc)...
+    - want URLs for each of these so that we can represent them in our database with summaries and tags
 
 * Some tools (e.g. VS Code) don't really have a global config.
   But if keep is running within a git project, in one of these tools,
@@ -101,7 +97,9 @@
     (needs more thought about the approach, benefits, etc.)
 
 * tags themselves should have summaries and full descriptions
-    i.e. somewhere in the "system" store is a docuemnt that describes a tag
+    i.e. somewhere in the "system" store is a docuemnt that describes a tag (key-only, and key+value)
+        "project" <- describes what a project is, for usage
+        "project:foo" <- all about that project
     of course it's optional, you can just tag things in an open-ended way
     but sure would be useful for convention, as well as maintenance, if tags are documented by whoever uses them.
     
@@ -153,6 +151,8 @@
     - analysis of the audio content will depend on the available models, but some might do a good job
 
 * add an image; same strategy as audio
+
+* also support docx
 
 * openclaw install a heartbeat.  Not too often, but often enough.
 
@@ -292,3 +292,4 @@ x `context` text alongside summaries? (no, summary is good now)
 . shell-safe ID quoting: _shell_quote_id() wraps IDs with special chars in single quotes (text output only, not JSON)
 . last-accessed rank bump: accessed_at column, touch/touch_many, --sort accessed on list, schema v2 migration
 . codebase cleanup: removed dead modules (indexing.py, chunking.py, context.py), dead code (_timestamp, AVAILABLE_SETTINGS, enable_verbose_mode), fixed mock signatures, consolidated tag parsing, unified tag-update output
+. rename for compact usage: `keep update` → `keep put`, `keep delete` → `keep del` (old names kept as hidden aliases)
