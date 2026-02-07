@@ -18,16 +18,16 @@ The reflective memory provides persistent storage with semantic search.
 **CLI:**
 ```bash
 # Uses ~/.keep/ by default (or KEEP_STORE_PATH)
-keep update "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
-keep update https://inguz.substack.com/p/keep -t topic=practice
-keep update "User prefers OAuth2 with PKCE" -t topic=auth
+keep put "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
+keep put https://inguz.substack.com/p/keep -t topic=practice
+keep put "User prefers OAuth2 with PKCE" -t topic=auth
 keep find "authentication flow" --limit 5
 keep find "auth" -t project=myapp              # Semantic search + tag filter
 keep list --tag project=myapp
 keep get file:///project/readme.md
 keep get ID -t project=myapp                    # Verify item has tag
 keep now -t project=myapp                       # Find now version with tag
-keep delete ID                                   # Remove item or revert to previous version
+keep del ID                                   # Remove item or revert to previous version
 ```
 
 **Python API:**
@@ -77,7 +77,7 @@ if kp.exists("file:///project/readme.md"):
 - `_system:conversations` — process knowledge: how work proceeds
 
 **When to use:**
-- CLI: `keep update` for all content (URI, inline text, or stdin)
+- CLI: `keep put` for all content (URI, inline text, or stdin)
 - API: `kp.update()` for URIs, `kp.remember()` for inline content
 - `find()` before filesystem search — the answer may already be indexed
 - `get_now()` at session start to see current working context
@@ -101,7 +101,7 @@ keep find "this situation"  # Prior knowledge
 
 **Reflect after acting:** What happened? What did I learn?
 ```bash
-keep update "what I learned" -t type=learning
+keep put "what I learned" -t type=learning
 ```
 
 **Periodically:** Run a full structured reflection:
@@ -133,7 +133,7 @@ Each ID in the results can be passed directly to `keep get`.
 
 ### Full output (frontmatter format)
 
-`keep get`, `keep now`, and `keep update` produce YAML frontmatter followed by the document body:
+`keep get`, `keep now`, and `keep put` produce YAML frontmatter followed by the document body:
 
 ```
 ---
@@ -201,7 +201,7 @@ keep now --history                          # List all versions
 keep now -t project=myapp                   # Find recent now with project tag
 
 # 4. Record learnings (cross-project knowledge uses topic only)
-keep update "Flaky timing fix: mock time instead of real assertions" -t topic=testing -t type=learning
+keep put "Flaky timing fix: mock time instead of real assertions" -t topic=testing -t type=learning
 ```
 
 **Python API equivalent:**
@@ -280,7 +280,7 @@ today = kp.query_tag("_updated_date", "2026-01-30") # Today
 When the normal flow is interrupted — expected response doesn't come, ambiguity surfaces — an assumption has been revealed. **First:** complete the immediate conversation. **Then record:**
 
 ```bash
-keep update "Assumed user wanted full rewrite. Actually: minimal patch." -t type=breakdown
+keep put "Assumed user wanted full rewrite. Actually: minimal patch." -t type=breakdown
 ```
 
 Breakdowns are how agents learn.
@@ -345,9 +345,9 @@ nav = kp.get_version_nav(id)  # {'prev': [...], 'next': [...]}
 
 **Content-addressed IDs for text updates:**
 ```bash
-keep update "my note"              # Creates _text:a1b2c3d4e5f6
-keep update "my note" -t done      # Same ID, new version (tag change)
-keep update "different note"       # Different ID (new document)
+keep put "my note"              # Creates _text:a1b2c3d4e5f6
+keep put "my note" -t done      # Same ID, new version (tag change)
+keep put "different note"       # Different ID (new document)
 ```
 
 Same content = same ID = enables versioning via tag changes.
@@ -585,8 +585,8 @@ The store auto-initializes on first use. See [QUICKSTART.md](QUICKSTART.md) for 
 **CLI:**
 ```bash
 # Store created automatically at ~/.keep/
-keep update "first note"           # Auto-initializes store
-KEEP_STORE_PATH=/path keep update "note"  # Custom location via env
+keep put "first note"           # Auto-initializes store
+KEEP_STORE_PATH=/path keep put "note"  # Custom location via env
 ```
 
 **Python API:**

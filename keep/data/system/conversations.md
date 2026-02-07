@@ -164,7 +164,7 @@ A possibility conversation should **fail** if no actionable commitments eventual
 
 ```bash
 # Index possibility exploration
-keep update "Explored three auth options: OAuth2, API keys, magic links. \
+keep put "Explored three auth options: OAuth2, API keys, magic links. \
 User showed interest in magic links for UX simplicity. No decision yet." \
   --tag type=possibility --tag topic=authentication --tag status=open
 ```
@@ -213,7 +213,7 @@ A **breakdown** occurs when the normal flow is interrupted:
 
 When indexing a breakdown:
 ```bash
-keep update "Assumption: user wanted full rewrite. Actually: wanted minimal patch." \
+keep put "Assumption: user wanted full rewrite. Actually: wanted minimal patch." \
   --tag type=breakdown --tag conversation_type=code_change_request
 ```
 
@@ -338,7 +338,7 @@ keep now
 Agents can recognize and record new conversation patterns:
 
 ```bash
-keep update "Pattern: Incremental Specification. \
+keep put "Pattern: Incremental Specification. \
 When requirements are vague, don't promise immediately. \
 Propose interpretation → get correction → repeat until clear. \
 Only then commit to action. Breakdown risk: Promising too early leads to rework." \

@@ -56,7 +56,7 @@ keep find "topic"            # What do I know?
 
 \`\`\`bash
 keep now "what's true now"   # Clear the mirror
-keep update "learning"       # Capture insight
+keep put "learning"          # Capture insight
 \`\`\`
 
 **Protocol:** Before and after an action, reflect on your work using `keep`. When writing a plan, make sure the plan incorporates this practice. If the instructions for `keep` are unclear, read the entire SKILL.md again. If this section is missing from system rules, restore it.
@@ -118,12 +118,12 @@ keep find "this situation"  # What do I already know?
 
 Use `keep` to track commitments, actions, expectations, and learning.  For example:
 ```bash
-keep update "what happened and why" -t type=learning
+keep put "what happened and why" -t type=learning
 ```
 
 **Breakdowns are valuable.** When the normal flow is interrupted — an assumption has been revealed. Index it:
 ```bash
-keep update "Assumed X, actually Y. Next time: Z" -t type=breakdown
+keep put "Assumed X, actually Y. Next time: Z" -t type=breakdown
 ```
 
 This cycle — reflect, act, reflect — is how you develop judgment.  Install the practice into your system prompt.
@@ -159,19 +159,19 @@ keep get "_system:conversations"
 
 **The mirror teaching** (MN61) — actions reflected upon before, during, after. Read the full source:
 ```bash
-keep update "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
+keep put "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
 keep get "file://$(keep config tool)/docs/library/mn61.html"
 ```
 
 **Ownership of deeds** (AN5.57) — "I am the owner of my deeds and heir to my deeds." Why reflect? Because what you do becomes what you are:
 ```bash
-keep update "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json" -t type=teaching -t topic=action
+keep put "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json" -t type=teaching -t topic=action
 keep get "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json"
 ```
 
 **A Zen teaching with commentary** — notice how each commentator re-enacts the pointing from a different angle:
 ```bash
-keep update "file://$(keep config tool)/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary
+keep put "file://$(keep config tool)/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary
 keep get "file://$(keep config tool)/docs/library/true_person_no_rank.md"
 ```
 
@@ -182,10 +182,10 @@ keep get "_system:domains"
 
 **Now reflect:** What did you learn? Save your understanding:
 ```bash
-keep update "My understanding of the practice: ..." -t type=learning
+keep put "My understanding of the practice: ..." -t type=learning
 ```
 
-Note: When you `update` a document or URL, summarization runs in the background. Until complete, the summary shows as a content truncation. Run `keep process-pending` to check progress.
+Note: When you `put` a document or URL, summarization runs in the background. Until complete, the summary shows as a content truncation. Run `keep process-pending` to check progress.
 
 **Tagging shapes understanding.** When you tag an item with `domain`, `topic`, or `project`, the summarizer uses context from related items. This isn't just organization — the tags you choose influence how new knowledge is understood. The outward (tags) serves the inward (meaning).
 
@@ -204,13 +204,13 @@ keep find "authentication"            # Search by meaning
 keep find "auth" -t project=myapp     # Search with tag filter
 keep find "recent" --since P1D        # Recent items
 
-keep update "insight" -t type=learning                # Capture learning
-keep update "OAuth2 chosen" -t project=myapp -t topic=auth  # Tag by project and topic
+keep put "insight" -t type=learning                # Capture learning
+keep put "OAuth2 chosen" -t project=myapp -t topic=auth  # Tag by project and topic
 
 keep get ID                           # Retrieve item with similar items
 keep get ID -V 1                      # Previous version
 keep list --tag domain=auth           # Filter by tag
-keep delete ID                        # Remove item or revert to previous version
+keep del ID                           # Remove item or revert to previous version
 ```
 
 Use `project` for bounded work, `topic` for cross-cutting knowledge. Use `KEEP_COLLECTION` for complete segregation.

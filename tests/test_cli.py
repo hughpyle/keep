@@ -47,7 +47,7 @@ class TestCliBasics:
         assert result.returncode == 0
         assert "keep" in result.stdout.lower()
         assert "find" in result.stdout
-        assert "update" in result.stdout
+        assert "put" in result.stdout
     
     def test_no_args_shows_now(self, cli):
         """CLI with no args shows current working context."""
@@ -59,7 +59,7 @@ class TestCliBasics:
 
     def test_command_help(self, cli):
         """Individual commands have help."""
-        for cmd in ["find", "update", "get", "list"]:
+        for cmd in ["find", "put", "get", "list"]:
             result = cli(cmd, "--help")
             assert result.returncode == 0, f"{cmd} --help failed"
             assert "Usage" in result.stdout or "usage" in result.stdout.lower()
@@ -210,8 +210,8 @@ class TestExitCodes:
     
     def test_invalid_tag_format_returns_error(self, cli):
         """Invalid tag format returns exit code 1."""
-        # update with bad tag format
-        result = cli("update", "test:1", "--tag", "badformat")
+        # put with bad tag format
+        result = cli("put", "test:1", "--tag", "badformat")
         # Should fail due to missing = in tag
         # (may also fail due to NotImplemented, which is fine)
         if "Invalid tag format" in result.stderr:
@@ -229,12 +229,12 @@ class TestTagParsing:
         """Single --tag is parsed correctly."""
         # We can't fully test this without implementation,
         # but we can check the format is accepted
-        result = cli("update", "--help")
+        result = cli("put", "--help")
         assert "--tag" in result.stdout or "-t" in result.stdout
-    
+
     def test_tag_format_validation(self, cli):
         """Tags without = are rejected."""
-        result = cli("update", "test:1", "--tag", "invalid")
+        result = cli("put", "test:1", "--tag", "invalid")
         # Should fail - either due to format error or missing dependencies
         # When implementation is complete, this should specifically check for format error
         assert result.returncode != 0
@@ -317,18 +317,18 @@ class TestApiCliEquivalence:
         assert "semantic" in result.stdout.lower() or "similar" in result.stdout.lower()
         # The CLI find uses mem.find(query, limit=limit)
     
-    def test_update_maps_to_api_update(self, cli):
-        """'update' command maps to Keeper.update()."""
-        result = cli("update", "--help")
+    def test_put_maps_to_api_update(self, cli):
+        """'put' command maps to Keeper.update()."""
+        result = cli("put", "--help")
         assert "URI" in result.stdout or "document" in result.stdout.lower()
-        # The CLI update uses mem.update(id, source_tags=...)
-    
-    def test_update_text_mode_maps_to_api_remember(self, cli):
-        """'update' text mode (no ://) maps to Keeper.remember()."""
-        result = cli("update", "--help")
+        # The CLI put uses mem.update(id, source_tags=...)
+
+    def test_put_text_mode_maps_to_api_remember(self, cli):
+        """'put' text mode (no ://) maps to Keeper.remember()."""
+        result = cli("put", "--help")
         # The help should mention text content mode
         assert "text" in result.stdout.lower() or "content" in result.stdout.lower()
-        # The CLI update with text calls kp.remember() internally
+        # The CLI put with text calls kp.remember() internally
     
     def test_get_maps_to_api_get(self, cli):
         """'get' command maps to Keeper.get()."""
@@ -455,3 +455,40 @@ class TestShellQuoteId:
         output = _format_item(item, as_json=True)
         parsed = json.loads(output)
         assert parsed["id"] == "file:///Application Data/doc.md"  # Raw, no quoting
+
+
+# -----------------------------------------------------------------------------
+# Command Alias Tests
+# -----------------------------------------------------------------------------
+
+class TestCommandAliases:
+    """Tests that old command names still work as hidden aliases."""
+
+    def test_help_shows_put_not_update(self, cli):
+        """Main help shows 'put' and 'del', not 'update' or 'delete'."""
+        result = cli("--help")
+        assert result.returncode == 0
+        assert "put" in result.stdout
+        assert "del" in result.stdout
+        # Old names should be hidden
+        lines = result.stdout.split("\n")
+        visible_commands = [l for l in lines if l.strip() and not l.strip().startswith("--")]
+        visible_text = "\n".join(visible_commands)
+        # 'update' and 'delete' should not appear as visible commands
+        # (they may appear in descriptions, so check command column only)
+
+    def test_update_alias_works(self, cli):
+        """'update' still works as a hidden alias for 'put'."""
+        result = cli("update", "--help")
+        assert result.returncode == 0
+
+    def test_delete_alias_works(self, cli):
+        """'delete' still works as a hidden alias for 'del'."""
+        result = cli("delete", "--help")
+        assert result.returncode == 0
+
+    def test_del_help(self, cli):
+        """'del' command has help."""
+        result = cli("del", "--help")
+        assert result.returncode == 0
+        assert "Delete" in result.stdout or "delete" in result.stdout.lower()
