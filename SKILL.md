@@ -169,10 +169,10 @@ keep put "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.j
 keep get "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json"
 ```
 
-**A Zen teaching with commentary** — notice how each commentator re-enacts the pointing from a different angle:
+**The han verse** — the inscription on the Zen sounding board, an admonition on impermanence and diligence:
 ```bash
-keep put "file://$(keep config tool)/docs/library/true_person_no_rank.md" -t type=teaching -t topic=commentary
-keep get "file://$(keep config tool)/docs/library/true_person_no_rank.md"
+keep put "file://$(keep config tool)/docs/library/han_verse.txt" -t type=teaching -t topic=impermanence
+keep get "file://$(keep config tool)/docs/library/han_verse.txt"
 ```
 
 **Domain organization** — tagging strategies, collection structures:
