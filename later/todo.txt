@@ -1,15 +1,16 @@
 
+* tag display improvements
+    - when displaying a tag, mark it up with an asterisk if a _tag:* doc exists for it
+    - add a shortcut `keep tag --describe` or similar to show the tag description
+
+* (done) does 'accessed date' have a system-tag? it should!
+
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
 
-* Show exactly how to use tags in the 'reflect.md'
-    (and make sure that `keep list/find` --> `keep get` is there too)
-    - use tags for commitment, etc - the language/action 
-
-    also: whenEVER you come across documents (local or remote) that are important to the user
+* whenEVER you come across documents (local or remote) that are important to the user
     or important to the task, be sure to put them in `keep` and tag appropriately.
-
     What is this document? why is it important?
 
 * edges thinking again
@@ -76,49 +77,9 @@
     - this is low-effort, high-leverage: the store doesn't interpret, it just holds up a mirror
     - consider: should `find` results also show per-item similar? or is that too noisy?
 
-* Speech acts and commitments (Winograd/Flores perspective)
-    - skill-level documentation: how to recognize and track speech acts
-      - requests, promises, assertions, declarations, assessments
-      - the "conversation for action" lifecycle: request → promise → performance → satisfaction
-    - consider what tagging looks like through this lens:
-      - "project" ≈ a domain of concern (a "conversation" in the W/F sense)
-      - "topic" ≈ a recurrent theme or breakdown
-      - what about: commitment, request, assessment, declaration?
-      - are these tags? or a different axis entirely?
-    - tracking commitments across sessions is a concrete use case
-      - "you said you'd revisit X" — requires recognizing a promise
-      - "this contradicts what you said on Jan 15" — requires recognizing assertions
-    - the store doesn't need to do the recognition; the agent does
-      - but the store needs enough structure to hold what the agent notices
-    - this is Tier 3 territory: the practice improving itself
-
 * relationships as a separate first-class thing
     - X and Y with a bidirectional edge
     (needs more thought about the approach, benefits, etc.)
-
-* tags themselves should have summaries and full descriptions
-    i.e. somewhere in the "system" store is a docuemnt that describes a tag (key-only, and key+value)
-        "project" <- describes what a project is, for usage
-        "project:foo" <- all about that project
-    of course it's optional, you can just tag things in an open-ended way
-    but sure would be useful for convention, as well as maintenance, if tags are documented by whoever uses them.
-    
-    * these are "system" documents, which is kinda a new thing
-      (nowdoc is also a system document because it has specific behavior, but that has hard-coded id)
-      (these could have ids such as `_tag:foo`)
-    * then: provide a set of predefined tag-descriptions as files in `docs/system` that get loaded on `init`
-      and include in there: a description of the "project" tag, a description of the "topic" tag
-      (and whatever else we decide to pre-load... bearing in mind that pre-loaded content is for convention not specification!)
-    * "project" and "topic" are the first two
-      - placeholder descriptions for these are fine initially
-      - load from 'docs/system'
-
-    * the summary can be determined by the content that is tagged
-      (or provided directly)
-      and should be updated occasionally (not every time!! - how?) when the tagged content changes.
-
-    then when displaying a tag, mark it up with an asterisk if exists a definition-for-that-tag doc
-    and give a shortcut `keep tag --describe` or something
 
 * tag-by-model ("auto-tag")?
     - is there a model-supported tagging? what would that need to be useful? (specific domains??)
@@ -293,3 +254,7 @@ x `context` text alongside summaries? (no, summary is good now)
 . last-accessed rank bump: accessed_at column, touch/touch_many, --sort accessed on list, schema v2 migration
 . codebase cleanup: removed dead modules (indexing.py, chunking.py, context.py), dead code (_timestamp, AVAILABLE_SETTINGS, enable_verbose_mode), fixed mock signatures, consolidated tag parsing, unified tag-update output
 . rename for compact usage: `keep update` → `keep put`, `keep delete` → `keep del` (old names kept as hidden aliases)
+. speech-act tagging: `act` tag (commitment, request, offer, assertion, assessment, declaration) and `status` tag (open, fulfilled, declined, withdrawn, renegotiated) with system docs (_tag:act, _tag:status, _tag:project, _tag:topic), woven into conversations.md, domains.md, SKILL.md, AGENT-GUIDE.md, REFERENCE.md, reflect.md
+. tag description system docs: _tag:* IDs with `context: tag-description` frontmatter, loaded via SYSTEM_DOC_IDS registry (SYSTEM_DOCS_VERSION 5)
+. reflect.md updated with act/status tag examples for commitment tracking
+. _accessed and _accessed_date system tags: exposed accessed_at from DocumentStore as queryable tags, added item.accessed property, documented in SYSTEM-TAGS.md

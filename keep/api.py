@@ -115,6 +115,8 @@ def _record_to_item(rec, score: float = None) -> "Item":
         "_updated": rec.updated_at,
         "_created": rec.created_at,
         "_updated_date": rec.updated_at[:10] if rec.updated_at else "",
+        "_accessed": rec.accessed_at or rec.updated_at,
+        "_accessed_date": (rec.accessed_at or rec.updated_at or "")[:10],
     }
     return Item(id=rec.id, summary=rec.summary, tags=tags, score=score)
 

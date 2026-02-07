@@ -48,6 +48,32 @@ These tags are actively set and maintained by the system.
 
 ---
 
+### `_accessed`
+
+**Purpose:** ISO 8601 timestamp of when the item was last retrieved (read).
+
+**Set by:** `_record_to_item()` in `api.py`, from `accessed_at` column in `DocumentStore`
+
+**Behavior:** Updated whenever the item is retrieved via `get()`, `find()`, `find_similar()`, or `query_fulltext()`. Distinct from `_updated` — reading an item updates `_accessed` but not `_updated`.
+
+**Example:** `"2026-02-07T09:15:00.123456+00:00"`
+
+**Access:** Read via `item.accessed` property or `item.tags["_accessed"]`
+
+---
+
+### `_accessed_date`
+
+**Purpose:** Date portion of `_accessed` for efficient date-based queries.
+
+**Set by:** `_record_to_item()` in `api.py`
+
+**Behavior:** Always set alongside `_accessed`. Format: `YYYY-MM-DD`.
+
+**Example:** `"2026-02-07"`
+
+---
+
 ### `_content_type`
 
 **Purpose:** MIME type of the document content.

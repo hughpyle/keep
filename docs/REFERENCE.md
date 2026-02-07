@@ -305,7 +305,7 @@ For full details: `keep get "_tag:act"` and `keep get "_tag:status"`.
 
 Protected tags prefixed with `_`. Users cannot modify these directly.
 
-**Implemented:** `_created`, `_updated`, `_updated_date`, `_content_type`, `_source`
+**Implemented:** `_created`, `_updated`, `_updated_date`, `_accessed`, `_accessed_date`, `_content_type`, `_source`
 
 ```python
 kp.query_tag("_updated_date", "2026-01-30")  # Temporal query
