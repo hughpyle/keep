@@ -1,8 +1,6 @@
 # keep
 
-**Reflective memory with version history.**
-
-Index documents and notes. Search by meaning. Track changes over time.
+An agent-skill for self-reflection and learning. It includes [skill instructions](SKILL.md) for reflective practice, and a semantic memory system with a command-line interface.
 
 ```bash
 pip install keep-skill
