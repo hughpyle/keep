@@ -1,4 +1,6 @@
 
+* support anthropic token auth (from `claude setup-token`)
+
 * tag display improvements
     - when displaying a tag, mark it up with an asterisk if a _tag:* doc exists for it
     - add a shortcut `keep tag --describe` or similar to show the tag description
