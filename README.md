@@ -8,7 +8,7 @@ export VOYAGE_API_KEY=...        # Or OPENAI_API_KEY, GEMINI_API_KEY
 
 # Index content (store auto-initializes on first use)
 keep put https://inguz.substack.com/p/keep -t topic=practice
-keep put "file://$(keep config tool)/docs/library/impermanence_verse.txt" -t type=teaching
+keep put "file://$(keep config tool)/docs/library/han_verse.txt" -t type=teaching
 keep put "Rate limit is 100 req/min" -t topic=api
 
 # Search by meaning
@@ -62,7 +62,7 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for all provider options.
 ```bash
 # Index URLs, files, and notes (store auto-initializes on first use)
 keep put https://inguz.substack.com/p/keep -t topic=practice
-keep put "file://$(keep config tool)/docs/library/impermanence_verse.txt" -t type=teaching
+keep put "file://$(keep config tool)/docs/library/han_verse.txt" -t type=teaching
 keep put "Token refresh needs clock sync" -t topic=auth
 
 # Search
