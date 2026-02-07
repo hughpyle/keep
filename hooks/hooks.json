@@ -1,0 +1,28 @@
+{
+  "description": "Keep reflective memory — context injection for the practice of reflection",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "keep now 2>/dev/null || true",
+            "statusMessage": "Reflecting..."
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "keep now 2>/dev/null || true",
+            "statusMessage": "Loading context..."
+          }
+        ]
+      }
+    ]
+  }
+}

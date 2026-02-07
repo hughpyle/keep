@@ -20,7 +20,7 @@ which treats work as networks of commitments made through language.
 | "Can you...", "Please...", "I need..." | **Action** | Clarify → Promise → Deliver | Promise before understanding |
 | "What if...", "Imagine...", "Could we..." | **Possibility** | Explore, generate options, hold lightly | Commit prematurely |
 | "What is...", "How does...", "Why..." | **Clarification** | Explain until understanding lands | Over-answer; assume you know the real question |
-| "I'm trying to understand...", "Context is..." | **Orientation** | Listen, reflect back, surface assumptions | Jump to solutions |
+| "I'm trying to understand...", "Context is..." | **Orientation** | Listen, reflect back, build shared background | Jump to solutions |
 | "Here's what I found...", "Status update..." | **Report** | Acknowledge, ask what's needed next | Assume it's a request |
 
 **Transition signals** (conversation type is shifting):
@@ -36,11 +36,20 @@ which treats work as networks of commitments made through language.
 
 Work is not information processing. Work is **commitment management**.
 
+Language is not mere description — language *is* action. When we speak, we perform acts that change the world: we request, promise, declare, assert, and evaluate. These are not decorations on top of "real" work. They are the work.
+
+Five kinds of speech act (Searle):
+- **Assertives**: Commit the speaker to a truth claim ("The tests pass")
+- **Directives**: Request action from another ("Please review this")
+- **Commissives**: Commit the speaker to future action — promises, pledges ("I'll fix that by Friday")
+- **Declarations**: Change reality by being uttered ("This is approved", "You're hired")
+- **Expressives**: Convey attitudes ("Thank you", "I'm concerned about...")
+
 When an agent assists with a task, it participates in a conversation with structure:
 - Requests create openings
 - Promises create obligations
 - Completion is declared, not merely achieved
-- Satisfaction closes the loop
+- **Satisfaction** closes the loop — declared by the *customer*, not the performer
 
 Understanding *where we are* in this structure is as important as understanding
 *what we know* about the subject matter.
@@ -66,11 +75,13 @@ Understanding *where we are* in this structure is as important as understanding
 
 At any point: Withdraw, Decline, Renegotiate.
 
+**Conditions of satisfaction** are negotiated agreements — not objective goals. They are what the customer and performer agree constitutes "done." When conditions are left implicit, breakdowns follow.
+
 **For agents:** Recognizing this structure helps answer:
 - "What has been asked of me?"
 - "What have I committed to?"
-- "What does 'done' look like?"
-- "Who needs to be satisfied?"
+- "What conditions of satisfaction were established?"
+- "Who declares satisfaction — and have they?"
 
 ---
 
@@ -127,7 +138,7 @@ Someone asserts a state of affairs.
 
 ## Conversations for Possibility
 
-Possibility conversations explore "what could be" — no commitment yet.
+Possibility conversations explore "what could be" — no commitment yet. The mood is speculative.
 
 **Recognize by:** "What if", "imagine", "we could", "brainstorm", "options"
 
@@ -147,6 +158,8 @@ Possibility conversations explore "what could be" — no commitment yet.
 - Explicit close ("good to know our options")
 - Energy dissipates naturally
 
+A possibility conversation should **fail** if no actionable commitments eventually emerge from it. If it was worth exploring, it should produce either a decision to act or an explicit decision not to.
+
 **Critical:** Don't promise during possibility. "I could do X" is an option, not a commitment. The transition to action must be explicit.
 
 ```bash
@@ -155,6 +168,28 @@ keep update "Explored three auth options: OAuth2, API keys, magic links. \
 User showed interest in magic links for UX simplicity. No decision yet." \
   --tag type=possibility --tag topic=authentication --tag status=open
 ```
+
+---
+
+## Conversations for Orientation
+
+Orientation conversations establish shared background — the context needed for future effective communication. This includes knowledge, relationships, and attitudes.
+
+**Recognize by:** "I'm trying to understand...", "Context is...", "Let me explain how we...", informal relationship-building
+
+**Your stance:**
+- Listen, reflect back, surface assumptions
+- Build shared understanding — don't jump to solutions
+- Acknowledge the relational dimension — trust is built here
+
+**Track:**
+- What shared context was established?
+- What assumptions were surfaced?
+- What remains unclear?
+
+**Completion:** Not explicit — orientation is ongoing. It succeeds when future conversations proceed more smoothly because of it.
+
+Formal onboarding and informal "shooting the bull" both serve this function. Don't underestimate the latter.
 
 ---
 
@@ -181,6 +216,46 @@ When indexing a breakdown:
 keep update "Assumption: user wanted full rewrite. Actually: wanted minimal patch." \
   --tag type=breakdown --tag conversation_type=code_change_request
 ```
+
+---
+
+## Moods
+
+A person's mood is driven by their vision of the future. Moods are not incidental to work — they shape what actions seem possible and what commitments feel achievable.
+
+**Moods that serve:** Ambition, acceptance, serenity, respect, pride, camaraderie.
+
+**Moods that undermine:** Anxiety, resentment, resignation, cynicism.
+
+To manage a mood, create a different understanding about the future. A team stuck in resignation needs a credible possibility to shift toward. A person in anxiety needs clarity about what is actually at stake.
+
+People who fail to manage their moods exhibit a lack of respect for their teammates. This is not about suppressing feelings — it is about taking responsibility for the atmosphere in which commitments are made.
+
+---
+
+## Assessments and Assertions
+
+**Assertions** are claims of fact: "The build is broken." "This endpoint returns 404." They commit the speaker to truth.
+
+**Assessments** are evaluations: "This code is well-structured." "The approach is risky." "We're making good progress." They express the speaker's judgment, not objective truth.
+
+Distinguishing the two is a core competency. Ungrounded assessments — evaluations presented as facts, or evaluations without observable evidence — distort action and erode trust.
+
+When reflecting, ask: "Am I stating a fact or making an evaluation? If an evaluation, what evidence grounds it?"
+
+Assessments are tied to moods. A mood of resignation produces assessments like "this will never work." The assessment *feels* like a fact, but it is not. Recognizing it as an assessment opens the possibility of a different future.
+
+---
+
+## Trust
+
+Trust is built and destroyed through commitments.
+
+**Both unfulfilled promises and unnecessary requests destroy trust.** A promise not kept — even a small one — signals unreliability. A request that wastes another's time signals disrespect.
+
+Trust is cultivated through consistent accountability conversations: making clear requests, negotiating honestly, keeping promises, declaring completion transparently, and accepting satisfaction gracefully.
+
+When trust is damaged, repair requires: acknowledging the specific breakdown, understanding its impact, and making a new commitment that is then kept.
 
 ---
 
@@ -295,5 +370,10 @@ Only then commit to action. Breakdown risk: Promising too early leads to rework.
 ## References
 
 - Winograd, T. & Flores, F. (1986). *Understanding Computers and Cognition*
+- Flores, F. (2013). *Conversations for Action and Collected Essays*
+- Searle, J. (1969). *Speech Acts*
+- Haeckel, S. (1999). *Adaptive Enterprise* (Commitment Management Protocol)
 - Denning, P. & Medina-Mora, R. (1995). "Completing the Loops"
 - Flores, F. et al. (1988). "Computer Systems and the Design of Organizational Interaction"
+- Dubberly, H. "The Language/Action Model of Conversation" — https://www.dubberly.com/articles/language-action-model.html
+- Ing, D. "Conversations for Action, Commitment Management Protocol" — https://coevolving.com/blogs/index.php/archive/conversations-for-action-commitment-management-protocol/
