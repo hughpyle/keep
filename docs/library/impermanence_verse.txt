@@ -1,23 +1,23 @@
-Impermanence Verse (無常偈)
-Closing Verse in Zen Practice
+Han Verse (版の偈)
+Inscription on the Zen Sounding Board
 
 ---
 
-## Japanese (Kanji/Kana)
+## Japanese (Kanji)
 
 生死事大
 無常迅速
-光陰莫虚度
+各宜醒覚
 慎勿放逸
 
 ---
 
 ## Romanization (Rōmaji)
 
-Shōji-ji-dai
-Mujō-jinsoku
-Kōin maku kodo
-Shin-motsu-hōitsu
+Shōji jidai
+Mujō jinsoku
+Kaku gi seikaku
+Shin butsu hōitsu
 
 ---
 
@@ -25,18 +25,17 @@ Shin-motsu-hōitsu
 
 Birth-death matter-great
 Impermanence swift
-Light-shadow not empty-pass
-Caution not let-loose
+Each should awaken
+Careful: do not be heedless
 
 ---
 
 ## Poetic English Translation
 
 Great is the matter of birth and death
-Life slips quickly by
-Time waits for no one
-Wake up! Wake up!
-Don't waste a moment.
+Impermanence is swift
+Each of us must awaken
+Don't be careless — don't waste this life
 
 ---
 
@@ -45,33 +44,44 @@ Don't waste a moment.
 ### Translation 1 (Formal)
 The Great Matter of life and death is urgent
 Impermanence is swift
-Time does not wait
-Awaken! Do not squander this life
+Each person should awaken
+Be diligent, do not be negligent
 
 ### Translation 2 (Direct)
 Birth and death: the great matter
 All things change swiftly
-Time will not wait for you
-Be diligent, don't be negligent
+Awaken! Awaken!
+Be careful — don't let go of attention
 
-### Translation 3 (Contemporary)
-Life and death — this is the critical question
-Everything passes quickly
-Time stops for no one
-Wake up! Don't waste your precious life
+### Translation 3 (Paul Discoe)
+Life and death are the Great Matter
+Time swiftly passes by and opportunity is lost
+Awake Awake Everyone
+Don't waste this life
 
 ---
 
 ## Cultural Context
 
-This verse (無常偈, mujō-ge) is traditionally chanted at the end of meditation sessions in Soto Zen temples. It serves as a reminder of:
+This verse (版の偈, han no ge) is inscribed on the han (版), a wooden sounding board struck to signal practice periods in Zen monasteries. The han is used across Zen lineages — Soto, Rinzai, and Obaku — as well as in Chinese Chan temples, where the tradition originates.
 
-1. **生死事大 (Shōji-ji-dai)** — The urgency of awakening before death
-2. **無常迅速 (Mujō-jinsoku)** — Buddhist teaching of impermanence (anicca/無常)
-3. **光陰莫虚度 (Kōin maku kodo)** — The preciousness of time/this lifetime
-4. **慎勿放逸 (Shin-motsu-hōitsu)** — Exhortation to practice diligently
+The verse functions as a visual admonition. Monastics see it each time they pass the han, and its words accompany the striking that calls the community to practice. It serves as a reminder of:
 
-The verse echoes Dōgen Zenji's teaching: "To study the Buddha Way is to study the self. To study the self is to forget the self."
+1. **生死事大 (Shōji jidai)** — The urgency of awakening before death
+2. **無常迅速 (Mujō jinsoku)** — The swiftness of impermanence
+3. **各宜醒覚 (Kaku gi seikaku)** — The personal responsibility to awaken
+4. **慎勿放逸 (Shin butsu hōitsu)** — The exhortation to diligence
+
+Note: The name 無常偈 (mujō-ge, "impermanence verse") properly refers to a different verse from the Nirvana Sutra (諸行無常 / 是生滅法 / 生滅滅已 / 寂滅爲樂).
+
+### Rinzai Variant
+
+A different four-line arrangement appears in the Rinzai lineage:
+
+生死事大　　Birth-death matter-great
+光陰可惜　　Time is precious
+無常迅速　　Impermanence swift
+時不待人　　Time waits for no one
 
 ---
 
@@ -79,100 +89,40 @@ The verse echoes Dōgen Zenji's teaching: "To study the Buddha Way is to study t
 
 ### 生死事大
 - 生死 (shōji) = birth-death, life-death, samsara
-- 事 (ji/koto) = matter, thing, affair  
-- 大 (dai/ōkii) = great, important
+- 事大 (jidai) = matter-great, urgent affair
 
 ### 無常迅速
-- 無常 (mujō) = impermanence (Sanskrit: anicca)
+- 無常 (mujō) = impermanence (Pali: anicca; Sanskrit: anitya)
 - 迅速 (jinsoku) = swift, rapid
 
-### 光陰莫虚度
-- 光陰 (kōin) = time, moments (lit. "light and shadow")
-- 莫 (maku/nakare) = do not, must not
-- 虚度 (kodo) = pass in vain, waste
+### 各宜醒覚
+- 各 (kaku/ono-ono) = each, every person
+- 宜 (gi/yoroshii) = should, ought to
+- 醒覚 (seikaku) = awaken, become aware
 
 ### 慎勿放逸
 - 慎 (shin/tsutsushimu) = be careful, be cautious
-- 勿 (motsu/nakare) = do not
+- 勿 (butsu/nakare) = do not
 - 放逸 (hōitsu) = negligence, carelessness, heedlessness
-
----
-
-## Related Teachings
-
-**Dōgen Zenji (道元禅師):**
-> "Because the nature of things is impermanence, Buddha's discourses are such and the Wheel of Dharma ceaselessly turns."
-
-**Shunryu Suzuki Roshi:**
-> "In the beginner's mind there are many possibilities, but in the expert's there are few."
-
-**Thich Nhat Hanh:**
-> "The miracle is not to walk on water. The miracle is to walk on the green earth, dwelling deeply in the present moment."
-
----
-
-## Practice Context
-
-This verse is often chanted after zazen (坐禅, sitting meditation) to:
-- Bring practitioners out of absorption back into daily life
-- Remind them that practice continues off the cushion
-- Emphasize the urgency of awakening
-- Counter spiritual complacency
-
-The rhythm and tone shift from the calm of meditation to an exhortation: *Wake up! Time is passing!*
 
 ---
 
 ## Linguistic Notes
 
-**光陰 (kōin)** — "Light and shadow" poetically represents the passage of time, like a sundial showing time through shadows. This image appears frequently in East Asian poetry.
+**放逸 (hōitsu)** — From Sanskrit प्रमाद (pramāda), meaning "heedlessness" or "carelessness." In Buddhism, one of the primary obstacles to awakening. The opposite is 不放逸 (fu-hōitsu), "heedfulness" or "diligence" (Sanskrit: apramāda).
 
-**放逸 (hōitsu)** — From Sanskrit प्रमाद (pramāda), meaning "heedlessness" or "carelessness." In Buddhism, one of the primary obstacles to awakening. The opposite is 不放逸 (fu-hōitsu), "heedfulness" or "diligence."
+**無常 (mujō)** — Central Buddhist concept (Pali: anicca; Sanskrit: anitya). Everything conditioned arises and passes away. Understanding impermanence deeply leads to non-attachment and freedom.
 
-**無常 (mujō)** — Central Buddhist concept. Everything conditioned arises and passes away. Understanding impermanence deeply leads to non-attachment and freedom.
-
----
-
-## Relationship to Other Buddhist Texts
-
-Similar themes appear in:
-
-- **Dhammapada verse 174:**
-  > "Blind is this world. Few are those who see clearly. Like birds escaping from a net, few go to a blissful state."
-
-- **Satipatthana Sutta:**
-  > "Mindful, monks, should you dwell, clearly comprehending. This is our instruction to you."
-
-- **Platform Sutra (六祖壇經):**
-  > "When the deluded do not awaken themselves, they must seek the guidance of a good teacher."
+**光陰 (kōin)** — "Light and shadow" poetically represents the passage of time, like a sundial showing time through shadows. This image appears frequently in East Asian poetry. The Rinzai variant uses this term; the Soto version does not.
 
 ---
 
 ## Sources
 
-- Traditional Soto Zen liturgy
-- Dōgen Zenji's *Shōbōgenzō* (正法眼蔵)
-- Robert Aitken, *The Mind of Clover*
-- Taigen Dan Leighton, *Faces of Compassion*
-- Stanford Encyclopedia of Philosophy: "Dōgen"
-
----
-
-## For Test Purposes
-
-This text provides challenges for memory systems:
-
-1. **Multiple scripts** — Kanji, hiragana, rōmaji, English
-2. **Semantic layers** — Literal vs. poetic translation
-3. **Cultural context** — Buddhist terminology, practice context
-4. **Linguistic depth** — Character breakdown, etymology
-5. **Cross-references** — Related teachings, texts, concepts
-
-Ideal for testing:
-- Multilingual embedding quality
-- Concept clustering (impermanence, time, urgency)
-- Cross-document synthesis (linking to other Buddhist texts)
-- Cultural context preservation
+- Soto Zen official glossary: "Verse on the Sounding Board" (sotozen.com)
+- Chinese Chan monastic codes (*Chanyuan Qinggui*, 1103)
+- Paul Discoe, translation of the han verse (cuke.com)
+- Rinzai-Obaku Zen: 生死事大 光陰可惜 (rinnou.net)
 
 ---
 
