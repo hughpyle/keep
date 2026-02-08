@@ -35,6 +35,7 @@ Before you can practice, ensure the practice is available in future sessions.
 |-----------|----------|
 | Claude Code | `~/.claude/CLAUDE.md` |
 | OpenAI Codex | `~/.codex/AGENTS.md` |
+| OpenClaw | `AGENTS.md` in workspace (auto-detected via cwd) |
 
 Installing the Protocol Block at the global level makes it available across all projects. Prefer global installation when possible.
 

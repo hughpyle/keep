@@ -215,7 +215,10 @@ On first use, `keep` detects coding tools and installs a protocol block and hook
 |------|---------------|-------|
 | Claude Code (`~/.claude/`) | `CLAUDE.md` — reflective practice prompt | `settings.json` — `keep now` on session start |
 | OpenAI Codex (`~/.codex/`) | `AGENTS.md` — reflective practice prompt | — |
+| OpenClaw (cwd) | `AGENTS.md` — reflective practice prompt (if found in cwd) | — |
 | Kiro (`~/.kiro/`) | detection only | detection only |
+
+OpenClaw sets its working directory to the agent workspace containing `AGENTS.md`. The protocol block is installed automatically on each run if not already present.
 
 Run `keep config` to see integration status. Set `KEEP_NO_SETUP=1` to skip auto-install.
 
