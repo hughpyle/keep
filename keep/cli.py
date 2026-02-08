@@ -785,6 +785,10 @@ def put(
         "--summary",
         help="User-provided summary (skips auto-summarization)"
     )] = None,
+    suggest_tags: Annotated[bool, typer.Option(
+        "--suggest-tags",
+        help="Show tag suggestions from similar items"
+    )] = False,
 ):
     """
     Add or update a document in the store.
@@ -827,15 +831,33 @@ def put(
         raise typer.Exit(1)
 
     # Surface similar items (occasion for reflection)
-    similar_items = kp.get_similar_for_display(item.id, limit=3, collection=collection)
+    suggest_limit = 10 if suggest_tags else 3
+    similar_items = kp.get_similar_for_display(item.id, limit=suggest_limit, collection=collection)
     similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
 
     typer.echo(_format_item(
         item,
         as_json=_get_json_output(),
-        similar_items=similar_items if similar_items else None,
+        similar_items=similar_items[:3] if similar_items else None,
         similar_offsets=similar_offsets if similar_items else None,
     ))
+
+    # Show tag suggestions from similar items
+    if suggest_tags and similar_items:
+        tag_counts: dict[str, int] = {}
+        for si in similar_items:
+            for k, v in si.tags.items():
+                if k.startswith("_"):
+                    continue
+                tag = f"{k}={v}" if v else k
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        if tag_counts:
+            # Sort by frequency (descending), then alphabetically
+            sorted_tags = sorted(tag_counts.items(), key=lambda x: (-x[1], x[0]))
+            typer.echo("\nsuggested tags:")
+            for tag, count in sorted_tags:
+                typer.echo(f"  -t {tag}  ({count})")
+            typer.echo(f"\napply with: keep tag-update {_shell_quote_id(item.id)} -t TAG")
 
 
 @app.command("update", hidden=True)
@@ -848,6 +870,19 @@ def update(
     summary: Annotated[Optional[str], typer.Option("--summary")] = None,
 ):
     """Add or update a document (alias for 'put')."""
+    put(source=source, id=id, store=store, collection=collection, tags=tags, summary=summary)
+
+
+@app.command("add", hidden=True)
+def add(
+    source: Annotated[Optional[str], typer.Argument(help="URI to fetch, text content, or '-' for stdin")] = None,
+    id: Annotated[Optional[str], typer.Option("--id", "-i")] = None,
+    store: StoreOption = None,
+    collection: CollectionOption = "default",
+    tags: Annotated[Optional[list[str]], typer.Option("--tag", "-t")] = None,
+    summary: Annotated[Optional[str], typer.Option("--summary")] = None,
+):
+    """Add a document (alias for 'put')."""
     put(source=source, id=id, store=store, collection=collection, tags=tags, summary=summary)
 
 
