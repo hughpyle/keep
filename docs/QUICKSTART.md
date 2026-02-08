@@ -2,16 +2,18 @@
 
 ## Installation
 
+To use local MLX models on macOS Apple Silicon (no API keys needed):
+```bash
+pip install 'keep-skill[local]'
+```
+
+For all others:
 ```bash
 pip install keep-skill
 ```
 
-That's it! API SDKs for Voyage, OpenAI, Anthropic, and Gemini are included.
+That's it! API providers for Voyage, OpenAI, Anthropic, and Gemini are included.
 
-For local models (no API keys needed, macOS Apple Silicon):
-```bash
-pip install 'keep-skill[local]'
-```
 
 ## Provider Configuration
 
