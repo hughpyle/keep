@@ -83,6 +83,12 @@ keep now -V 1                        # Previous intentions
 keep now --history                   # List all versions
 keep reflect                         # Deep structured reflection practice
 
+# Add or update documents
+keep put "inline text" -t topic=auth  # Text mode (content-addressed ID)
+keep put file:///path/to/doc.pdf      # URI mode
+keep put -                            # Stdin mode
+keep put "note" --suggest-tags        # Show tag suggestions from similar items
+
 # Get with versioning and similar items
 keep get ID                          # Current version with similar items
 keep get ID -V 1                     # Previous version with prev/next nav
