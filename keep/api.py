@@ -10,6 +10,7 @@ This is the minimal working implementation focused on:
 
 import hashlib
 import importlib.resources
+import json
 import logging
 import re
 from datetime import datetime, timezone, timedelta
@@ -484,14 +485,22 @@ class Keeper:
                 logger.debug("Error renaming %s: %s", old_id, e)
 
         # Rename _text:hash → %hash (transfer embeddings directly, no re-embedding)
+        # Preserves original timestamps — these are user memories with meaningful dates
         try:
             coll = self._resolve_collection(None)
             old_text_docs = self._document_store.query_by_id_prefix(coll, "_text:")
             for rec in old_text_docs:
                 new_id = "%" + rec.id[len("_text:"):]
                 if not self._document_store.get(coll, new_id):
-                    # Copy in document store
-                    self._document_store.upsert(coll, new_id, rec.summary, rec.tags)
+                    # Direct SQL copy preserving created_at and updated_at
+                    tags_json = json.dumps(rec.tags, ensure_ascii=False)
+                    self._document_store._conn.execute("""
+                        INSERT OR REPLACE INTO documents
+                        (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (new_id, coll, rec.summary, tags_json,
+                          rec.created_at, rec.updated_at, rec.content_hash, rec.accessed_at))
+                    self._document_store._conn.commit()
                     # Transfer embedding from ChromaDB (no re-embedding needed)
                     try:
                         chroma_coll = self._store._get_collection(coll)
