@@ -1144,7 +1144,7 @@ def reflect():
 
 @app.command()
 def get(
-    id: Annotated[str, typer.Argument(default=..., help="URI of item (append @V{N} for version)")],
+    id: Annotated[list[str], typer.Argument(help="URI(s) of item(s) (append @V{N} for version)")],
     version: Annotated[Optional[int], typer.Option(
         "--version", "-V",
         help="Get specific version (0=current, 1=previous, etc.)"
@@ -1173,13 +1173,14 @@ def get(
     collection: CollectionOption = "default",
 ):
     """
-    Retrieve a specific item by ID.
+    Retrieve item(s) by ID.
 
-    Version identifiers: Append @V{N} to get a specific version.
+    Accepts one or more IDs. Version identifiers: Append @V{N} to get a specific version.
 
     \b
     Examples:
         keep get doc:1                  # Current version with similar items
+        keep get doc:1 doc:2 doc:3      # Multiple items
         keep get doc:1 -V 1             # Previous version with prev/next nav
         keep get "doc:1@V{1}"           # Same as -V 1
         keep get doc:1 --history        # List all versions
@@ -1188,24 +1189,55 @@ def get(
         keep get doc:1 -t project=myapp # Only if tag matches
     """
     kp = _get_keeper(store, collection)
+    outputs = []
+    errors = []
+
+    for one_id in id:
+        result = _get_one(kp, one_id, version, history, similar, no_similar, tag, limit, collection)
+        if result is None:
+            errors.append(one_id)
+        else:
+            outputs.append(result)
+
+    if outputs:
+        separator = "\n" if _get_ids_output() else "\n---\n" if len(outputs) > 1 else ""
+        typer.echo(separator.join(outputs))
+
+    if errors:
+        raise typer.Exit(1)
+
+
+def _get_one(
+    kp: Keeper,
+    one_id: str,
+    version: Optional[int],
+    history: bool,
+    similar: bool,
+    no_similar: bool,
+    tag: Optional[list[str]],
+    limit: int,
+    collection: str,
+) -> Optional[str]:
+    """Get a single item and return its formatted output, or None on error."""
 
     # Parse @V{N} version identifier from ID (security: check literal first)
-    actual_id = id
+    actual_id = one_id
     version_from_id = None
 
-    if kp.exists(id, collection=collection):
+    if kp.exists(one_id, collection=collection):
         # Literal ID exists - use it directly (prevents confusion attacks)
-        actual_id = id
+        actual_id = one_id
     else:
         # Try parsing @V{N} suffix
-        match = VERSION_SUFFIX_PATTERN.search(id)
+        match = VERSION_SUFFIX_PATTERN.search(one_id)
         if match:
             version_from_id = int(match.group(1))
-            actual_id = id[:match.start()]
+            actual_id = one_id[:match.start()]
 
     # Version from ID only applies if --version not explicitly provided
+    effective_version = version
     if version is None and version_from_id is not None:
-        version = version_from_id
+        effective_version = version_from_id
 
     if history:
         # List all versions
@@ -1214,10 +1246,12 @@ def get(
 
         if _get_ids_output():
             # Output version identifiers, one per line
+            lines = []
             if current:
-                typer.echo(f"{actual_id}@V{{0}}")
+                lines.append(f"{actual_id}@V{{0}}")
             for i in range(1, len(versions) + 1):
-                typer.echo(f"{actual_id}@V{{{i}}}")
+                lines.append(f"{actual_id}@V{{{i}}}")
+            return "\n".join(lines)
         elif _get_json_output():
             result = {
                 "id": actual_id,
@@ -1238,24 +1272,25 @@ def get(
                     for i, v in enumerate(versions)
                 ],
             }
-            typer.echo(json.dumps(result, indent=2))
+            return json.dumps(result, indent=2)
         else:
+            lines = []
             if current:
                 summary_preview = current.summary[:60].replace("\n", " ")
                 if len(current.summary) > 60:
                     summary_preview += "..."
-                typer.echo(f"v0 (current): {summary_preview}")
+                lines.append(f"v0 (current): {summary_preview}")
             if versions:
-                typer.echo(f"\nArchived:")
+                lines.append(f"\nArchived:")
                 for i, v in enumerate(versions, start=1):
                     date_part = v.created_at[:10] if v.created_at else "unknown"
                     summary_preview = v.summary[:50].replace("\n", " ")
                     if len(v.summary) > 50:
                         summary_preview += "..."
-                    typer.echo(f"  v{i} ({date_part}): {summary_preview}")
+                    lines.append(f"  v{i} ({date_part}): {summary_preview}")
             else:
-                typer.echo("No version history.")
-        return
+                lines.append("No version history.")
+            return "\n".join(lines)
 
     if similar:
         # List similar items
@@ -1264,10 +1299,12 @@ def get(
 
         if _get_ids_output():
             # Output version-scoped IDs one per line
+            lines = []
             for item in similar_items:
                 base_id = item.tags.get("_base_id", item.id)
                 offset = similar_offsets.get(item.id, 0)
-                typer.echo(f"{base_id}@V{{{offset}}}")
+                lines.append(f"{base_id}@V{{{offset}}}")
+            return "\n".join(lines)
         elif _get_json_output():
             result = {
                 "id": actual_id,
@@ -1281,9 +1318,9 @@ def get(
                     for item in similar_items
                 ],
             }
-            typer.echo(json.dumps(result, indent=2))
+            return json.dumps(result, indent=2)
         else:
-            typer.echo(f"Similar to {actual_id}:")
+            lines = [f"Similar to {actual_id}:"]
             if similar_items:
                 for item in similar_items:
                     base_id = item.tags.get("_base_id", item.id)
@@ -1293,13 +1330,13 @@ def get(
                     summary_preview = item.summary[:50].replace("\n", " ")
                     if len(item.summary) > 50:
                         summary_preview += "..."
-                    typer.echo(f"  {base_id}@V{{{offset}}} {score_str} {date_part} {summary_preview}")
+                    lines.append(f"  {base_id}@V{{{offset}}} {score_str} {date_part} {summary_preview}")
             else:
-                typer.echo("  No similar items found.")
-        return
+                lines.append("  No similar items found.")
+            return "\n".join(lines)
 
     # Get specific version or current
-    offset = version if version is not None else 0
+    offset = effective_version if effective_version is not None else 0
 
     if offset == 0:
         item = kp.get(actual_id, collection=collection)
@@ -1318,14 +1355,14 @@ def get(
             typer.echo(f"Version not found: {actual_id} (offset {offset})", err=True)
         else:
             typer.echo(f"Not found: {actual_id}", err=True)
-        raise typer.Exit(1)
+        return None
 
     # Check tag filter if specified
     if tag:
         filtered = _filter_by_tags([item], tag)
         if not filtered:
             typer.echo(f"Tag filter not matched: {actual_id}", err=True)
-            raise typer.Exit(1)
+            return None
 
     # Get version navigation
     version_nav = kp.get_version_nav(actual_id, internal_version, collection=collection)
@@ -1337,64 +1374,71 @@ def get(
         similar_items = kp.get_similar_for_display(actual_id, limit=3, collection=collection)
         similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
 
-    typer.echo(_format_item(
+    return _format_item(
         item,
         as_json=_get_json_output(),
         version_nav=version_nav,
         viewing_offset=offset if offset > 0 else None,
         similar_items=similar_items,
         similar_offsets=similar_offsets,
-    ))
+    )
 
 
 @app.command("del")
 def del_cmd(
-    id: Annotated[str, typer.Argument(help="ID of item to delete")],
+    id: Annotated[list[str], typer.Argument(help="ID(s) of item(s) to delete")],
     store: StoreOption = None,
     collection: CollectionOption = "default",
 ):
     """
-    Delete the current version of an item.
+    Delete the current version of item(s).
 
-    If the item has version history, reverts to the previous version.
+    If an item has version history, reverts to the previous version.
     If no history exists, removes the item completely.
 
     \b
     Examples:
         keep del %abc123def456        # Remove a text note
+        keep del %abc123 %def456      # Remove multiple items
         keep del now                  # Revert now to previous
     """
     kp = _get_keeper(store, collection)
+    had_errors = False
 
-    item = kp.get(id, collection=collection)
-    if item is None:
-        typer.echo(f"Not found: {id}", err=True)
+    for one_id in id:
+        item = kp.get(one_id, collection=collection)
+        if item is None:
+            typer.echo(f"Not found: {one_id}", err=True)
+            had_errors = True
+            continue
+
+        restored = kp.revert(one_id, collection=collection)
+
+        if restored is None:
+            # Fully deleted
+            typer.echo(_format_summary_line(item))
+        else:
+            # Reverted — show the restored version with similar items
+            similar_items = kp.get_similar_for_display(restored.id, limit=3, collection=collection)
+            similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+            typer.echo(_format_item(
+                restored,
+                as_json=_get_json_output(),
+                similar_items=similar_items if similar_items else None,
+                similar_offsets=similar_offsets if similar_items else None,
+            ))
+
+    if had_errors:
         raise typer.Exit(1)
-
-    restored = kp.revert(id, collection=collection)
-
-    if restored is None:
-        # Fully deleted
-        typer.echo(_format_summary_line(item))
-    else:
-        # Reverted — show the restored version with similar items
-        similar_items = kp.get_similar_for_display(restored.id, limit=3, collection=collection)
-        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-        typer.echo(_format_item(
-            restored,
-            as_json=_get_json_output(),
-            similar_items=similar_items if similar_items else None,
-            similar_offsets=similar_offsets if similar_items else None,
-        ))
 
 
 @app.command("delete", hidden=True)
 def delete(
-    id: Annotated[str, typer.Argument(help="ID of item to delete")],
+    id: Annotated[list[str], typer.Argument(help="ID(s) of item(s) to delete")],
     store: StoreOption = None,
     collection: CollectionOption = "default",
 ):
-    """Delete the current version of an item (alias for 'del')."""
+    """Delete the current version of item(s) (alias for 'del')."""
     del_cmd(id=id, store=store, collection=collection)
 
 
