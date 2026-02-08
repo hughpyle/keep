@@ -49,7 +49,8 @@ keep put "test"             # No API key needed
 
 ### Claude Desktop Setup
 
-For use in Claude Desktop, the simplest option is OpenAI (handles both embeddings and summarization):
+For use in Claude Desktop, API-based providers can be used.
+For OpenAI (handles both embeddings and summarization):
 
 1. **Get an OpenAI API key** at [platform.openai.com](https://platform.openai.com/)
 2. **Add to network allowlist**: `api.openai.com`
