@@ -1,7 +1,4 @@
 
-* openclaw detection for AGENTS.md (w.g. in /Users/clawdbot/grab/AGENTS.md)
-    it's just cwd()
-
 * openclaw plugin rework
 
 * add "remember... when..." stuff, but where? and what's the set of useful "when"?
@@ -247,3 +244,4 @@ x `context` text alongside summaries? (no, summary is good now)
 . Ollama support: auto-detection via /api/tags (0.5s timeout), smart model selection (embed vs generative), OLLAMA_HOST env var, priority between API keys and MLX
 . `keep put --suggest-tags`: shows tag suggestions from similar items with frequency counts
 . `keep add` as hidden alias for `keep put` (alongside existing `update` alias)
+. openclaw AGENTS.md detection: install protocol block into AGENTS.md in cwd (openclaw sets cwd to workspace)
