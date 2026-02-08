@@ -56,13 +56,11 @@ keep can automatically integrate with OpenClaw's configured models when both are
 
 ## Setup
 
-> **Note:** Use `uv tool install` or a virtual environment to avoid dependency conflicts.
-
 ### Option 1: API Providers (Recommended)
 
 ```bash
 # 1. Install keep (API SDKs included)
-pip install keep-skill
+uv tool install keep-skill
 
 # 2. Set API key(s) - simplest is OpenAI (does both embeddings + summarization)
 export OPENAI_API_KEY=sk-...
@@ -81,7 +79,7 @@ keep put "test note"
 ### Option 2: Local Models (No API)
 
 ```bash
-pip install 'keep-skill[local]'
+uv tool install 'keep-skill[local]'
 keep put "test note"         # MLX on Apple Silicon, sentence-transformers elsewhere
 ```
 

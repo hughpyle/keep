@@ -3,7 +3,7 @@
 An agent-skill for self-reflection and learning. It includes [skill instructions](SKILL.md) for reflective practice, and a semantic memory system with a command-line interface.
 
 ```bash
-pip install keep-skill
+uv tool install keep-skill       # or: pip install keep-skill
 export OPENAI_API_KEY=...        # Or GEMINI_API_KEY (both do embeddings + summarization)
 
 # Index content (store auto-initializes on first use)
@@ -38,20 +38,20 @@ Backed by ChromaDB for vectors, SQLite for metadata and versions.
 
 ## Installation
 
-**Python 3.11–3.13 required.**
+**Python 3.11–3.13 required.** Use [uv](https://docs.astral.sh/uv/) (recommended) or pip:
 
 If [Ollama](https://ollama.com/) is running locally, keep auto-detects it — no API keys needed.
 
 To use local MLX models on macOS Apple Silicon (no API keys, no Ollama):
 ```bash
-pip install 'keep-skill[local]'   # macOS Apple Silicon optimized
+uv tool install 'keep-skill[local]'   # macOS Apple Silicon optimized
 ```
 
 Or, for API-based summarization and embedding, install and set an API key.
 Providers for Voyage, OpenAI, Anthropic, and Gemini are included:
 
 ```bash
-pip install keep-skill
+uv tool install keep-skill
 
 export OPENAI_API_KEY=...      # Simplest (handles both embeddings + summarization)
 # Or: GEMINI_API_KEY=...       # Also does both

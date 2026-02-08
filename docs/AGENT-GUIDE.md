@@ -67,7 +67,7 @@ if kp.exists("file:///project/readme.md"):
 
 **Item fields:** `id` (URI or custom), `summary` (str), `tags` (dict), `score` (float, search results only). Timestamps are in tags: `item.created` and `item.updated` are property accessors.
 
-**Prerequisites:** Python 3.11+, `pip install keep-skill` (with API key) or `pip install 'keep-skill[local]'` (no API needed)
+**Prerequisites:** Python 3.11+, `uv tool install keep-skill` (with API key) or `uv tool install 'keep-skill[local]'` (no API needed)
 
 **Default store location:** `~/.keep/` in the user's home directory (created automatically). Override with `KEEP_STORE_PATH` or explicit path argument.
 
