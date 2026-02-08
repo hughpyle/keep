@@ -202,18 +202,38 @@ def install_codex(config_dir: Path) -> list[str]:
     return actions
 
 
+def _check_cwd_agents_md() -> None:
+    """
+    Install protocol block into AGENTS.md in cwd if present.
+
+    OpenClaw sets cwd to its workspace directory, which contains AGENTS.md.
+    This is idempotent — the marker check prevents double-install.
+    """
+    agents_md = Path.cwd() / "AGENTS.md"
+    if agents_md.is_file():
+        if _install_protocol_block(agents_md):
+            print(
+                f"keep: installed protocol block in {agents_md}",
+                file=sys.stderr,
+            )
+
+
 def check_and_install(config: "StoreConfig") -> None:
     """
     Check for coding tools and install integrations if needed.
 
     Fast path: one stat per unknown tool (tools already in config are skipped).
-    When all tools in TOOL_CONFIGS are accounted for, this does zero I/O.
+    When all tools in TOOL_CONFIGS are accounted for, this does zero I/O
+    (except the cwd AGENTS.md check, which is one stat).
     """
     from .config import save_config
 
     # Bypass via environment variable
     if os.environ.get("KEEP_NO_SETUP"):
         return
+
+    # Check for AGENTS.md in cwd (OpenClaw workspace detection)
+    _check_cwd_agents_md()
 
     # Detect only tools not yet in config (one stat each)
     new_tools = detect_new_tools(config.integrations)
