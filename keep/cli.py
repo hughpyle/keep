@@ -10,6 +10,7 @@ Usage:
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -144,6 +145,7 @@ def _format_yaml_frontmatter(
     viewing_offset: Optional[int] = None,
     similar_items: Optional[list[Item]] = None,
     similar_offsets: Optional[dict[str, int]] = None,
+    meta_sections: Optional[dict[str, list[Item]]] = None,
 ) -> str:
     """
     Format item as YAML frontmatter with summary as content.
@@ -154,11 +156,22 @@ def _format_yaml_frontmatter(
         viewing_offset: If viewing an old version, the offset (1=previous, 2=two ago)
         similar_items: Optional list of similar items to display
         similar_offsets: Version offsets for similar items (item.id -> offset)
+        meta_sections: Optional dict of {name: [Items]} from meta-doc resolution
 
     Note: Offset computation (v1, v2, etc.) assumes version_nav lists
     are ordered newest-first, matching list_versions() ordering.
     Changing that ordering would break the vN = -V N correspondence.
     """
+    cols = shutil.get_terminal_size((120, 24)).columns
+
+    def _truncate_summary(summary: str, prefix_len: int) -> str:
+        """Truncate summary to fit terminal width, matching _format_summary_line."""
+        max_width = max(cols - prefix_len, 20)
+        s = summary.replace("\n", " ")
+        if len(s) > max_width:
+            s = s[:max_width - 3].rsplit(" ", 1)[0] + "..."
+        return s
+
     version = viewing_offset if viewing_offset is not None else 0
     version_suffix = f"@V{{{version}}}" if version > 0 else ""
     lines = ["---", f"id: {_shell_quote_id(item.id)}{version_suffix}"]
@@ -171,17 +184,34 @@ def _format_yaml_frontmatter(
 
     # Add similar items if available (version-scoped IDs with date and summary)
     if similar_items:
-        lines.append("similar:")
+        # Build ID strings for alignment
+        sim_ids = []
         for sim_item in similar_items:
             base_id = sim_item.tags.get("_base_id", sim_item.id)
             offset = (similar_offsets or {}).get(sim_item.id, 0)
+            version_suffix = f"@V{{{offset}}}" if offset > 0 else ""
+            sim_ids.append(f"{base_id}{version_suffix}")
+        id_width = min(max(len(s) for s in sim_ids), 20)
+        lines.append("similar:")
+        for sim_item, sid in zip(similar_items, sim_ids):
             score_str = f"({sim_item.score:.2f})" if sim_item.score else ""
             date_part = sim_item.tags.get("_updated", sim_item.tags.get("_created", ""))[:10]
-            summary_preview = sim_item.summary[:40].replace("\n", " ")
-            if len(sim_item.summary) > 40:
-                summary_preview += "..."
-            version_suffix = f"@V{{{offset}}}" if offset > 0 else ""
-            lines.append(f"  - {base_id}{version_suffix} {score_str} {date_part} {summary_preview}")
+            actual_id_len = max(len(sid), id_width)
+            prefix_len = 4 + actual_id_len + 1 + len(score_str) + 1 + len(date_part) + 1
+            summary_preview = _truncate_summary(sim_item.summary, prefix_len)
+            lines.append(f"  - {sid.ljust(id_width)} {score_str} {date_part} {summary_preview}")
+
+    # Add meta-doc sections (tag-based contextual results, prefixed to avoid key conflicts)
+    if meta_sections:
+        for name, meta_items in meta_sections.items():
+            meta_ids = [_shell_quote_id(mi.id) for mi in meta_items]
+            id_width = min(max(len(s) for s in meta_ids), 20)
+            lines.append(f"meta/{name}:")
+            for meta_item, mid in zip(meta_items, meta_ids):
+                actual_id_len = max(len(mid), id_width)
+                prefix_len = 4 + actual_id_len + 1
+                summary_preview = _truncate_summary(meta_item.summary, prefix_len)
+                lines.append(f"  - {mid.ljust(id_width)} {summary_preview}")
 
     # Add version navigation (just @V{N} since ID is shown at top, with date + summary)
     if version_nav:
@@ -189,23 +219,23 @@ def _format_yaml_frontmatter(
         current_offset = viewing_offset if viewing_offset is not None else 0
 
         if version_nav.get("prev"):
+            prev_ids = [f"@V{{{current_offset + i + 1}}}" for i in range(len(version_nav["prev"]))]
+            id_width = max(len(s) for s in prev_ids)
             lines.append("prev:")
-            for i, v in enumerate(version_nav["prev"]):
-                prev_offset = current_offset + i + 1
+            for vid, v in zip(prev_ids, version_nav["prev"]):
                 date_part = v.created_at[:10] if v.created_at else ""
-                summary_preview = v.summary[:40].replace("\n", " ")
-                if len(v.summary) > 40:
-                    summary_preview += "..."
-                lines.append(f"  - @V{{{prev_offset}}} {date_part} {summary_preview}")
+                prefix_len = 4 + id_width + 1 + len(date_part) + 1
+                summary_preview = _truncate_summary(v.summary, prefix_len)
+                lines.append(f"  - {vid.ljust(id_width)} {date_part} {summary_preview}")
         if version_nav.get("next"):
+            next_ids = [f"@V{{{current_offset - i - 1}}}" for i in range(len(version_nav["next"]))]
+            id_width = max(len(s) for s in next_ids)
             lines.append("next:")
-            for i, v in enumerate(version_nav["next"]):
-                next_offset = current_offset - i - 1
+            for vid, v in zip(next_ids, version_nav["next"]):
                 date_part = v.created_at[:10] if v.created_at else ""
-                summary_preview = v.summary[:40].replace("\n", " ")
-                if len(v.summary) > 40:
-                    summary_preview += "..."
-                lines.append(f"  - @V{{{next_offset}}} {date_part} {summary_preview}")
+                prefix_len = 4 + id_width + 1 + len(date_part) + 1
+                summary_preview = _truncate_summary(v.summary, prefix_len)
+                lines.append(f"  - {vid.ljust(id_width)} {date_part} {summary_preview}")
         elif viewing_offset is not None:
             # Viewing old version and next is empty means current is next
             lines.append("next:")
@@ -236,7 +266,6 @@ def _format_summary_line(item: Item, id_width: int = 0) -> str:
     date = item.tags.get("_updated_date") or item.tags.get("_updated", "")[:10] or item.tags.get("_created", "")[:10] or ""
 
     # Truncate summary to fit terminal width, collapse newlines
-    import shutil
     cols = shutil.get_terminal_size((120, 24)).columns
     prefix_len = len(padded_id) + 1 + len(date) + 1  # "id date "
     max_summary = max(cols - prefix_len, 20)
@@ -305,12 +334,14 @@ def main_callback(
         version_nav = kp.get_version_nav(NOWDOC_ID, None, collection="default")
         similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection="default")
         similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+        meta_sections = kp.resolve_meta(NOWDOC_ID, collection="default")
         typer.echo(_format_item(
             item,
             as_json=_get_json_output(),
             version_nav=version_nav,
             similar_items=similar_items,
             similar_offsets=similar_offsets,
+            meta_sections=meta_sections,
         ))
 
 
@@ -361,6 +392,7 @@ def _format_item(
     viewing_offset: Optional[int] = None,
     similar_items: Optional[list[Item]] = None,
     similar_offsets: Optional[dict[str, int]] = None,
+    meta_sections: Optional[dict[str, list[Item]]] = None,
 ) -> str:
     """
     Format a single item for display.
@@ -377,6 +409,7 @@ def _format_item(
         viewing_offset: Version offset if viewing old version (triggers full format)
         similar_items: Similar items to display (triggers full format)
         similar_offsets: Version offsets for similar items
+        meta_sections: Meta-doc resolved sections {name: [Items]}
     """
     if _get_ids_output():
         versioned_id = _format_versioned_id(item)
@@ -402,6 +435,14 @@ def _format_item(
                 }
                 for s in similar_items
             ]
+        if meta_sections:
+            result["meta"] = {
+                name: [
+                    {"id": mi.id, "summary": mi.summary[:60]}
+                    for mi in items
+                ]
+                for name, items in meta_sections.items()
+            }
         if version_nav:
             current_offset = viewing_offset if viewing_offset is not None else 0
             result["version_nav"] = {}
@@ -432,8 +473,8 @@ def _format_item(
     # Full format when:
     # - --full flag is set
     # - version navigation or similar items are provided (can't display in summary)
-    if _get_full_output() or version_nav or similar_items or viewing_offset is not None:
-        return _format_yaml_frontmatter(item, version_nav, viewing_offset, similar_items, similar_offsets)
+    if _get_full_output() or version_nav or similar_items or viewing_offset is not None or meta_sections:
+        return _format_yaml_frontmatter(item, version_nav, viewing_offset, similar_items, similar_offsets, meta_sections)
     return _format_summary_line(item)
 
 
@@ -1064,15 +1105,17 @@ def now(
 
         item = kp.set_now(new_content, tags=parsed_tags or None)
 
-        # Surface similar items (occasion for reflection)
+        # Surface similar items and meta sections (occasion for reflection)
         similar_items = kp.get_similar_for_display(item.id, limit=3, collection=collection)
         similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+        meta_sections = kp.resolve_meta(item.id, collection=collection)
 
         typer.echo(_format_item(
             item,
             as_json=_get_json_output(),
             similar_items=similar_items if similar_items else None,
             similar_offsets=similar_offsets if similar_items else None,
+            meta_sections=meta_sections if meta_sections else None,
         ))
         if not _get_json_output() and not _get_ids_output() and not sys.stdout.isatty():
             typer.echo("\nAs an agent, you should reflect on this work. (run: `keep reflect`)")
@@ -1092,12 +1135,14 @@ def now(
             version_nav = kp.get_version_nav(NOWDOC_ID, None, collection=collection)
             similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection=collection)
             similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+            meta_sections = kp.resolve_meta(NOWDOC_ID, collection=collection)
             typer.echo(_format_item(
                 item,
                 as_json=_get_json_output(),
                 version_nav=version_nav,
                 similar_items=similar_items,
                 similar_offsets=similar_offsets,
+                meta_sections=meta_sections,
             ))
             if not _get_json_output() and not _get_ids_output() and not sys.stdout.isatty():
                 typer.echo("\nAs an agent, you should reflect on this work. (run: `keep reflect`)")
@@ -1385,12 +1430,14 @@ def _get_one(
     # Get version navigation
     version_nav = kp.get_version_nav(actual_id, internal_version, collection=collection)
 
-    # Get similar items (unless suppressed or viewing old version)
+    # Get similar items and meta sections (unless suppressed or viewing old version)
     similar_items = None
     similar_offsets = None
+    meta_sections = None
     if not no_similar and offset == 0:
         similar_items = kp.get_similar_for_display(actual_id, limit=3, collection=collection)
         similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+        meta_sections = kp.resolve_meta(actual_id, collection=collection)
 
     return _format_item(
         item,
@@ -1399,6 +1446,7 @@ def _get_one(
         viewing_offset=offset if offset > 0 else None,
         similar_items=similar_items,
         similar_offsets=similar_offsets,
+        meta_sections=meta_sections,
     )
 
 
@@ -1489,6 +1537,7 @@ def _get_config_value(cfg, store_path: Path, path: str):
     Special paths (not in TOML):
         file - config file location
         tool - package directory (SKILL.md location)
+        openclaw-plugin - OpenClaw plugin directory
         store - store path
         collections - list of collections
 
@@ -1505,6 +1554,9 @@ def _get_config_value(cfg, store_path: Path, path: str):
         return str(cfg.config_path) if cfg else None
     if path == "tool":
         return str(get_tool_directory())
+    if path == "openclaw-plugin":
+        import importlib.resources
+        return str(Path(str(importlib.resources.files("keep"))) / "data" / "openclaw-plugin")
     if path == "store":
         return str(store_path)
     if path == "collections":
@@ -1662,6 +1714,7 @@ def config(
         keep config              # Show all config
         keep config file         # Config file location
         keep config tool         # Package directory (SKILL.md location)
+        keep config openclaw-plugin  # OpenClaw plugin directory
         keep config store        # Store path
         keep config providers    # All provider config
         keep config providers.embedding  # Embedding provider name

@@ -322,3 +322,136 @@ class TestSummarizationPrompts:
         assert strip_summary_preamble("Here is a summary: Redis is fast.") == "Redis is fast."
         assert strip_summary_preamble("This document describes a system.") == "a system."
         assert strip_summary_preamble("Redis is fast.") == "Redis is fast."
+
+
+# -----------------------------------------------------------------------------
+# Meta-doc Parser Tests
+# -----------------------------------------------------------------------------
+
+class TestMetaDocParser:
+    """Tests for _parse_meta_doc() structured line parser."""
+
+    def test_query_lines(self):
+        """Query lines with key=value pairs are parsed."""
+        from keep.api import _parse_meta_doc
+        queries, ctx = _parse_meta_doc("act=commitment status=open\ntype=learning")
+        assert queries == [
+            {"act": "commitment", "status": "open"},
+            {"type": "learning"},
+        ]
+        assert ctx == []
+
+    def test_context_match_keys(self):
+        """Context-match lines (key=) are parsed."""
+        from keep.api import _parse_meta_doc
+        queries, ctx = _parse_meta_doc("project=\ntopic=")
+        assert queries == []
+        assert ctx == ["project", "topic"]
+
+    def test_prose_ignored(self):
+        """Prose lines are ignored by the parser."""
+        from keep.api import _parse_meta_doc
+        content = """# .meta/todo — Open Loops
+
+Open loops: unresolved commitments.
+
+act=commitment status=open
+
+project=
+"""
+        queries, ctx = _parse_meta_doc(content)
+        assert queries == [{"act": "commitment", "status": "open"}]
+        assert ctx == ["project"]
+
+    def test_mixed_content(self):
+        """Full meta-doc with prose, queries, and context."""
+        from keep.api import _parse_meta_doc
+        content = """# .meta/learnings — Experiential Priming
+
+Past learnings and breakdowns.
+
+type=learning
+type=breakdown
+type=gotcha
+
+project=
+topic=
+"""
+        queries, ctx = _parse_meta_doc(content)
+        assert len(queries) == 3
+        assert queries[0] == {"type": "learning"}
+        assert queries[1] == {"type": "breakdown"}
+        assert queries[2] == {"type": "gotcha"}
+        assert ctx == ["project", "topic"]
+
+    def test_empty_content(self):
+        """Empty content returns empty lists."""
+        from keep.api import _parse_meta_doc
+        queries, ctx = _parse_meta_doc("")
+        assert queries == []
+        assert ctx == []
+
+    def test_markdown_headings_are_prose(self):
+        """Markdown headings and formatting are treated as prose."""
+        from keep.api import _parse_meta_doc
+        queries, ctx = _parse_meta_doc("# Heading\n**bold text**\n- list item")
+        assert queries == []
+        assert ctx == []
+
+    def test_partial_key_value_is_prose(self):
+        """Lines with mixed tokens (some not key=value) are prose."""
+        from keep.api import _parse_meta_doc
+        queries, ctx = _parse_meta_doc("act=commitment and also open")
+        assert queries == []
+        assert ctx == []
+
+
+# -----------------------------------------------------------------------------
+# System Doc Tests
+# -----------------------------------------------------------------------------
+
+class TestSystemDocs:
+    """Tests for system document infrastructure."""
+
+    def test_all_system_doc_files_exist(self):
+        """Every file referenced in SYSTEM_DOC_IDS exists on disk."""
+        from keep.api import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR
+        for filename in SYSTEM_DOC_IDS:
+            path = SYSTEM_DOC_DIR / filename
+            assert path.exists(), f"Missing system doc file: {filename}"
+
+    def test_system_doc_ids_are_valid(self):
+        """System doc IDs follow naming conventions."""
+        from keep.api import SYSTEM_DOC_IDS
+        for filename, doc_id in SYSTEM_DOC_IDS.items():
+            assert not doc_id.startswith("_"), f"{doc_id} uses old underscore prefix"
+            assert doc_id == doc_id.strip(), f"{doc_id} has whitespace"
+
+    def test_meta_docs_have_query_lines(self):
+        """Meta-docs must contain at least one parseable query line."""
+        from keep.api import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR, _load_frontmatter, _parse_meta_doc
+        for filename, doc_id in SYSTEM_DOC_IDS.items():
+            if not doc_id.startswith(".meta/"):
+                continue
+            content, _ = _load_frontmatter(SYSTEM_DOC_DIR / filename)
+            queries, _ = _parse_meta_doc(content)
+            assert len(queries) > 0, f"{doc_id} has no query lines — meta-doc would be inert"
+
+    def test_tag_docs_have_structure(self):
+        """.tag/* docs should have documented structure (values, characteristics, or lifecycle)."""
+        from keep.api import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR, _load_frontmatter
+        markers = ("## Values", "## Characteristics", "## Speech-act lifecycle")
+        for filename, doc_id in SYSTEM_DOC_IDS.items():
+            if not doc_id.startswith(".tag/"):
+                continue
+            content, _ = _load_frontmatter(SYSTEM_DOC_DIR / filename)
+            assert any(m in content for m in markers), \
+                f"{doc_id} missing structure documentation"
+
+    def test_bundled_hash_is_deterministic(self):
+        """_content_hash produces consistent results for same input."""
+        from keep.api import _content_hash
+        h1 = _content_hash("test content")
+        h2 = _content_hash("test content")
+        assert h1 == h2
+        assert h1 != _content_hash("different content")

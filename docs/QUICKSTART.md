@@ -132,6 +132,10 @@ similar:
   - https://inguz.substack.com/p/keep (0.47) 2026-02-07 Keep: A Reflective Memory...
   - now (0.45) 2026-02-07 Finished reading MN61. The mirror teachi...
   - file:///.../library/han_verse.txt (0.44) 2026-02-07 Han Verse: Great is the matter...
+meta/todo:
+  - %a1b2c3d4 Update auth docs for new flow
+meta/learnings:
+  - %e5f6g7h8 JSON validation before deploy
 prev:
   - @V{1} 2026-02-07 Previous version summary...
 ---
@@ -140,6 +144,7 @@ The Exhortation to Rāhula at Mango Stone is a Buddhist sutra that teaches...
 
 Key fields:
 - **`similar:`** — related items with similarity scores (0–1). Each ID can be passed to `keep get`
+- **`meta/*:`** — contextual items from tag queries (open commitments, learnings, decisions)
 - **`prev:`** / **`next:`** — version navigation. `@V{1}` means "one version back", usable with `-V 1`
 - **`tags:`** — user tags and system tags (`_created`, `_updated`, `_source`, etc.)
 

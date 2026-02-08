@@ -67,12 +67,14 @@ packages = ["keep"]
 "SKILL.md" = "keep/SKILL.md"
 "docs/library" = "keep/docs/library"
 "commands/reflect.md" = "keep/data/reflect.md"
+"later/openclaw-plugin" = "keep/data/openclaw-plugin"
 
 [tool.hatch.build.targets.sdist]
 include = [
     "/keep",
     "/docs/library",
     "/commands/reflect.md",
+    "/later/openclaw-plugin",
     "/SKILL.md",
     "/README.md",
     "/LICENSE",
