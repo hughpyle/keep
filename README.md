@@ -4,7 +4,7 @@ An agent-skill for self-reflection and learning. It includes [skill instructions
 
 ```bash
 pip install keep-skill
-export VOYAGE_API_KEY=...        # Or OPENAI_API_KEY, GEMINI_API_KEY
+export OPENAI_API_KEY=...        # Or GEMINI_API_KEY (both do embeddings + summarization)
 
 # Index content (store auto-initializes on first use)
 keep put https://inguz.substack.com/p/keep -t topic=practice
@@ -44,8 +44,9 @@ pip install keep-skill
 API SDKs for Voyage, OpenAI, Anthropic, and Gemini are included. Set an API key:
 
 ```bash
-export VOYAGE_API_KEY=...      # Recommended (Anthropic's partner)
-# Or: export OPENAI_API_KEY=... or GEMINI_API_KEY=...
+export OPENAI_API_KEY=...      # Simplest (handles both embeddings + summarization)
+# Or: GEMINI_API_KEY=...       # Also does both
+# Or: VOYAGE_API_KEY=... and ANTHROPIC_API_KEY=...  # Best quality
 ```
 
 For local models (no API keys needed):

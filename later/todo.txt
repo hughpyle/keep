@@ -1,8 +1,4 @@
 
-* tag display improvements
-    - when displaying a tag, mark it up with an asterisk if a _tag:* doc exists for it
-    - add a shortcut `keep tag --describe` or similar to show the tag description
-
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
@@ -13,12 +9,14 @@
     the semantics all live)
 
 * let's explore some semantic relationships that are important
+    the thing we're talking about is related to (many of):
     - a meeting or other event
     - people
     - places
     - events in the world
     do we want to go down the whole "entity extraction" thing? really?
-    but we absolutely do need to handle "hey, note about XYZ, ...." whare XYZ is a capital-E Entity
+    but we absolutely do need to handle "hey, note about XYZ, ...." whare XYZ is a capital-E Entity;
+    or "I just talked to Z and T"
     maybe the entity-extraction is done by the AGENT, huh?
     - so the agent should tag "entities" in a consistent way, but it's just a convention, not rules
         -t class=Person entity=Daniel
@@ -117,19 +115,6 @@
         - or, can we do relevance-per-tag everywhere? so that topics and projects are just tags like everything else?
     - more thinking and research needed
 
-
-
-* Unix has heredoc, keep has nowdoc, what else do we need?
-    - or rather, is there functionality like a heredoc, that we should use for the nowdoc?
-
-
-* other "system" behaviors?
-    - zero, nada by default - is that ok?
-
-* all the pip install extras - yuk
-    makes the decision before you even know really
-    - prefer somthing more dynamic, not sure what
-
 * how do we get the claude-code model context?
 
 * how do we get the vscode model context?  I really don't want to require a plugin too
@@ -142,7 +127,6 @@
     - want something that tracks last-retrieval time
     - not sure how that applies to the ranking for retrieval
     - do we need any of this to be config not code??
-
  
 * compare the openclaw plugin against the other memory plugins on the hub
 

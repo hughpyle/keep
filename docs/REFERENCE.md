@@ -131,49 +131,16 @@ keep del ID                       # Remove item (or revert to previous version)
 ```
 
 ## Python API
+
+See [PYTHON-API.md](PYTHON-API.md) for complete Python API reference.
+
+Quick example:
 ```python
-from keep import Keeper, Item
-from keep.document_store import VersionInfo  # for version history
-kp = Keeper()  # uses default store
-
-# Core indexing
-kp.update(uri, tags={}, summary=None)   # Index document from URI → Item
-kp.remember(content, summary=None, ...) # Index inline content → Item
-# Note: If summary provided, skips auto-summarization
-# Note: remember() uses content verbatim if short (≤max_summary_length)
-# Note: User tags (domain, topic, etc.) provide context for summarization
-
-# Search (since: ISO duration like "P7D", "PT1H" or date "2026-01-15")
-kp.find(query, limit=10, since=None)       # Semantic search → list[Item]
-kp.find_similar(uri, limit=10, since=None) # Similar items → list[Item]
-kp.get_similar_for_display(id, limit=3)    # Similar items using stored embedding → list[Item]
-kp.query_tag(key, value=None, since=None)  # Tag lookup → list[Item]
-kp.query_fulltext(query, since=None)       # Text search → list[Item]
-
-# Tags
-kp.tag(id, tags={})                     # Update tags only → Item | None
-kp.list_tags(key=None)                  # List tag keys or values → list[str]
-
-# Item access
-kp.get(id)                              # Fetch by ID → Item | None
-kp.exists(id)                           # Check existence → bool
-kp.list_recent(limit=10)                # Recent items by update time → list[Item]
-kp.list_collections()                   # All collections → list[str]
-
-# Version history
-kp.get_version(id, offset=1)            # Get previous version (1=prev, 2=two ago) → Item | None
-kp.list_versions(id, limit=10)          # List archived versions → list[VersionInfo]
-kp.get_version_nav(id)                  # Get prev/next for display → dict
-
-# Current intentions (now)
-kp.get_now()                            # Get current intentions (auto-creates if missing) → Item
-kp.set_now(content, tags={})            # Set current intentions → Item
+from keep import Keeper
+kp = Keeper()
+kp.remember("note", tags={"project": "myapp"})
+results = kp.find("authentication", limit=5)
 ```
-
-## Item Fields
-`id`, `summary`, `tags` (dict), `score` (searches only)
-
-Timestamps accessed via properties: `item.created`, `item.updated` (read from tags)
 
 ## Tags
 
