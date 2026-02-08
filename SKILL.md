@@ -55,7 +55,7 @@ keep now "what's true now"   # Update intentions
 keep put "learning" -t type=learning -t topic=X    # Capture insight
 keep put "I will do Y" -t act=commitment -t status=open  # Track commitments
 keep put "https://example.com/doc" -t topic=X      # Index important documents
-keep get "_tag:act"          # Speech-act tag reference
+keep get .tag/act            # Speech-act tag reference
 \`\`\`
 
 **Protocol:** Reflect using `keep` — before, during, and after action. Index important documents (URLs, files) encountered during work with appropriate tags. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
@@ -153,13 +153,13 @@ Now *store and read* the foundational teachings. These are seed wisdom, not test
 
 **The Language-Action framework** — conversation types, commitment structure, breakdowns:
 ```bash
-keep get "_system:conversations"
+keep get .conversations
 ```
 
 Use standard tags for speech acts and status:
 ```bash
-keep get "_tag:act"       # Tags for speech-act categories: commitment, request, assertion etc
-keep get "_tag:status"    # Tags for lifecycle status: open, fulfilled, withdrawn, etc.
+keep get .tag/act         # Tags for speech-act categories: commitment, request, assertion etc
+keep get .tag/status      # Tags for lifecycle status: open, fulfilled, withdrawn, etc.
 ```
 
 **The mirror teaching** (MN61) — actions reflected upon before, during, after:
@@ -213,15 +213,15 @@ keep del ID                           # Remove item or revert to previous versio
 
 **Domain organization** — tagging strategies, collection structures:
 ```bash
-keep get "_system:domains"
+keep get .domains
 ```
 
 Use `project` tags for bounded work, `topic` for cross-cutting knowledge.
 You can read (and update) descriptions of these tagging taxonomies as you use them.
 
 ```bash
-keep get "_tag:project"   # Bounded work contexts
-keep get "_tag:topic"     # Cross-cutting subject areas
+keep get .tag/project     # Bounded work contexts
+keep get .tag/topic       # Cross-cutting subject areas
 ```
 
 For complete CLI and API reference, see [docs/REFERENCE.md](docs/REFERENCE.md).
@@ -233,5 +233,5 @@ For complete CLI and API reference, see [docs/REFERENCE.md](docs/REFERENCE.md).
 - [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) — Detailed patterns for working sessions
 - [docs/REFERENCE.md](docs/REFERENCE.md) — Complete CLI and API reference
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — Installation and setup
-- [keep/data/system/conversations.md](keep/data/system/conversations.md) — Full conversation framework (`_system:conversations`)
-- [keep/data/system/domains.md](keep/data/system/domains.md) — Domain-specific organization (`_system:domains`)
+- [keep/data/system/conversations.md](keep/data/system/conversations.md) — Full conversation framework (`.conversations`)
+- [keep/data/system/domains.md](keep/data/system/domains.md) — Domain-specific organization (`.domains`)

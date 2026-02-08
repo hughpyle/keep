@@ -181,7 +181,7 @@ COLLECTION_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 ENV_TAG_PREFIX = "KEEP_TAG_"
 
 # Fixed ID for the current working context (singleton)
-NOWDOC_ID = "_now:default"
+NOWDOC_ID = "now"
 
 
 def _get_system_doc_dir() -> Path:
@@ -216,15 +216,29 @@ def _get_system_doc_dir() -> Path:
 SYSTEM_DOC_DIR = _get_system_doc_dir()
 
 # Stable IDs for system documents (path-independent)
+# Convention: filename sans .md, hyphens → /, prefixed with .
 SYSTEM_DOC_IDS = {
-    "now.md": "_system:now",
-    "conversations.md": "_system:conversations",
-    "domains.md": "_system:domains",
-    "library.md": "_system:library",
-    "tag-act.md": "_tag:act",
-    "tag-status.md": "_tag:status",
-    "tag-project.md": "_tag:project",
-    "tag-topic.md": "_tag:topic",
+    "now.md": ".now",
+    "conversations.md": ".conversations",
+    "domains.md": ".domains",
+    "library.md": ".library",
+    "tag-act.md": ".tag/act",
+    "tag-status.md": ".tag/status",
+    "tag-project.md": ".tag/project",
+    "tag-topic.md": ".tag/topic",
+}
+
+# Old IDs for migration (maps old → new)
+_OLD_ID_RENAMES = {
+    "_system:now": ".now",
+    "_system:conversations": ".conversations",
+    "_system:domains": ".domains",
+    "_system:library": ".library",
+    "_tag:act": ".tag/act",
+    "_tag:status": ".tag/status",
+    "_tag:project": ".tag/project",
+    "_tag:topic": ".tag/topic",
+    "_now:default": "now",
 }
 
 
@@ -306,7 +320,7 @@ def _text_content_id(content: str) -> str:
     Generate a content-addressed ID for text updates.
 
     This makes text updates versioned by content:
-    - `keep put "my note"` → ID = _text:{hash[:12]}
+    - `keep put "my note"` → ID = %{hash[:12]}
     - `keep put "my note" -t status=done` → same ID, new version
     - `keep put "different note"` → different ID
 
@@ -314,10 +328,10 @@ def _text_content_id(content: str) -> str:
         content: The text content
 
     Returns:
-        Content-addressed ID in format _text:{hash[:12]}
+        Content-addressed ID in format %{hash[:12]}
     """
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
-    return f"_text:{content_hash}"
+    return f"%{content_hash}"
 
 
 class Keeper:
@@ -411,10 +425,10 @@ class Keeper:
         Migrate system documents to stable IDs and current version.
 
         Handles:
-        - Migration from old file:// URIs to _system:{name} IDs
+        - Migration from old file:// URIs to stable IDs
+        - Rename of old prefixes (_system:, _tag:, _now:, _text:) to new (.x, .tag/x, now, %x)
         - Fresh creation for new stores
         - Version upgrades when bundled content changes
-        - Cleanup of old file:// URIs (from before path was changed)
 
         Called during init. Only loads docs that don't already exist,
         so user modifications are preserved. Updates config version
@@ -435,29 +449,71 @@ class Keeper:
         filename_to_id = {name: doc_id for name, doc_id in SYSTEM_DOC_IDS.items()}
 
         # First pass: clean up old file:// URIs with category=system tag
-        # These may have different paths than current SYSTEM_DOC_DIR
         try:
             old_system_docs = self.query_tag("category", "system")
             for doc in old_system_docs:
                 if doc.id.startswith("file://") and doc.id.endswith(".md"):
-                    # Extract filename from path
                     filename = Path(doc.id.replace("file://", "")).name
                     new_id = filename_to_id.get(filename)
                     if new_id and not self.exists(new_id):
-                        # Migrate content to new ID
                         self.remember(doc.summary, id=new_id, tags=doc.tags)
                         self.delete(doc.id)
                         stats["migrated"] += 1
                         logger.info("Migrated system doc: %s -> %s", doc.id, new_id)
                     elif new_id:
-                        # New ID already exists, just clean up old one
                         self.delete(doc.id)
                         stats["cleaned"] += 1
                         logger.info("Cleaned up old system doc: %s", doc.id)
         except Exception as e:
             logger.debug("Error scanning old system docs: %s", e)
 
-        # Second pass: create or update system docs from bundled content
+        # Second pass: rename old prefixes to new
+        # _system:foo → .foo, _tag:foo → .tag/foo, _now:default → now
+        for old_id, new_id in _OLD_ID_RENAMES.items():
+            try:
+                old_item = self.get(old_id)
+                if old_item and not self.exists(new_id):
+                    self.remember(old_item.summary, id=new_id, tags=old_item.tags)
+                    self.delete(old_id)
+                    stats["migrated"] += 1
+                    logger.info("Renamed ID: %s -> %s", old_id, new_id)
+                elif old_item:
+                    self.delete(old_id)
+                    stats["cleaned"] += 1
+            except Exception as e:
+                logger.debug("Error renaming %s: %s", old_id, e)
+
+        # Rename _text:hash → %hash (transfer embeddings directly, no re-embedding)
+        try:
+            coll = self._resolve_collection(None)
+            old_text_docs = self._document_store.query_by_id_prefix(coll, "_text:")
+            for rec in old_text_docs:
+                new_id = "%" + rec.id[len("_text:"):]
+                if not self._document_store.get(coll, new_id):
+                    # Copy in document store
+                    self._document_store.upsert(coll, new_id, rec.summary, rec.tags)
+                    # Transfer embedding from ChromaDB (no re-embedding needed)
+                    try:
+                        chroma_coll = self._store._get_collection(coll)
+                        result = chroma_coll.get(
+                            ids=[rec.id],
+                            include=["embeddings", "metadatas", "documents"])
+                        if result["ids"] and result["embeddings"]:
+                            meta = result["metadatas"][0] or {}
+                            chroma_coll.upsert(
+                                ids=[new_id],
+                                embeddings=[result["embeddings"][0]],
+                                documents=[result["documents"][0] or rec.summary],
+                                metadatas=[meta])
+                    except Exception:
+                        pass  # ChromaDB entry may not exist
+                self.delete(rec.id)
+                stats["migrated"] += 1
+                logger.info("Renamed text ID: %s -> %s", rec.id, new_id)
+        except Exception as e:
+            logger.debug("Error migrating _text: IDs: %s", e)
+
+        # Third pass: create or update system docs from bundled content
         for path in SYSTEM_DOC_DIR.glob("*.md"):
             new_id = SYSTEM_DOC_IDS.get(path.name)
             if new_id is None:

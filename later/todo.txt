@@ -9,11 +9,6 @@
     - embeddings
     - summarization
 
-* change `_text:foo` to just `#foo` for simplicity and readability (for new files)
-
-* change `_system:foo` to just `^foo` for similar reasons (for new files)
-    (need a backward-compat shim for these I guess)
-
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
@@ -248,3 +243,4 @@ x `context` text alongside summaries? (no, summary is good now)
 . anthropic OAuth token support: CLAUDE_CODE_OAUTH_TOKEN as alternative to ANTHROPIC_API_KEY, documented distinction between API keys (sk-ant-api03-...) and OAuth tokens (sk-ant-oat01-...) from `claude setup-token`
 . document indexing practice: added guidance to SKILL.md, reflect.md, and Protocol Block instructing agents to index important documents (URLs, files) encountered during work with appropriate tags explaining what and why
 . timestamps: seconds-precision UTC, no timezone suffix in frontmatter (stored and displayed)
+. ID prefix rename: _text:hash → %hash, _system:foo → .foo, _tag:foo → .tag/foo, _now:default → now. Migration renames old IDs, SYSTEM_DOCS_VERSION 6, % added to shell-safe pattern.

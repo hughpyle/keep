@@ -382,10 +382,12 @@ class TestShellQuoteId:
     def test_safe_id_not_quoted(self):
         """IDs with only shell-safe chars are returned as-is."""
         from keep.cli import _shell_quote_id
-        assert _shell_quote_id("_text:abc123def456") == "_text:abc123def456"
+        assert _shell_quote_id("%abc123def456") == "%abc123def456"
         assert _shell_quote_id("file:///path/to/doc.md") == "file:///path/to/doc.md"
         assert _shell_quote_id("https://example.com/path") == "https://example.com/path"
-        assert _shell_quote_id("_now:default@V{3}") == "_now:default@V{3}"
+        assert _shell_quote_id("now@V{3}") == "now@V{3}"
+        assert _shell_quote_id(".tag/act") == ".tag/act"
+        assert _shell_quote_id(".conversations") == ".conversations"
 
     def test_space_id_quoted(self):
         """IDs with spaces get single-quoted."""
@@ -423,12 +425,12 @@ class TestShellQuoteId:
         from keep.cli import _format_summary_line
         from keep.types import Item
         item = Item(
-            id="_text:abc123",
+            id="%abc123",
             summary="A note",
             tags={"_updated": "2026-01-15T00:00:00Z"},
         )
         output = _format_summary_line(item)
-        assert "_text:abc123" in output
+        assert "%abc123" in output
         assert "'" not in output.split(" ")[0]  # ID portion not quoted
 
     def test_versioned_id_quotes_unsafe(self):

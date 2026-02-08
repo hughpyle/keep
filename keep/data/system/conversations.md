@@ -54,7 +54,7 @@ When an agent assists with a task, it participates in a conversation with struct
 Understanding *where we are* in this structure is as important as understanding
 *what we know* about the subject matter.
 
-**Tagging convention:** Use `act` to classify the speech-act type and `status` to track lifecycle state. For full details: `keep get "_tag:act"` and `keep get "_tag:status"`.
+**Tagging convention:** Use `act` to classify the speech-act type and `status` to track lifecycle state. For full details: `keep get .tag/act` and `keep get .tag/status`.
 
 ---
 

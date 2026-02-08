@@ -834,7 +834,7 @@ class DocumentStore:
 
         Args:
             collection: Collection name
-            prefix: ID prefix to match (e.g., "_system:")
+            prefix: ID prefix to match (e.g., ".")
 
         Returns:
             List of matching DocumentRecords
