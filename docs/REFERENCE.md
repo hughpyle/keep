@@ -60,13 +60,13 @@ Version numbers are **offsets**: @V{0} = current, @V{1} = previous, @V{2} = two 
 ### Pipe Composition
 
 ```bash
-keep --ids find "auth" | xargs keep get              # Get full details
+keep --ids find "auth" | xargs keep get              # Get full details for all matches
+keep --ids list -n 5 | xargs keep get                # Get details for recent items
 keep --ids list --tag project=foo | xargs keep tag-update --tag status=done
 keep --json --ids find "query"                       # JSON array: ["id@V{0}", ...]
 
 # Version history composition
 keep --ids now --history | xargs -I{} keep get "{}"  # Get all versions
-keep --ids list | xargs -I{} keep get "{}"           # Get details for recent items
 diff <(keep get doc:1) <(keep get "doc:1@V{1}")      # Diff current vs previous
 ```
 
@@ -91,6 +91,7 @@ keep put "note" --suggest-tags        # Show tag suggestions from similar items
 
 # Get with versioning and similar items
 keep get ID                          # Current version with similar items
+keep get ID1 ID2 ID3                 # Multiple items
 keep get ID -V 1                     # Previous version with prev/next nav
 keep get "ID@V{1}"                   # Same as -V 1 (version identifier syntax)
 keep get ID --history                # List all versions (default 10, -n to override)

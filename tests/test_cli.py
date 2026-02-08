@@ -290,18 +290,42 @@ class TestUnixComposability:
         """IDs can be extracted for use in other commands."""
         from keep.cli import _format_items
         from keep.types import Item
-        
+
         items = [
             Item(id="file:///a.md", summary="A"),
             Item(id="file:///b.md", summary="B"),
         ]
-        
+
         json_output = _format_items(items, as_json=True)
         parsed = json.loads(json_output)
-        
+
         # Simulate: keep find "query" --json | jq -r '.[].id' | xargs -I{} keep get {}
         ids = [item["id"] for item in parsed]
         assert ids == ["file:///a.md", "file:///b.md"]
+
+    def test_get_multiple_ids_separated_by_yaml_separator(self, cli):
+        """Multiple IDs in get produce YAML-document-separated output."""
+        # Get two system docs that always exist
+        result = cli("get", ".conversations", ".domains", "--no-similar")
+        assert result.returncode == 0
+        # Multiple items separated by --- between them
+        parts = result.stdout.split("\n---\n")
+        # At least 2 documents (each starts with --- frontmatter too)
+        assert len(parts) >= 3  # opening ---, doc1 body + ---, doc2 frontmatter + body
+        assert ".conversations" in result.stdout
+        assert ".domains" in result.stdout
+
+    def test_get_single_id_no_extra_separator(self, cli):
+        """Single ID in get produces normal output (no extra separators)."""
+        result = cli("get", ".conversations", "--no-similar")
+        assert result.returncode == 0
+        assert "id: .conversations" in result.stdout
+
+    def test_get_nonexistent_id_returns_error(self, cli):
+        """Nonexistent ID returns exit code 1."""
+        result = cli("get", "nonexistent:id:that:does:not:exist")
+        assert result.returncode == 1
+        assert "Not found" in result.stderr
 
 
 # -----------------------------------------------------------------------------
@@ -335,6 +359,12 @@ class TestApiCliEquivalence:
         result = cli("get", "--help")
         assert "ID" in result.stdout or "id" in result.stdout.lower()
         # The CLI get uses mem.get(id)
+
+    def test_get_accepts_multiple_ids(self, cli):
+        """'get' command accepts multiple ID arguments."""
+        result = cli("get", "--help")
+        # Help should show variadic argument
+        assert "ID..." in result.stdout
     
     def test_list_tag_maps_to_api_query_tag(self, cli):
         """'list --tag' command maps to Keeper.query_tag()."""
