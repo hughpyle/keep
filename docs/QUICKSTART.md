@@ -33,16 +33,18 @@ Set environment variables for your preferred providers:
   - Direct API access with OAuth tokens may have limitations or require additional configuration
   - For production use with `keep`, prefer using a standard API key from the Anthropic console
 
-**Recommended setup** (best quality/cost balance):
+**Simplest setup** (single API key):
 ```bash
-export VOYAGE_API_KEY=...      # Embeddings (Anthropic's partner)
-export ANTHROPIC_API_KEY=...   # Summarization (cheapest: claude-3-haiku)
+export OPENAI_API_KEY=...      # Does both embeddings + summarization
+# Or: GEMINI_API_KEY=...       # Also does both
 keep put "test"             # Store auto-initializes on first use
 ```
 
-**Single provider** (if you only have one API key):
+**Best quality** (two API keys for optimal embeddings):
 ```bash
-export OPENAI_API_KEY=...      # Does both embeddings + summarization
+export VOYAGE_API_KEY=...      # Embeddings (Anthropic's partner)
+export ANTHROPIC_API_KEY=...   # Summarization (cost-effective: claude-3-haiku)
+# Or: CLAUDE_CODE_OAUTH_TOKEN  # OAuth token alternative
 keep put "test"
 ```
 
@@ -159,28 +161,7 @@ keep put "different note"       # Different ID (new document)
 
 ## Python API
 
-```python
-from keep import Keeper
-
-kp = Keeper()  # Uses ~/.keep/ by default
-
-# Index from file or URL
-kp.update("file:///path/to/doc.md", tags={"project": "myapp"})
-kp.update("https://inguz.substack.com/p/keep", tags={"topic": "practice"})
-kp.remember("Important insight about auth patterns")
-
-# Search
-results = kp.find("authentication", limit=5)
-for r in results:
-    print(f"[{r.score:.2f}] {r.id}: {r.summary}")
-
-# Retrieve
-item = kp.get("file:///path/to/doc.md")
-
-# Version history
-prev = kp.get_version("doc:1", offset=1)     # Previous version
-versions = kp.list_versions("doc:1")          # All versions
-```
+For embedding keep into applications, see [PYTHON-API.md](PYTHON-API.md).
 
 ## Model Configuration
 
@@ -227,10 +208,11 @@ Run `keep config` to see integration status. Set `KEEP_NO_SETUP=1` to skip auto-
 KEEP_STORE_PATH=/path/to/store       # Override store location
 KEEP_TAG_PROJECT=myapp               # Auto-apply tags
 KEEP_NO_SETUP=1                      # Skip auto-install of tool integrations
-VOYAGE_API_KEY=pa-...                # For Voyage embeddings
-ANTHROPIC_API_KEY=sk-ant-...         # For Anthropic summarization
-OPENAI_API_KEY=sk-...                # For OpenAI providers
-GEMINI_API_KEY=...                   # For Gemini providers
+OPENAI_API_KEY=sk-...                # For OpenAI (embeddings + summarization)
+GEMINI_API_KEY=...                   # For Gemini (embeddings + summarization)
+VOYAGE_API_KEY=pa-...                # For Voyage embeddings only
+ANTHROPIC_API_KEY=sk-ant-...         # For Anthropic summarization only
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # OAuth token alternative
 ```
 
 ## Troubleshooting
@@ -245,7 +227,8 @@ GEMINI_API_KEY=...                   # For Gemini providers
 
 ## Next Steps
 
-- [REFERENCE.md](REFERENCE.md) — Complete CLI and API reference
+- [REFERENCE.md](REFERENCE.md) — Complete CLI reference
+- [PYTHON-API.md](PYTHON-API.md) — Python API for embedding keep in applications
 - [AGENT-GUIDE.md](AGENT-GUIDE.md) — Working session patterns
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System internals
 - [SKILL.md](../SKILL.md) — The reflective practice

@@ -3,7 +3,8 @@
 This guide provides in-depth patterns for using the reflective memory store effectively.
 
 For the practice introduction (why and when), see [../SKILL.md](../SKILL.md).
-For quick API/CLI reference, see [REFERENCE.md](REFERENCE.md).
+For quick CLI reference, see [REFERENCE.md](REFERENCE.md).
+For complete Python API reference, see [PYTHON-API.md](PYTHON-API.md).
 
 ---
 

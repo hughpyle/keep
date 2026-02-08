@@ -32,11 +32,11 @@ class AnthropicSummarization:
     Note: OAuth tokens (sk-ant-oat01-...) are primarily for Claude Code CLI.
     For production use, prefer API keys (sk-ant-api03-...) from console.anthropic.com.
 
-    Default model is claude-3-haiku (cheapest: $0.25/$1.25 per MTok).
+    Default model is claude-3-haiku (cost-effective: $0.25/$1.25 per MTok).
     Configure via keep.toml [summarization] section for other models:
-    - claude-3-haiku-20240307: Cheapest, fast, good for summaries
-    - claude-3-5-haiku-20241022: Better quality, 3x cost
-    - claude-haiku-4-5-20251001: Latest, best quality, 4x cost
+    - claude-3-haiku-20240307: Cost-effective, fast, good for summaries
+    - claude-3-5-haiku-20241022: Better quality, higher cost
+    - claude-haiku-4-5-20251001: Latest, best quality, highest cost
     """
 
     def __init__(
@@ -303,7 +303,7 @@ class AnthropicTagging:
     2. ANTHROPIC_API_KEY (recommended: API key from console.anthropic.com)
     3. CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token')
 
-    Default model is claude-3-haiku (cheapest). See AnthropicSummarization
+    Default model is claude-3-haiku (cost-effective). See AnthropicSummarization
     for model options and pricing.
     """
 
