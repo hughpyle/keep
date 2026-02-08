@@ -100,12 +100,11 @@ class TestTimestamps:
 
     def test_created_at_preserved_on_update(self, store: DocumentStore) -> None:
         """created_at is preserved when updated."""
+        store._now = lambda: "2026-01-01T00:00:00"
         original, _ = store.upsert("default", "doc:1", "Original", {})
         original_created = original.created_at
 
-        import time
-        time.sleep(0.01)  # Small delay to ensure different timestamp
-
+        store._now = lambda: "2026-01-01T00:00:05"
         updated, _ = store.upsert("default", "doc:1", "Updated", {})
 
         assert updated.created_at == original_created
@@ -481,12 +480,11 @@ class TestAccessedAt:
 
     def test_touch_updates_accessed_at(self, store: DocumentStore) -> None:
         """touch() updates accessed_at without changing updated_at."""
+        store._now = lambda: "2026-01-01T00:00:00"
         record, _ = store.upsert("default", "doc:1", "Summary", {})
         original_updated = record.updated_at
 
-        import time
-        time.sleep(0.01)
-
+        store._now = lambda: "2026-01-01T00:00:05"
         store.touch("default", "doc:1")
         doc = store.get("default", "doc:1")
 
@@ -495,13 +493,12 @@ class TestAccessedAt:
 
     def test_touch_many(self, store: DocumentStore) -> None:
         """touch_many() updates accessed_at for multiple docs."""
+        store._now = lambda: "2026-01-01T00:00:00"
         store.upsert("default", "doc:1", "S1", {})
         store.upsert("default", "doc:2", "S2", {})
         store.upsert("default", "doc:3", "S3", {})
 
-        import time
-        time.sleep(0.01)
-
+        store._now = lambda: "2026-01-01T00:00:05"
         store.touch_many("default", ["doc:1", "doc:3"])
 
         d1 = store.get("default", "doc:1")
@@ -516,13 +513,13 @@ class TestAccessedAt:
 
     def test_list_recent_order_by_accessed(self, store: DocumentStore) -> None:
         """list_recent(order_by='accessed') sorts by accessed_at."""
+        store._now = lambda: "2026-01-01T00:00:00"
         store.upsert("default", "doc:1", "First", {})
 
-        import time
-        time.sleep(0.01)
+        store._now = lambda: "2026-01-01T00:00:01"
         store.upsert("default", "doc:2", "Second", {})
 
-        time.sleep(0.01)
+        store._now = lambda: "2026-01-01T00:00:02"
         # Touch doc:1 so it has newer accessed_at than doc:2
         store.touch("default", "doc:1")
 

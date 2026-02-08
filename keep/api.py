@@ -102,6 +102,30 @@ def _filter_by_date(items: list, since: str) -> list:
     ]
 
 
+def _truncate_ts(ts: str) -> str:
+    """Truncate ISO timestamp to seconds UTC, no timezone suffix.
+
+    Strips microseconds and timezone indicator from stored timestamps.
+    All timestamps are UTC by convention.
+    """
+    # Remove microseconds: cut at first '.' after position 19 (HH:MM:SS)
+    dot = ts.find(".", 19)
+    if dot != -1:
+        # Find where timezone starts after microseconds
+        for i in range(dot + 1, len(ts)):
+            if ts[i] in "+-Z":
+                ts = ts[:dot] + ts[i:]
+                break
+        else:
+            ts = ts[:dot]
+    # Strip timezone suffix (+00:00, Z, etc.) — all timestamps are UTC
+    if ts.endswith("+00:00"):
+        ts = ts[:-6]
+    elif ts.endswith("Z"):
+        ts = ts[:-1]
+    return ts
+
+
 def _record_to_item(rec, score: float = None) -> "Item":
     """
     Convert a DocumentRecord to an Item with timestamp tags.
@@ -110,13 +134,16 @@ def _record_to_item(rec, score: float = None) -> "Item":
     to ensure consistent timestamp exposure across all retrieval methods.
     """
     from .types import Item
+    updated = _truncate_ts(rec.updated_at) if rec.updated_at else ""
+    created = _truncate_ts(rec.created_at) if rec.created_at else ""
+    accessed = _truncate_ts(rec.accessed_at or rec.updated_at) if (rec.accessed_at or rec.updated_at) else ""
     tags = {
         **rec.tags,
-        "_updated": rec.updated_at,
-        "_created": rec.created_at,
-        "_updated_date": rec.updated_at[:10] if rec.updated_at else "",
-        "_accessed": rec.accessed_at or rec.updated_at,
-        "_accessed_date": (rec.accessed_at or rec.updated_at or "")[:10],
+        "_updated": updated,
+        "_created": created,
+        "_updated_date": updated[:10],
+        "_accessed": accessed,
+        "_accessed_date": accessed[:10],
     }
     return Item(id=rec.id, summary=rec.summary, tags=tags, score=score)
 
@@ -1024,8 +1051,10 @@ class Keeper:
             updated_str = item.tags.get("_updated")
             if updated_str and item.score is not None:
                 try:
-                    # Parse ISO timestamp
+                    # Parse ISO timestamp (may lack timezone — all timestamps are UTC)
                     updated = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+                    if updated.tzinfo is None:
+                        updated = updated.replace(tzinfo=timezone.utc)
                     days_elapsed = (now - updated).total_seconds() / 86400
                     
                     # Exponential decay: 0.5^(days/half_life)
