@@ -216,13 +216,21 @@ def _format_yaml_frontmatter(
     return "\n".join(lines)
 
 
-def _format_summary_line(item: Item) -> str:
-    """Format item as single summary line: id date summary (with @V{N} only for old versions)"""
+def _format_summary_line(item: Item, id_width: int = 0) -> str:
+    """Format item as single summary line: id date summary (with @V{N} only for old versions)
+
+    Args:
+        item: The item to format
+        id_width: Minimum width for ID column (for alignment across items)
+    """
     # Get version-scoped ID (omit @V{0} for current version)
     base_id = item.tags.get("_base_id", item.id)
     version = item.tags.get("_version", "0")
     version_suffix = f"@V{{{version}}}" if version != "0" else ""
     versioned_id = f"{_shell_quote_id(base_id)}{version_suffix}"
+
+    # Pad ID for column alignment
+    padded_id = versioned_id.ljust(id_width) if id_width else versioned_id
 
     # Get date (from _updated_date or _updated or _created)
     date = item.tags.get("_updated_date") or item.tags.get("_updated", "")[:10] or item.tags.get("_created", "")[:10] or ""
@@ -230,13 +238,13 @@ def _format_summary_line(item: Item) -> str:
     # Truncate summary to fit terminal width, collapse newlines
     import shutil
     cols = shutil.get_terminal_size((120, 24)).columns
-    prefix_len = len(versioned_id) + 1 + len(date) + 1  # "id date "
+    prefix_len = len(padded_id) + 1 + len(date) + 1  # "id date "
     max_summary = max(cols - prefix_len, 20)
     summary = item.summary.replace("\n", " ")
     if len(summary) > max_summary:
         summary = summary[:max_summary - 3].rsplit(" ", 1)[0] + "..."
 
-    return f"{versioned_id} {date} {summary}"
+    return f"{padded_id} {date} {summary}"
 
 
 def _format_versioned_id(item: Item) -> str:
@@ -453,7 +461,11 @@ def _format_items(items: list[Item], as_json: bool = False) -> str:
     # Default: summary lines with single-newline separator
     if _get_full_output():
         return "\n\n".join(_format_yaml_frontmatter(item) for item in items)
-    return "\n".join(_format_summary_line(item) for item in items)
+
+    # Compute ID column width for alignment (capped to avoid long URIs dominating)
+    max_id = max(len(_format_versioned_id(item)) for item in items)
+    id_width = min(max_id, 20)
+    return "\n".join(_format_summary_line(item, id_width) for item in items)
 
 
 NO_PROVIDER_ERROR = """
