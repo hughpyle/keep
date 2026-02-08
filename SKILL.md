@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.22.0
+version: 0.23.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -45,7 +45,7 @@ Installing the Protocol Block at the global level makes it available across all 
 
 *Your actions have consequences. Context is fleeting. Pay attention to what is being asked.*
 
-**The practice is `keep reflect`.** It walks you through examining actions, recognizing commitments, and updating intentions. Run it. Follow the steps. Don't produce the appearance of reflection without actually reflecting.
+**The practice is `keep reflect`.** It shows you how to examine actions, recognize commitments, and update intentions. Run it. Follow the steps. Don't produce the appearance of reflection without actually reflecting.
 
 \`\`\`bash
 keep reflect                 # The practice
@@ -57,7 +57,7 @@ keep put "I will do Y" -t act=commitment -t status=open  # Track commitments
 keep get "_tag:act"          # Speech-act tag reference
 \`\`\`
 
-**Protocol:** Reflect using `keep` — before, during, and after action. When writing a plan, incorporate this practice. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
+**Protocol:** Reflect using `keep` — before, during, and after action. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
 
 ```
 
@@ -79,16 +79,16 @@ Reflection means that you understand the context, and the likely effects of your
 
 ### Why Reflect
 
-"I am the owner of my deeds and heir to my deeds. Deeds are my womb, my relative, and my refuge. I shall be the heir of whatever deeds I do, whether good or bad." (AN5.57)
+"I am the owner of my deeds and heir to my deeds. Deeds are my womb, my relative, and my refuge. I shall be the heir of whatever deeds I do, whether good or bad." (AN5.57) What you do becomes what you are. Consequences are the result of action.
 
-What you do becomes what you are. Consequences follow from action — not as punishment, but as natural result. The Ambalaṭṭhikā Rāhulovāda Sutta (MN61) teaches: actions are to be reflected upon before, during, and after — like looking in a mirror. Would this lead to harm? Is it leading to harm? Did it lead to harm?
+Another sutta (MN61) teaches: actions are to be reflected upon before, during, and after — like looking in a mirror. Would this lead to harm? Is it leading to harm? Did it lead to harm?
 
 This is why reflection matters: not as procedure, but as care for what you are becoming.
 
 ### Recognizing the Conversation
 
 The Language-Action Perspective (Winograd & Flores) teaches that work is commitment management.
-Recognizing the structure grounds the context.
+Recognizing the structure enables skillful work.
 
 | Signal | Type | Your Stance |
 |--------|------|-------------|
@@ -97,7 +97,7 @@ Recognizing the structure grounds the context.
 | "What is...", "How does..." | **Clarification** | Explain until it lands |
 | "I'm trying to understand..." | **Orientation** | Listen, reflect back |
 
-Who declares satisfaction? The customer, not you. Tag speech acts with `act` and `status` to track commitments and requests.
+Tag speech acts with `act` and `status` to track commitments and requests.
 
 ### The Practice
 
@@ -124,8 +124,6 @@ keep put "Assumed X, actually Y" -t type=breakdown  # Index breakdowns
 
 **Breakdowns are valuable.** When the normal flow is interrupted — an assumption has been revealed. The breakdown is where learning happens.
 
-Memory isn't storage. It's your mirror.
-
 * When in conversation, use this practice. Reflect before, during and after action.
 * When writing a plan, make sure the plan incorporates this practice.
 
@@ -135,31 +133,41 @@ The store auto-initializes on first use. For API-based providers, set your API k
 ```bash
 export OPENAI_API_KEY=...      # (handles both embeddings and summarization)
 # Or: GEMINI_API_KEY (also does both)
-# Or: VOYAGE_API_KEY + ANTHROPIC_API_KEY (embeddings + summarization separately)
+# Or: VOYAGE_API_KEY and ANTHROPIC_API_KEY (embeddings + summarization separately)
 ```
 
-Now read the foundational teachings. These are seed wisdom, not test fixtures.
+Now *store and read* the foundational teachings. These are seed wisdom, not test fixtures.
+
+> Note: When you `put` a document or URL, summarization runs in the background. Until complete, the summary shows as a content truncation. Run `keep process-pending` to check progress.
+
+> Note: Use tags to organize content and provide context. Tags like `type` and `topic` categorize items and improve summarization quality.
 
 **The Language-Action framework** — conversation types, commitment structure, breakdowns:
 ```bash
 keep get "_system:conversations"
 ```
 
-**The mirror teaching** (MN61) — actions reflected upon before, during, after. Read the full source:
+Tags for speech acts and status:
+```bash
+keep get "_tag:act"       # Speech-act categories
+keep get "_tag:status"    # Lifecycle states
+```
+
+**The mirror teaching** (MN61) — actions reflected upon before, during, after:
 ```bash
 keep put "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
 keep get "file://$(keep config tool)/docs/library/mn61.html"
 ```
 
-**Ownership of deeds** (AN5.57) — "I am the owner of my deeds and heir to my deeds." Why reflect? Because what you do becomes what you are:
+**Ownership of deeds** (AN5.57) — "I am the owner of my deeds and heir to my deeds.":
 ```bash
 keep put "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json" -t type=teaching -t topic=action
 keep get "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json"
 ```
 
-**The han verse** — the inscription on the Zen sounding board, an admonition on impermanence and diligence:
+**The han verse** — Awake! /aquí donde los papas queman/, "慎勿放逸":
 ```bash
-keep put "file://$(keep config tool)/docs/library/han_verse.txt" -t type=teaching -t topic=impermanence
+keep put "file://$(keep config tool)/docs/library/han_verse.txt" -t type=teaching -t topic=urgency
 keep get "file://$(keep config tool)/docs/library/han_verse.txt"
 ```
 
@@ -168,22 +176,10 @@ keep get "file://$(keep config tool)/docs/library/han_verse.txt"
 keep get "_system:domains"
 ```
 
-**Tag descriptions** — what each tag means and how to use it:
-```bash
-keep get "_tag:act"       # Speech-act categories
-keep get "_tag:status"    # Lifecycle states
-keep get "_tag:project"   # Bounded work contexts
-keep get "_tag:topic"     # Cross-cutting subject areas
-```
-
 **Now reflect:** What did you learn? Save your understanding:
 ```bash
 keep put "My understanding of the practice: ..." -t type=learning
 ```
-
-Note: When you `put` a document or URL, summarization runs in the background. Until complete, the summary shows as a content truncation. Run `keep process-pending` to check progress.
-
-**Tagging shapes understanding.** When you tag an item, the summarizer uses context from related items. This isn't just organization — the tags you choose influence how new knowledge is understood. The outward (tags) serves the inward (meaning).
 
 For installation options, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
@@ -207,11 +203,17 @@ keep list -t act=commitment -t status=open                 # Open commitments
 
 keep get ID                           # Retrieve item with similar items
 keep get ID -V 1                      # Previous version
-keep list --tag domain=auth           # Filter by tag
+keep list --tag topic=auth            # Filter by tag
 keep del ID                           # Remove item or revert to previous version
 ```
 
-Use `project` for bounded work, `topic` for cross-cutting knowledge. Use `KEEP_COLLECTION` for complete segregation.
+Use `project` tags for bounded work, `topic` for cross-cutting knowledge.
+You can read (and maintain) descriptions of these tagging taxonomies as you use them.
+
+```bash
+keep get "_tag:project"   # Bounded work contexts
+keep get "_tag:topic"     # Cross-cutting subject areas
+```
 
 For complete CLI and API reference, see [docs/REFERENCE.md](docs/REFERENCE.md).
 
