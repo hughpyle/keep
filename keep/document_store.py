@@ -182,7 +182,7 @@ class DocumentStore:
     
     def _now(self) -> str:
         """Current timestamp in ISO format."""
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
     def _get_unlocked(self, collection: str, id: str) -> Optional[DocumentRecord]:
         """Get a document by ID without acquiring the lock (for use within locked contexts)."""

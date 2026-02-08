@@ -156,10 +156,10 @@ Now *store and read* the foundational teachings. These are seed wisdom, not test
 keep get "_system:conversations"
 ```
 
-Tags for speech acts and status:
+Use standard tags for speech acts and status:
 ```bash
-keep get "_tag:act"       # Speech-act categories
-keep get "_tag:status"    # Lifecycle states
+keep get "_tag:act"       # Tags for speech-act categories: commitment, request, assertion etc
+keep get "_tag:status"    # Tags for lifecycle status: open, fulfilled, withdrawn, etc.
 ```
 
 **The mirror teaching** (MN61) — actions reflected upon before, during, after:
