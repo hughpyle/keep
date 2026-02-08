@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.26.0
+version: 0.27.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -67,7 +67,7 @@ keep get .tag/act            # Speech-act tag reference
 
 If running in OpenClaw (or a similar agentic harness), two integrations make reflection automatic.
 
-**Plugin — context injection every turn:**
+**Plugin:**
 
 ```bash
 openclaw plugins install -l $(keep config openclaw-plugin)
@@ -75,7 +75,7 @@ openclaw plugins enable keep
 openclaw gateway restart
 ```
 
-This installs a `before_agent_start` hook that runs `keep now` and injects the output as prepended context into every agent turn. The agent starts each turn knowing its current intentions and context.
+This installs a `before_agent_start` hook that runs `keep now` and injects the output as prepended context. The agent starts each turn knowing its current intentions and context.
 
 **Cron — daily reflection:**
 
