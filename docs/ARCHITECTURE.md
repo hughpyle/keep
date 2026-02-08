@@ -252,7 +252,7 @@ Dimension determined by model. Must be consistent across indexing and queries.
 ### Summarization Providers
 Generate human-readable summaries from content.
 
-- **anthropic**: LLM-based, cheapest good option (ANTHROPIC_API_KEY)
+- **anthropic**: LLM-based, cheapest good option (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)
 - **openai**: LLM-based, high quality (OPENAI_API_KEY)
 - **gemini**: LLM-based, Google (GEMINI_API_KEY)
 - **MLX**: LLM-based, local, no API key

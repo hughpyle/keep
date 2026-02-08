@@ -24,8 +24,13 @@ class AnthropicSummarization:
     """
     Summarization provider using Anthropic's Claude API.
 
-    Requires: ANTHROPIC_API_KEY environment variable.
-    Optionally reads from OpenClaw config via OPENCLAW_CONFIG env var.
+    Authentication (checked in priority order):
+    1. api_key parameter (if provided)
+    2. ANTHROPIC_API_KEY (recommended: API key from console.anthropic.com)
+    3. CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token')
+
+    Note: OAuth tokens (sk-ant-oat01-...) are primarily for Claude Code CLI.
+    For production use, prefer API keys (sk-ant-api03-...) from console.anthropic.com.
 
     Default model is claude-3-haiku (cheapest: $0.25/$1.25 per MTok).
     Configure via keep.toml [summarization] section for other models:
@@ -44,17 +49,26 @@ class AnthropicSummarization:
             from anthropic import Anthropic
         except ImportError:
             raise RuntimeError("AnthropicSummarization requires 'anthropic' library")
-        
+
         self.model = model
         self.max_tokens = max_tokens
-        
-        # Try environment variable first, then OpenClaw config
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+
+        # Try multiple auth sources in priority order:
+        # 1. Explicit api_key parameter
+        # 2. ANTHROPIC_API_KEY (API key from console.anthropic.com: sk-ant-api03-...)
+        # 3. CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token': sk-ant-oat01-...)
+        key = (
+            api_key or
+            os.environ.get("ANTHROPIC_API_KEY") or
+            os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+        )
         if not key:
-            # Try to read from OpenClaw config (OAuth tokens stored separately)
-            # For now, just require explicit API key
-            raise ValueError("ANTHROPIC_API_KEY environment variable required")
-        
+            raise ValueError(
+                "Anthropic authentication required. Set one of:\n"
+                "  ANTHROPIC_API_KEY (API key from console.anthropic.com)\n"
+                "  CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token')"
+            )
+
         self.client = Anthropic(api_key=key)
     
     def summarize(
@@ -284,6 +298,11 @@ class AnthropicTagging:
     """
     Tagging provider using Anthropic's Claude API with JSON output.
 
+    Authentication (checked in priority order):
+    1. api_key parameter (if provided)
+    2. ANTHROPIC_API_KEY (recommended: API key from console.anthropic.com)
+    3. CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token')
+
     Default model is claude-3-haiku (cheapest). See AnthropicSummarization
     for model options and pricing.
     """
@@ -309,13 +328,25 @@ Respond with a JSON object only, no explanation."""
             from anthropic import Anthropic
         except ImportError:
             raise RuntimeError("AnthropicTagging requires 'anthropic' library")
-        
+
         self.model = model
-        
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+
+        # Try multiple auth sources (same as AnthropicSummarization):
+        # 1. Explicit api_key parameter
+        # 2. ANTHROPIC_API_KEY (API key from console.anthropic.com: sk-ant-api03-...)
+        # 3. CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token': sk-ant-oat01-...)
+        key = (
+            api_key or
+            os.environ.get("ANTHROPIC_API_KEY") or
+            os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+        )
         if not key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable required")
-        
+            raise ValueError(
+                "Anthropic authentication required. Set one of:\n"
+                "  ANTHROPIC_API_KEY (API key from console.anthropic.com)\n"
+                "  CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token')"
+            )
+
         self._client = Anthropic(api_key=key)
     
     def tag(self, content: str) -> dict[str, str]:

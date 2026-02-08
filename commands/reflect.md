@@ -19,6 +19,14 @@ keep list --since P1D # or search, filter by tag, get context
 
 Read the current intentions. Review what has been done since the last reflection. Note what you see.
 
+**Index important documents.** Before analyzing, capture any documents (URLs, files, references) encountered since the last reflection that are important to the user or task:
+```bash
+keep put "https://docs.example.com/api" -t topic=integration -t project=current
+keep put "file:///path/to/design.pdf" -t type=reference
+```
+
+What is this document? Why is it important to this work? Tag appropriately. This creates navigable knowledge for future sessions.
+
 ## 2. The Mirror
 
 For each significant action taken since the last reflection, ask:

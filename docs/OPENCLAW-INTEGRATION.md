@@ -28,7 +28,7 @@ keep can automatically integrate with OpenClaw's configured models when both are
 
 **For summarization**, keep checks in this order:
 
-1. **Anthropic** — if `ANTHROPIC_API_KEY` set
+1. **Anthropic** — if `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` set
 2. **OpenAI** — if `OPENAI_API_KEY` set
 3. **Gemini** — if `GEMINI_API_KEY` set
 4. **MLX** — Apple Silicon local models
@@ -48,7 +48,7 @@ keep can automatically integrate with OpenClaw's configured models when both are
 
 **API keys** are resolved from:
 1. `memorySearch.remote.apiKey` in config
-2. Environment variables (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`)
+2. Environment variables (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`)
 
 ---
 
@@ -72,7 +72,7 @@ keep put "test note"
 For best quality embeddings with Anthropic summarization:
 ```bash
 export VOYAGE_API_KEY=...       # Embeddings (Anthropic's partner)
-export ANTHROPIC_API_KEY=...    # Summarization
+export ANTHROPIC_API_KEY=...    # Summarization (or CLAUDE_CODE_OAUTH_TOKEN)
 keep put "test note"
 ```
 
@@ -158,7 +158,8 @@ OpenClaw uses short model names. keep maps them to actual Anthropic API names:
 | `VOYAGE_API_KEY` | Voyage AI (Anthropic's partner) | ✓ | - |
 | `OPENAI_API_KEY` | OpenAI API | ✓ | ✓ |
 | `GEMINI_API_KEY` | Google Gemini API | ✓ | ✓ |
-| `ANTHROPIC_API_KEY` | Anthropic API | - | ✓ |
+| `ANTHROPIC_API_KEY` | Anthropic API (API key) | - | ✓ |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Anthropic API (OAuth token) | - | ✓ |
 | `OPENCLAW_CONFIG` | Override OpenClaw config location | - | - |
 | `KEEP_STORE_PATH` | Override store location | - | - |
 
