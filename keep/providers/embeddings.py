@@ -219,20 +219,25 @@ class OllamaEmbedding:
     """
     Embedding provider using Ollama's local API.
 
-    Requires: Ollama running locally (default: http://localhost:11434)
+    Requires: Ollama running locally.
+    Respects OLLAMA_HOST env var (default: http://localhost:11434).
     """
 
     def __init__(
         self,
         model: str = "nomic-embed-text",
-        base_url: str = "http://localhost:11434",
+        base_url: str | None = None,
     ):
         """
         Args:
             model: Ollama model name
-            base_url: Ollama API base URL
+            base_url: Ollama API base URL (default: OLLAMA_HOST or http://localhost:11434)
         """
         self.model_name = model
+        if base_url is None:
+            base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
         self.base_url = base_url.rstrip("/")
         self._dimension: int | None = None
 

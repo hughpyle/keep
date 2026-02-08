@@ -137,7 +137,7 @@ Ask: What is this document? Why is it important? Tag appropriately. Documents in
 
 ## Layer 2: First Time Setup
 
-The store auto-initializes on first use. For API-based providers, set your API key first:
+The store auto-initializes on first use. If Ollama is running locally, it's auto-detected — no keys needed. Otherwise, set an API key:
 ```bash
 export OPENAI_API_KEY=...      # (handles both embeddings and summarization)
 # Or: GEMINI_API_KEY (also does both)

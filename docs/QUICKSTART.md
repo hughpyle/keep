@@ -50,9 +50,19 @@ export ANTHROPIC_API_KEY=...   # Summarization (cost-effective: claude-3-haiku)
 keep put "test"
 ```
 
-### Local Providers
+### Ollama (Local LLM Server)
 
-For offline operation (macOS Apple Silicon):
+If [Ollama](https://ollama.com/) is running locally with models pulled, keep auto-detects it — no configuration needed:
+```bash
+ollama pull llama3.2:3b             # Any model works
+keep put "test"                     # Auto-detected on first run
+```
+
+Keep picks the best available model: dedicated embedding models (e.g. `nomic-embed-text`) for embeddings, generative models (e.g. `llama3.2`) for summarization. Respects `OLLAMA_HOST` if set.
+
+### Local Providers (Apple Silicon)
+
+For offline operation on macOS Apple Silicon without Ollama:
 ```bash
 pip install 'keep-skill[local]'
 keep put "test"             # No API key needed
@@ -189,6 +199,8 @@ model = "claude-3-haiku-20240307"
 | **OpenAI** | Summarization | `gpt-4o-mini` (default), `gpt-4o` |
 | **Gemini** | Embeddings | `text-embedding-004` (default) |
 | **Gemini** | Summarization | `gemini-3-flash-preview` (default), `gemini-3-pro-preview` |
+| **Ollama** | Embeddings | Any model; prefer `nomic-embed-text`, `mxbai-embed-large` |
+| **Ollama** | Summarization | Any generative model (e.g. `llama3.2`, `mistral`, `phi3`) |
 | **Local** | Embeddings | `all-MiniLM-L6-v2` (sentence-transformers) |
 | **Local** | Summarization | MLX models (Apple Silicon only) |
 
@@ -210,6 +222,7 @@ Run `keep config` to see integration status. Set `KEEP_NO_SETUP=1` to skip auto-
 KEEP_STORE_PATH=/path/to/store       # Override store location
 KEEP_TAG_PROJECT=myapp               # Auto-apply tags
 KEEP_NO_SETUP=1                      # Skip auto-install of tool integrations
+OLLAMA_HOST=http://localhost:11434   # Ollama server URL (auto-detected)
 OPENAI_API_KEY=sk-...                # For OpenAI (embeddings + summarization)
 GEMINI_API_KEY=...                   # For Gemini (embeddings + summarization)
 VOYAGE_API_KEY=pa-...                # For Voyage embeddings only

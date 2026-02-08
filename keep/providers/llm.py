@@ -171,14 +171,20 @@ class OpenAISummarization:
 class OllamaSummarization:
     """
     Summarization provider using Ollama's local API.
+
+    Respects OLLAMA_HOST env var (default: http://localhost:11434).
     """
 
     def __init__(
         self,
         model: str = "llama3.2",
-        base_url: str = "http://localhost:11434",
+        base_url: str | None = None,
     ):
         self.model = model
+        if base_url is None:
+            base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
         self.base_url = base_url.rstrip("/")
 
     def summarize(
@@ -434,16 +440,22 @@ Respond with a JSON object only, no explanation."""
 class OllamaTagging:
     """
     Tagging provider using Ollama's local API.
+
+    Respects OLLAMA_HOST env var (default: http://localhost:11434).
     """
-    
+
     SYSTEM_PROMPT = OpenAITagging.SYSTEM_PROMPT
-    
+
     def __init__(
         self,
         model: str = "llama3.2",
-        base_url: str = "http://localhost:11434",
+        base_url: str | None = None,
     ):
         self.model = model
+        if base_url is None:
+            base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
         self.base_url = base_url.rstrip("/")
     
     def tag(self, content: str) -> dict[str, str]:

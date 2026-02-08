@@ -66,12 +66,12 @@ The original document content is **not stored** — only the summary and embeddi
 
 **[providers/](keep/providers/)** — Pluggable services
 - **Document**: Fetch content from URIs (file://, https://)
-- **Embedding**: Generate vectors (sentence-transformers, OpenAI, MLX)
+- **Embedding**: Generate vectors (sentence-transformers, OpenAI, Ollama, MLX)
 - **Summarization**: Generate summaries (truncate, LLM-based)
 - **Registry**: Factory for lazy-loading providers
 
 **[config.py](keep/config.py)** — Configuration
-- Detects available providers (platform, API keys)
+- Detects available providers (platform, API keys, Ollama)
 - Persists choices in `keep.toml`
 - Auto-creates on first use
 
@@ -244,6 +244,7 @@ Generate vector representations for semantic search.
 - **voyage**: API-based, Anthropic's recommended partner (VOYAGE_API_KEY)
 - **openai**: API-based, high quality (OPENAI_API_KEY)
 - **gemini**: API-based, Google (GEMINI_API_KEY)
+- **ollama**: Local server, auto-detected, any model (OLLAMA_HOST)
 - **sentence-transformers**: Local, CPU/GPU, no API key
 - **MLX**: Apple Silicon optimized, local, no API key
 
@@ -255,6 +256,7 @@ Generate human-readable summaries from content.
 - **anthropic**: LLM-based, cost-effective option (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)
 - **openai**: LLM-based, high quality (OPENAI_API_KEY)
 - **gemini**: LLM-based, Google (GEMINI_API_KEY)
+- **ollama**: LLM-based, local server, auto-detected (OLLAMA_HOST)
 - **MLX**: LLM-based, local, no API key
 - **truncate**: Simple text truncation (fallback)
 - **passthrough**: Store content as-is (with length limit)
