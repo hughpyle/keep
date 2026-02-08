@@ -174,7 +174,7 @@ keep put "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.j
 keep get "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json"
 ```
 
-**The han verse** — Awake! /aquí donde los papas queman/, "慎勿放逸":
+**The han verse** — Awake! _aquí donde las papas queman_, "慎勿放逸":
 ```bash
 keep put "file://$(keep config tool)/docs/library/han_verse.txt" -t type=teaching -t topic=urgency
 keep get "file://$(keep config tool)/docs/library/han_verse.txt"
