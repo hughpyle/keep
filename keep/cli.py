@@ -1537,6 +1537,11 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
         lines.append("#   openai summarization: gpt-4o-mini (default)")
         lines.append("#   gemini embedding: text-embedding-004 (default)")
         lines.append("#   gemini summarization: gemini-3-flash-preview (default)")
+        lines.append("#")
+        lines.append("# Ollama (auto-detected if running, no API key needed):")
+        lines.append("#   OLLAMA_HOST        → default: http://localhost:11434")
+        lines.append("#   ollama embedding: any model (prefer nomic-embed-text, mxbai-embed-large)")
+        lines.append("#   ollama summarization: any generative model (e.g. llama3.2, mistral)")
 
     return "\n".join(lines)
 

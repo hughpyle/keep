@@ -185,19 +185,76 @@ def get_openclaw_memory_search_config(openclaw_config: dict | None) -> dict | No
             .get("memorySearch", None))
 
 
+def _detect_ollama() -> dict | None:
+    """
+    Check if Ollama is running locally and discover available models.
+
+    Respects OLLAMA_HOST environment variable (default: http://localhost:11434).
+    Uses a short timeout (0.5s) to avoid blocking during provider detection.
+
+    Returns dict with 'base_url' and 'models' if Ollama is reachable
+    with at least one model, None otherwise.
+    """
+    import json
+    import urllib.request
+
+    base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    if not base_url.startswith("http"):
+        base_url = f"http://{base_url}"
+
+    try:
+        req = urllib.request.Request(f"{base_url}/api/tags")
+        with urllib.request.urlopen(req, timeout=0.5) as resp:
+            data = json.loads(resp.read())
+            models = [m["name"] for m in data.get("models", [])]
+            if models:
+                return {"base_url": base_url, "models": models}
+    except Exception:
+        pass
+    return None
+
+
+def _ollama_pick_models(models: list[str]) -> tuple[str, str | None]:
+    """
+    Choose the best Ollama models for embeddings and summarization.
+
+    Returns (embed_model, chat_model). chat_model is None if only
+    embedding-specific models are available.
+    """
+    # Separate embedding-specific models from generative models
+    embed_models = []
+    generative_models = []
+    for m in models:
+        base = m.split(":")[0]
+        if "embed" in base:
+            embed_models.append(m)
+        else:
+            generative_models.append(m)
+
+    # For embeddings: prefer dedicated embedding model, else first available
+    embed_model = embed_models[0] if embed_models else models[0]
+
+    # For summarization: need a generative model (embedding models can't generate text)
+    chat_model = generative_models[0] if generative_models else None
+
+    return embed_model, chat_model
+
+
 def detect_default_providers() -> dict[str, ProviderConfig | None]:
     """
     Detect the best default providers for the current environment.
 
     Priority for embeddings:
     1. API keys: VOYAGE_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
-    2. Local: MLX (Apple Silicon), sentence-transformers
-    3. None if nothing available
+    2. Ollama (if running locally with models)
+    3. Local: MLX (Apple Silicon), sentence-transformers
+    4. None if nothing available
 
     Priority for summarization:
     1. API keys: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), OPENAI_API_KEY, GEMINI_API_KEY
-    2. Local: MLX (Apple Silicon)
-    3. Fallback: truncate (always available)
+    2. Ollama (if running locally with a generative model)
+    3. Local: MLX (Apple Silicon)
+    4. Fallback: truncate (always available)
 
     Returns provider configs for: embedding, summarization, document.
     embedding may be None if no provider is available.
@@ -225,8 +282,19 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     )
     has_voyage_key = bool(os.environ.get("VOYAGE_API_KEY"))
 
+    # Check for Ollama (lazy — only probed when no API key covers both)
+    _ollama_info: dict | None = None
+    _ollama_checked = False
+
+    def get_ollama() -> dict | None:
+        nonlocal _ollama_info, _ollama_checked
+        if not _ollama_checked:
+            _ollama_checked = True
+            _ollama_info = _detect_ollama()
+        return _ollama_info
+
     # --- Embedding provider ---
-    # Priority: Voyage (direct REST) > OpenAI > Gemini > Local (MLX/sentence-transformers)
+    # Priority: Voyage > OpenAI > Gemini > Ollama > MLX > sentence-transformers
     embedding_provider: ProviderConfig | None = None
 
     # 1. API providers first (Voyage uses direct REST, no SDK import needed)
@@ -237,7 +305,17 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     elif has_gemini_key:
         embedding_provider = ProviderConfig("gemini")
 
-    # 2. Local providers (only if no API key available)
+    # 2. Ollama (local server, no API key needed)
+    if embedding_provider is None:
+        ollama = get_ollama()
+        if ollama:
+            embed_model, _ = _ollama_pick_models(ollama["models"])
+            params: dict[str, Any] = {"model": embed_model}
+            if ollama["base_url"] != "http://localhost:11434":
+                params["base_url"] = ollama["base_url"]
+            embedding_provider = ProviderConfig("ollama", params)
+
+    # 3. Local providers (MLX, sentence-transformers)
     if embedding_provider is None:
         if is_apple_silicon:
             try:
@@ -257,7 +335,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     providers["embedding"] = embedding_provider
 
     # --- Summarization provider ---
-    # Priority: Anthropic > OpenAI > Gemini > MLX > truncate
+    # Priority: Anthropic > OpenAI > Gemini > Ollama > MLX > truncate
     summarization_provider: ProviderConfig | None = None
 
     # 1. API providers
@@ -268,7 +346,18 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     elif has_gemini_key:
         summarization_provider = ProviderConfig("gemini")
 
-    # 2. Local MLX (Apple Silicon)
+    # 2. Ollama (needs a generative model, not embedding-only)
+    if summarization_provider is None:
+        ollama = get_ollama()
+        if ollama:
+            _, chat_model = _ollama_pick_models(ollama["models"])
+            if chat_model:
+                params = {"model": chat_model}
+                if ollama["base_url"] != "http://localhost:11434":
+                    params["base_url"] = ollama["base_url"]
+                summarization_provider = ProviderConfig("ollama", params)
+
+    # 3. Local MLX (Apple Silicon)
     if summarization_provider is None and is_apple_silicon:
         try:
             import mlx_lm  # noqa
@@ -276,7 +365,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         except ImportError:
             pass
 
-    # 3. Fallback: truncate (always available)
+    # 4. Fallback: truncate (always available)
     if summarization_provider is None:
         summarization_provider = ProviderConfig("truncate")
 

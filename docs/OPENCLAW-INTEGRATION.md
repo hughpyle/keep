@@ -23,16 +23,18 @@ keep can automatically integrate with OpenClaw's configured models when both are
 1. **Voyage** — if `VOYAGE_API_KEY` set (Anthropic's recommended partner)
 2. **OpenAI** — if `OPENAI_API_KEY` set
 3. **Gemini** — if `GEMINI_API_KEY` set
-4. **MLX** — Apple Silicon local models
-5. **Fallback** — sentence-transformers (local, always works)
+4. **Ollama** — if running locally with models (auto-detected)
+5. **MLX** — Apple Silicon local models
+6. **Fallback** — sentence-transformers (local, always works)
 
 **For summarization**, keep checks in this order:
 
 1. **Anthropic** — if `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` set
 2. **OpenAI** — if `OPENAI_API_KEY` set
 3. **Gemini** — if `GEMINI_API_KEY` set
-4. **MLX** — Apple Silicon local models
-5. **Fallback** — truncate (first 500 chars)
+4. **Ollama** — if running locally with a generative model
+5. **MLX** — Apple Silicon local models
+6. **Fallback** — truncate (first 500 chars)
 
 ### What Gets Shared
 
@@ -176,10 +178,10 @@ OpenClaw uses short model names. keep maps them to actual Anthropic API names:
 
 ### What May Use API
 
-⚠️ **Embeddings** — Local by default (`[local]` install), or API (Voyage/OpenAI/Gemini)
-⚠️ **Summarization** — Local with MLX, or API (Anthropic/OpenAI/Gemini)
+⚠️ **Embeddings** — Local by default (`[local]` install or Ollama), or API (Voyage/OpenAI/Gemini)
+⚠️ **Summarization** — Local with Ollama or MLX, or API (Anthropic/OpenAI/Gemini)
 
-For maximum privacy, use `pip install 'keep-skill[local]'` with no API keys set.
+For maximum privacy, use Ollama or `pip install 'keep-skill[local]'` with no API keys set.
 
 ---
 

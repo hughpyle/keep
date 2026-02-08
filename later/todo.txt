@@ -1,11 +1,16 @@
 
-* add support for ollama (e.g. default model `llama3.2:3b`) for local access
-    - embeddings
-    - summarization
-    (hopefully there's a trivial and fast way to detect these capabilities)
-
 * openclaw detection for AGENTS.md (w.g. in /Users/clawdbot/grab/AGENTS.md)
     it's just cwd()
+
+* openclaw plugin rework
+
+* `keep put --suggest-tags` would be useful for a human user
+    process the document, evaluate the embeddings & similarity, provide multi-selection tags list from that
+
+* `keep add` as a hidden transparent alias for `keep put` (just like `update`)
+
+* add "remember... when..." stuff, but where? and what's the set of useful "when"?
+    (e.g.: remember to double-check that the documentation is all consistent, when finishing X)
 
 * lectio
     - encourage "deep reflection" on items that were important
@@ -244,3 +249,4 @@ x `context` text alongside summaries? (no, summary is good now)
 . ID prefix rename: _text:hash → %hash, _system:foo → .foo, _tag:foo → .tag/foo, _now:default → now. Migration renames old IDs, SYSTEM_DOCS_VERSION 6, % added to shell-safe pattern.
 . aligned ID column in `keep list` output (capped at 20 chars)
 . QUICKSTART.md reordered: keep[local] shown before API key options
+. Ollama support: auto-detection via /api/tags (0.5s timeout), smart model selection (embed vs generative), OLLAMA_HOST env var, priority between API keys and MLX
