@@ -227,7 +227,56 @@ SYSTEM_DOC_IDS = {
     "tag-status.md": ".tag/status",
     "tag-project.md": ".tag/project",
     "tag-topic.md": ".tag/topic",
+    "tag-type.md": ".tag/type",
+    "meta-todo.md": ".meta/todo",
+    "meta-learnings.md": ".meta/learnings",
 }
+
+# Pattern for meta-doc query lines: key=value pairs separated by spaces
+_META_QUERY_PAIR = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*=\S+$')
+# Pattern for context-match lines: key= (bare, no value)
+_META_CONTEXT_KEY = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*)=$')
+
+
+def _parse_meta_doc(content: str) -> tuple[list[dict[str, str]], list[str]]:
+    """
+    Parse meta-doc content into query lines and context-match keys.
+
+    Returns:
+        (query_lines, context_keys) where:
+        - query_lines: list of dicts, each {key: value, ...} for AND queries
+        - context_keys: list of tag keys for context matching
+    """
+    query_lines: list[dict[str, str]] = []
+    context_keys: list[str] = []
+
+    for line in content.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+
+        # Check for context-match: exactly "key=" with no value
+        ctx_match = _META_CONTEXT_KEY.match(line)
+        if ctx_match:
+            context_keys.append(ctx_match.group(1))
+            continue
+
+        # Check for query line: all space-separated tokens are key=value
+        tokens = line.split()
+        pairs: dict[str, str] = {}
+        is_query = True
+        for token in tokens:
+            if _META_QUERY_PAIR.match(token):
+                k, v = token.split("=", 1)
+                pairs[k] = v
+            else:
+                is_query = False
+                break
+
+        if is_query and pairs:
+            query_lines.append(pairs)
+
+    return query_lines, context_keys
 
 # Old IDs for migration (maps old → new)
 _OLD_ID_RENAMES = {
@@ -522,7 +571,18 @@ class Keeper:
         except Exception as e:
             logger.debug("Error migrating _text: IDs: %s", e)
 
-        # Third pass: create or update system docs from bundled content
+        # Third pass: remove system docs no longer bundled
+        _RETIRED_SYSTEM_IDS = [".meta/decisions"]
+        for old_id in _RETIRED_SYSTEM_IDS:
+            try:
+                if self.exists(old_id):
+                    self.delete(old_id)
+                    stats["cleaned"] += 1
+                    logger.info("Removed retired system doc: %s", old_id)
+            except Exception as e:
+                logger.debug("Error removing retired doc %s: %s", old_id, e)
+
+        # Fourth pass: create or update system docs from bundled content
         for path in SYSTEM_DOC_DIR.glob("*.md"):
             new_id = SYSTEM_DOC_IDS.get(path.name)
             if new_id is None:
@@ -531,11 +591,30 @@ class Keeper:
 
             try:
                 content, tags = _load_frontmatter(path)
+                bundled_hash = _content_hash(content)
                 tags["category"] = "system"
-                existed = self.exists(new_id)
-                # remember() handles both create and update (with re-summarization)
+                tags["bundled_hash"] = bundled_hash
+
+                # Check for user edits before overwriting
+                existing_doc = self._document_store.get(coll, new_id)
+                if existing_doc:
+                    prev_hash = existing_doc.tags.get("bundled_hash")
+                    if prev_hash and existing_doc.content_hash != prev_hash:
+                        # User edited this doc — preserve their version
+                        stats["skipped"] += 1
+                        logger.info("Preserving user-edited system doc: %s", new_id)
+                        continue
+
+                # Store via remember() for embedding/versioning, then patch
+                # summary to full verbatim content (system docs are reference
+                # material — never summarize them)
                 self.remember(content, id=new_id, tags=tags)
-                if existed:
+                self._document_store.upsert(
+                    collection=coll, id=new_id, summary=content,
+                    tags=self._document_store.get(coll, new_id).tags,
+                    content_hash=bundled_hash,
+                )
+                if existing_doc:
                     stats["migrated"] += 1
                     logger.info("Updated system doc: %s", new_id)
                 else:
@@ -841,7 +920,7 @@ class Keeper:
             logger.debug("Content and tags unchanged, skipping summarization for %s", id)
             final_summary = existing_doc.summary
         elif summary is not None:
-            # User-provided summary - validate length
+            # Caller-provided summary — enforce max_summary_length
             if len(summary) > max_len:
                 import warnings
                 warnings.warn(
@@ -1020,7 +1099,7 @@ class Keeper:
             logger.debug("Content and tags unchanged, skipping summarization for %s", id)
             final_summary = existing_doc.summary
         elif summary is not None:
-            # User-provided summary - validate length
+            # Caller-provided summary — enforce max_summary_length
             if len(summary) > max_len:
                 import warnings
                 warnings.warn(
@@ -1320,6 +1399,162 @@ class Keeper:
         coll = self._resolve_collection(collection)
         version_count = self._document_store.version_count(coll, base_id)
         return version_count - int(version_tag) + 1
+
+    def resolve_meta(
+        self,
+        item_id: str,
+        *,
+        limit_per_doc: int = 3,
+        collection: Optional[str] = None,
+    ) -> dict[str, list[Item]]:
+        """
+        Resolve all .meta/* docs against an item's tags.
+
+        Meta-docs define tag-based queries that surface contextually relevant
+        items — open commitments, past learnings, decisions to revisit.
+        Results are ranked by similarity to the current item + recency decay,
+        so the most relevant matches surface first.
+
+        Args:
+            item_id: ID of the item whose tags provide context
+            limit_per_doc: Max results per meta-doc
+            collection: Target collection
+
+        Returns:
+            Dict of {meta_name: [matching Items]}. Empty results omitted.
+        """
+        coll = self._resolve_collection(collection)
+
+        # Find all .meta/* documents
+        meta_records = self._document_store.query_by_id_prefix(coll, ".meta/")
+        if not meta_records:
+            return {}
+
+        # Get current item's tags for context
+        current = self.get(item_id, collection=collection)
+        if current is None:
+            return {}
+        current_tags = current.tags
+
+        result: dict[str, list[Item]] = {}
+
+        for rec in meta_records:
+            meta_id = rec.id
+            short_name = meta_id.split("/", 1)[1] if "/" in meta_id else meta_id
+
+            query_lines, context_keys = _parse_meta_doc(rec.summary)
+            if not query_lines:
+                continue
+
+            # Get context values from current item's tags
+            context_values: dict[str, str] = {}
+            for key in context_keys:
+                val = current_tags.get(key)
+                if val and not key.startswith("_"):
+                    context_values[key] = val
+
+            # Build expanded queries: cross-product of query lines × context values
+            expanded: list[dict[str, str]] = []
+            if context_values:
+                for query in query_lines:
+                    for ctx_key, ctx_val in context_values.items():
+                        expanded.append({**query, ctx_key: ctx_val})
+            else:
+                # No context → use query lines as-is
+                expanded = list(query_lines)
+
+            # Run each expanded query, union results (fetch generously for ranking)
+            seen_ids: set[str] = set()
+            matches: list[Item] = []
+            for query in expanded:
+                try:
+                    items = self.query_tag(
+                        collection=collection,
+                        limit=100,  # fetch all candidates for ranking
+                        **query,
+                    )
+                except (ValueError, Exception):
+                    continue
+                for item in items:
+                    # Skip the current item, meta-docs, and dupes
+                    if item.id == item_id or item.id.startswith(".meta/") or item.id in seen_ids:
+                        continue
+                    seen_ids.add(item.id)
+                    matches.append(item)
+
+            if not matches:
+                continue
+
+            # Rank by similarity to current item + recency decay
+            matches = self._rank_by_relevance(coll, item_id, matches)
+            result[short_name] = matches[:limit_per_doc]
+
+        return result
+
+    def _rank_by_relevance(
+        self,
+        coll: str,
+        anchor_id: str,
+        candidates: list[Item],
+    ) -> list[Item]:
+        """
+        Rank candidate items by similarity to anchor + recency decay.
+
+        Uses stored embeddings from ChromaDB — no re-embedding needed.
+        Falls back to recency-only ranking if embeddings unavailable.
+        """
+        import math
+
+        if not candidates:
+            return candidates
+
+        # Get anchor embedding from ChromaDB
+        try:
+            chroma_coll = self._store._get_collection(coll)
+            anchor_result = chroma_coll.get(
+                ids=[anchor_id], include=["embeddings"]
+            )
+            if not anchor_result["ids"] or not anchor_result["embeddings"]:
+                return self._apply_recency_decay(candidates)
+            anchor_emb = anchor_result["embeddings"][0]
+
+            # Batch-fetch candidate embeddings
+            candidate_ids = [c.id for c in candidates]
+            cand_result = chroma_coll.get(
+                ids=candidate_ids, include=["embeddings"]
+            )
+        except Exception:
+            return self._apply_recency_decay(candidates)
+
+        # Build id → embedding lookup (some candidates may not have embeddings)
+        emb_lookup: dict[str, list[float]] = {}
+        if cand_result["ids"] and cand_result["embeddings"]:
+            for cid, cemb in zip(cand_result["ids"], cand_result["embeddings"]):
+                if cemb is not None:
+                    emb_lookup[cid] = cemb
+
+        # Score each candidate: cosine similarity
+        def _cosine_sim(a: list[float], b: list[float]) -> float:
+            dot = sum(x * y for x, y in zip(a, b))
+            norm_a = math.sqrt(sum(x * x for x in a))
+            norm_b = math.sqrt(sum(x * x for x in b))
+            if norm_a == 0 or norm_b == 0:
+                return 0.0
+            return dot / (norm_a * norm_b)
+
+        for item in candidates:
+            emb = emb_lookup.get(item.id)
+            if emb is not None:
+                item.score = _cosine_sim(anchor_emb, emb)
+            else:
+                item.score = 0.0
+
+        # Apply recency decay to the similarity scores
+        candidates = self._apply_recency_decay(candidates)
+
+        # Sort by score descending
+        candidates.sort(key=lambda x: x.score or 0.0, reverse=True)
+        return candidates
 
     def query_fulltext(
         self,
@@ -1727,6 +1962,7 @@ class Keeper:
         from .config import SYSTEM_DOCS_VERSION, save_config
 
         stats = {"reset": 0}
+        coll = self._resolve_collection(None)
 
         for path in SYSTEM_DOC_DIR.glob("*.md"):
             new_id = SYSTEM_DOC_IDS.get(path.name)
@@ -1735,11 +1971,18 @@ class Keeper:
 
             try:
                 content, tags = _load_frontmatter(path)
+                bundled_hash = _content_hash(content)
                 tags["category"] = "system"
+                tags["bundled_hash"] = bundled_hash
 
                 # Delete existing (if any) and create fresh
                 self.delete(new_id)
                 self.remember(content, id=new_id, tags=tags)
+                self._document_store.upsert(
+                    collection=coll, id=new_id, summary=content,
+                    tags=self._document_store.get(coll, new_id).tags,
+                    content_hash=bundled_hash,
+                )
                 stats["reset"] += 1
                 logger.info("Reset system doc: %s", new_id)
 

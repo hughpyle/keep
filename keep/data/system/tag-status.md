@@ -12,12 +12,13 @@ The `status` tag tracks the lifecycle state of speech acts — primarily commitm
 | Value | Meaning | Typical transition from |
 |-------|---------|------------------------|
 | `open` | Active and unfulfilled | (initial state) |
+| `blocked` | Cannot proceed until something else is resolved | `open` |
 | `fulfilled` | Completed and satisfied | `open` |
 | `declined` | Not accepted | `open` |
 | `withdrawn` | Cancelled by the originator | `open` |
 | `renegotiated` | Terms changed, new commitment replaces this one | `open` |
 
-The normal flow: `open` → `fulfilled`. The other transitions handle exceptions — declining, withdrawing, or renegotiating.
+The normal flow: `open` → `fulfilled`. `blocked` is a sub-state of open — the commitment still exists but progress is gated on an external dependency. The other transitions handle exceptions — declining, withdrawing, or renegotiating.
 
 ## Domain-specific status values
 

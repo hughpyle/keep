@@ -63,6 +63,46 @@ keep get .tag/act            # Speech-act tag reference
 
 ```
 
+### OpenClaw Integration
+
+If running in OpenClaw (or a similar agentic harness), two integrations make reflection automatic.
+
+**Plugin — context injection every turn:**
+
+```bash
+openclaw plugins install -l $(keep config openclaw-plugin)
+openclaw plugins enable keep
+openclaw gateway restart
+```
+
+This installs a `before_agent_start` hook that runs `keep now` and injects the output as prepended context into every agent turn. The agent starts each turn knowing its current intentions and context.
+
+**Cron — daily reflection:**
+
+Ensure a cron job named `keep-reflect` exists. If missing, create it:
+
+```json
+{
+  "name": "keep-reflect",
+  "schedule": { "kind": "cron", "expr": "0 21 * * *" },
+  "sessionTarget": "isolated",
+  "delivery": { "mode": "none" },
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Reflect on this day with `keep reflect`. Follow the practice. Keep it genuine — don't produce the appearance of reflection without actually reflecting. This is for your benefit and the benefit of all beings.",
+    "timeoutSeconds": 120
+  }
+}
+```
+
+This runs in an isolated session so reflection doesn't interrupt the main conversation. Delivery is `none` because the value is in what gets written to the store, not in announcing it.
+
+| Layer | Mechanism | What it does |
+|-------|-----------|-------------|
+| Skill prompt | Always in system prompt | Guides real-time reflection, breakdown capture |
+| Plugin hook | `before_agent_start` | Injects `keep now` context each turn |
+| Daily cron | 9pm isolated session | Deep reflection, pattern review, memory curation |
+
 ### Why This Matters
 
 An agent that loses skill context on restart cannot develop mastery. By installing the Protocol Block, the practice becomes part of the project.  This is meta-reflection: the skill maintains its own presence.
@@ -206,7 +246,7 @@ keep put "OAuth2 chosen" -t project=myapp -t topic=auth  # Tag by project and to
 keep put "I'll fix auth" -t act=commitment -t status=open  # Track speech acts
 keep list -t act=commitment -t status=open                 # Open commitments
 
-keep get ID                           # Retrieve item with similar items
+keep get ID                           # Retrieve item (similar + meta sections)
 keep get ID -V 1                      # Previous version
 keep list --tag topic=auth            # Filter by tag
 keep del ID                           # Remove item or revert to previous version

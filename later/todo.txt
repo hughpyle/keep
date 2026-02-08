@@ -1,5 +1,7 @@
 
-* openclaw plugin rework
+* can `keep config` return error status if there's no correct configuration yet?
+
+* `keep reflect --something` that helps trigger "hourly reflection"?
 
 * add "remember... when..." stuff, but where? and what's the set of useful "when"?
     (e.g.: remember to double-check that the documentation is all consistent, when finishing X)
@@ -248,3 +250,7 @@ x `context` text alongside summaries? (no, summary is good now)
 . `keep get` accepts multiple IDs: `keep --ids list -n 5 | xargs keep get` works; items separated by `---`
 . `keep del` accepts multiple IDs
 . inline content safety: --summary rejected for inline/stdin, length limit enforced, default max_summary_length bumped 500→2000
+. meta-docs: .meta/* system docs with tag-based contextual resolution; todo/learnings/decisions surface in `now` and `get` frontmatter (SYSTEM_DOCS_VERSION 7)
+. aligned ID column in frontmatter sections (similar, meta, prev/next) — same strategy as `keep list`, capped at 20 chars
+. meta section namespace: `meta/todo:` prefix in frontmatter output prevents conflicts with built-in keys (prev, next, similar)
+. openclaw plugin rework

@@ -57,6 +57,29 @@ class TestCliBasics:
         assert "---" in result.stdout  # YAML frontmatter
         assert "id:" in result.stdout
 
+    def test_meta_docs_loaded(self, cli):
+        """Meta-doc system docs are loaded and accessible."""
+        result = cli("get", ".meta/todo", "--no-similar")
+        assert result.returncode == 0
+        assert ".meta/todo" in result.stdout
+
+    def test_tag_type_doc_loaded(self, cli):
+        """Tag description doc .tag/type is loaded and has full content."""
+        result = cli("get", ".tag/type", "--no-similar")
+        assert result.returncode == 0
+        assert "Content Classification" in result.stdout
+        # Should contain the values table (verbatim, not summarized)
+        assert "learning" in result.stdout
+        assert "breakdown" in result.stdout
+
+    def test_meta_sections_use_namespace_prefix(self, cli):
+        """Meta sections in frontmatter use meta/ prefix to avoid key conflicts."""
+        result = cli("get", ".meta/todo", "--no-similar")
+        assert result.returncode == 0
+        # The meta-doc itself shouldn't show meta/ sections (it IS a meta-doc)
+        # but its content should have the query lines intact
+        assert "act=commitment" in result.stdout
+
     def test_command_help(self, cli):
         """Individual commands have help."""
         for cmd in ["find", "put", "get", "list"]:

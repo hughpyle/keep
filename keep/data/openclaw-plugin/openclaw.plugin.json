@@ -1,0 +1,11 @@
+{
+  "id": "keep",
+  "name": "keep",
+  "description": "Reflective memory — injects `keep now` context at agent start",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
