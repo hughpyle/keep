@@ -90,6 +90,7 @@ Alternatively, for best quality embeddings with Anthropic summarization:
 keep put "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
 keep put https://inguz.substack.com/p/keep -t topic=practice
 keep put "Meeting notes from today" -t type=meeting
+keep put "some content" --suggest-tags  # Show tag suggestions from similar items
 
 # Search (returns: id date summary)
 keep find "authentication" --limit 5
