@@ -17,6 +17,9 @@ keep find "what's the rate limit?"
 # Track what you're working on
 keep now "Debugging auth flow"
 keep now -V 1                    # Previous intentions
+
+# Instructions for reflection
+keep reflect
 ```
 
 ---

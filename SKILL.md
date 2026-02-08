@@ -180,11 +180,6 @@ keep put "file://$(keep config tool)/docs/library/han_verse.txt" -t type=teachin
 keep get "file://$(keep config tool)/docs/library/han_verse.txt"
 ```
 
-**Domain organization** — tagging strategies, collection structures:
-```bash
-keep get "_system:domains"
-```
-
 **Now reflect:** What did you learn? Save your understanding:
 ```bash
 keep put "My understanding of the practice: ..." -t type=learning
@@ -216,8 +211,13 @@ keep list --tag topic=auth            # Filter by tag
 keep del ID                           # Remove item or revert to previous version
 ```
 
+**Domain organization** — tagging strategies, collection structures:
+```bash
+keep get "_system:domains"
+```
+
 Use `project` tags for bounded work, `topic` for cross-cutting knowledge.
-You can read (and maintain) descriptions of these tagging taxonomies as you use them.
+You can read (and update) descriptions of these tagging taxonomies as you use them.
 
 ```bash
 keep get "_tag:project"   # Bounded work contexts
