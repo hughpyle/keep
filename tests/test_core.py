@@ -251,8 +251,7 @@ class TestNowdoc:
         """NOWDOC_ID is exported and has expected format."""
         from keep import NOWDOC_ID
 
-        assert NOWDOC_ID == "_now:default"
-        assert NOWDOC_ID.startswith("_")  # System-managed ID
+        assert NOWDOC_ID == "now"
 
     def test_system_now_md_exists(self):
         """System now.md file exists in keep/data/system/ with frontmatter."""

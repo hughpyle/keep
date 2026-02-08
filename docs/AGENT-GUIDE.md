@@ -72,12 +72,12 @@ if kp.exists("file:///project/readme.md"):
 **Default store location:** `~/.keep/` in the user's home directory (created automatically). Override with `KEEP_STORE_PATH` or explicit path argument.
 
 **Patterns documentation** (bundled system docs, access via `keep get`):
-- `_system:domains` — domain-specific organization (software dev, research, etc.)
-- `_system:conversations` — process knowledge: how work proceeds
-- `_tag:act` — speech-act categories (commitment, request, offer, assertion, assessment, declaration)
-- `_tag:status` — lifecycle states (open, fulfilled, declined, withdrawn, renegotiated)
-- `_tag:project` — bounded work contexts
-- `_tag:topic` — cross-cutting subject areas
+- `.domains` — domain-specific organization (software dev, research, etc.)
+- `.conversations` — process knowledge: how work proceeds
+- `.tag/act` — speech-act categories (commitment, request, offer, assertion, assessment, declaration)
+- `.tag/status` — lifecycle states (open, fulfilled, declined, withdrawn, renegotiated)
+- `.tag/project` — bounded work contexts
+- `.tag/topic` — cross-cutting subject areas
 
 **When to use:**
 - CLI: `keep put` for all content (URI, inline text, or stdin)
@@ -126,7 +126,7 @@ CLI commands produce structured output. Understanding this format lets you navig
 `keep find "reflection"` returns one line per result — `id date summary`:
 
 ```
-_now:default 2026-02-07 Finished reading MN61. The mirror teaching: ...
+now 2026-02-07 Finished reading MN61. The mirror teaching: ...
 file:///.../library/mn61.html 2026-02-07 The Exhortation to Rāhula...
 https://inguz.substack.com/p/keep 2026-02-07 Keep: A Reflective Memory...
 file:///.../library/han_verse.txt 2026-02-07 Han Verse: Great is the matter...
@@ -141,10 +141,10 @@ Each ID in the results can be passed directly to `keep get`.
 ```
 ---
 id: file:///.../library/mn61.html
-tags: {_source: uri, _updated: 2026-02-07T15:14:28+00:00, topic: reflection, type: teaching}
+tags: {_source: uri, _updated: 2026-02-07T15:14:28, topic: reflection, type: teaching}
 similar:
   - https://inguz.substack.com/p/keep (0.47) 2026-02-07 Keep: A Reflective Memory...
-  - _now:default (0.45) 2026-02-07 Finished reading MN61. The mirror teachi...
+  - now (0.45) 2026-02-07 Finished reading MN61. The mirror teachi...
   - file:///.../library/han_verse.txt (0.44) 2026-02-07 Han Verse: Great is the matter...
 prev:
   - @V{1} 2026-02-07 Previous version summary...
@@ -220,8 +220,8 @@ kp.set_now(
 )
 
 # 3. Check previous context if needed
-prev = kp.get_version("_now:default", offset=1)  # Previous version
-versions = kp.list_versions("_now:default")       # All versions
+prev = kp.get_version("now", offset=1)  # Previous version
+versions = kp.list_versions("now")       # All versions
 
 # 4. Record cross-project learning (topic only, no project)
 kp.remember(
@@ -302,7 +302,7 @@ An item has:
 
 The full original document is not stored in this service.
 
-**Speech-act tags:** Items can be classified by speech-act type (`act=commitment`, `act=request`, etc.) and tracked through a lifecycle (`status=open` → `status=fulfilled`). This makes the commitment structure of work visible and queryable. See `keep get "_tag:act"` for details.
+**Speech-act tags:** Items can be classified by speech-act type (`act=commitment`, `act=request`, etc.) and tracked through a lifecycle (`status=open` → `status=fulfilled`). This makes the commitment structure of work visible and queryable. See `keep get .tag/act` for details.
 
 The services that implement embedding, summarization and tagging are configured at initialization time. This skill itself is provider-agnostic.
 
@@ -350,7 +350,7 @@ nav = kp.get_version_nav(id)  # {'prev': [...], 'next': [...]}
 
 **Content-addressed IDs for text updates:**
 ```bash
-keep put "my note"              # Creates _text:a1b2c3d4e5f6
+keep put "my note"              # Creates %a1b2c3d4e5f6
 keep put "my note" -t done      # Same ID, new version (tag change)
 keep put "different note"       # Different ID (new document)
 ```
@@ -462,7 +462,7 @@ Private isn't just convention — it's enforced by routing to a separate store.
 ```
 Keeper (facade)
     │
-    ├── reads: _system:routing (document in shared store)
+    ├── reads: .routing (document in shared store)
     │         ├── summary: "Items tagged draft/private route separately"
     │         └── private_patterns: [{"_visibility": "draft"}, {"_for": "self"}, ...]
     │
@@ -472,7 +472,7 @@ Keeper (facade)
     │
     └── Shared Store
         └── everything else
-        └── includes the _system:routing document itself
+        └── includes the .routing document itself
 ```
 
 The routing context is itself a document with:
@@ -488,13 +488,13 @@ The facade reads the routing document and makes physical routing decisions. Quer
 - `{"_for": "self"}`
 
 **Customizing routing:**
-The `_system:routing` document can be updated to change what routes privately. The patterns are associative — described in the document, not hardcoded.
+The `.routing` document can be updated to change what routes privately. The patterns are associative — described in the document, not hardcoded.
 
 ---
 
 ## Domain Patterns
 
-See `_system:domains` (`keep get _system:domains`) for suggested collection and tag organization for common use cases:
+See `.domains` (`keep get .domains`) for suggested collection and tag organization for common use cases:
 - Software Development
 - Market Research
 - Personal Reflection & Growth
@@ -510,14 +510,14 @@ The store's guiding metadata is itself stored as documents — like Oracle's dat
 
 | ID | Purpose | Updatable |
 |----|---------|-----------|
-| `_system:routing` | Private/shared routing patterns | Yes |
-| `_system:context` | Current working context | Yes |
-| `_system:guidance` | Local behavioral guidance | Yes |
+| `.routing` | Private/shared routing patterns | Yes |
+| `.context` | Current working context | Yes |
+| `.guidance` | Local behavioral guidance | Yes |
 
 **Querying system documents:**
 ```python
 # Read the routing configuration
-routing = kp.get("_system:routing")
+routing = kp.get(".routing")
 print(routing.summary)  # Natural language description
 print(routing.tags)     # Includes private_patterns
 
@@ -542,7 +542,7 @@ kp.remember(
 
     Source: Team retrospective + industry research.
     """,
-    id="_system:guidance:code_review",
+    id=".guidance/code_review",
     tags={"_system": "true", "domain": "code_review"}
 )
 

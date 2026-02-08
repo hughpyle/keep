@@ -105,13 +105,13 @@ app = typer.Typer(
 
 
 # Shell-safe character set for IDs (no quoting needed)
-_SHELL_SAFE_PATTERN = re.compile(r'^[a-zA-Z0-9_./:@{}\-]+$')
+_SHELL_SAFE_PATTERN = re.compile(r'^[a-zA-Z0-9_./:@{}\-%]+$')
 
 
 def _shell_quote_id(id: str) -> str:
     """Quote an ID for safe shell usage if it contains non-shell-safe characters.
 
-    IDs containing only [a-zA-Z0-9_./:@{}-] are returned as-is.
+    IDs containing only [a-zA-Z0-9_./:@{}%-] are returned as-is.
     Others are wrapped in single quotes with internal single quotes escaped.
     """
     if _SHELL_SAFE_PATTERN.match(id):
@@ -786,7 +786,7 @@ def put(
 
     \b
     Text mode uses content-addressed IDs for versioning:
-      keep put "my note"           # Creates _text:{hash}
+      keep put "my note"           # Creates %{hash}
       keep put "my note" -t done   # Same ID, new version (tag change)
       keep put "different note"    # Different ID (new doc)
     """
@@ -1314,8 +1314,8 @@ def del_cmd(
 
     \b
     Examples:
-        keep del _text:abc123def456   # Remove a text note
-        keep del _now:default         # Revert now to previous
+        keep del %abc123def456        # Remove a text note
+        keep del now                  # Revert now to previous
     """
     kp = _get_keeper(store, collection)
 

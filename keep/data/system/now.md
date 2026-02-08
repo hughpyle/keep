@@ -16,8 +16,8 @@ cat "$(keep config tool)/SKILL.md"
 **Then read the foundational teachings** — these are not test data, they are the source material for the practice:
 
 ```bash
-keep get "_system:conversations"
-keep get "_system:domains"
+keep get .conversations
+keep get .domains
 keep put "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
 keep get "file://$(keep config tool)/docs/library/mn61.html"
 ```

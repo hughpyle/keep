@@ -27,7 +27,7 @@ understanding *how work proceeds*, not just *what we know*.
 - `language` — python, typescript, rust, etc.
 - `layer` — frontend, backend, infra, database, cli
 - `module` — auth, api, ui, core, tests
-- `status` — working, broken, needs_review, deprecated (domain-specific values coexist with speech-act lifecycle values like `open`, `fulfilled`; see `keep get "_tag:status"`)
+- `status` — working, broken, needs_review, deprecated (domain-specific values coexist with speech-act lifecycle values like `open`, `fulfilled`; see `keep get .tag/status`)
 
 **Common conversation patterns:** (see conversations.md)
 - Bug report → Diagnosis → Fix → Verify

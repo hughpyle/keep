@@ -23,13 +23,13 @@ Three output formats, consistent across all commands:
 One line per item: `id@V{N} date summary`
 ```
 file:///path/to/doc.md@V{0} 2026-01-15 Document about authentication patterns...
-_text:a1b2c3d4@V{0} 2026-01-14 URI detection should use proper scheme validation...
+%a1b2c3d4@V{0} 2026-01-14 URI detection should use proper scheme validation...
 ```
 
 ### With `--ids`: Versioned IDs Only
 ```
 file:///path/to/doc.md@V{0}
-_text:a1b2c3d4@V{0}
+%a1b2c3d4@V{0}
 ```
 
 ### With `--full`: YAML Frontmatter
@@ -266,7 +266,7 @@ keep put "The tests pass" -t act=assertion
 keep put "This approach is risky" -t act=assessment -t topic=architecture
 ```
 
-For full details: `keep get "_tag:act"` and `keep get "_tag:status"`.
+For full details: `keep get .tag/act` and `keep get .tag/status`.
 
 ## System Tags (auto-managed)
 
@@ -310,7 +310,7 @@ Append `@V{N}` to any ID to specify a version by offset:
 
 ```bash
 keep get "doc:1@V{1}"          # Previous version of doc:1
-keep get "_now:default@V{2}"   # Two versions ago of nowdoc
+keep get "now@V{2}"            # Two versions ago of nowdoc
 ```
 
 ### Version Access
@@ -341,16 +341,16 @@ Archived:
 With `--ids`, outputs version identifiers for piping:
 ```bash
 keep --ids now --history
-# _now:default@V{0}
-# _now:default@V{1}
-# _now:default@V{2}
+# now@V{0}
+# now@V{1}
+# now@V{2}
 ```
 
 ### Content-Addressed IDs
 
 Text-mode updates use content-addressed IDs for versioning:
 ```bash
-keep put "my note"              # Creates _text:a1b2c3d4e5f6
+keep put "my note"              # Creates %a1b2c3d4e5f6
 keep put "my note" -t done      # Same ID, new version (tag change)
 keep put "different note"       # Different ID (new document)
 ```
@@ -395,5 +395,5 @@ When tags change (add, remove, or value change), the document is re-queued for s
 **Provider note:** Only LLM-based summarizers (anthropic, openai, ollama, mlx) use context. Simple providers (truncate, first_paragraph) ignore it.
 
 ## Domain Patterns
-See `_system:domains` for organization templates (`keep get _system:domains`).
-See `_system:conversations` for process knowledge (`keep get _system:conversations`).
+See `.domains` for organization templates (`keep get .domains`).
+See `.conversations` for process knowledge (`keep get .conversations`).

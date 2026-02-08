@@ -22,7 +22,7 @@ Tagging items by speech act makes the structure of work visible: what has been p
 
 ## Lifecycle pairing
 
-Three act values represent open-ended speech acts that have a lifecycle: `commitment`, `request`, and `offer`. These pair naturally with the `status` tag to track state (`open`, `fulfilled`, `declined`, `withdrawn`, `renegotiated`). See `keep get "_tag:status"` for details.
+Three act values represent open-ended speech acts that have a lifecycle: `commitment`, `request`, and `offer`. These pair naturally with the `status` tag to track state (`open`, `fulfilled`, `declined`, `withdrawn`, `renegotiated`). See `keep get .tag/status` for details.
 
 The other three — `assertion`, `assessment`, `declaration` — are typically complete at the moment of utterance and don't need lifecycle tracking.
 
