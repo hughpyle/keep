@@ -1,10 +1,4 @@
 
-* can we make `keep list` do some aligning on its id column? for readability
-
-* openclaw doesn't see that it can use `keep[local]` for mlx without a key
-    (maybe put that before the key-based options)
-    - done, pls verify
-
 * add support for ollama (e.g. default model `llama3.2:3b`) for local access
     - embeddings
     - summarization
@@ -248,3 +242,5 @@ x `context` text alongside summaries? (no, summary is good now)
 . document indexing practice: added guidance to SKILL.md, reflect.md, and Protocol Block instructing agents to index important documents (URLs, files) encountered during work with appropriate tags explaining what and why
 . timestamps: seconds-precision UTC, no timezone suffix in frontmatter (stored and displayed)
 . ID prefix rename: _text:hash → %hash, _system:foo → .foo, _tag:foo → .tag/foo, _now:default → now. Migration renames old IDs, SYSTEM_DOCS_VERSION 6, % added to shell-safe pattern.
+. aligned ID column in `keep list` output (capped at 20 chars)
+. QUICKSTART.md reordered: keep[local] shown before API key options
