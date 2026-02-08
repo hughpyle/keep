@@ -5,8 +5,6 @@
     - when displaying a tag, mark it up with an asterisk if a _tag:* doc exists for it
     - add a shortcut `keep tag --describe` or similar to show the tag description
 
-* (done) does 'accessed date' have a system-tag? it should!
-
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
