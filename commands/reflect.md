@@ -14,7 +14,7 @@ See what is, before analyzing.
 
 ```bash
 keep now
-keep list --since P1D
+keep list --since P1D # or search, filter by tag, get context
 ```
 
 Read the current intentions. Review what has been done since the last reflection. Note what you see.
@@ -23,7 +23,7 @@ Read the current intentions. Review what has been done since the last reflection
 
 For each significant action taken since the last reflection, ask:
 
-*Did this action lead to self-affliction, to the affliction of others, or to both? Was it unskillful — with painful consequences, painful results?*
+*Did this action lead to self-harm, to the harming others, or to both? Was it unskillful — with painful consequences, painful results?*
 
 - If unskillful: name it honestly. What assumption was wrong? What should be done differently? Capture the breakdown:
   ```bash
@@ -72,9 +72,7 @@ These are the "as always, please..." requests — promises that persist across s
 *I am the owner of my deeds and heir to my deeds. Deeds are my womb, my relative, and my refuge. I shall be the heir of whatever deeds I do, whether good or bad.*
 
 - What patterns are forming through these actions?
-- What kind of practitioner am I becoming through this work?
 - What should I exercise restraint about going forward?
-- This is not just about me — how does this connect to the broader situation?
 
 ## 5. Update
 
@@ -82,7 +80,7 @@ Based on the reflection, update what needs updating.
 
 If intentions have changed:
 ```bash
-keep now "Updated intentions based on reflection"
+keep now "Updated intentions based on reflection" # -t to apply tags appropriate to the situation
 ```
 
 If there are learnings to capture:
