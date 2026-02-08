@@ -195,7 +195,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     3. None if nothing available
 
     Priority for summarization:
-    1. API keys: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
+    1. API keys: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), OPENAI_API_KEY, GEMINI_API_KEY
     2. Local: MLX (Apple Silicon)
     3. Fallback: truncate (always available)
 
@@ -211,7 +211,10 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     )
 
     # Check for API keys
-    has_anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    has_anthropic_key = bool(
+        os.environ.get("ANTHROPIC_API_KEY") or
+        os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    )
     has_openai_key = bool(
         os.environ.get("KEEP_OPENAI_API_KEY") or
         os.environ.get("OPENAI_API_KEY")

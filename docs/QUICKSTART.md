@@ -22,9 +22,16 @@ Set environment variables for your preferred providers:
 | Provider | Env Variable | Get API Key | Embeddings | Summarization |
 |----------|--------------|-------------|------------|---------------|
 | **Voyage AI** | `VOYAGE_API_KEY` | [dash.voyageai.com](https://dash.voyageai.com/) | ✓ | - |
-| **Anthropic** | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com/) | - | ✓ |
+| **Anthropic** | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`* | [console.anthropic.com](https://console.anthropic.com/) | - | ✓ |
 | **OpenAI** | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/) | ✓ | ✓ |
 | **Google Gemini** | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com/) | ✓ | ✓ |
+
+\* **Anthropic Authentication Methods:**
+- **API Key** (`ANTHROPIC_API_KEY`): Recommended. Get from [console.anthropic.com](https://console.anthropic.com/). Format: `sk-ant-api03-...`
+- **OAuth Token** (`CLAUDE_CODE_OAUTH_TOKEN`): For Claude Pro/Team subscribers. Generate via `claude setup-token`. Format: `sk-ant-oat01-...`
+  - Note: OAuth tokens from `claude setup-token` are primarily designed for Claude Code CLI authentication
+  - Direct API access with OAuth tokens may have limitations or require additional configuration
+  - For production use with `keep`, prefer using a standard API key from the Anthropic console
 
 **Recommended setup** (best quality/cost balance):
 ```bash

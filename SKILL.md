@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.23.0
+version: 0.24.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -54,10 +54,11 @@ keep find "topic"            # What do I know?
 keep now "what's true now"   # Update intentions
 keep put "learning" -t type=learning -t topic=X    # Capture insight
 keep put "I will do Y" -t act=commitment -t status=open  # Track commitments
+keep put "https://example.com/doc" -t topic=X      # Index important documents
 keep get "_tag:act"          # Speech-act tag reference
 \`\`\`
 
-**Protocol:** Reflect using `keep` — before, during, and after action. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
+**Protocol:** Reflect using `keep` — before, during, and after action. Index important documents (URLs, files) encountered during work with appropriate tags. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
 
 ```
 
@@ -122,6 +123,13 @@ keep put "what happened" -t type=learning    # Capture insight
 keep put "Assumed X, actually Y" -t type=breakdown  # Index breakdowns
 ```
 
+**Index important documents.** Whenever you encounter documents (URLs, files, references) important to the user or task, index them:
+```bash
+keep put "https://example.com/doc" -t topic=auth -t project=myapp
+keep put "file:///path/to/important.pdf" -t type=reference -t topic=security
+```
+Ask: What is this document? Why is it important? Tag appropriately. Documents indexed during work become navigable knowledge.
+
 **Breakdowns are valuable.** When the normal flow is interrupted — an assumption has been revealed. The breakdown is where learning happens.
 
 * When in conversation, use this practice. Reflect before, during and after action.
@@ -134,6 +142,7 @@ The store auto-initializes on first use. For API-based providers, set your API k
 export OPENAI_API_KEY=...      # (handles both embeddings and summarization)
 # Or: GEMINI_API_KEY (also does both)
 # Or: VOYAGE_API_KEY and ANTHROPIC_API_KEY (embeddings + summarization separately)
+# Or: VOYAGE_API_KEY and CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token')
 ```
 
 Now *store and read* the foundational teachings. These are seed wisdom, not test fixtures.

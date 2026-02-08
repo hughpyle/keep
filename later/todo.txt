@@ -1,6 +1,4 @@
 
-* support anthropic token auth (from `claude setup-token`)
-
 * tag display improvements
     - when displaying a tag, mark it up with an asterisk if a _tag:* doc exists for it
     - add a shortcut `keep tag --describe` or similar to show the tag description
@@ -8,10 +6,6 @@
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
-
-* whenEVER you come across documents (local or remote) that are important to the user
-    or important to the task, be sure to put them in `keep` and tag appropriately.
-    What is this document? why is it important?
 
 * edges thinking again
     why don't we do edges, first, as a special think that just links a document to the "now" doc?
@@ -69,13 +63,6 @@
     - no capability for "model migration and re-embedding" yet
 
 * Measure some outcomes.  Describe behavior in openclaw, in claude code, etc.  Show where it works.
-
-* Surface similar items on create/update ("occasions for reflection")
-    - when `remember` or `update` stores a new item, return similar items in the output
-      (same mechanism as `get --similar`, applied at write-time)
-    - the agent or human sees the juxtaposition and can make connections
-    - this is low-effort, high-leverage: the store doesn't interpret, it just holds up a mirror
-    - consider: should `find` results also show per-item similar? or is that too noisy?
 
 * relationships as a separate first-class thing
     - X and Y with a bidirectional edge
@@ -258,3 +245,6 @@ x `context` text alongside summaries? (no, summary is good now)
 . tag description system docs: _tag:* IDs with `context: tag-description` frontmatter, loaded via SYSTEM_DOC_IDS registry (SYSTEM_DOCS_VERSION 5)
 . reflect.md updated with act/status tag examples for commitment tracking
 . _accessed and _accessed_date system tags: exposed accessed_at from DocumentStore as queryable tags, added item.accessed property, documented in SYSTEM-TAGS.md
+. surface similar items on create/update: `keep put` and `keep now` show similar items in output as occasions for reflection
+. anthropic OAuth token support: CLAUDE_CODE_OAUTH_TOKEN as alternative to ANTHROPIC_API_KEY, documented distinction between API keys (sk-ant-api03-...) and OAuth tokens (sk-ant-oat01-...) from `claude setup-token`
+. document indexing practice: added guidance to SKILL.md, reflect.md, and Protocol Block instructing agents to index important documents (URLs, files) encountered during work with appropriate tags explaining what and why
