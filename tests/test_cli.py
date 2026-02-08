@@ -217,6 +217,26 @@ class TestExitCodes:
         if "Invalid tag format" in result.stderr:
             assert result.returncode == 1
 
+    def test_put_inline_with_summary_rejected(self, cli):
+        """--summary with inline text is rejected (would lose content)."""
+        result = cli("put", "my note", "--summary", "a summary")
+        assert result.returncode == 1
+        assert "cannot be used with inline text" in result.stderr
+
+    def test_put_stdin_with_summary_rejected(self, cli):
+        """--summary with stdin is rejected (would lose content)."""
+        result = cli("put", "-", "--summary", "a summary", input="some content")
+        assert result.returncode == 1
+        assert "cannot be used with stdin" in result.stderr
+
+    def test_put_inline_too_long_rejected(self, cli):
+        """Inline text exceeding max_summary_length is rejected."""
+        long_text = "x" * 3000
+        result = cli("put", long_text)
+        assert result.returncode == 1
+        assert "too long to store" in result.stderr
+        assert "file" in result.stderr.lower()  # Hint mentions file
+
 
 # -----------------------------------------------------------------------------
 # Tag Parsing Tests

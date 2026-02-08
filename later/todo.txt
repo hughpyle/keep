@@ -1,40 +1,4 @@
 
-* usability/design issue
-
-    > I don't see the content when I run keep get on the new docs. Is that a keep bug, or a misunderstanding, or terrible usability in the skill, or what?
-
-        That's keep's design, not a bug — but it IS a usability problem I walked right into.
-
-        From the AGENT-GUIDE: "The full original document is not stored in this service." Keep stores summaries and embeddings, not full content. What you see after --- is the
-        summary. I provided a --summary flag with a one-liner, so the full spec I piped in was used for embedding/indexing only and then discarded.
-
-        For URI-based items (file:///, https://), you go back to the URI for the content. For inline text... it's gone except for the summary.
-
-        What I should have done: written the spec to disk first, then indexed it.
-
-        ```bash
-        # write the real doc
-        echo "..." > ~/clawd/specs/surface.md
-
-        # index it — keep stores the summary, URI points to full content
-        keep put file:///Users/openclaw/clawd/specs/surface.md -i specs/surface ...
-        ```
-
-        Then keep get shows the summary, and the URI tells you where the full doc lives. This is actually the pattern we were discussing earlier — keep as index, disk as source
-        of truth.
-
-        So it's three things at once:
-        1. By design — keep is a summary/index store, not a document store
-        2. Terrible usability — when you put inline text, the natural expectation is that get returns it
-        3. My mistake — I used --summary which replaced the content with a one-liner, making it worse
-
-    The trade-off with file:// IDs is they're verbose — file:///Users/openclaw/clawd/specs/first-fridays.md instead of specs/first-fridays. That's another argument for fixing
-    inline content storage in keep. Once that's done, you could keep put "..." -i meta/open-loops and keep get specs/first-fridays returns the full text. Short IDs, full
-    content, no files needed for small docs.
-
-    The bug to fix: for inline text and stdin, keep should store the original content and return it on get, not just the summary. Short content is already kept verbatim as
-    the summary, but anything long enough to trigger summarization loses the original.
-    
 * openclaw plugin rework
 
 * add "remember... when..." stuff, but where? and what's the set of useful "when"?
@@ -282,3 +246,5 @@ x `context` text alongside summaries? (no, summary is good now)
 . `keep add` as hidden alias for `keep put` (alongside existing `update` alias)
 . openclaw AGENTS.md detection: install protocol block into AGENTS.md in cwd (openclaw sets cwd to workspace)
 . `keep get` accepts multiple IDs: `keep --ids list -n 5 | xargs keep get` works; items separated by `---`
+. `keep del` accepts multiple IDs
+. inline content safety: --summary rejected for inline/stdin, length limit enforced, default max_summary_length bumped 500→2000

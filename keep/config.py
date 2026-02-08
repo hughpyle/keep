@@ -111,7 +111,7 @@ class StoreConfig:
     default_tags: dict[str, str] = field(default_factory=dict)
 
     # Maximum length for summaries (used for smart remember and validation)
-    max_summary_length: int = 500
+    max_summary_length: int = 2000
 
     # System docs version (tracks which bundled docs have been applied to this store)
     system_docs_version: int = 0
@@ -450,8 +450,8 @@ def load_config(config_dir: Path) -> StoreConfig:
     default_tags = {k: str(v) for k, v in raw_tags.items()
                     if not k.startswith("_")}
 
-    # Parse max_summary_length (default 500)
-    max_summary_length = data.get("store", {}).get("max_summary_length", 500)
+    # Parse max_summary_length (default 2000)
+    max_summary_length = data.get("store", {}).get("max_summary_length", 2000)
 
     # Parse system_docs_version (default 0 for stores that predate this feature)
     system_docs_version = data.get("store", {}).get("system_docs_version", 0)
@@ -512,7 +512,7 @@ def save_config(config: StoreConfig) -> None:
     if config.store_path:
         store_section["path"] = config.store_path
     # Only write max_summary_length if not default
-    if config.max_summary_length != 500:
+    if config.max_summary_length != 2000:
         store_section["max_summary_length"] = config.max_summary_length
     # Write system_docs_version if set (tracks migration state)
     if config.system_docs_version > 0:
