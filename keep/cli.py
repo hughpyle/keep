@@ -815,17 +815,35 @@ def put(
         content = sys.stdin.read()
         content, frontmatter_tags = _parse_frontmatter(content)
         parsed_tags = {**frontmatter_tags, **parsed_tags}  # CLI tags override
+        if summary is not None:
+            typer.echo("Error: --summary cannot be used with stdin input (original content would be lost)", err=True)
+            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
+            raise typer.Exit(1)
+        max_len = kp._config.max_summary_length
+        if len(content) > max_len:
+            typer.echo(f"Error: stdin content too long to store inline ({len(content)} chars, max {max_len})", err=True)
+            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
+            raise typer.Exit(1)
         # Use content-addressed ID for stdin text (enables versioning)
         doc_id = id or _text_content_id(content)
-        item = kp.remember(content, id=doc_id, summary=summary, tags=parsed_tags or None)
+        item = kp.remember(content, id=doc_id, tags=parsed_tags or None)
     elif source and _URI_SCHEME_PATTERN.match(source):
         # URI mode: fetch from URI (ID is the URI itself)
         item = kp.update(source, tags=parsed_tags or None, summary=summary)
     elif source:
         # Text mode: inline content (no :// in source)
+        if summary is not None:
+            typer.echo("Error: --summary cannot be used with inline text (original content would be lost)", err=True)
+            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
+            raise typer.Exit(1)
+        max_len = kp._config.max_summary_length
+        if len(source) > max_len:
+            typer.echo(f"Error: inline text too long to store ({len(source)} chars, max {max_len})", err=True)
+            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
+            raise typer.Exit(1)
         # Use content-addressed ID for text (enables versioning)
         doc_id = id or _text_content_id(source)
-        item = kp.remember(source, id=doc_id, summary=summary, tags=parsed_tags or None)
+        item = kp.remember(source, id=doc_id, tags=parsed_tags or None)
     else:
         typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
         raise typer.Exit(1)
