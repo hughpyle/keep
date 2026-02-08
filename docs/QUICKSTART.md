@@ -2,14 +2,16 @@
 
 ## Installation
 
+Use [uv](https://docs.astral.sh/uv/) (recommended) or pip.
+
 To use local MLX models on macOS Apple Silicon (no API keys needed):
 ```bash
-pip install 'keep-skill[local]'
+uv tool install 'keep-skill[local]'
 ```
 
 For all others:
 ```bash
-pip install keep-skill
+uv tool install keep-skill
 ```
 
 That's it! API providers for Voyage, OpenAI, Anthropic, and Gemini are included.
@@ -64,7 +66,7 @@ Keep picks the best available model: dedicated embedding models (e.g. `nomic-emb
 
 For offline operation on macOS Apple Silicon without Ollama:
 ```bash
-pip install 'keep-skill[local]'
+uv tool install 'keep-skill[local]'
 keep put "test"             # No API key needed
 ```
 
