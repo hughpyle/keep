@@ -3,7 +3,7 @@
   "kind": "memory",
   "name": "Keep",
   "description": "Semantic memory - remember everything, find by meaning",
-  "version": "0.1.0",
+  "version": "0.27.2",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

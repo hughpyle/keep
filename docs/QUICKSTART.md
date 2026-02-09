@@ -101,7 +101,8 @@ keep find "auth" --since P7D           # Last 7 days
 # Retrieve (shows similar items by default)
 keep get "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
 keep get https://inguz.substack.com/p/keep
-keep get ID --no-similar             # Without similar items
+keep get ID --meta                   # List meta items only
+keep get ID --similar                # List similar items only
 
 # Tags
 keep list --tag project=myapp          # Find by tag

@@ -107,6 +107,26 @@ class DocumentStore:
         if "content_hash" not in columns:
             self._conn.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT")
 
+        # Migration: truncate content_hash from 64-char to 10-char
+        self._conn.execute("""
+            UPDATE documents SET content_hash = SUBSTR(content_hash, -10)
+            WHERE content_hash IS NOT NULL AND LENGTH(content_hash) > 10
+        """)
+        cursor = self._conn.execute("""
+            SELECT id, collection, tags_json FROM documents
+            WHERE tags_json LIKE '%bundled_hash%'
+        """)
+        for row in cursor.fetchall():
+            tags = json.loads(row["tags_json"])
+            bh = tags.get("bundled_hash")
+            if bh and len(bh) > 10:
+                tags["bundled_hash"] = bh[-10:]
+                self._conn.execute(
+                    "UPDATE documents SET tags_json = ? WHERE id = ? AND collection = ?",
+                    (json.dumps(tags), row["id"], row["collection"])
+                )
+        self._conn.commit()
+
         # Index for collection queries
         self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_documents_collection

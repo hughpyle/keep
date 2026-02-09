@@ -98,8 +98,9 @@ keep get ID -V 1                     # Previous version with prev/next nav
 keep get "ID@V{1}"                   # Same as -V 1 (version identifier syntax)
 keep get ID --history                # List all versions (default 10, -n to override)
 keep get ID --similar                # List similar items (default 10)
-keep get ID --no-similar             # Suppress similar items
 keep get ID --similar -n 20          # List 20 similar items
+keep get ID --meta                   # List meta items
+keep get ID --meta -n 5              # List 5 meta items per section
 
 # List recent items
 keep list                            # Show 10 most recent (summary lines)

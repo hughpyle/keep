@@ -321,8 +321,8 @@ All documents retain version history automatically. When you update a document, 
 **CLI:**
 ```bash
 keep get ID                   # Current version with similar items
-keep get ID --no-similar      # Just the document, no similar
 keep get ID --similar         # List similar items (default 10, -n to override)
+keep get ID --meta            # List meta items (-n to override)
 keep get ID -V 1              # Previous version
 keep get ID -V 2              # Two versions ago
 keep get ID --history         # List all versions (default 10, -n to override)

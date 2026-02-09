@@ -2,16 +2,14 @@
 * can `keep config` return error status if there's no correct configuration yet?
 
 * `keep reflect --something` that helps trigger "hourly reflection"?
-
-* add "remember... when..." stuff, but where? and what's the set of useful "when"?
-    (e.g.: remember to double-check that the documentation is all consistent, when finishing X)
+    (different "reflect docs" would do that, but... do we want mmore than one?)
 
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
 
 * edges thinking again
-    why don't we do edges, first, as a special think that just links a document to the "now" doc?
+    why don't we do edges, first, as a special thing that just links a document to the "now" doc?
     (maybe not very useful.. still need to capture the /reason/ that it's linked, which is where
     the semantics all live)
 
@@ -60,7 +58,6 @@
         - more tags?  update with descriptions-of-tags?  auto-summarize to make descriptions-of-tags?
         - or do we actually benefit from "edges" here?
 
-
 * re-test the gemini path
 
 * dynamically detect available models using the provider's API?
@@ -81,8 +78,6 @@
     - want this to be pluggable, guide the model-driven tagging from a sysdoc that defines how it works
     - want "references" for this too... maybe later
 
-* compare openclaw 'memory-lancedb' plugin and others
-
 * check - what is your emotional response when encountering this project the first time?
 
 * check for compatibility with linux (so far I've exclusively been running on macOS)
@@ -102,25 +97,17 @@
     - use as content but don't really want add dependencies on mp3/flace/wav decoding (especially anything requiring a license such as the fraunhofer stuff, all our deps must be MIT-compatible)
     - getting tags out of the file would be a great test case
     - analysis of the audio content will depend on the available models, but some might do a good job
+    - whisper-cpp etc? outside our scope
+      but I do want a semantic index of my music library
 
 * add an image; same strategy as audio
 
 * also support docx
 
-* openclaw install a heartbeat.  Not too often, but often enough.
-
 * multi-embeddings
     - background task can detect current config and maintain compat
 
 * review the CLI completely.  Can the common tasks have single-letter aliases for their commands?
-
-* "relevance / focus scores" are to be decveloped within the context of "topics / projects"
-    - there isn't an absolute relevance
-    - `keep similar` is close, is that enough?  no, we want to return results that include their relevance score
-    - relevance includes timeliness, and the current topic/project context
-        - so this means that topics and projects really are special?
-        - or, can we do relevance-per-tag everywhere? so that topics and projects are just tags like everything else?
-    - more thinking and research needed
 
 * how do we get the claude-code model context?
 
@@ -135,10 +122,6 @@
     - not sure how that applies to the ranking for retrieval
     - do we need any of this to be config not code??
  
-* compare the openclaw plugin against the other memory plugins on the hub
-
-* move plugin into a `plugins` directory? yuk name, these are not "plugins for keep", so what?
-
 ----
 
 Done: (finished items go at the end)
@@ -254,3 +237,6 @@ x `context` text alongside summaries? (no, summary is good now)
 . aligned ID column in frontmatter sections (similar, meta, prev/next) — same strategy as `keep list`, capped at 20 chars
 . meta section namespace: `meta/todo:` prefix in frontmatter output prevents conflicts with built-in keys (prev, next, similar)
 . openclaw plugin rework
+. "remember X when Z" - covered by meta-docs
+. compact bundled_hash: truncated _content_hash to 10 hex chars, migration for existing data
+. `keep get --meta`: dedicated meta mode with -n limit, removed --no-similar
