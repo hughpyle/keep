@@ -39,6 +39,8 @@ What makes this more than a vector store: when you view your current context (`k
 
 Backed by ChromaDB for vectors, SQLite for metadata and versions.
 
+> This is like an opinionated version of [Reflexion](https://github.com/noahshinn/reflexion) from Shinn et al.  If there are other similar research or projects I'd like to hear about them!
+
 ### The Practice
 
 keep is designed as a skill for AI agents — a practice, not just a tool. The [skill instructions](SKILL.md) teach agents to reflect before, during, and after action: check intentions, recognize commitments, capture learnings, notice breakdowns. `keep reflect` guides a structured reflection; `keep now` tracks current intentions and surfaces what's relevant.
