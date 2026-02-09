@@ -1,5 +1,8 @@
 
-* Outside of any project/topic tags, I'm not seeing commitments... looks like a query bug?
+x Outside of any project/topic tags, I'm not seeing commitments... looks like a query bug?
+    (no, user error - wasn't using act= tags)
+    - need to make sure the tagging instructions are as clear as poss
+    - reference `keep get .tag/act` directly
 
 * doc updates:
     - skillfile intro needs to be chomped a LOT
