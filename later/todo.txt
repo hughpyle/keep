@@ -1,4 +1,10 @@
 
+* Outside of any project/topic tags, I'm not seeing commitments... looks like a query bug?
+
+* doc updates:
+    - skillfile intro needs to be chomped a LOT
+    - readme can say "yeah, it's like an opinionated version of Reflexion (Shinn et al)".  https://github.com/noahshinn/reflexion
+
 * can `keep config` return error status if there's no correct configuration yet?
 
 * `keep reflect --something` that helps trigger "hourly reflection"?
@@ -7,11 +13,6 @@
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
-
-* edges thinking again
-    why don't we do edges, first, as a special thing that just links a document to the "now" doc?
-    (maybe not very useful.. still need to capture the /reason/ that it's linked, which is where
-    the semantics all live)
 
 * let's explore some semantic relationships that are important
     the thing we're talking about is related to (many of):
@@ -56,7 +57,6 @@
         - update with all relevant documents as you research
         - update with all relevant URLs as you research
         - more tags?  update with descriptions-of-tags?  auto-summarize to make descriptions-of-tags?
-        - or do we actually benefit from "edges" here?
 
 * re-test the gemini path
 
@@ -65,10 +65,6 @@
     - no capability for "model migration and re-embedding" yet
 
 * Measure some outcomes.  Describe behavior in openclaw, in claude code, etc.  Show where it works.
-
-* relationships as a separate first-class thing
-    - X and Y with a bidirectional edge
-    (needs more thought about the approach, benefits, etc.)
 
 * tag-by-model ("auto-tag")?
     - is there a model-supported tagging? what would that need to be useful? (specific domains??)
@@ -240,3 +236,4 @@ x `context` text alongside summaries? (no, summary is good now)
 . "remember X when Z" - covered by meta-docs
 . compact bundled_hash: truncated _content_hash to 10 hex chars, migration for existing data
 . `keep get --meta`: dedicated meta mode with -n limit, removed --no-similar
+. decision: no edges in the data model, at least for a while.  The meta tags are dynamic edges.
