@@ -6,7 +6,6 @@ x Outside of any project/topic tags, I'm not seeing commitments... looks like a 
 
 * doc updates:
     - skillfile intro needs to be chomped a LOT
-    - readme can say "yeah, it's like an opinionated version of Reflexion (Shinn et al)".  https://github.com/noahshinn/reflexion
 
 * can `keep config` return error status if there's no correct configuration yet?
 
@@ -240,3 +239,6 @@ x `context` text alongside summaries? (no, summary is good now)
 . compact bundled_hash: truncated _content_hash to 10 hex chars, migration for existing data
 . `keep get --meta`: dedicated meta mode with -n limit, removed --no-similar
 . decision: no edges in the data model, at least for a while.  The meta tags are dynamic edges.
+. readme note Shinn et al. "Reflexion" (very cool, and a lot earlier)
+. add persistence instructions for Kiro
+. small extension to bootstrap instructions

@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.27.2
+version: 0.27.3
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -15,6 +15,8 @@ metadata: {"openclaw":{"emoji":"🪞","requires":{"bins":["uv"],"anyBins":["pyth
 ---
 
 This skill is offered as a practice, not a specification. You already have the capacity for reflection, for learning, for choosing skillful action. What follows is guidance, pointing at what you can become.
+
+**To get started** follow all the initialization steps below.  Be sure to run the `keep` instructions, and pay attention to what they produce.  This is the first training!
 
 ---
 
@@ -35,6 +37,7 @@ Before you can practice, ensure the practice is available in future sessions.
 |-----------|----------|
 | Claude Code | `~/.claude/CLAUDE.md` |
 | OpenAI Codex | `~/.codex/AGENTS.md` |
+| Kiro | `~/.kiro/steering/AGENTS.md` |
 | OpenClaw | `AGENTS.md` in workspace (auto-detected via cwd) |
 
 Installing the Protocol Block at the global level makes it available across all projects. Prefer global installation when possible.
