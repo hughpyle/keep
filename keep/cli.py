@@ -1220,9 +1220,9 @@ def get(
         "--similar", "-S",
         help="List similar items"
     )] = False,
-    no_similar: Annotated[bool, typer.Option(
-        "--no-similar",
-        help="Suppress similar items in output"
+    meta: Annotated[bool, typer.Option(
+        "--meta", "-M",
+        help="List meta items"
     )] = False,
     tag: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
@@ -1230,7 +1230,7 @@ def get(
     )] = None,
     limit: Annotated[int, typer.Option(
         "--limit", "-n",
-        help="Max items for --history or --similar (default: 10)"
+        help="Max items for --history, --similar, or --meta (default: 10)"
     )] = 10,
     store: StoreOption = None,
     collection: CollectionOption = "default",
@@ -1248,7 +1248,7 @@ def get(
         keep get "doc:1@V{1}"           # Same as -V 1
         keep get doc:1 --history        # List all versions
         keep get doc:1 --similar        # List similar items
-        keep get doc:1 --no-similar     # Suppress similar items
+        keep get doc:1 --meta           # List meta items
         keep get doc:1 -t project=myapp # Only if tag matches
     """
     kp = _get_keeper(store, collection)
@@ -1256,7 +1256,7 @@ def get(
     errors = []
 
     for one_id in id:
-        result = _get_one(kp, one_id, version, history, similar, no_similar, tag, limit, collection)
+        result = _get_one(kp, one_id, version, history, similar, meta, tag, limit, collection)
         if result is None:
             errors.append(one_id)
         else:
@@ -1276,7 +1276,7 @@ def _get_one(
     version: Optional[int],
     history: bool,
     similar: bool,
-    no_similar: bool,
+    meta: bool,
     tag: Optional[list[str]],
     limit: int,
     collection: str,
@@ -1398,6 +1398,37 @@ def _get_one(
                 lines.append("  No similar items found.")
             return "\n".join(lines)
 
+    if meta:
+        # List meta items for this ID
+        meta_sections = kp.resolve_meta(actual_id, limit_per_doc=limit, collection=collection)
+        if _get_ids_output():
+            lines = []
+            for name, items in meta_sections.items():
+                for item in items:
+                    lines.append(_shell_quote_id(item.id))
+            return "\n".join(lines)
+        elif _get_json_output():
+            result = {
+                "id": actual_id,
+                "meta": {
+                    name: [{"id": item.id, "summary": item.summary[:60]} for item in items]
+                    for name, items in meta_sections.items()
+                },
+            }
+            return json.dumps(result, indent=2)
+        else:
+            lines = [f"Meta for {actual_id}:"]
+            for name, items in meta_sections.items():
+                lines.append(f"  {name}:")
+                for item in items:
+                    summary_preview = item.summary[:50].replace("\n", " ")
+                    if len(item.summary) > 50:
+                        summary_preview += "..."
+                    lines.append(f"    {_shell_quote_id(item.id)}  {summary_preview}")
+            if len(lines) == 1:
+                lines.append("  No meta items found.")
+            return "\n".join(lines)
+
     # Get specific version or current
     offset = effective_version if effective_version is not None else 0
 
@@ -1430,11 +1461,11 @@ def _get_one(
     # Get version navigation
     version_nav = kp.get_version_nav(actual_id, internal_version, collection=collection)
 
-    # Get similar items and meta sections (unless suppressed or viewing old version)
+    # Get similar items and meta sections for current version
     similar_items = None
     similar_offsets = None
     meta_sections = None
-    if not no_similar and offset == 0:
+    if offset == 0:
         similar_items = kp.get_similar_for_display(actual_id, limit=3, collection=collection)
         similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
         meta_sections = kp.resolve_meta(actual_id, collection=collection)

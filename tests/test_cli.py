@@ -59,13 +59,13 @@ class TestCliBasics:
 
     def test_meta_docs_loaded(self, cli):
         """Meta-doc system docs are loaded and accessible."""
-        result = cli("get", ".meta/todo", "--no-similar")
+        result = cli("get", ".meta/todo")
         assert result.returncode == 0
         assert ".meta/todo" in result.stdout
 
     def test_tag_type_doc_loaded(self, cli):
         """Tag description doc .tag/type is loaded and has full content."""
-        result = cli("get", ".tag/type", "--no-similar")
+        result = cli("get", ".tag/type")
         assert result.returncode == 0
         assert "Content Classification" in result.stdout
         # Should contain the values table (verbatim, not summarized)
@@ -74,7 +74,7 @@ class TestCliBasics:
 
     def test_meta_sections_use_namespace_prefix(self, cli):
         """Meta sections in frontmatter use meta/ prefix to avoid key conflicts."""
-        result = cli("get", ".meta/todo", "--no-similar")
+        result = cli("get", ".meta/todo")
         assert result.returncode == 0
         # The meta-doc itself shouldn't show meta/ sections (it IS a meta-doc)
         # but its content should have the query lines intact
@@ -349,7 +349,7 @@ class TestUnixComposability:
     def test_get_multiple_ids_separated_by_yaml_separator(self, cli):
         """Multiple IDs in get produce YAML-document-separated output."""
         # Get two system docs that always exist
-        result = cli("get", ".conversations", ".domains", "--no-similar")
+        result = cli("get", ".conversations", ".domains")
         assert result.returncode == 0
         # Multiple items separated by --- between them
         parts = result.stdout.split("\n---\n")
@@ -360,7 +360,7 @@ class TestUnixComposability:
 
     def test_get_single_id_no_extra_separator(self, cli):
         """Single ID in get produces normal output (no extra separators)."""
-        result = cli("get", ".conversations", "--no-similar")
+        result = cli("get", ".conversations")
         assert result.returncode == 0
         assert "id: .conversations" in result.stdout
 

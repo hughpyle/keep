@@ -342,8 +342,8 @@ def _get_env_tags() -> dict[str, str]:
 
 
 def _content_hash(content: str) -> str:
-    """SHA256 hash of content for change detection."""
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+    """Short SHA256 hash of content for change detection."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[-10:]
 
 
 def _user_tags_changed(old_tags: dict, new_tags: dict) -> bool:
