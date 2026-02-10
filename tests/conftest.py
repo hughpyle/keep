@@ -153,6 +153,10 @@ class MockChromaStore:
     def list_ids(self, collection: str) -> list[str]:
         return list(self._data.get(collection, {}).keys())
 
+    def find_missing_ids(self, collection: str, ids: list[str]) -> set[str]:
+        existing = set(self._data.get(collection, {}).keys())
+        return {id for id in ids if id not in existing}
+
     def update_summary(self, collection: str, id: str, summary: str) -> bool:
         if collection in self._data and id in self._data[collection]:
             self._data[collection][id]["summary"] = summary

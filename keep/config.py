@@ -99,8 +99,8 @@ class StoreConfig:
     version: int = CONFIG_VERSION
     created: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-    # Provider configurations
-    embedding: ProviderConfig = field(default_factory=lambda: ProviderConfig("sentence-transformers"))
+    # Provider configurations (embedding may be None if no provider is available)
+    embedding: Optional[ProviderConfig] = field(default_factory=lambda: ProviderConfig("sentence-transformers"))
     summarization: ProviderConfig = field(default_factory=lambda: ProviderConfig("truncate"))
     document: ProviderConfig = field(default_factory=lambda: ProviderConfig("composite"))
 
@@ -209,8 +209,8 @@ def _detect_ollama() -> dict | None:
             models = [m["name"] for m in data.get("models", [])]
             if models:
                 return {"base_url": base_url, "models": models}
-    except Exception:
-        pass
+    except (OSError, ValueError):
+        pass  # Ollama not running or not responding
     return None
 
 

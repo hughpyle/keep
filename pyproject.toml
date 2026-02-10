@@ -25,6 +25,7 @@ classifiers = [
 
 dependencies = [
     "chromadb>=0.4",
+    "requests>=2.20",
     "typer>=0.9",
     "tomli-w>=1.0",
     # Lightweight API SDKs (~2MB total, no heavy deps)

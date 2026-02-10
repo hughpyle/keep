@@ -104,22 +104,23 @@ def _filter_by_date(items: list, since: str) -> list:
 
 
 def _truncate_ts(ts: str) -> str:
-    """Truncate ISO timestamp to seconds UTC, no timezone suffix.
+    """Normalize timestamp to canonical format: YYYY-MM-DDTHH:MM:SS.
 
-    Strips microseconds and timezone indicator from stored timestamps.
-    All timestamps are UTC by convention.
+    New data is already in this format (via utc_now()). This handles
+    legacy timestamps that may have microseconds, 'Z', or '+00:00'.
     """
-    # Remove microseconds: cut at first '.' after position 19 (HH:MM:SS)
+    # Strip fractional seconds
     dot = ts.find(".", 19)
     if dot != -1:
-        # Find where timezone starts after microseconds
+        # Skip past digits to any tz suffix
+        end = dot
         for i in range(dot + 1, len(ts)):
             if ts[i] in "+-Z":
-                ts = ts[:dot] + ts[i:]
                 break
         else:
-            ts = ts[:dot]
-    # Strip timezone suffix (+00:00, Z, etc.) — all timestamps are UTC
+            i = len(ts)
+        ts = ts[:dot] + ts[i:] if i < len(ts) else ts[:dot]
+    # Strip timezone suffix — all timestamps are UTC by convention
     if ts.endswith("+00:00"):
         ts = ts[:-6]
     elif ts.endswith("Z"):
@@ -165,7 +166,7 @@ from .providers.base import (
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import VersionInfo
 from .store import ChromaStore
-from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX
+from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, parse_utc_timestamp
 
 
 # Default max length for truncated placeholder summaries
@@ -482,27 +483,29 @@ class Keeper:
         """
         try:
             coll = self._resolve_collection(None)
-            doc_ids = set(self._document_store.list_ids(coll))
-            chroma_ids = set(self._store.list_ids(coll))
-            missing = doc_ids - chroma_ids
-            orphaned = chroma_ids - doc_ids
+            doc_ids = self._document_store.list_ids(coll)
+            missing = self._store.find_missing_ids(coll, doc_ids)
+            # Check for orphaned ChromaDB entries
+            chroma_ids = self._store.list_ids(coll)
+            doc_id_set = set(doc_ids)
+            orphaned = [cid for cid in chroma_ids if cid not in doc_id_set]
             if missing or orphaned:
                 logger.warning(
                     "Store inconsistency: %d missing from search index, %d orphaned",
                     len(missing), len(orphaned),
                 )
                 return True
-        except Exception:
-            pass  # Don't block startup
+        except Exception as e:
+            logger.debug("Store consistency check failed: %s", e)
         return False
 
     def _auto_reconcile(self, collection: str) -> None:
         """Fix store divergence using summaries (no content re-fetch needed)."""
-        doc_ids = set(self._document_store.list_ids(collection))
-        chroma_ids = set(self._store.list_ids(collection))
+        doc_ids = self._document_store.list_ids(collection)
+        missing = self._store.find_missing_ids(collection, doc_ids)
 
         # Items in DocumentStore but missing from ChromaDB — re-embed summary
-        for doc_id in doc_ids - chroma_ids:
+        for doc_id in missing:
             try:
                 record = self._document_store.get(collection, doc_id)
                 if record:
@@ -516,12 +519,15 @@ class Keeper:
                 logger.warning("Failed to reconcile %s: %s", doc_id, e)
 
         # Items in ChromaDB but not in DocumentStore — remove orphaned embeddings
-        for orphan_id in chroma_ids - doc_ids:
-            try:
-                self._store.delete(collection, orphan_id)
-                logger.info("Removed orphaned embedding: %s", orphan_id)
-            except Exception as e:
-                logger.warning("Failed to remove orphan %s: %s", orphan_id, e)
+        chroma_ids = self._store.list_ids(collection)
+        doc_id_set = set(doc_ids)
+        for orphan_id in chroma_ids:
+            if orphan_id not in doc_id_set:
+                try:
+                    self._store.delete(collection, orphan_id)
+                    logger.info("Removed orphaned embedding: %s", orphan_id)
+                except Exception as e:
+                    logger.warning("Failed to remove orphan %s: %s", orphan_id, e)
 
     def _migrate_system_documents(self) -> dict:
         """
@@ -567,7 +573,7 @@ class Keeper:
                         self.delete(doc.id)
                         stats["cleaned"] += 1
                         logger.info("Cleaned up old system doc: %s", doc.id)
-        except Exception as e:
+        except (OSError, ValueError, KeyError) as e:
             logger.debug("Error scanning old system docs: %s", e)
 
         # Second pass: rename old prefixes to new
@@ -583,7 +589,7 @@ class Keeper:
                 elif old_item:
                     self.delete(old_id)
                     stats["cleaned"] += 1
-            except Exception as e:
+            except (OSError, ValueError, KeyError) as e:
                 logger.debug("Error renaming %s: %s", old_id, e)
 
         # Rename _text:hash → %hash (transfer embeddings directly, no re-embedding)
@@ -616,12 +622,12 @@ class Keeper:
                                 embeddings=[result["embeddings"][0]],
                                 documents=[result["documents"][0] or rec.summary],
                                 metadatas=[meta])
-                    except Exception:
-                        pass  # ChromaDB entry may not exist
+                    except (ValueError, KeyError) as e:
+                        logger.debug("ChromaDB transfer skipped for %s: %s", rec.id, e)
                 self.delete(rec.id)
                 stats["migrated"] += 1
                 logger.info("Renamed text ID: %s -> %s", rec.id, new_id)
-        except Exception as e:
+        except (OSError, ValueError, KeyError) as e:
             logger.debug("Error migrating _text: IDs: %s", e)
 
         # Third pass: remove system docs no longer bundled
@@ -632,7 +638,7 @@ class Keeper:
                     self.delete(old_id)
                     stats["cleaned"] += 1
                     logger.info("Removed retired system doc: %s", old_id)
-            except Exception as e:
+            except (OSError, ValueError, KeyError) as e:
                 logger.debug("Error removing retired doc %s: %s", old_id, e)
 
         # Fourth pass: create or update system docs from bundled content
@@ -695,6 +701,12 @@ class Keeper:
         exhaustion.
         """
         if self._embedding_provider is None:
+            if self._config.embedding is None:
+                raise RuntimeError(
+                    "No embedding provider configured. Install one with:\n"
+                    "  pip install 'keep-skill[local]'   # local models\n"
+                    "Or set VOYAGE_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY."
+                )
             registry = get_registry()
             base_provider = registry.create_embedding(
                 self._config.embedding.name,
@@ -1141,10 +1153,7 @@ class Keeper:
             updated_str = item.tags.get("_updated")
             if updated_str and item.score is not None:
                 try:
-                    # Parse ISO timestamp (may lack timezone — all timestamps are UTC)
-                    updated = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
-                    if updated.tzinfo is None:
-                        updated = updated.replace(tzinfo=timezone.utc)
+                    updated = parse_utc_timestamp(updated_str)
                     days_elapsed = (now - updated).total_seconds() / 86400
                     
                     # Exponential decay: 0.5^(days/half_life)
@@ -1470,7 +1479,8 @@ class Keeper:
             cand_result = chroma_coll.get(
                 ids=candidate_ids, include=["embeddings"]
             )
-        except Exception:
+        except Exception as e:
+            logger.debug("Embedding lookup failed, falling back to recency: %s", e)
             return self._apply_recency_decay(candidates)
 
         # Build id → embedding lookup (some candidates may not have embeddings)
@@ -1823,7 +1833,7 @@ class Keeper:
         chroma_coll = self._store._get_collection(coll)
         try:
             chroma_coll.delete(ids=[versioned_chroma_id])
-        except Exception:
+        except ValueError:
             pass  # May not exist if it was a tag-only change
 
         return self.get(id, collection=collection)
@@ -2247,12 +2257,13 @@ class Keeper:
         """
         coll = self._resolve_collection(collection)
 
-        # Get IDs from both stores
-        doc_ids = set(self._document_store.list_ids(coll))
-        chroma_ids = set(self._store.list_ids(coll))
+        # Find mismatches between stores
+        doc_ids = self._document_store.list_ids(coll)
+        missing_from_chroma = self._store.find_missing_ids(coll, doc_ids)
 
-        missing_from_chroma = doc_ids - chroma_ids
-        orphaned_in_chroma = chroma_ids - doc_ids
+        chroma_ids = self._store.list_ids(coll)
+        doc_id_set = set(doc_ids)
+        orphaned_in_chroma = {cid for cid in chroma_ids if cid not in doc_id_set}
 
         fixed = 0
         removed = 0

@@ -3,6 +3,7 @@ Data types for reflective memory.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -12,6 +13,28 @@ SYSTEM_TAG_PREFIX = "_"
 # Tags used internally but hidden from display output
 # These exist for efficient queries/sorting but aren't user-facing
 INTERNAL_TAGS = frozenset({"_updated_date", "_accessed_date"})
+
+
+def utc_now() -> str:
+    """Current UTC timestamp in canonical format: YYYY-MM-DDTHH:MM:SS.
+
+    All timestamps in keep are UTC, stored without timezone suffix.
+    This is the single source of truth for timestamp formatting.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def parse_utc_timestamp(ts: str) -> datetime:
+    """Parse a stored timestamp string to a timezone-aware UTC datetime.
+
+    Handles both the canonical format (no suffix) and legacy formats
+    that may include microseconds, 'Z', or '+00:00' suffixes.
+    """
+    ts = ts.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def filter_non_system_tags(tags: dict[str, str]) -> dict[str, str]:

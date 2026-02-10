@@ -544,7 +544,7 @@ def _get_keeper(store: Optional[Path], collection: str) -> Keeper:
             from .integrations import check_and_install
             try:
                 check_and_install(kp._config)
-            except Exception:
+            except (OSError, ValueError) as e:
                 pass  # Never block normal operation
         return kp
     except Exception as e:
@@ -950,10 +950,6 @@ def now(
     content: Annotated[Optional[str], typer.Argument(
         help="Content to set (omit to show current)"
     )] = None,
-    file: Annotated[Optional[Path], typer.Option(
-        "--file", "-f",
-        help="Read content from file"
-    )] = None,
     reset: Annotated[bool, typer.Option(
         "--reset",
         help="Reset to default from system"
@@ -990,7 +986,6 @@ def now(
         keep now "What's important now"  # Update intentions
         keep now "Auth work" -t project=myapp  # Update with tag
         keep now -t project=myapp        # Find version with tag
-        keep now -f context.md           # Read content from file
         keep now --reset                 # Reset to default from system
         keep now -V 1                    # Previous version
         keep now --history               # List all versions
@@ -1077,7 +1072,7 @@ def now(
         return
 
     # Determine if we're getting or setting
-    setting = content is not None or file is not None or reset
+    setting = content is not None or reset
 
     if setting:
         if reset:
@@ -1090,12 +1085,6 @@ def now(
             except FileNotFoundError:
                 typer.echo("Error: Builtin now.md not found", err=True)
                 raise typer.Exit(1)
-        elif file is not None:
-            if not file.exists():
-                typer.echo(f"Error: File not found: {file}", err=True)
-                raise typer.Exit(1)
-            new_content = file.read_text()
-            parsed_tags = {}
         else:
             new_content = content
             parsed_tags = {}
@@ -1596,20 +1585,20 @@ def _get_config_value(cfg, store_path: Path, path: str):
         try:
             chroma = ChromaStore(store_path)
             return chroma.list_collections()
-        except Exception:
+        except (OSError, ValueError):
             return []
 
     # Provider shortcuts
     if path == "providers":
         if cfg:
             return {
-                "embedding": cfg.embedding.name,
+                "embedding": cfg.embedding.name if cfg.embedding else None,
                 "summarization": cfg.summarization.name,
                 "document": cfg.document.name,
             }
         return None
     if path == "providers.embedding":
-        return cfg.embedding.name if cfg else None
+        return cfg.embedding.name if cfg and cfg.embedding else None
     if path == "providers.summarization":
         return cfg.summarization.name if cfg else None
     if path == "providers.document":
@@ -1652,7 +1641,7 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
     try:
         chroma = ChromaStore(store_path)
         collections = chroma.list_collections()
-    except Exception:
+    except (OSError, ValueError):
         collections = []
 
     # Show paths
@@ -1806,7 +1795,7 @@ def config(
             "store": str(store_path),
             "collections": collections,
             "providers": {
-                "embedding": cfg.embedding.name if cfg else None,
+                "embedding": cfg.embedding.name if cfg and cfg.embedding else None,
                 "summarization": cfg.summarization.name if cfg else None,
                 "document": cfg.document.name if cfg else None,
             },

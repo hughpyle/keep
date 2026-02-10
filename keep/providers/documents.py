@@ -255,13 +255,25 @@ class HttpDocumentProvider:
             with resp:
                 resp.raise_for_status()
 
-                # Check size
+                # Check declared size
                 content_length = resp.headers.get("content-length")
                 if content_length and int(content_length) > self.max_size:
                     raise IOError(f"Content too large: {content_length} bytes")
 
-                # Read content with size limit
-                content = resp.text[:self.max_size]
+                # Read content in chunks with enforced size limit
+                chunks: list[bytes] = []
+                downloaded = 0
+                for chunk in resp.iter_content(chunk_size=65536):
+                    downloaded += len(chunk)
+                    if downloaded > self.max_size:
+                        chunks.append(chunk[:self.max_size - (downloaded - len(chunk))])
+                        break
+                    chunks.append(chunk)
+                raw = b"".join(chunks)
+
+                # Decode using the response's detected encoding
+                encoding = resp.encoding or "utf-8"
+                content = raw.decode(encoding, errors="replace")
 
                 # Get content type
                 content_type = resp.headers.get("content-type", "text/plain")
