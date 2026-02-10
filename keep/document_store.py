@@ -396,23 +396,25 @@ class DocumentStore:
     def touch(self, collection: str, id: str) -> None:
         """Update accessed_at timestamp without changing updated_at."""
         now = self._now()
-        self._conn.execute("""
-            UPDATE documents SET accessed_at = ?
-            WHERE id = ? AND collection = ?
-        """, (now, id, collection))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("""
+                UPDATE documents SET accessed_at = ?
+                WHERE id = ? AND collection = ?
+            """, (now, id, collection))
+            self._conn.commit()
 
     def touch_many(self, collection: str, ids: list[str]) -> None:
         """Update accessed_at for multiple documents in one statement."""
         if not ids:
             return
         now = self._now()
-        placeholders = ",".join("?" * len(ids))
-        self._conn.execute(f"""
-            UPDATE documents SET accessed_at = ?
-            WHERE collection = ? AND id IN ({placeholders})
-        """, (now, collection, *ids))
-        self._conn.commit()
+        with self._lock:
+            placeholders = ",".join("?" * len(ids))
+            self._conn.execute(f"""
+                UPDATE documents SET accessed_at = ?
+                WHERE collection = ? AND id IN ({placeholders})
+            """, (now, collection, *ids))
+            self._conn.commit()
 
     def restore_latest_version(self, collection: str, id: str) -> Optional[DocumentRecord]:
         """
@@ -808,7 +810,10 @@ class DocumentStore:
         Returns:
             List of DocumentRecords, most recent first
         """
-        order_col = "accessed_at" if order_by == "accessed" else "updated_at"
+        allowed_order = {"updated": "updated_at", "accessed": "accessed_at"}
+        order_col = allowed_order.get(order_by)
+        if order_col is None:
+            raise ValueError(f"Invalid order_by: {order_by!r} (expected 'updated' or 'accessed')")
         cursor = self._conn.execute(f"""
             SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
@@ -859,12 +864,14 @@ class DocumentStore:
         Returns:
             List of matching DocumentRecords
         """
+        # Escape LIKE wildcards in the prefix to prevent injection
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         cursor = self._conn.execute("""
             SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
-            WHERE collection = ? AND id LIKE ?
+            WHERE collection = ? AND id LIKE ? ESCAPE '\\'
             ORDER BY id
-        """, (collection, f"{prefix}%"))
+        """, (collection, f"{escaped}%"))
 
         results = []
         for row in cursor:
@@ -895,18 +902,12 @@ class DocumentStore:
             Sorted list of distinct tag keys
         """
         cursor = self._conn.execute("""
-            SELECT tags_json FROM documents
-            WHERE collection = ?
+            SELECT DISTINCT j.key FROM documents, json_each(tags_json) AS j
+            WHERE collection = ? AND j.key NOT LIKE '\\_%' ESCAPE '\\'
+            ORDER BY j.key
         """, (collection,))
 
-        keys: set[str] = set()
-        for row in cursor:
-            tags = json.loads(row["tags_json"])
-            for key in tags:
-                if not key.startswith("_"):
-                    keys.add(key)
-
-        return sorted(keys)
+        return [row[0] for row in cursor]
 
     def list_distinct_tag_values(self, collection: str, key: str) -> list[str]:
         """
@@ -920,17 +921,13 @@ class DocumentStore:
             Sorted list of distinct values
         """
         cursor = self._conn.execute("""
-            SELECT tags_json FROM documents
-            WHERE collection = ?
-        """, (collection,))
+            SELECT DISTINCT json_extract(tags_json, '$.' || ?) AS val
+            FROM documents
+            WHERE collection = ? AND val IS NOT NULL
+            ORDER BY val
+        """, (key, collection))
 
-        values: set[str] = set()
-        for row in cursor:
-            tags = json.loads(row["tags_json"])
-            if key in tags:
-                values.add(tags[key])
-
-        return sorted(values)
+        return [row[0] for row in cursor]
 
     def query_by_tag_key(
         self,
