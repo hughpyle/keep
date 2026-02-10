@@ -80,7 +80,6 @@ keep --help                          # Show all commands
 # Current intentions (now)
 keep now                             # Show current intentions with version nav
 keep now "What's important now"      # Update intentions
-keep now -f context.md -t project=x  # Read content from file with tags
 keep now -V 1                        # Previous intentions
 keep now --history                   # List all versions
 keep reflect                         # Deep structured reflection practice

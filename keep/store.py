@@ -8,11 +8,10 @@ For now, ChromaDb is the only implementation — and that's fine.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .types import Item
+from .types import Item, utc_now
 
 
 @dataclass
@@ -138,7 +137,7 @@ class ChromaStore:
         coll = self._get_collection(collection)
 
         # Add timestamp if not present
-        now = datetime.now(timezone.utc).isoformat()
+        now = utc_now()
         if "_updated" not in tags:
             tags = {**tags, "_updated": now}
         if "_created" not in tags:
@@ -264,9 +263,8 @@ class ChromaStore:
                 )
                 if versions["ids"]:
                     coll.delete(ids=versions["ids"])
-            except Exception:
-                # Metadata filter might fail if no versions exist
-                pass
+            except ValueError:
+                pass  # Metadata filter may fail if no versions exist
 
         return True
 
@@ -294,7 +292,7 @@ class ChromaStore:
 
         # Update metadata with new timestamp
         metadata = existing["metadatas"][0] or {}
-        now = datetime.now(timezone.utc).isoformat()
+        now = utc_now()
         metadata["_updated"] = now
         metadata["_updated_date"] = now[:10]
 
@@ -326,7 +324,7 @@ class ChromaStore:
             return False
 
         # Update timestamp
-        now = datetime.now(timezone.utc).isoformat()
+        now = utc_now()
         tags = dict(tags)  # Copy to avoid mutating input
         tags["_updated"] = now
         tags["_updated_date"] = now[:10]
@@ -393,9 +391,14 @@ class ChromaStore:
             return None
         return list(result["embeddings"][0])
 
+    _LIST_IDS_PAGE = 5000
+
     def list_ids(self, collection: str) -> list[str]:
         """
         List all document IDs in a collection.
+
+        Paginates internally to avoid loading all IDs in a single
+        ChromaDB call, which can be slow or OOM on large collections.
 
         Args:
             collection: Collection name
@@ -404,8 +407,41 @@ class ChromaStore:
             List of document IDs
         """
         coll = self._get_collection(collection)
-        result = coll.get(include=[])
-        return result["ids"]
+        all_ids: list[str] = []
+        offset = 0
+        while True:
+            result = coll.get(include=[], limit=self._LIST_IDS_PAGE, offset=offset)
+            batch = result["ids"]
+            if not batch:
+                break
+            all_ids.extend(batch)
+            if len(batch) < self._LIST_IDS_PAGE:
+                break
+            offset += len(batch)
+        return all_ids
+
+    def find_missing_ids(self, collection: str, ids: list[str]) -> set[str]:
+        """
+        Given a list of IDs, return those not present in ChromaDB.
+
+        Checks in batches to avoid oversized requests.
+
+        Args:
+            collection: Collection name
+            ids: IDs to check
+
+        Returns:
+            Set of IDs not found in ChromaDB
+        """
+        coll = self._get_collection(collection)
+        missing: set[str] = set()
+        batch_size = self._LIST_IDS_PAGE
+        for i in range(0, len(ids), batch_size):
+            batch = ids[i:i + batch_size]
+            result = coll.get(ids=batch, include=[])
+            found = set(result["ids"])
+            missing.update(id for id in batch if id not in found)
+        return missing
 
     def query_embedding(
         self,

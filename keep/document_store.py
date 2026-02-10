@@ -17,9 +17,10 @@ import json
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+from .types import utc_now
 
 
 # Schema version for migrations
@@ -200,9 +201,10 @@ class DocumentStore:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
     
-    def _now(self) -> str:
-        """Current timestamp in ISO format."""
-        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    @staticmethod
+    def _now() -> str:
+        """Current timestamp in canonical UTC format."""
+        return utc_now()
 
     def _get_unlocked(self, collection: str, id: str) -> Optional[DocumentRecord]:
         """Get a document by ID without acquiring the lock (for use within locked contexts)."""
@@ -923,9 +925,10 @@ class DocumentStore:
         cursor = self._conn.execute("""
             SELECT DISTINCT json_extract(tags_json, '$.' || ?) AS val
             FROM documents
-            WHERE collection = ? AND val IS NOT NULL
+            WHERE collection = ?
+              AND json_extract(tags_json, '$.' || ?) IS NOT NULL
             ORDER BY val
-        """, (key, collection))
+        """, (key, collection, key))
 
         return [row[0] for row in cursor]
 
