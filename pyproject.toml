@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "keep-skill"
-version = "0.27.4"
+version = "0.27.5"
 description = "Reflective memory - remember and search documents by meaning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -25,6 +25,7 @@ classifiers = [
 
 dependencies = [
     "chromadb>=0.4",
+    "pyyaml>=6.0",
     "requests>=2.20",
     "typer>=0.9",
     "tomli-w>=1.0",

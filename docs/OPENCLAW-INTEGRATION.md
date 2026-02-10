@@ -1,4 +1,4 @@
-# OpenClaw Integration
+# Provider Configuration
 
 **Status:** Available in v0.1.0+
 
@@ -6,11 +6,11 @@
 
 ## Overview
 
-keep can automatically integrate with OpenClaw's configured models when both are present. This enables:
+keep auto-detects available AI providers from environment variables. This enables:
 
-- **Unified model configuration** — Configure once in OpenClaw, use everywhere
-- **Local-first by default** — Embeddings stay local, summarization can use configured LLM
-- **Seamless fallback** — Works standalone without OpenClaw
+- **Zero-config setup** — Set an API key and go
+- **Local-first by default** — Local embeddings when no API keys are set
+- **Seamless fallback** — Graceful degradation through the provider priority chain
 
 ---
 
@@ -38,19 +38,17 @@ keep can automatically integrate with OpenClaw's configured models when both are
 
 ### What Gets Shared
 
-**From OpenClaw config:**
-- **Embedding provider** from `memorySearch.provider` (openai, gemini, or auto)
-- **Embedding model** from `memorySearch.model`
-- **Model selection for summarization** (e.g., `anthropic/claude-sonnet-4-5`)
-- Provider routing (automatically detects Anthropic models)
+**API keys** are resolved from environment variables:
+- `VOYAGE_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`
+- `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`
+
+These are the same variables that OpenClaw and other tools set, so provider selection works automatically when both tools share the same shell environment.
 
 **Stays local:**
 - **Store** remains in `~/.keep/` (not shared with OpenClaw)
-- Falls back to **sentence-transformers** if no API keys available
+- Falls back to **sentence-transformers** or **MLX** if no API keys available
 
-**API keys** are resolved from:
-1. `memorySearch.remote.apiKey` in config
-2. Environment variables (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`)
+> **Note:** Direct reading of OpenClaw's `openclaw.json` config file is not yet implemented. Provider selection is currently based entirely on environment variables.
 
 ---
 
@@ -83,35 +81,17 @@ uv tool install 'keep-skill[local]'
 keep put "test note"         # MLX on Apple Silicon, sentence-transformers elsewhere
 ```
 
-### Option 3: Manual Override
-
-Set `OPENCLAW_CONFIG` to use a different config file:
+### Option 3: Ollama (Local Server)
 
 ```bash
-export OPENCLAW_CONFIG=/custom/path/to/openclaw.json
-keep put "test note"
+# Start Ollama with an embedding model
+ollama pull llama3.2:3b
+keep put "test note"         # Auto-detected if Ollama is running
 ```
 
 ---
 
 ## Configuration Files
-
-### OpenClaw Config Location
-
-Default: `~/.openclaw/openclaw.json`
-
-**Relevant fields:**
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "anthropic/claude-sonnet-4-5"
-      }
-    }
-  }
-}
-```
 
 ### keep Config Location
 
@@ -136,18 +116,15 @@ name = "composite"
 
 ---
 
-## Model Mapping
+## Model Defaults
 
-OpenClaw uses short model names. keep maps them to actual Anthropic API names:
+When using Anthropic for summarization, keep uses `claude-3-5-haiku-20241022` by default (fast, inexpensive). This can be overridden in `keep.toml`:
 
-| OpenClaw Model | Anthropic API Model |
-|----------------|---------------------|
-| `claude-sonnet-4` | `claude-sonnet-4-20250514` |
-| `claude-sonnet-4-5` | `claude-sonnet-4-20250514` |
-| `claude-sonnet-3-5` | `claude-3-5-sonnet-20241022` |
-| `claude-haiku-3-5` | `claude-3-5-haiku-20241022` |
-
-**Unknown models** default to `claude-3-5-haiku-20241022` (fast, cheap).
+```toml
+[summarization]
+name = "anthropic"
+model = "claude-sonnet-4-20250514"
+```
 
 ---
 
@@ -160,7 +137,7 @@ OpenClaw uses short model names. keep maps them to actual Anthropic API names:
 | `GEMINI_API_KEY` | Google Gemini API | ✓ | ✓ |
 | `ANTHROPIC_API_KEY` | Anthropic API (API key) | - | ✓ |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Anthropic API (OAuth token) | - | ✓ |
-| `OPENCLAW_CONFIG` | Override OpenClaw config location | - | - |
+| `OLLAMA_HOST` | Override Ollama server address | ✓ | ✓ |
 | `KEEP_STORE_PATH` | Override store location | - | - |
 
 ---
@@ -326,10 +303,8 @@ Summaries are computed once per document. Using an API:
 
 ## Future Enhancements
 
-**Planned for v0.2:**
-- [ ] OAuth integration (use OpenClaw's OAuth tokens directly)
+- [ ] Read OpenClaw config (`~/.openclaw/openclaw.json`) for provider/model selection
 - [ ] Per-collection provider config
-- [ ] Automatic model upgrades when OpenClaw config changes
 - [ ] Batch summarization for cost optimization
 
 ---

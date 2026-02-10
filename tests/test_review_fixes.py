@@ -176,6 +176,14 @@ class TestIsPrivateUrl:
         """localhost resolves to 127.0.0.1, should be blocked."""
         assert provider._is_private_url("http://localhost/secret") is True
 
+    def test_unspecified_address(self, provider) -> None:
+        """0.0.0.0 (unspecified) should be blocked."""
+        assert provider._is_private_url("http://0.0.0.0/path") is True
+
+    def test_multicast_address(self, provider) -> None:
+        """Multicast addresses should be blocked."""
+        assert provider._is_private_url("http://224.0.0.1/path") is True
+
     def test_fetch_blocks_private(self, provider) -> None:
         """fetch() raises IOError for private URLs."""
         with pytest.raises(IOError, match="private"):
