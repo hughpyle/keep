@@ -4,11 +4,8 @@ Summarization and tagging providers using LLMs.
 
 import json
 import os
-from typing import Any
 
 from .base import (
-    SummarizationProvider,
-    TaggingProvider,
     get_registry,
     SUMMARIZATION_SYSTEM_PROMPT,
     build_summarization_prompt,
@@ -218,6 +215,7 @@ class OllamaSummarization:
                 ],
                 "stream": False,
             },
+            timeout=120,
         )
         response.raise_for_status()
 
@@ -475,6 +473,7 @@ class OllamaTagging:
                 "format": "json",
                 "stream": False,
             },
+            timeout=120,
         )
         response.raise_for_status()
         

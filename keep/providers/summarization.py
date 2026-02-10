@@ -4,7 +4,7 @@ Default summarization providers.
 Simple, zero-dependency summarizers for getting started.
 """
 
-from .base import SummarizationProvider, get_registry
+from .base import get_registry
 
 
 class TruncationSummarizer:
