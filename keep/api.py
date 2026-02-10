@@ -467,8 +467,61 @@ class Keeper:
             embedding_dimension=embedding_dim,
         )
 
+        # Check store consistency (cheap ID-set comparison, deferred fix)
+        self._needs_reconcile = self._check_store_consistency()
+
         # Migrate and ensure system documents (idempotent)
         self._migrate_system_documents()
+
+    def _check_store_consistency(self) -> bool:
+        """Check if DocumentStore and ChromaDB ID sets match.
+
+        Returns True if reconciliation is needed. Does not fix —
+        that is deferred to the first _upsert call when the
+        embedding provider is available.
+        """
+        try:
+            coll = self._resolve_collection(None)
+            doc_ids = set(self._document_store.list_ids(coll))
+            chroma_ids = set(self._store.list_ids(coll))
+            missing = doc_ids - chroma_ids
+            orphaned = chroma_ids - doc_ids
+            if missing or orphaned:
+                logger.warning(
+                    "Store inconsistency: %d missing from search index, %d orphaned",
+                    len(missing), len(orphaned),
+                )
+                return True
+        except Exception:
+            pass  # Don't block startup
+        return False
+
+    def _auto_reconcile(self, collection: str) -> None:
+        """Fix store divergence using summaries (no content re-fetch needed)."""
+        doc_ids = set(self._document_store.list_ids(collection))
+        chroma_ids = set(self._store.list_ids(collection))
+
+        # Items in DocumentStore but missing from ChromaDB — re-embed summary
+        for doc_id in doc_ids - chroma_ids:
+            try:
+                record = self._document_store.get(collection, doc_id)
+                if record:
+                    embedding = self._get_embedding_provider().embed(record.summary)
+                    self._store.upsert(
+                        collection=collection, id=doc_id,
+                        embedding=embedding, summary=record.summary, tags=record.tags,
+                    )
+                    logger.info("Reconciled missing item: %s", doc_id)
+            except Exception as e:
+                logger.warning("Failed to reconcile %s: %s", doc_id, e)
+
+        # Items in ChromaDB but not in DocumentStore — remove orphaned embeddings
+        for orphan_id in chroma_ids - doc_ids:
+            try:
+                self._store.delete(collection, orphan_id)
+                logger.info("Removed orphaned embedding: %s", orphan_id)
+            except Exception as e:
+                logger.warning("Failed to remove orphan %s: %s", orphan_id, e)
 
     def _migrate_system_documents(self) -> dict:
         """
@@ -814,7 +867,141 @@ class Keeper:
     # -------------------------------------------------------------------------
     # Write Operations
     # -------------------------------------------------------------------------
-    
+
+    def _upsert(
+        self,
+        id: str,
+        content: str,
+        *,
+        tags: Optional[dict[str, str]] = None,
+        summary: Optional[str] = None,
+        system_tags: dict[str, str],
+        collection: Optional[str] = None,
+    ) -> Item:
+        """Core upsert logic shared by update() and remember()."""
+        coll = self._resolve_collection(collection)
+
+        # Auto-reconcile on first write if startup detected inconsistency
+        if self._needs_reconcile:
+            self._auto_reconcile(coll)
+            self._needs_reconcile = False
+
+        # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
+        existing_tags = {}
+        existing_doc = self._document_store.get(coll, id)
+        if existing_doc:
+            existing_tags = filter_non_system_tags(existing_doc.tags)
+        else:
+            existing = self._store.get(coll, id)
+            if existing:
+                existing_tags = filter_non_system_tags(existing.tags)
+
+        # Compute content hash for change detection
+        new_hash = _content_hash(content)
+
+        # Build tags: existing → config → env → user → system
+        merged_tags = {**existing_tags}
+
+        if self._config.default_tags:
+            merged_tags.update(self._config.default_tags)
+
+        env_tags = _get_env_tags()
+        merged_tags.update(env_tags)
+
+        if tags:
+            merged_tags.update(filter_non_system_tags(tags))
+
+        merged_tags.update(system_tags)
+
+        # Change detection (before embedding to allow early return)
+        content_unchanged = (
+            existing_doc is not None
+            and existing_doc.content_hash == new_hash
+        )
+        tags_changed = (
+            existing_doc is not None
+            and _user_tags_changed(existing_doc.tags, merged_tags)
+        )
+
+        # Early return: nothing to do
+        if content_unchanged and not tags_changed and summary is None:
+            logger.debug("Content and tags unchanged, skipping for %s", id)
+            return _record_to_item(existing_doc)
+
+        # Get embedding: reuse stored if content unchanged, compute if new/changed
+        if content_unchanged:
+            embedding = self._store.get_embedding(coll, id)
+            if embedding is None:
+                embedding = self._get_embedding_provider().embed(content)
+        else:
+            embedding = self._get_embedding_provider().embed(content)
+
+        # Determine summary
+        max_len = self._config.max_summary_length
+        if summary is not None:
+            if len(summary) > max_len:
+                import warnings
+                warnings.warn(
+                    f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
+                    UserWarning,
+                    stacklevel=3
+                )
+                summary = summary[:max_len]
+            final_summary = summary
+        elif content_unchanged and tags_changed:
+            logger.debug("Tags changed, queueing re-summarization for %s", id)
+            final_summary = existing_doc.summary
+            if len(content) > max_len:
+                self._pending_queue.enqueue(id, coll, content)
+        elif len(content) <= max_len:
+            final_summary = content
+        else:
+            final_summary = content[:max_len] + "..."
+            self._pending_queue.enqueue(id, coll, content)
+
+        # Save old embedding before ChromaDB upsert overwrites it (for version archival)
+        old_embedding = None
+        if existing_doc is not None and not content_unchanged:
+            old_embedding = self._store.get_embedding(coll, id)
+
+        # Dual-write: document store (canonical) + ChromaDB (embedding index)
+        result, content_changed = self._document_store.upsert(
+            collection=coll,
+            id=id,
+            summary=final_summary,
+            tags=merged_tags,
+            content_hash=new_hash,
+        )
+
+        self._store.upsert(
+            collection=coll,
+            id=id,
+            embedding=embedding,
+            summary=final_summary,
+            tags=merged_tags,
+        )
+
+        # If content changed and we archived a version, also store versioned embedding
+        if existing_doc is not None and content_changed:
+            version_count = self._document_store.version_count(coll, id)
+            if version_count > 0:
+                if old_embedding is None:
+                    old_embedding = self._get_embedding_provider().embed(existing_doc.summary)
+                self._store.upsert_version(
+                    collection=coll,
+                    id=id,
+                    version=version_count,
+                    embedding=old_embedding,
+                    summary=existing_doc.summary,
+                    tags=existing_doc.tags,
+                )
+
+        # Spawn background processor if needed
+        if summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
+            self._spawn_processor()
+
+        return _record_to_item(result)
+
     def update(
         self,
         id: str,
@@ -850,7 +1037,6 @@ class Keeper:
         Returns:
             The stored Item with merged tags and new summary
         """
-        # Handle deprecated source_tags parameter
         if source_tags is not None:
             import warnings
             warnings.warn(
@@ -861,136 +1047,17 @@ class Keeper:
             if tags is None:
                 tags = source_tags
 
-        coll = self._resolve_collection(collection)
-
-        # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
-        existing_tags = {}
-        existing_doc = self._document_store.get(coll, id)
-        if existing_doc:
-            existing_tags = filter_non_system_tags(existing_doc.tags)
-        else:
-            # Fall back to ChromaDB for legacy data
-            existing = self._store.get(coll, id)
-            if existing:
-                existing_tags = filter_non_system_tags(existing.tags)
-
-        # Fetch document
         doc = self._document_provider.fetch(id)
 
-        # Compute content hash for change detection
-        new_hash = _content_hash(doc.content)
-
-        # Generate embedding
-        embedding = self._get_embedding_provider().embed(doc.content)
-
-        # Build tags first (needed for tags_changed check)
-        # Order: existing → config → env → user (later wins on collision)
-        merged_tags = {**existing_tags}
-
-        # Merge config default tags
-        if self._config.default_tags:
-            merged_tags.update(self._config.default_tags)
-
-        # Merge environment variable tags
-        env_tags = _get_env_tags()
-        merged_tags.update(env_tags)
-
-        # Merge in user-provided tags (filtered to prevent system tag override)
-        if tags:
-            merged_tags.update(filter_non_system_tags(tags))
-
-        # Add system tags
-        merged_tags["_source"] = "uri"
+        system_tags = {"_source": "uri"}
         if doc.content_type:
-            merged_tags["_content_type"] = doc.content_type
+            system_tags["_content_type"] = doc.content_type
 
-        # Determine summary - skip if content AND tags unchanged
-        max_len = self._config.max_summary_length
-        content_unchanged = (
-            existing_doc is not None
-            and existing_doc.content_hash == new_hash
+        return self._upsert(
+            id, doc.content,
+            tags=tags, summary=summary,
+            system_tags=system_tags, collection=collection,
         )
-        tags_changed = (
-            existing_doc is not None
-            and _user_tags_changed(existing_doc.tags, merged_tags)
-        )
-
-        if content_unchanged and not tags_changed and summary is None:
-            # Content and tags unchanged - preserve existing summary
-            logger.debug("Content and tags unchanged, skipping summarization for %s", id)
-            final_summary = existing_doc.summary
-        elif summary is not None:
-            # Caller-provided summary — enforce max_summary_length
-            if len(summary) > max_len:
-                import warnings
-                warnings.warn(
-                    f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
-                    UserWarning,
-                    stacklevel=2
-                )
-                summary = summary[:max_len]
-            final_summary = summary
-        elif content_unchanged and tags_changed:
-            # Tags changed but content unchanged - keep existing summary, queue for re-summarization
-            logger.debug("Tags changed, queueing re-summarization for %s", id)
-            final_summary = existing_doc.summary
-            if len(doc.content) > max_len:
-                self._pending_queue.enqueue(id, coll, doc.content)
-        else:
-            # New or changed content
-            if len(doc.content) > max_len:
-                final_summary = doc.content[:max_len] + "..."
-                # Queue for background processing
-                self._pending_queue.enqueue(id, coll, doc.content)
-            else:
-                final_summary = doc.content
-
-        # Get existing doc info for versioning before upsert
-        old_doc = self._document_store.get(coll, id)
-
-        # Dual-write: document store (canonical) + ChromaDB (embedding index)
-        # DocumentStore.upsert now returns (record, content_changed) and archives old version
-        doc_record, content_changed = self._document_store.upsert(
-            collection=coll,
-            id=id,
-            summary=final_summary,
-            tags=merged_tags,
-            content_hash=new_hash,
-        )
-
-        # Store embedding for current version
-        self._store.upsert(
-            collection=coll,
-            id=id,
-            embedding=embedding,
-            summary=final_summary,
-            tags=merged_tags,
-        )
-
-        # If content changed and we archived a version, also store versioned embedding
-        # Skip if content hash is same (only tags/summary changed)
-        if old_doc is not None and content_changed:
-            # Get the version number that was just archived
-            version_count = self._document_store.version_count(coll, id)
-            if version_count > 0:
-                # Re-embed the old content for the archived version
-                old_embedding = self._get_embedding_provider().embed(old_doc.summary)
-                self._store.upsert_version(
-                    collection=coll,
-                    id=id,
-                    version=version_count,
-                    embedding=old_embedding,
-                    summary=old_doc.summary,
-                    tags=old_doc.tags,
-                )
-
-        # Spawn background processor if content was queued (large content, no user summary, content or tags changed)
-        if summary is None and len(doc.content) > max_len and (not content_unchanged or tags_changed):
-            self._spawn_processor()
-
-        # Return the stored item
-        doc_record = self._document_store.get(coll, id)
-        return _record_to_item(doc_record)
 
     def remember(
         self,
@@ -1030,7 +1097,6 @@ class Keeper:
         Returns:
             The stored Item with merged tags and new summary
         """
-        # Handle deprecated source_tags parameter
         if source_tags is not None:
             import warnings
             warnings.warn(
@@ -1041,135 +1107,15 @@ class Keeper:
             if tags is None:
                 tags = source_tags
 
-        coll = self._resolve_collection(collection)
-
-        # Generate ID if not provided
         if id is None:
             timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
             id = f"mem:{timestamp}"
 
-        # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
-        existing_tags = {}
-        existing_doc = self._document_store.get(coll, id)
-        if existing_doc:
-            existing_tags = filter_non_system_tags(existing_doc.tags)
-        else:
-            existing = self._store.get(coll, id)
-            if existing:
-                existing_tags = filter_non_system_tags(existing.tags)
-
-        # Compute content hash for change detection
-        new_hash = _content_hash(content)
-
-        # Generate embedding
-        embedding = self._get_embedding_provider().embed(content)
-
-        # Build tags first (needed for tags_changed check)
-        # Order: existing → config → env → user (later wins on collision)
-        merged_tags = {**existing_tags}
-
-        # Merge config default tags
-        if self._config.default_tags:
-            merged_tags.update(self._config.default_tags)
-
-        # Merge environment variable tags
-        env_tags = _get_env_tags()
-        merged_tags.update(env_tags)
-
-        # Merge in user-provided tags (filtered)
-        if tags:
-            merged_tags.update(filter_non_system_tags(tags))
-
-        # Add system tags
-        merged_tags["_source"] = "inline"
-
-        # Determine summary (smart behavior for remember) - skip if content AND tags unchanged
-        max_len = self._config.max_summary_length
-        content_unchanged = (
-            existing_doc is not None
-            and existing_doc.content_hash == new_hash
+        return self._upsert(
+            id, content,
+            tags=tags, summary=summary,
+            system_tags={"_source": "inline"}, collection=collection,
         )
-        tags_changed = (
-            existing_doc is not None
-            and _user_tags_changed(existing_doc.tags, merged_tags)
-        )
-
-        if content_unchanged and not tags_changed and summary is None:
-            # Content and tags unchanged - preserve existing summary
-            logger.debug("Content and tags unchanged, skipping summarization for %s", id)
-            final_summary = existing_doc.summary
-        elif summary is not None:
-            # Caller-provided summary — enforce max_summary_length
-            if len(summary) > max_len:
-                import warnings
-                warnings.warn(
-                    f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
-                    UserWarning,
-                    stacklevel=2
-                )
-                summary = summary[:max_len]
-            final_summary = summary
-        elif content_unchanged and tags_changed:
-            # Tags changed but content unchanged - keep existing summary, queue for re-summarization
-            logger.debug("Tags changed, queueing re-summarization for %s", id)
-            final_summary = existing_doc.summary
-            if len(content) > max_len:
-                self._pending_queue.enqueue(id, coll, content)
-        elif len(content) <= max_len:
-            # Content is short enough - use verbatim (smart summary)
-            final_summary = content
-        else:
-            # Content is long - async summarization (truncated placeholder now, real summary later)
-            final_summary = content[:max_len] + "..."
-            # Queue for background processing
-            self._pending_queue.enqueue(id, coll, content)
-
-        # Get existing doc info for versioning before upsert
-        old_doc = self._document_store.get(coll, id)
-
-        # Dual-write: document store (canonical) + ChromaDB (embedding index)
-        # DocumentStore.upsert now returns (record, content_changed) and archives old version
-        doc_record, content_changed = self._document_store.upsert(
-            collection=coll,
-            id=id,
-            summary=final_summary,
-            tags=merged_tags,
-            content_hash=new_hash,
-        )
-
-        # Store embedding for current version
-        self._store.upsert(
-            collection=coll,
-            id=id,
-            embedding=embedding,
-            summary=final_summary,
-            tags=merged_tags,
-        )
-
-        # If content changed and we archived a version, also store versioned embedding
-        # Skip if content hash is same (only tags/summary changed)
-        if old_doc is not None and content_changed:
-            # Get the version number that was just archived
-            version_count = self._document_store.version_count(coll, id)
-            if version_count > 0:
-                # Re-embed the old content for the archived version
-                old_embedding = self._get_embedding_provider().embed(old_doc.summary)
-                self._store.upsert_version(
-                    collection=coll,
-                    id=id,
-                    version=version_count,
-                    embedding=old_embedding,
-                    summary=old_doc.summary,
-                    tags=old_doc.tags,
-                )
-
-        # Spawn background processor if content was queued (large content, no user summary, content or tags changed)
-        if summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
-            self._spawn_processor()
-
-        # Return the stored item
-        doc_record = self._document_store.get(coll, id)
-        return _record_to_item(doc_record)
 
     # -------------------------------------------------------------------------
     # Query Operations
@@ -1289,13 +1235,14 @@ class Keeper:
         """
         coll = self._resolve_collection(collection)
 
-        # Get the item to find its embedding
+        # Get the item's stored embedding from ChromaDB
         item = self._store.get(coll, id)
         if item is None:
             raise KeyError(f"Item not found: {id}")
 
-        # Search using the summary's embedding (fetch extra when filtering)
-        embedding = self._get_embedding_provider().embed(item.summary)
+        embedding = self._store.get_embedding(coll, id)
+        if embedding is None:
+            embedding = self._get_embedding_provider().embed(item.summary)
         actual_limit = limit + 1 if not include_self else limit
         if since is not None:
             actual_limit = max(actual_limit, limit * 3)
@@ -1542,15 +1489,14 @@ class Keeper:
                 return 0.0
             return dot / (norm_a * norm_b)
 
+        scored = []
         for item in candidates:
             emb = emb_lookup.get(item.id)
-            if emb is not None:
-                item.score = _cosine_sim(anchor_emb, emb)
-            else:
-                item.score = 0.0
+            sim = _cosine_sim(anchor_emb, emb) if emb is not None else 0.0
+            scored.append(Item(id=item.id, summary=item.summary, tags=item.tags, score=sim))
 
         # Apply recency decay to the similarity scores
-        candidates = self._apply_recency_decay(candidates)
+        candidates = self._apply_recency_decay(scored)
 
         # Sort by score descending
         candidates.sort(key=lambda x: x.score or 0.0, reverse=True)
@@ -2309,17 +2255,14 @@ class Keeper:
         orphaned_in_chroma = chroma_ids - doc_ids
 
         fixed = 0
-        if fix and missing_from_chroma:
+        removed = 0
+        if fix:
+            # Re-index items missing from ChromaDB using stored summary
             for doc_id in missing_from_chroma:
                 try:
-                    # Re-fetch and re-index
                     doc_record = self._document_store.get(coll, doc_id)
                     if doc_record:
-                        # Fetch original content
-                        doc = self._document_provider.fetch(doc_id)
-                        embedding = self._get_embedding_provider().embed(doc.content)
-
-                        # Write to ChromaDB
+                        embedding = self._get_embedding_provider().embed(doc_record.summary)
                         self._store.upsert(
                             collection=coll,
                             id=doc_id,
@@ -2332,10 +2275,20 @@ class Keeper:
                 except Exception as e:
                     logger.warning("Failed to reconcile %s: %s", doc_id, e)
 
+            # Remove orphaned ChromaDB entries
+            for orphan_id in orphaned_in_chroma:
+                try:
+                    self._store.delete(coll, orphan_id)
+                    removed += 1
+                    logger.info("Removed orphan: %s", orphan_id)
+                except Exception as e:
+                    logger.warning("Failed to remove orphan %s: %s", orphan_id, e)
+
         return {
             "missing_from_chroma": len(missing_from_chroma),
             "orphaned_in_chroma": len(orphaned_in_chroma),
             "fixed": fixed,
+            "removed": removed,
             "missing_ids": list(missing_from_chroma) if missing_from_chroma else [],
             "orphaned_ids": list(orphaned_in_chroma) if orphaned_in_chroma else [],
         }

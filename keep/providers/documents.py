@@ -79,13 +79,18 @@ class FileDocumentProvider:
         else:
             path_str = uri
 
-        path = Path(path_str)
+        path = Path(path_str).resolve()
 
         if not path.exists():
             raise IOError(f"File not found: {path}")
 
         if not path.is_file():
             raise IOError(f"Not a file: {path}")
+
+        # Reject paths outside user's home directory as a safety boundary
+        home = Path.home().resolve()
+        if not path.is_relative_to(home):
+            raise IOError(f"Path traversal blocked: {path} is outside home directory")
 
         # Detect content type
         suffix = path.suffix.lower()
@@ -179,8 +184,45 @@ class HttpDocumentProvider:
         """Check if this is an HTTP(S) URL."""
         return uri.startswith("http://") or uri.startswith("https://")
     
+    @staticmethod
+    def _is_private_url(uri: str) -> bool:
+        """Check if URL targets a private/internal network address."""
+        from urllib.parse import urlparse
+        import ipaddress
+        import socket
+
+        parsed = urlparse(uri)
+        hostname = parsed.hostname
+        if not hostname:
+            return True
+
+        # Block known metadata endpoints and localhost
+        if hostname in ("metadata.google.internal",):
+            return True
+
+        try:
+            addr = ipaddress.ip_address(hostname)
+            return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+        except ValueError:
+            pass  # Not an IP literal — resolve it
+
+        try:
+            for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+                addr = ipaddress.ip_address(sockaddr[0])
+                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                    return True
+        except socket.gaierror:
+            pass  # DNS failure will be caught by requests
+
+        return False
+
+    _MAX_REDIRECTS = 5
+
     def fetch(self, uri: str) -> Document:
         """Fetch content from HTTP URL with text extraction for HTML."""
+        if self._is_private_url(uri):
+            raise IOError(f"Blocked request to private/internal address: {uri}")
+
         try:
             import requests
         except ImportError:
@@ -188,26 +230,42 @@ class HttpDocumentProvider:
 
         from keep import __version__
 
-        try:
-            # Use context manager to ensure connection is closed
-            with requests.get(
-                uri,
+        # Follow redirects manually so each hop is validated against SSRF
+        target = uri
+        for _ in range(self._MAX_REDIRECTS):
+            resp = requests.get(
+                target,
                 timeout=self.timeout,
                 headers={"User-Agent": f"keep/{__version__}"},
                 stream=True,
-            ) as response:
-                response.raise_for_status()
+                allow_redirects=False,
+            )
+            if resp.is_redirect:
+                target = resp.headers.get("Location", "")
+                if not target.startswith(("http://", "https://")):
+                    raise IOError(f"Redirect to unsupported scheme: {target}")
+                if self._is_private_url(target):
+                    raise IOError(f"Redirect to private/internal address blocked: {target}")
+                resp.close()
+                continue
+            break
+        else:
+            raise IOError(f"Too many redirects fetching {uri}")
+
+        try:
+            with resp:
+                resp.raise_for_status()
 
                 # Check size
-                content_length = response.headers.get("content-length")
+                content_length = resp.headers.get("content-length")
                 if content_length and int(content_length) > self.max_size:
                     raise IOError(f"Content too large: {content_length} bytes")
 
                 # Read content with size limit
-                content = response.text[:self.max_size]
+                content = resp.text[:self.max_size]
 
                 # Get content type
-                content_type = response.headers.get("content-type", "text/plain")
+                content_type = resp.headers.get("content-type", "text/plain")
                 if ";" in content_type:
                     content_type = content_type.split(";")[0].strip()
 
@@ -224,8 +282,8 @@ class HttpDocumentProvider:
                     content=content,
                     content_type=content_type,
                     metadata={
-                        "status_code": response.status_code,
-                        "headers": dict(response.headers),
+                        "status_code": resp.status_code,
+                        "headers": dict(resp.headers),
                     },
                 )
         except requests.RequestException as e:
