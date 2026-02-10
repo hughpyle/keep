@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .types import Item, SYSTEM_TAG_PREFIX
+from .types import Item
 
 
 @dataclass

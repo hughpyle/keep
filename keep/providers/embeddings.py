@@ -3,9 +3,8 @@ Embedding providers for generating vector representations of text.
 """
 
 import os
-from typing import Any
 
-from .base import EmbeddingProvider, get_registry
+from .base import get_registry
 
 
 class SentenceTransformerEmbedding:
@@ -257,6 +256,7 @@ class OllamaEmbedding:
         response = requests.post(
             f"{self.base_url}/api/embeddings",
             json={"model": self.model_name, "prompt": text},
+            timeout=60,
         )
         response.raise_for_status()
 

@@ -7,12 +7,7 @@ run entirely locally with no API keys required.
 Requires: pip install mlx-lm mlx
 """
 
-import os
-from typing import Any
-
 from .base import (
-    EmbeddingProvider,
-    SummarizationProvider,
     get_registry,
     SUMMARIZATION_SYSTEM_PROMPT,
     build_summarization_prompt,

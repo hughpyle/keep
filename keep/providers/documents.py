@@ -3,7 +3,6 @@ Document providers for fetching content from various URI schemes.
 """
 
 from pathlib import Path
-from urllib.parse import urlparse
 
 from .base import Document, DocumentProvider, get_registry
 
