@@ -471,8 +471,11 @@ class Keeper:
         # Check store consistency (cheap ID-set comparison, deferred fix)
         self._needs_reconcile = self._check_store_consistency()
 
-        # Migrate and ensure system documents (idempotent)
-        self._migrate_system_documents()
+        # System doc migration deferred to first write (needs embeddings)
+        from .config import SYSTEM_DOCS_VERSION
+        self._needs_sysdoc_migration = (
+            self._config.system_docs_version < SYSTEM_DOCS_VERSION
+        )
 
     def _check_store_consistency(self) -> bool:
         """Check if DocumentStore and ChromaDB ID sets match.
@@ -893,7 +896,10 @@ class Keeper:
         """Core upsert logic shared by update() and remember()."""
         coll = self._resolve_collection(collection)
 
-        # Auto-reconcile on first write if startup detected inconsistency
+        # Deferred init tasks (run on first write when embeddings are available)
+        if self._needs_sysdoc_migration:
+            self._needs_sysdoc_migration = False  # Clear before call (migration calls remember → _upsert)
+            self._migrate_system_documents()
         if self._needs_reconcile:
             self._auto_reconcile(coll)
             self._needs_reconcile = False

@@ -320,6 +320,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         if is_apple_silicon:
             try:
                 import mlx.core  # noqa
+                import sentence_transformers  # noqa  — MLX embedding uses sentence-transformers
                 embedding_provider = ProviderConfig("mlx", {"model": "all-MiniLM-L6-v2"})
             except ImportError:
                 pass
@@ -465,7 +466,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         store_path=store_path_str,
         version=version,
         created=data.get("store", {}).get("created", ""),
-        embedding=parse_provider(data.get("embedding", {"name": "sentence-transformers"})),
+        embedding=parse_provider(data["embedding"]) if "embedding" in data else None,
         summarization=parse_provider(data.get("summarization", {"name": "truncate"})),
         document=parse_provider(data.get("document", {"name": "composite"})),
         embedding_identity=parse_embedding_identity(data.get("embedding_identity")),

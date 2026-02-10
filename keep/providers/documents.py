@@ -201,14 +201,16 @@ class HttpDocumentProvider:
 
         try:
             addr = ipaddress.ip_address(hostname)
-            return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+            return (addr.is_private or addr.is_loopback or addr.is_link_local
+                    or addr.is_reserved or addr.is_unspecified or addr.is_multicast)
         except ValueError:
             pass  # Not an IP literal — resolve it
 
         try:
             for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
                 addr = ipaddress.ip_address(sockaddr[0])
-                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                if (addr.is_private or addr.is_loopback or addr.is_link_local
+                        or addr.is_reserved or addr.is_unspecified or addr.is_multicast):
                     return True
         except socket.gaierror:
             pass  # DNS failure will be caught by requests
@@ -257,8 +259,12 @@ class HttpDocumentProvider:
 
                 # Check declared size
                 content_length = resp.headers.get("content-length")
-                if content_length and int(content_length) > self.max_size:
-                    raise IOError(f"Content too large: {content_length} bytes")
+                if content_length:
+                    try:
+                        if int(content_length) > self.max_size:
+                            raise IOError(f"Content too large: {content_length} bytes")
+                    except ValueError:
+                        pass  # Malformed header — enforce via iter_content below
 
                 # Read content in chunks with enforced size limit
                 chunks: list[bytes] = []

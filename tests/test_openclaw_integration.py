@@ -87,19 +87,24 @@ class TestDetectDefaultProviders:
     """Tests for provider detection with OpenClaw integration."""
 
     def test_falls_back_to_local_embedding_without_config(self):
-        """Should use local embedding (mlx on Apple Silicon, sentence-transformers otherwise)."""
-        with patch.dict(os.environ, {"OPENCLAW_CONFIG": "/nonexistent"}, clear=False):
-            # Clear any API keys that might affect detection
-            env = {
-                "OPENCLAW_CONFIG": "/nonexistent",
-                "OPENAI_API_KEY": "",
-                "GEMINI_API_KEY": "",
-                "GOOGLE_API_KEY": "",
-            }
-            with patch.dict(os.environ, env, clear=False):
-                providers = detect_default_providers()
-                # On Apple Silicon, prefers mlx; otherwise sentence-transformers
-                assert providers["embedding"].name in ("mlx", "sentence-transformers")
+        """Without API keys or Ollama, should use local provider or None — never remote."""
+        # Clear all API keys and disable Ollama to test pure local fallback
+        env = {
+            "OPENCLAW_CONFIG": "/nonexistent",
+            "ANTHROPIC_API_KEY": "",
+            "CLAUDE_CODE_OAUTH_TOKEN": "",
+            "VOYAGE_API_KEY": "",
+            "OPENAI_API_KEY": "",
+            "GEMINI_API_KEY": "",
+            "GOOGLE_API_KEY": "",
+        }
+        with patch.dict(os.environ, env, clear=False), \
+             patch("keep.config._detect_ollama", return_value=None):
+            providers = detect_default_providers()
+            # Local provider if [local] deps installed, None otherwise
+            embed = providers["embedding"]
+            if embed is not None:
+                assert embed.name in ("mlx", "sentence-transformers")
 
     def test_uses_gemini_when_configured(self):
         """Should use Gemini embeddings when memorySearch.provider is gemini."""
@@ -121,6 +126,8 @@ class TestDetectDefaultProviders:
         try:
             env = {
                 "OPENCLAW_CONFIG": temp_path,
+                "VOYAGE_API_KEY": "",
+                "OPENAI_API_KEY": "",
                 "GEMINI_API_KEY": "test-key",
             }
             with patch.dict(os.environ, env, clear=False):
@@ -150,6 +157,7 @@ class TestDetectDefaultProviders:
         try:
             env = {
                 "OPENCLAW_CONFIG": temp_path,
+                "VOYAGE_API_KEY": "",
                 "OPENAI_API_KEY": "test-key",
             }
             with patch.dict(os.environ, env, clear=False):
@@ -178,6 +186,7 @@ class TestDetectDefaultProviders:
         try:
             env = {
                 "OPENCLAW_CONFIG": temp_path,
+                "VOYAGE_API_KEY": "",
                 "OPENAI_API_KEY": "test-openai-key",
                 "GEMINI_API_KEY": "test-gemini-key",
             }
@@ -206,6 +215,7 @@ class TestDetectDefaultProviders:
         try:
             env = {
                 "OPENCLAW_CONFIG": temp_path,
+                "VOYAGE_API_KEY": "",
                 "OPENAI_API_KEY": "",
                 "GEMINI_API_KEY": "test-gemini-key",
             }
