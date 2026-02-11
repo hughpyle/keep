@@ -548,10 +548,9 @@ def _get_keeper(store: Optional[Path]) -> Keeper:
         kp = Keeper(actual_store)
         # Ensure close() runs before interpreter shutdown to release model locks
         atexit.register(kp.close)
-        # Check for missing embedding provider
+        # Warn (don't exit) if no embedding provider — read-only ops still work
         if kp._config and kp._config.embedding is None:
             typer.echo(NO_PROVIDER_ERROR.strip(), err=True)
-            raise typer.Exit(1)
         # Check tool integrations (fast path: dict lookup, no I/O)
         if kp._config:
             from .integrations import check_and_install
