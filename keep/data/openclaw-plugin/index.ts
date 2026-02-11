@@ -1,7 +1,9 @@
 /**
  * keep — OpenClaw plugin
  *
- * Hook: before_agent_start → inject `keep now` into session context
+ * Hooks:
+ *   before_agent_start → inject `keep now` context
+ *   after_agent_stop   → update intentions
  */
 
 import { execSync } from "child_process";
@@ -15,11 +17,12 @@ function keepAvailable(): boolean {
   }
 }
 
-function getKeepNow(): string | null {
+function runKeep(args: string, input?: string): string | null {
   try {
-    return execSync("keep now", {
+    return execSync(`keep ${args}`, {
       encoding: "utf-8",
       timeout: 5000,
+      input: input ?? "",
     }).trim();
   } catch {
     return null;
@@ -32,10 +35,11 @@ export default function register(api: any) {
     return;
   }
 
+  // Agent start: inject current intentions + similar context
   api.on(
     "before_agent_start",
     async (_event: any, _ctx: any) => {
-      const now = getKeepNow();
+      const now = runKeep("now -n 10");
       if (!now) return;
 
       return {
@@ -45,5 +49,14 @@ export default function register(api: any) {
     { priority: 10 },
   );
 
-  api.logger?.info("[keep] Registered hook: before_agent_start");
+  // Agent stop: update intentions
+  api.on(
+    "after_agent_stop",
+    async (_event: any, _ctx: any) => {
+      runKeep("now 'Session ended'");
+    },
+    { priority: 10 },
+  );
+
+  api.logger?.info("[keep] Registered hooks: before_agent_start, after_agent_stop");
 }
