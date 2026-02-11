@@ -493,8 +493,8 @@ class Keeper:
             doc_id_set = set(doc_ids)
             orphaned = [cid for cid in chroma_ids if cid not in doc_id_set]
             if missing or orphaned:
-                logger.warning(
-                    "Store inconsistency: %d missing from search index, %d orphaned",
+                logger.info(
+                    "Store inconsistency: %d missing from search index, %d orphaned (will auto-reconcile)",
                     len(missing), len(orphaned),
                 )
                 return True
