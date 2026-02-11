@@ -14,6 +14,7 @@ Embeddings are stored in ChromaDB collections, keyed by embedding provider.
 """
 
 import json
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .types import utc_now
+
+logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
@@ -76,7 +79,14 @@ class DocumentStore:
         self._db_path = store_path
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = threading.Lock()
-        self._init_db()
+        try:
+            self._init_db()
+        except sqlite3.DatabaseError as e:
+            if "malformed" in str(e):
+                logger.warning("Database malformed, attempting recovery: %s", self._db_path)
+                self._recover_malformed()
+            else:
+                raise
     
     def _init_db(self) -> None:
         """Initialize the SQLite database."""
@@ -145,6 +155,11 @@ class DocumentStore:
         # Run schema migrations
         self._migrate_schema()
 
+        # Quick integrity check for existing databases
+        result = self._conn.execute("PRAGMA quick_check").fetchone()
+        if result[0] != "ok":
+            raise sqlite3.DatabaseError("database disk image is malformed")
+
     def _migrate_schema(self) -> None:
         """
         Run schema migrations using PRAGMA user_version.
@@ -200,7 +215,69 @@ class DocumentStore:
 
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
-    
+
+    def _recover_malformed(self) -> None:
+        """
+        Attempt to recover a malformed SQLite database.
+
+        Strategy: dump all readable data, rebuild the database from scratch.
+        The corrupt file is preserved as .db.corrupt for inspection.
+
+        Raises the original error if recovery fails.
+        """
+        import shutil
+
+        db_path = str(self._db_path)
+        corrupt_path = db_path + ".corrupt"
+
+        # Close any existing connection
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+
+        # Try to dump data from the corrupt database
+        try:
+            src = sqlite3.connect(db_path)
+            dump = list(src.iterdump())
+            src.close()
+        except Exception as dump_err:
+            logger.error("Cannot read data from malformed database: %s", dump_err)
+            raise sqlite3.DatabaseError(
+                f"Database is malformed and data is unreadable: {self._db_path}"
+            ) from dump_err
+
+        # Preserve the corrupt file
+        shutil.move(db_path, corrupt_path)
+        logger.info("Corrupt database saved to %s", corrupt_path)
+
+        # Remove stale WAL/SHM files
+        for suffix in ("-wal", "-shm"):
+            p = Path(db_path + suffix)
+            if p.exists():
+                p.unlink()
+
+        # Rebuild from dump
+        dst = sqlite3.connect(db_path)
+        for stmt in dump:
+            try:
+                dst.execute(stmt)
+            except Exception:
+                pass  # Skip errors from dump replay (e.g. duplicate CREATE)
+        dst.commit()
+        dst.close()
+
+        logger.warning(
+            "Database recovered from %d SQL statements. "
+            "Corrupt file preserved at %s",
+            len(dump), corrupt_path,
+        )
+
+        # Retry normal initialization
+        self._init_db()
+
     @staticmethod
     def _now() -> str:
         """Current timestamp in canonical UTC format."""
@@ -502,10 +579,169 @@ class DocumentStore:
 
         return cursor.rowcount > 0
     
+    def extract_versions(
+        self,
+        collection: str,
+        source_id: str,
+        target_id: str,
+        tag_filter: Optional[dict[str, str]] = None,
+    ) -> tuple[list[VersionInfo], Optional[DocumentRecord]]:
+        """
+        Extract matching versions from source into a new target document.
+
+        Moves matching archived versions (and optionally the current document)
+        from source_id to target_id. The target gets fresh sequential version
+        numbering. Source retains non-matching versions (gaps are tolerated).
+
+        Args:
+            collection: Collection name
+            source_id: Document to extract from
+            target_id: New document to create (must not exist)
+            tag_filter: If provided, only extract versions whose tags
+                        contain all specified key=value pairs.
+                        If None, extract everything.
+
+        Returns:
+            Tuple of (extracted_versions, new_source_current_or_None).
+            extracted_versions: list of VersionInfo that were moved to target.
+            new_source_current: the new current state of the source document
+                after extraction, or None if source was fully emptied.
+
+        Raises:
+            ValueError: If target_id already exists or source_id doesn't exist.
+        """
+        def _tags_match(tags: dict[str, str], filt: dict[str, str]) -> bool:
+            return all(tags.get(k) == v for k, v in filt.items())
+
+        with self._lock:
+            # Validate
+            source = self._get_unlocked(collection, source_id)
+            if source is None:
+                raise ValueError(f"Source document '{source_id}' not found")
+            if self._get_unlocked(collection, target_id) is not None:
+                raise ValueError(f"Target document '{target_id}' already exists")
+
+            # Get all archived versions (oldest first for sequential renumbering)
+            cursor = self._conn.execute("""
+                SELECT version, summary, tags_json, content_hash, created_at
+                FROM document_versions
+                WHERE id = ? AND collection = ?
+                ORDER BY version ASC
+            """, (source_id, collection))
+            all_versions = []
+            for row in cursor:
+                all_versions.append(VersionInfo(
+                    version=row["version"],
+                    summary=row["summary"],
+                    tags=json.loads(row["tags_json"]),
+                    created_at=row["created_at"],
+                    content_hash=row["content_hash"],
+                ))
+
+            # Partition: matching vs remaining
+            if tag_filter:
+                matching_versions = [v for v in all_versions if _tags_match(v.tags, tag_filter)]
+                current_matches = _tags_match(source.tags, tag_filter)
+            else:
+                matching_versions = list(all_versions)
+                current_matches = True
+
+            # Build the full list of extracted items (versions + possibly current)
+            extracted: list[VersionInfo] = list(matching_versions)
+            if current_matches:
+                # Current becomes the newest extracted item
+                extracted.append(VersionInfo(
+                    version=0,  # placeholder, will be renumbered
+                    summary=source.summary,
+                    tags=source.tags,
+                    created_at=source.updated_at,
+                    content_hash=source.content_hash,
+                ))
+
+            if not extracted:
+                raise ValueError("No versions match the tag filter")
+
+            # Delete matching archived versions from source
+            if matching_versions:
+                version_nums = [v.version for v in matching_versions]
+                placeholders = ",".join("?" * len(version_nums))
+                self._conn.execute(f"""
+                    DELETE FROM document_versions
+                    WHERE id = ? AND collection = ? AND version IN ({placeholders})
+                """, (source_id, collection, *version_nums))
+
+            # Create target: newest extracted → current, rest → version history
+            # extracted is in chronological order (oldest first)
+            now = self._now()
+            target_current = extracted[-1]  # newest
+            target_history = extracted[:-1]  # older ones
+
+            # Insert target current into documents table
+            self._conn.execute("""
+                INSERT INTO documents
+                (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                target_id, collection, target_current.summary,
+                json.dumps(target_current.tags, ensure_ascii=False),
+                target_current.created_at, now,
+                target_current.content_hash, now,
+            ))
+
+            # Insert target version history with fresh sequential numbering
+            for seq, vi in enumerate(target_history, start=1):
+                self._conn.execute("""
+                    INSERT INTO document_versions
+                    (id, collection, version, summary, tags_json, content_hash, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    target_id, collection, seq, vi.summary,
+                    json.dumps(vi.tags, ensure_ascii=False),
+                    vi.content_hash, vi.created_at,
+                ))
+
+            # Handle source after extraction
+            new_source: Optional[DocumentRecord] = None
+            if current_matches:
+                # Source's current was extracted — need to promote or delete
+                remaining_versions = [v for v in all_versions if v not in matching_versions]
+                if remaining_versions:
+                    # Promote newest remaining to current
+                    promote = remaining_versions[-1]  # already sorted ASC
+                    self._conn.execute("""
+                        UPDATE documents
+                        SET summary = ?, tags_json = ?, updated_at = ?,
+                            content_hash = ?, accessed_at = ?
+                        WHERE id = ? AND collection = ?
+                    """, (
+                        promote.summary,
+                        json.dumps(promote.tags, ensure_ascii=False),
+                        promote.created_at, promote.content_hash, now,
+                        source_id, collection,
+                    ))
+                    # Delete the promoted version from history
+                    self._conn.execute("""
+                        DELETE FROM document_versions
+                        WHERE id = ? AND collection = ? AND version = ?
+                    """, (source_id, collection, promote.version))
+                    new_source = self._get_unlocked(collection, source_id)
+                else:
+                    # Nothing remains — delete source
+                    self._conn.execute("""
+                        DELETE FROM documents WHERE id = ? AND collection = ?
+                    """, (source_id, collection))
+            else:
+                # Source current was not extracted — it stays
+                new_source = self._get_unlocked(collection, source_id)
+
+            self._conn.commit()
+
+        return extracted, new_source
+
     # -------------------------------------------------------------------------
     # Read Operations
     # -------------------------------------------------------------------------
-    
+
     def get(self, collection: str, id: str) -> Optional[DocumentRecord]:
         """
         Get a document by ID.
@@ -565,27 +801,15 @@ class DocumentStore:
             # Offset 0 means current - caller should use get()
             return None
 
-        # Get max version to calculate the target
-        cursor = self._conn.execute("""
-            SELECT MAX(version) FROM document_versions
-            WHERE id = ? AND collection = ?
-        """, (id, collection))
-        max_version = cursor.fetchone()[0]
-
-        if max_version is None:
-            return None  # No versions archived
-
-        # offset=1 → max_version, offset=2 → max_version-1, etc.
-        target_version = max_version - (offset - 1)
-
-        if target_version < 1:
-            return None  # Requested version doesn't exist
-
+        # Use OFFSET query to handle gaps in version numbering.
+        # offset=1 → OFFSET 0 (newest archived), offset=2 → OFFSET 1, etc.
         cursor = self._conn.execute("""
             SELECT version, summary, tags_json, content_hash, created_at
             FROM document_versions
-            WHERE id = ? AND collection = ? AND version = ?
-        """, (id, collection, target_version))
+            WHERE id = ? AND collection = ?
+            ORDER BY version DESC
+            LIMIT 1 OFFSET ?
+        """, (id, collection, offset - 1))
 
         row = cursor.fetchone()
         if row is None:
@@ -712,6 +936,14 @@ class DocumentStore:
         """Count archived versions for a document."""
         cursor = self._conn.execute("""
             SELECT COUNT(*) FROM document_versions
+            WHERE id = ? AND collection = ?
+        """, (id, collection))
+        return cursor.fetchone()[0]
+
+    def max_version(self, collection: str, id: str) -> int:
+        """Return the highest archived version number, or 0 if none."""
+        cursor = self._conn.execute("""
+            SELECT COALESCE(MAX(version), 0) FROM document_versions
             WHERE id = ? AND collection = ?
         """, (id, collection))
         return cursor.fetchone()[0]
@@ -865,13 +1097,9 @@ class DocumentStore:
             UNION ALL
 
             SELECT dv.id, dv.summary, dv.tags_json, dv.created_at as sort_ts,
-                   (mv.max_v - dv.version + 1) as version_offset,
+                   ROW_NUMBER() OVER (PARTITION BY dv.id ORDER BY dv.version DESC) as version_offset,
                    dv.content_hash, NULL as accessed_at
             FROM document_versions dv
-            JOIN (SELECT id, collection, MAX(version) as max_v
-                  FROM document_versions
-                  GROUP BY id, collection) mv
-            ON dv.id = mv.id AND dv.collection = mv.collection
             WHERE dv.collection = ?
 
             ORDER BY sort_ts DESC

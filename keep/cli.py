@@ -1193,6 +1193,36 @@ def reflect():
 
 
 @app.command()
+def save(
+    name: Annotated[str, typer.Argument(help="Name for the saved thread")],
+    tags: Annotated[Optional[list[str]], typer.Option(
+        "--tag", "-t",
+        help="Only extract versions matching these tags (key=value)"
+    )] = None,
+    store: StoreOption = None,
+):
+    """
+    Save now history as a named item.
+
+    Extracts version history from now into a new named item.
+    With -t, only versions matching the tag filter are extracted;
+    non-matching versions remain in now.
+    Without -t, all history is moved and now resets to default.
+    """
+    kp = _get_keeper(store)
+    tag_filter = _parse_tags(tags) if tags else None
+
+    try:
+        saved = kp.save(name, tags=tag_filter)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    as_json = _get_json_output()
+    typer.echo(_format_item(saved, as_json=as_json))
+
+
+@app.command()
 def get(
     id: Annotated[list[str], typer.Argument(help="URI(s) of item(s) (append @V{N} for version)")],
     version: Annotated[Optional[int], typer.Option(

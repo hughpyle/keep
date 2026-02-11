@@ -1,15 +1,8 @@
 
-. Separate functional docs/KEEP-NOW.md, docs/KEEP-FIND.md, docs/KEEP-PUT.md etc
-
 * Maybe the metadoc should say how many results to produce by default?
     (e.g. closures: 10, learnings: 3)
 
-* `keep save "thread-name"` — move now history into a named item, reset now
-    - especially when you filter by tag(s)
-    - rename current `now` doc (with all version history) to a named item
-    - useful for closing finished threads: "this conversation is done, archive it"
-    - implementation: rename across SQLite + ChromaDB (both document_store and vector store)
-    - pointers?: saved item gets a markdown link back to where it came from, now gets a link to saved item
+* `keep save --from ITEM_ID` — extend save to extract from any versioned item, not just now
 
 * VS Code hooks 
     https://docs.github.com/en/copilot/reference/hooks-configuration
@@ -256,3 +249,7 @@ x `context` text alongside summaries? (no, summary is good now)
 . `keep now -f` removed (not useful)
 . hooks rework (claude code, openclaw, add kiro)
 . skills/docs rework
+. Separate functional docs/KEEP-NOW.md, docs/KEEP-FIND.md, docs/KEEP-PUT.md etc
+. `keep save "name"`: extract now history into named item, with tag-filtered variant (-t)
+. gap-tolerant version numbering: get_version() uses OFFSET, revert() uses max_version(), list_recent_with_history() uses ROW_NUMBER()
+. repaired malformed SQLite database (iterdump + rebuild)

@@ -1191,14 +1191,14 @@ class Keeper:
 
         # If content changed and we archived a version, also store versioned embedding
         if existing_doc is not None and content_changed:
-            version_count = self._document_store.version_count(doc_coll, id)
-            if version_count > 0:
+            max_ver = self._document_store.max_version(doc_coll, id)
+            if max_ver > 0:
                 if old_embedding is None:
                     old_embedding = self._get_embedding_provider().embed(existing_doc.summary)
                 self._store.upsert_version(
                     collection=chroma_coll,
                     id=id,
-                    version=version_count,
+                    version=max_ver,
                     embedding=old_embedding,
                     summary=existing_doc.summary,
                     tags=existing_doc.tags,
@@ -1540,8 +1540,13 @@ class Keeper:
             return 0  # Current version
         base_id = item.tags.get("_base_id", item.id)
         doc_coll = self._resolve_doc_collection()
-        version_count = self._document_store.version_count(doc_coll, base_id)
-        return version_count - int(version_tag) + 1
+        # Count versions >= this one to get the offset (handles gaps)
+        internal_version = int(version_tag)
+        cursor = self._document_store._conn.execute("""
+            SELECT COUNT(*) FROM document_versions
+            WHERE id = ? AND collection = ? AND version >= ?
+        """, (base_id, doc_coll, internal_version))
+        return cursor.fetchone()[0]
 
     def resolve_meta(
         self,
@@ -1971,15 +1976,15 @@ class Keeper:
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
-        version_count = self._document_store.version_count(doc_coll, id)
+        max_ver = self._document_store.max_version(doc_coll, id)
 
-        if version_count == 0:
+        if max_ver == 0:
             # No history — full delete
             self.delete(id)
             return None
 
         # Get the versioned ChromaDB ID we need to promote
-        versioned_chroma_id = f"{id}@v{version_count}"
+        versioned_chroma_id = f"{id}@v{max_ver}"
 
         # Get the archived embedding from ChromaDB
         archived_embedding = self._store.get_embedding(chroma_coll, versioned_chroma_id)
@@ -2057,6 +2062,158 @@ class Keeper:
             The updated context Item
         """
         return self.remember(content, id=NOWDOC_ID, tags=tags)
+
+    def save(
+        self,
+        name: str,
+        *,
+        source_id: str = NOWDOC_ID,
+        tags: Optional[dict[str, str]] = None,
+    ) -> Item:
+        """
+        Extract version history from a source document into a named item.
+
+        Moves matching versions (filtered by tags if provided) from source_id
+        to a new item with the given name. The source retains non-matching
+        versions; if fully emptied and source is 'now', it resets to default.
+
+        Args:
+            name: ID for the new saved item (must not already exist)
+            source_id: Document to extract from (default: now)
+            tags: If provided, only extract versions whose tags contain
+                  all specified key=value pairs. If None, extract all.
+
+        Returns:
+            The newly created saved Item.
+
+        Raises:
+            ValueError: If name is empty, target exists, source doesn't exist,
+                        or no versions match the filter.
+        """
+        if not name:
+            raise ValueError("Name cannot be empty")
+
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
+
+        # Get the source's archived version numbers before extraction
+        # (needed to map to ChromaDB versioned IDs)
+        source_versions = self._document_store.list_versions(
+            doc_coll, source_id, limit=10000
+        )
+        source_current = self._document_store.get(doc_coll, source_id)
+        if source_current is None:
+            raise ValueError(f"Source document '{source_id}' not found")
+
+        # Identify which versions will be extracted (for ChromaDB cleanup)
+        def _tags_match(item_tags: dict, filt: dict) -> bool:
+            return all(item_tags.get(k) == v for k, v in filt.items())
+
+        if tags:
+            matched_version_nums = [
+                v.version for v in source_versions
+                if _tags_match(v.tags, tags)
+            ]
+            current_matches = _tags_match(source_current.tags, tags)
+        else:
+            matched_version_nums = [v.version for v in source_versions]
+            current_matches = True
+
+        # Extract in DocumentStore (SQLite side)
+        extracted, new_source = self._document_store.extract_versions(
+            doc_coll, source_id, name, tag_filter=tags
+        )
+
+        # ChromaDB side: move embeddings
+        # 1. Collect source ChromaDB IDs for matched versions
+        source_chroma_ids = [f"{source_id}@v{n}" for n in matched_version_nums]
+        if current_matches:
+            source_chroma_ids.append(source_id)
+
+        # 2. Batch-get embeddings from source
+        coll = self._store._get_collection(chroma_coll)
+        if source_chroma_ids:
+            result = coll.get(
+                ids=source_chroma_ids,
+                include=["embeddings", "documents", "metadatas"],
+            )
+            # Build a map: chroma_id → embedding
+            embedding_map = {}
+            if result["ids"] and result["embeddings"] is not None:
+                for i, cid in enumerate(result["ids"]):
+                    embedding_map[cid] = list(result["embeddings"][i])
+
+            # 3. Batch-delete source entries
+            if result["ids"]:
+                coll.delete(ids=list(result["ids"]))
+
+        # 4. Insert target entries with new IDs
+        # The extracted list is chronological (oldest first),
+        # last one is current, rest are history
+        target_ids = []
+        target_embeddings = []
+        target_summaries = []
+        target_metadatas = []
+
+        # History versions (sequential 1, 2, ...)
+        for seq, vi in enumerate(extracted[:-1], start=1):
+            target_vid = f"{name}@v{seq}"
+            # Find the embedding for this version
+            source_vid = f"{source_id}@v{vi.version}" if vi.version > 0 else source_id
+            emb = embedding_map.get(source_vid)
+            if emb is not None:
+                ver_tags = dict(vi.tags)
+                ver_tags["_version"] = str(seq)
+                ver_tags["_base_id"] = name
+                target_ids.append(target_vid)
+                target_embeddings.append(emb)
+                target_summaries.append(vi.summary)
+                target_metadatas.append(self._store._tags_to_metadata(ver_tags))
+
+        # Current (newest extracted)
+        newest = extracted[-1]
+        source_cur_id = f"{source_id}@v{newest.version}" if newest.version > 0 else source_id
+        cur_emb = embedding_map.get(source_cur_id)
+        if cur_emb is not None:
+            cur_tags = dict(newest.tags)
+            cur_tags["_saved_from"] = source_id
+            from .types import utc_now as _utc_now
+            cur_tags["_saved_at"] = _utc_now()
+            target_ids.append(name)
+            target_embeddings.append(cur_emb)
+            target_summaries.append(newest.summary)
+            target_metadatas.append(self._store._tags_to_metadata(cur_tags))
+
+        # Batch-insert into ChromaDB
+        if target_ids:
+            coll.upsert(
+                ids=target_ids,
+                embeddings=target_embeddings,
+                documents=target_summaries,
+                metadatas=target_metadatas,
+            )
+
+        # Add system tags to the saved document in DocumentStore too
+        saved_doc = self._document_store.get(doc_coll, name)
+        if saved_doc:
+            saved_tags = dict(saved_doc.tags)
+            saved_tags["_saved_from"] = source_id
+            from .types import utc_now as _utc_now2
+            saved_tags["_saved_at"] = _utc_now2()
+            self._document_store.update_tags(doc_coll, name, saved_tags)
+
+        # If source was fully emptied and is 'now', recreate with defaults
+        if new_source is None and source_id == NOWDOC_ID:
+            try:
+                default_content, default_tags = _load_frontmatter(
+                    SYSTEM_DOC_DIR / "now.md"
+                )
+            except FileNotFoundError:
+                default_content = "# Now\n\nYour working context."
+                default_tags = {}
+            self.set_now(default_content, tags=default_tags)
+
+        return self.get(name)
 
     def list_system_documents(self) -> list[Item]:
         """
