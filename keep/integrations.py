@@ -255,54 +255,49 @@ def install_codex(config_dir: Path) -> list[str]:
     return actions
 
 
-# Hook definitions for Kiro CLI agents
-KIRO_HOOKS = {
-    "agentSpawn": [
-        {"command": "keep now -n 10 </dev/null 2>/dev/null || true"},
-    ],
-    "userPromptSubmit": [
-        {"command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now -n 10 2>/dev/null || true"},
-    ],
-    "stop": [
-        {"command": "keep now 'Session ended' 2>/dev/null || true"},
-    ],
-}
+# Hook definitions for Kiro — each becomes a separate .kiro.hook file
+KIRO_HOOKS = [
+    {
+        "name": "keep-spawn",
+        "trigger": "agentSpawn",
+        "action": "command",
+        "command": "keep now -n 10 </dev/null 2>/dev/null || true",
+    },
+    {
+        "name": "keep-prompt",
+        "trigger": "userPromptSubmit",
+        "action": "command",
+        "command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now -n 10 2>/dev/null || true",
+    },
+    {
+        "name": "keep-stop",
+        "trigger": "stop",
+        "action": "command",
+        "command": "keep now 'Session ended' 2>/dev/null || true",
+    },
+]
 
 
 def _install_kiro_hooks(config_dir: Path) -> bool:
     """
     Install keep hooks into Kiro hooks directory.
 
-    Creates ~/.kiro/hooks/keep.json with lifecycle hooks.
-    Returns True if file was written.
+    Creates individual .kiro.hook files in ~/.kiro/hooks/.
+    Returns True if any file was written.
     """
     hooks_dir = config_dir / "hooks"
-    hooks_file = hooks_dir / "keep.json"
-
-    config: dict[str, Any] = {}
-    if hooks_file.exists():
-        try:
-            config = json.loads(hooks_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            config = {}
-
-    existing_hooks = config.get("hooks", {})
-
-    # Strip old keep hooks before installing new ones
-    existing_hooks = _strip_keep_hooks(existing_hooks)
-
-    # Merge new hook definitions
-    for event, hook_list in KIRO_HOOKS.items():
-        if event not in existing_hooks:
-            existing_hooks[event] = []
-        existing_hooks[event].extend(hook_list)
-
-    config["hooks"] = existing_hooks
     hooks_dir.mkdir(parents=True, exist_ok=True)
-    hooks_file.write_text(
-        json.dumps(config, indent=2) + "\n", encoding="utf-8"
-    )
-    return True
+    wrote = False
+
+    for hook_def in KIRO_HOOKS:
+        hook_file = hooks_dir / f"{hook_def['name']}.kiro.hook"
+        content = {k: v for k, v in hook_def.items() if k != "name"}
+        hook_file.write_text(
+            json.dumps(content, indent=2) + "\n", encoding="utf-8"
+        )
+        wrote = True
+
+    return wrote
 
 
 def install_kiro(config_dir: Path) -> list[str]:
@@ -310,7 +305,7 @@ def install_kiro(config_dir: Path) -> list[str]:
     Install protocol block and hooks for Kiro.
 
     Steering file goes in ~/.kiro/steering/keep.md.
-    Hooks go in ~/.kiro/hooks/keep.json.
+    Hooks go in ~/.kiro/hooks/*.kiro.hook (one per event).
 
     Returns list of actions taken.
     """
