@@ -261,7 +261,7 @@ KIRO_HOOKS = {
         {"command": "keep now -n 10 </dev/null 2>/dev/null || true"},
     ],
     "userPromptSubmit": [
-        {"command": "keep now </dev/null 2>/dev/null || true"},
+        {"command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now -n 10 2>/dev/null || true"},
     ],
     "stop": [
         {"command": "keep now 'Session ended' 2>/dev/null || true"},
