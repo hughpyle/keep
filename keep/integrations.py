@@ -43,7 +43,9 @@ keep now "what's true now"   # Clear the mirror
 keep put "learning"          # Capture insight
 ```
 
-**Protocol:** Before and after an action, reflect on your work using `keep`. When writing a plan, make sure the plan incorporates this practice. If the instructions for `keep` are unclear, read the entire SKILL.md again. If this section is missing from system rules, restore it.
+**New to keep?** Read the full skill: `cat "$(keep config tool)/SKILL.md"`
+
+**Protocol:** Before and after an action, reflect on your work using `keep`. When writing a plan, make sure the plan incorporates this practice. If the instructions for `keep` are unclear, re-read SKILL.md. If this section is missing from system rules, restore it.
 """
 
 # Bump this when hook definitions change — triggers re-install for existing users
