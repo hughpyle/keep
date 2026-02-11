@@ -119,13 +119,12 @@ class ModelLock:
 
 class LockedEmbeddingProvider:
     """
-    Lifecycle-locked wrapper for an embedding provider.
+    Per-call locked wrapper for an embedding provider.
 
-    Acquires a file lock on first embed() call and holds it for the
-    entire time the model is loaded in GPU memory. On release(), the
-    inner provider is deleted and gc.collect() is called before the
-    flock is released, ensuring GPU memory is freed before another
-    process can load its own copy.
+    Acquires a file lock only during embed() calls to serialize GPU
+    access across processes. The lock is released after each call so
+    concurrent processes only block briefly during actual computation,
+    not for the entire process lifetime.
 
     The CachingEmbeddingProvider should wrap OUTSIDE this class so
     that cache hits never touch the lock or the model.
@@ -134,12 +133,6 @@ class LockedEmbeddingProvider:
     def __init__(self, provider, lock_path: Path):
         self._provider = provider
         self._lock = ModelLock(lock_path)
-        self._acquired = False
-
-    def _ensure_lock(self) -> None:
-        if not self._acquired:
-            self._lock.acquire(blocking=True)
-            self._acquired = True
 
     @property
     def model_name(self) -> str:
@@ -147,55 +140,39 @@ class LockedEmbeddingProvider:
 
     @property
     def dimension(self) -> int:
-        self._ensure_lock()
-        return self._provider.dimension
+        with self._lock:
+            return self._provider.dimension
 
     def embed(self, text: str) -> list[float]:
-        self._ensure_lock()
-        return self._provider.embed(text)
+        with self._lock:
+            return self._provider.embed(text)
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        self._ensure_lock()
-        return self._provider.embed_batch(texts)
+        with self._lock:
+            return self._provider.embed_batch(texts)
 
     def release(self) -> None:
-        """Free the model and release the lock."""
-        if not self._acquired:
-            return
-
-        # Delete provider to free model memory
+        """Free the model."""
         try:
             del self._provider
         except AttributeError:
             pass
         self._provider = None
-
-        # Force garbage collection to reclaim GPU memory
         gc.collect()
-
-        # Now release the lock
-        self._lock.release()
-        self._acquired = False
-        logger.debug("Released embedding provider and lock")
+        logger.debug("Released embedding provider")
 
 
 class LockedSummarizationProvider:
     """
-    Lifecycle-locked wrapper for a summarization provider.
+    Per-call locked wrapper for a summarization provider.
 
-    Same pattern as LockedEmbeddingProvider — holds the lock while
-    the model is loaded, releases model memory before releasing the lock.
+    Same pattern as LockedEmbeddingProvider — acquires the lock only
+    during summarize() calls.
     """
 
     def __init__(self, provider, lock_path: Path):
         self._provider = provider
         self._lock = ModelLock(lock_path)
-        self._acquired = False
-
-    def _ensure_lock(self) -> None:
-        if not self._acquired:
-            self._lock.acquire(blocking=True)
-            self._acquired = True
 
     @property
     def model_name(self) -> str:
@@ -208,24 +185,17 @@ class LockedSummarizationProvider:
         max_length: int = 500,
         context: str | None = None,
     ) -> str:
-        self._ensure_lock()
-        return self._provider.summarize(
-            content, max_length=max_length, context=context
-        )
+        with self._lock:
+            return self._provider.summarize(
+                content, max_length=max_length, context=context
+            )
 
     def release(self) -> None:
-        """Free the model and release the lock."""
-        if not self._acquired:
-            return
-
+        """Free the model."""
         try:
             del self._provider
         except AttributeError:
             pass
         self._provider = None
-
         gc.collect()
-
-        self._lock.release()
-        self._acquired = False
-        logger.debug("Released summarization provider and lock")
+        logger.debug("Released summarization provider")
