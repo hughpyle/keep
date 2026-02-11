@@ -59,6 +59,8 @@ Document summary here...
 
 Version numbers are **offsets**: @V{0} = current, @V{1} = previous, @V{2} = two versions ago.
 
+**Output width:** Summaries are truncated to fit the terminal. When stdout is not a TTY (e.g., piped through hooks), output uses 200 columns for wider summaries.
+
 ### Pipe Composition
 
 ```bash
@@ -344,13 +346,11 @@ keep now -V 2                  # Two versions ago of nowdoc
 
 ### History Output
 
-`--history` shows versions using offset numbers:
+`--history` shows versions as summary lines with version identifiers:
 ```
-v0 (current): Current summary...
-
-Archived:
-  v1 (2026-01-15): Previous summary...
-  v2 (2026-01-14): Older summary...
+now           2026-01-16 Current summary...
+now@V{1}      2026-01-15 Previous summary...
+now@V{2}      2026-01-14 Older summary...
 ```
 
 With `--ids`, outputs version identifiers for piping:

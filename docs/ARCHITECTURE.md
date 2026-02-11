@@ -356,6 +356,11 @@ This ensures both embedding and summarization receive clean text.
 - Config auto-created with detected defaults
 - Validation on load with clear error messages
 
+**Store Inconsistency**
+- On startup, a background thread checks for mismatches between ChromaDB and SQLite
+- Missing search index entries or orphaned vectors are reconciled automatically
+- This runs as a daemon thread and does not block normal operation
+
 **Store Corruption**
 - ChromaDB is resilient (SQLite-backed)
 - Embedding cache can be deleted and rebuilt

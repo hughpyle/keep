@@ -21,6 +21,7 @@ keep put "file://$(keep config tool)/docs/library/ancrenewisse.pdf"
 keep put https://inguz.substack.com/p/keep -t topic=practice
 keep put "User prefers OAuth2 with PKCE" -t topic=auth
 keep find "authentication flow" --limit 5
+keep find "auth" --text                        # Full-text search on summaries
 keep find "auth" -t project=myapp              # Semantic search + tag filter
 keep list --tag project=myapp
 keep get file:///project/readme.md
@@ -169,13 +170,11 @@ The Exhortation to Rāhula at Mango Stone is a Buddhist sutra that teaches...
 
 ### Version history
 
-`keep now --history` or `keep get ID --history` shows a compact version list:
+`keep now --history` or `keep get ID --history` shows versions as summary lines:
 
 ```
-v0 (current): Finished reading MN61. The mirror teaching: reflect before, ...
-
-Archived:
-  v1 (2026-02-07): Reading the first teachings. Exploring MN61 and th...
+now           2026-02-08 Finished reading MN61. The mirror teaching: reflect before, ...
+now@V{1}      2026-02-07 Reading the first teachings. Exploring MN61 and th...
 ```
 
 ### Other formats
