@@ -252,6 +252,8 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # OAuth token alternative
 
 **Slow local summarization:** Large content is summarized in the background automatically.
 
+**Claude Code hooks need `jq`:** The prompt-submit hook uses `jq` to extract context. Install with your package manager (e.g., `brew install jq`). Hooks are fail-safe without it, but prompt context won't be captured.
+
 ## Next Steps
 
 - [REFERENCE.md](REFERENCE.md) — Complete CLI reference

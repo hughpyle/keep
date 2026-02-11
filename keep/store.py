@@ -78,6 +78,10 @@ class ChromaStore:
         # Cache of collection handles
         self._collections: dict[str, Any] = {}
     
+    def reset_embedding_dimension(self, dimension: int) -> None:
+        """Update expected embedding dimension (for provider changes)."""
+        self._embedding_dimension = dimension
+
     def _get_collection(self, name: str) -> Any:
         """Get or create a collection by name."""
         if name not in self._collections:

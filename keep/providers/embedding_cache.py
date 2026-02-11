@@ -7,6 +7,7 @@ avoiding redundant embedding calls for unchanged content.
 
 import hashlib
 import json
+import logging
 import sqlite3
 import struct
 import threading
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 from .base import EmbeddingProvider
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingCache:
@@ -258,50 +261,65 @@ class CachingEmbeddingProvider:
     def embed(self, text: str) -> list[float]:
         """
         Get embedding, using cache when available.
+
+        Cache failures are non-fatal — falls through to the real provider.
         """
-        # Check cache
-        cached = self._cache.get(self.model_name, text)
-        if cached is not None:
-            self._hits += 1
-            return cached
-        
+        # Check cache (fail-safe)
+        try:
+            cached = self._cache.get(self.model_name, text)
+            if cached is not None:
+                self._hits += 1
+                return cached
+        except Exception as e:
+            logger.debug("Embedding cache read failed: %s", e)
+
         # Cache miss - compute embedding
         self._misses += 1
         embedding = self._provider.embed(text)
-        
-        # Store in cache
-        self._cache.put(self.model_name, text, embedding)
-        
+
+        # Store in cache (fail-safe)
+        try:
+            self._cache.put(self.model_name, text, embedding)
+        except Exception as e:
+            logger.debug("Embedding cache write failed: %s", e)
+
         return embedding
     
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """
         Get embeddings for batch, using cache where available.
-        
-        Only computes embeddings for cache misses.
+
+        Only computes embeddings for cache misses. Cache failures
+        are non-fatal — falls through to the real provider.
         """
         results: list[Optional[list[float]]] = [None] * len(texts)
         to_embed: list[tuple[int, str]] = []
-        
-        # Check cache for each text
+
+        # Check cache for each text (fail-safe)
         for i, text in enumerate(texts):
-            cached = self._cache.get(self.model_name, text)
-            if cached is not None:
-                self._hits += 1
-                results[i] = cached
-            else:
-                self._misses += 1
-                to_embed.append((i, text))
-        
+            try:
+                cached = self._cache.get(self.model_name, text)
+                if cached is not None:
+                    self._hits += 1
+                    results[i] = cached
+                    continue
+            except Exception as e:
+                logger.debug("Embedding cache read failed: %s", e)
+            self._misses += 1
+            to_embed.append((i, text))
+
         # Batch embed cache misses
         if to_embed:
             indices, texts_to_embed = zip(*to_embed)
             embeddings = self._provider.embed_batch(list(texts_to_embed))
-            
+
             for idx, text, embedding in zip(indices, texts_to_embed, embeddings):
                 results[idx] = embedding
-                self._cache.put(self.model_name, text, embedding)
-        
+                try:
+                    self._cache.put(self.model_name, text, embedding)
+                except Exception as e:
+                    logger.debug("Embedding cache write failed: %s", e)
+
         return results  # type: ignore
     
     def stats(self) -> dict:

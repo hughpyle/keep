@@ -145,6 +145,10 @@ keep tag-update ID1 ID2 --tag k=v    # Tag multiple docs
 
 # Delete / revert
 keep del ID                       # Remove item (or revert to previous version)
+
+# Maintenance
+keep reindex                      # Rebuild search index with current embedding provider
+keep reindex -y                   # Skip confirmation
 ```
 
 ## Python API
@@ -229,17 +233,6 @@ keep find "authentication" -t topic=auth
 # Big picture (no project filter)
 keep find "recent work" --since P1D
 ```
-
-**For complete segregation**, use collections with `KEEP_COLLECTION`:
-```bash
-export KEEP_COLLECTION=work
-keep now "work context"
-
-export KEEP_COLLECTION=personal
-keep now "personal context"
-```
-
-Collections are separate stores. Tags are overlays within a store.
 
 ### Speech-Act Tags
 
@@ -377,7 +370,6 @@ Same content = same ID = enables versioning via tag changes.
 ```bash
 KEEP_STORE_PATH=/path/to/store       # Override store location
 KEEP_CONFIG=/path/to/.keep           # Override config directory
-KEEP_COLLECTION=name                 # Collection name (default: "default")
 KEEP_TAG_PROJECT=myapp               # Auto-apply tags (any KEEP_TAG_* variable)
 KEEP_VERBOSE=1                       # Debug logging to stderr
 KEEP_NO_SETUP=1                      # Skip auto-install of tool integrations
