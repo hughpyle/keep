@@ -639,7 +639,7 @@ def find(
     limit: LimitOption = 10,
     since: SinceOption = None,
     history: Annotated[bool, typer.Option(
-        "--history",
+        "--history", "-H",
         help="Include archived versions of matching items"
     )] = False,
 ):
@@ -726,7 +726,7 @@ def list_recent(
     )] = "updated",
     since: SinceOption = None,
     history: Annotated[bool, typer.Option(
-        "--history",
+        "--history", "-H",
         help="Include archived versions in listing"
     )] = False,
 ):
