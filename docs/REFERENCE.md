@@ -113,13 +113,16 @@ keep list --history                  # Include archived versions
 # Debug mode
 keep -v <cmd>                        # Enable debug logging to stderr
 
-# Search with time filtering (--since accepts ISO duration or date)
+# Search (semantic by default, --text for full-text)
+keep find "query"                    # Semantic similarity search
+keep find "query" --text             # Full-text search on summaries
+keep find --id ID                    # Find similar to item
+keep find "query" --history          # Include archived versions
 keep find "query" --since P7D        # Last 7 days
 keep find "query" --since P1W        # Last week
 keep find "query" --since PT1H       # Last hour
 keep find "query" --since 2026-01-15 # Since specific date
 keep find --id ID --since P30D       # Similar items from last 30 days
-keep search "text" --since P3D       # Full-text search, last 3 days
 
 # Tag filtering
 keep list --tags=                    # List all tag keys
