@@ -145,7 +145,9 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples
 ## Documentation
 
 - **[docs/QUICKSTART.md](docs/QUICKSTART.md)** — Setup, configuration, async summarization
-- **[docs/REFERENCE.md](docs/REFERENCE.md)** — Complete CLI and API reference
+- **[docs/REFERENCE.md](docs/REFERENCE.md)** — Quick reference index
+- **[docs/TAGGING.md](docs/TAGGING.md)** — Tags, speech acts, project/topic organization
+- **[docs/VERSIONING.md](docs/VERSIONING.md)** — Document versioning and history
 - **[docs/META-DOCS.md](docs/META-DOCS.md)** — How meta-docs surface contextual feedback
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Working session patterns
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — How it works under the hood

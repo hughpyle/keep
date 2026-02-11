@@ -1558,6 +1558,8 @@ def _get_config_value(cfg, store_path: Path, path: str):
     if path == "openclaw-plugin":
         import importlib.resources
         return str(Path(str(importlib.resources.files("keep"))) / "data" / "openclaw-plugin")
+    if path == "docs":
+        return str(get_tool_directory() / "docs")
     if path == "store":
         return str(store_path)
     if path == "collections":
@@ -1628,7 +1630,10 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
     # Show paths
     lines.append(f"file: {config_path}")
     lines.append(f"tool: {get_tool_directory()}")
+    lines.append(f"docs: {get_tool_directory() / 'docs'}")
     lines.append(f"store: {store_path}")
+    import importlib.resources
+    lines.append(f"openclaw-plugin: {Path(str(importlib.resources.files('keep'))) / 'data' / 'openclaw-plugin'}")
     lines.append(f"collections: {collections}")
 
     if cfg:
@@ -1715,6 +1720,7 @@ def config(
         keep config              # Show all config
         keep config file         # Config file location
         keep config tool         # Package directory (SKILL.md location)
+        keep config docs         # Documentation directory
         keep config openclaw-plugin  # OpenClaw plugin directory
         keep config store        # Store path
         keep config providers    # All provider config
@@ -1770,10 +1776,13 @@ def config(
         except Exception:
             collections = []
 
+        import importlib.resources
         result = {
             "file": str(config_path) if config_path else None,
             "tool": str(get_tool_directory()),
+            "docs": str(get_tool_directory() / "docs"),
             "store": str(store_path),
+            "openclaw-plugin": str(Path(str(importlib.resources.files("keep"))) / "data" / "openclaw-plugin"),
             "collections": collections,
             "providers": {
                 "embedding": cfg.embedding.name if cfg and cfg.embedding else None,

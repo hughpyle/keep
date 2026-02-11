@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.30.3
+version: 0.31.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -198,14 +198,15 @@ keep get .tag/project     # Bounded work contexts
 keep get .tag/topic       # Cross-cutting subject areas
 ```
 
-For complete CLI and API reference, see [docs/REFERENCE.md](docs/REFERENCE.md).
+For CLI reference, see [docs/REFERENCE.md](docs/REFERENCE.md). Per-command details in `docs/KEEP-*.md`.
 
 ---
 
 ## See Also
 
 - [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) — Detailed patterns for working sessions
-- [docs/REFERENCE.md](docs/REFERENCE.md) — Complete CLI and API reference
+- [docs/REFERENCE.md](docs/REFERENCE.md) — Quick reference index
+- [docs/TAGGING.md](docs/TAGGING.md) — Tags, speech acts, project/topic
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — Installation and setup
 - [keep/data/system/conversations.md](keep/data/system/conversations.md) — Full conversation framework (`.conversations`)
 - [keep/data/system/domains.md](keep/data/system/domains.md) — Domain-specific organization (`.domains`)
