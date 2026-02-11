@@ -66,6 +66,17 @@ meta/learnings:
 Working on auth flow
 ```
 
+## keep save
+
+When a thread of work is complete, save the now history as a named item. Tag filtering lets you extract only the versions relevant to a specific project.
+
+```bash
+keep save "thread-name"                    # Save all now history
+keep save "auth-thread" -t project=myapp   # Save only matching versions
+```
+
+Saving to an existing name appends incrementally. See [KEEP-SAVE.md](KEEP-SAVE.md) for details.
+
 ## keep reflect
 
 Deep structured reflection practice. Guides you through gathering context, examining actions, and updating intentions.
@@ -76,6 +87,7 @@ keep reflect
 
 ## See Also
 
+- [KEEP-SAVE.md](KEEP-SAVE.md) — Save now history as named items
 - [TAGGING.md](TAGGING.md) — Tag system and speech-act tracking
 - [VERSIONING.md](VERSIONING.md) — Version history and navigation
 - [META-DOCS.md](META-DOCS.md) — How meta sections surface contextual items

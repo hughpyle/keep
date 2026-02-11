@@ -169,6 +169,8 @@ For installation options, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 keep now                              # Current intentions
 keep now "Working on auth flow"       # Update intentions
 keep now -V 1                         # Previous intentions
+keep save "thread-name"               # Save now history as named item
+keep save "name" -t project=foo       # Save only matching versions
 
 keep find "authentication"            # Search by meaning
 keep find "auth" -t project=myapp     # Search with tag filter

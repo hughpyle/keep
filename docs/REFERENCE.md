@@ -14,6 +14,7 @@
 | `keep find` | Search by meaning or text | [KEEP-FIND.md](KEEP-FIND.md) |
 | `keep list` | List recent items, filter by tags | [KEEP-LIST.md](KEEP-LIST.md) |
 | `keep config` | Show configuration and paths | [KEEP-CONFIG.md](KEEP-CONFIG.md) |
+| `keep save` | Save now history as a named item | [KEEP-SAVE.md](KEEP-SAVE.md) |
 | `keep reflect` | Structured reflection practice | [KEEP-NOW.md](KEEP-NOW.md#keep-reflect) |
 | `keep del` | Remove item or revert to previous version | — |
 | `keep tag-update` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
@@ -93,6 +94,8 @@ diff <(keep get doc:1) <(keep get "doc:1@V{1}")      # Diff current vs previous
 keep now                              # Show current intentions
 keep now "What's important now"       # Update intentions
 keep reflect                          # Structured reflection practice
+keep save "thread-name"               # Save now history as named item
+keep save "name" -t project=foo       # Save only matching versions
 
 # Add or update
 keep put "inline text" -t topic=auth  # Text mode
