@@ -49,7 +49,7 @@ keep put "learning"          # Capture insight
 """
 
 # Bump this when hook definitions change — triggers re-install for existing users
-HOOKS_VERSION = 5
+HOOKS_VERSION = 6
 
 # Hook definitions for Claude Code
 CLAUDE_CODE_HOOKS = {
@@ -59,7 +59,7 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "keep now -n 10 </dev/null 2>/dev/null || true",
+                    "command": "keep get now -n 10 </dev/null 2>/dev/null || true",
                     "statusMessage": "Reflecting...",
                 }
             ],
@@ -69,7 +69,7 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "keep now </dev/null 2>/dev/null || true",
+                    "command": "keep get now </dev/null 2>/dev/null || true",
                     "statusMessage": "Reflecting...",
                 }
             ],
@@ -91,7 +91,7 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "keep now </dev/null 2>/dev/null || true",
+                    "command": "keep get now </dev/null 2>/dev/null || true",
                     "statusMessage": "Loading context...",
                 }
             ],
