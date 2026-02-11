@@ -468,8 +468,13 @@ class Keeper:
             embedding_dimension=embedding_dim,
         )
 
-        # Check store consistency (cheap ID-set comparison, deferred fix)
-        self._needs_reconcile = self._check_store_consistency()
+        # Check store consistency and reconcile in background if needed
+        if self._check_store_consistency():
+            import threading
+            coll = self._resolve_collection(None)
+            threading.Thread(
+                target=self._auto_reconcile_safe, args=(coll,), daemon=True
+            ).start()
 
         # System doc migration deferred to first write (needs embeddings)
         from .config import SYSTEM_DOCS_VERSION
@@ -501,6 +506,13 @@ class Keeper:
         except Exception as e:
             logger.debug("Store consistency check failed: %s", e)
         return False
+
+    def _auto_reconcile_safe(self, collection: str) -> None:
+        """Background-safe wrapper for auto-reconcile. Silently handles failures."""
+        try:
+            self._auto_reconcile(collection)
+        except Exception as e:
+            logger.debug("Background reconcile failed: %s", e)
 
     def _auto_reconcile(self, collection: str) -> None:
         """Fix store divergence using summaries (no content re-fetch needed)."""
@@ -900,9 +912,6 @@ class Keeper:
         if self._needs_sysdoc_migration:
             self._needs_sysdoc_migration = False  # Clear before call (migration calls remember → _upsert)
             self._migrate_system_documents()
-        if self._needs_reconcile:
-            self._auto_reconcile(coll)
-            self._needs_reconcile = False
 
         # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
         existing_tags = {}
