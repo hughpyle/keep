@@ -1,0 +1,5 @@
+{
+  "trigger": "stop",
+  "action": "command",
+  "command": "keep now 'Session ended' 2>/dev/null || true"
+}
