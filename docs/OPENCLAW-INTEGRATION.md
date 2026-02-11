@@ -4,6 +4,13 @@ How to install and configure keep as an OpenClaw plugin.
 
 ---
 
+## Install keep
+
+```bash
+uv tool install keep-skill                    # API providers included
+# Or: uv tool install 'keep-skill[local]'    # Local models, no API keys needed
+```
+
 ## Install the Plugin
 
 ```bash
