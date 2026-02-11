@@ -59,16 +59,6 @@ openclaw cron add \
 
 This runs in an isolated session at 9pm daily. Delivery is silent — the value is in what gets written to the store.
 
-## Optional: Full Plugin
-
-The lightweight plugin (installed above) handles hooks only. A full plugin with CLI commands (`openclaw memory search`, `openclaw memory status`) and a file watcher is available at the repo root:
-
-```bash
-openclaw plugins install -l /path/to/keep/openclaw-plugin
-```
-
-This registers `memory_search` and `memory_get` as OpenClaw tools, plus `openclaw memory` CLI commands.
-
 ## Provider Configuration
 
 keep auto-detects AI providers from environment variables. Set one and go:
