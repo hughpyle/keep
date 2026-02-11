@@ -790,7 +790,6 @@ class Keeper:
     def _gather_context(
         self,
         id: str,
-        collection: str,
         tags: dict[str, str],
     ) -> str | None:
         """
@@ -801,7 +800,6 @@ class Keeper:
 
         Args:
             id: ID of the item being summarized (to exclude from results)
-            collection: Collection to search
             tags: User tags from the item being summarized
 
         Returns:
@@ -812,7 +810,7 @@ class Keeper:
 
         # Get similar items (broader search, we'll filter by tags)
         try:
-            similar = self.find_similar(id, limit=20, collection=collection)
+            similar = self.find_similar(id, limit=20)
         except KeyError:
             # Item not found yet (first indexing) - no context available
             return None
@@ -1078,7 +1076,6 @@ class Keeper:
         tags: Optional[dict[str, str]] = None,
         summary: Optional[str] = None,
         system_tags: dict[str, str],
-        collection: Optional[str] = None,
     ) -> Item:
         """Core upsert logic shared by update() and remember()."""
         doc_coll = self._resolve_doc_collection()
@@ -1212,7 +1209,6 @@ class Keeper:
         *,
         summary: Optional[str] = None,
         source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
-        collection: Optional[str] = None,
     ) -> Item:
         """
         Insert or update a document in the store.
@@ -1235,7 +1231,6 @@ class Keeper:
             tags: User-provided tags to merge with existing tags
             summary: User-provided summary (skips auto-summarization if given)
             source_tags: Deprecated alias for 'tags'
-            collection: Target collection (uses default if None)
 
         Returns:
             The stored Item with merged tags and new summary
@@ -1259,7 +1254,7 @@ class Keeper:
         return self._upsert(
             id, doc.content,
             tags=tags, summary=summary,
-            system_tags=system_tags, collection=collection,
+            system_tags=system_tags,
         )
 
     def remember(
@@ -1270,7 +1265,6 @@ class Keeper:
         summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
         source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
-        collection: Optional[str] = None,
     ) -> Item:
         """
         Store inline content directly (without fetching from a URI).
@@ -1295,7 +1289,6 @@ class Keeper:
             summary: User-provided summary (skips auto-summarization if given)
             tags: User-provided tags to merge with existing tags
             source_tags: Deprecated alias for 'tags'
-            collection: Target collection (uses default if None)
 
         Returns:
             The stored Item with merged tags and new summary
@@ -1317,7 +1310,7 @@ class Keeper:
         return self._upsert(
             id, content,
             tags=tags, summary=summary,
-            system_tags={"_source": "inline"}, collection=collection,
+            system_tags={"_source": "inline"},
         )
 
     # -------------------------------------------------------------------------
@@ -1375,7 +1368,6 @@ class Keeper:
         *,
         limit: int = 10,
         since: Optional[str] = None,
-        collection: Optional[str] = None
     ) -> list[Item]:
         """
         Find items using semantic similarity search.
@@ -1387,7 +1379,6 @@ class Keeper:
             query: Search query text
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
-            collection: Target collection
         """
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
@@ -1422,7 +1413,6 @@ class Keeper:
         limit: int = 10,
         since: Optional[str] = None,
         include_self: bool = False,
-        collection: Optional[str] = None
     ) -> list[Item]:
         """
         Find items similar to an existing item.
@@ -1432,7 +1422,6 @@ class Keeper:
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
             include_self: Include the queried item in results
-            collection: Target collection
         """
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
@@ -1473,7 +1462,6 @@ class Keeper:
         id: str,
         *,
         limit: int = 3,
-        collection: Optional[str] = None
     ) -> list[Item]:
         """
         Find similar items for frontmatter display using stored embedding.
@@ -1484,7 +1472,6 @@ class Keeper:
         Args:
             id: ID of item to find similar items for
             limit: Maximum results to return
-            collection: Target collection
 
         Returns:
             List of similar items, one per unique base document
@@ -1527,7 +1514,7 @@ class Keeper:
 
         return filtered
 
-    def get_version_offset(self, item: Item, collection: Optional[str] = None) -> int:
+    def get_version_offset(self, item: Item) -> int:
         """
         Get version offset (0=current, 1=previous, ...) for an item.
 
@@ -1536,7 +1523,6 @@ class Keeper:
 
         Args:
             item: Item to get version offset for
-            collection: Target collection
 
         Returns:
             Version offset (0 for current version)
@@ -1554,7 +1540,6 @@ class Keeper:
         item_id: str,
         *,
         limit_per_doc: int = 3,
-        collection: Optional[str] = None,
     ) -> dict[str, list[Item]]:
         """
         Resolve all .meta/* docs against an item's tags.
@@ -1567,7 +1552,6 @@ class Keeper:
         Args:
             item_id: ID of the item whose tags provide context
             limit_per_doc: Max results per meta-doc
-            collection: Target collection
 
         Returns:
             Dict of {meta_name: [matching Items]}. Empty results omitted.
@@ -1580,7 +1564,7 @@ class Keeper:
             return {}
 
         # Get current item's tags for context
-        current = self.get(item_id, collection=collection)
+        current = self.get(item_id)
         if current is None:
             return {}
         current_tags = current.tags
@@ -1618,7 +1602,6 @@ class Keeper:
             for query in expanded:
                 try:
                     items = self.query_tag(
-                        collection=collection,
                         limit=100,  # fetch all candidates for ranking
                         **query,
                     )
@@ -1635,7 +1618,7 @@ class Keeper:
                 continue
 
             # Rank by similarity to current item + recency decay
-            matches = self._rank_by_relevance(coll, item_id, matches)
+            matches = self._rank_by_relevance(self._resolve_chroma_collection(), item_id, matches)
             result[short_name] = matches[:limit_per_doc]
 
         return result
@@ -1711,7 +1694,6 @@ class Keeper:
         *,
         limit: int = 10,
         since: Optional[str] = None,
-        collection: Optional[str] = None
     ) -> list[Item]:
         """
         Search item summaries using full-text search.
@@ -1720,7 +1702,6 @@ class Keeper:
             query: Text to search for in summaries
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
-            collection: Target collection
         """
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
@@ -1747,7 +1728,6 @@ class Keeper:
         *,
         limit: int = 100,
         since: Optional[str] = None,
-        collection: Optional[str] = None,
         **tags: str
     ) -> list[Item]:
         """
@@ -1768,7 +1748,6 @@ class Keeper:
             value: Tag value (optional, any value if not provided)
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
-            collection: Target collection
             **tags: Additional tag filters as keyword arguments
         """
         doc_coll = self._resolve_doc_collection()
@@ -1820,8 +1799,6 @@ class Keeper:
     def list_tags(
         self,
         key: Optional[str] = None,
-        *,
-        collection: Optional[str] = None,
     ) -> list[str]:
         """
         List distinct tag keys or values.
@@ -1829,7 +1806,6 @@ class Keeper:
         Args:
             key: If provided, list distinct values for this key.
                  If None, list distinct tag keys.
-            collection: Target collection
 
         Returns:
             Sorted list of distinct keys or values
@@ -1845,7 +1821,7 @@ class Keeper:
     # Direct Access
     # -------------------------------------------------------------------------
     
-    def get(self, id: str, *, collection: Optional[str] = None) -> Optional[Item]:
+    def get(self, id: str) -> Optional[Item]:
         """
         Retrieve a specific item by ID.
 
@@ -1871,8 +1847,6 @@ class Keeper:
         self,
         id: str,
         offset: int = 0,
-        *,
-        collection: Optional[str] = None,
     ) -> Optional[Item]:
         """
         Get a specific version of a document by offset.
@@ -1886,7 +1860,6 @@ class Keeper:
         Args:
             id: Document identifier
             offset: Version offset (0=current, 1=previous, etc.)
-            collection: Target collection
 
         Returns:
             Item if found, None if version doesn't exist
@@ -1895,7 +1868,7 @@ class Keeper:
 
         if offset == 0:
             # Current version
-            return self.get(id, collection=collection)
+            return self.get(id)
 
         # Get archived version
         version_info = self._document_store.get_version(doc_coll, id, offset)
@@ -1912,8 +1885,6 @@ class Keeper:
         self,
         id: str,
         limit: int = 10,
-        *,
-        collection: Optional[str] = None,
     ) -> list[VersionInfo]:
         """
         List version history for a document.
@@ -1924,7 +1895,6 @@ class Keeper:
         Args:
             id: Document identifier
             limit: Maximum versions to return
-            collection: Target collection
 
         Returns:
             List of VersionInfo, newest archived first
@@ -1937,8 +1907,6 @@ class Keeper:
         id: str,
         current_version: Optional[int] = None,
         limit: int = 3,
-        *,
-        collection: Optional[str] = None,
     ) -> dict[str, list[VersionInfo]]:
         """
         Get version navigation info (prev/next) for display.
@@ -1947,7 +1915,6 @@ class Keeper:
             id: Document identifier
             current_version: The version being viewed (None = current/live version)
             limit: Max previous versions to return when viewing current
-            collection: Target collection
 
         Returns:
             Dict with 'prev' and optionally 'next' lists of VersionInfo.
@@ -1955,7 +1922,7 @@ class Keeper:
         doc_coll = self._resolve_doc_collection()
         return self._document_store.get_version_nav(doc_coll, id, current_version, limit)
 
-    def exists(self, id: str, *, collection: Optional[str] = None) -> bool:
+    def exists(self, id: str) -> bool:
         """
         Check if an item exists in the store.
         """
@@ -1968,7 +1935,6 @@ class Keeper:
         self,
         id: str,
         *,
-        collection: Optional[str] = None,
         delete_versions: bool = True,
     ) -> bool:
         """
@@ -1976,7 +1942,6 @@ class Keeper:
 
         Args:
             id: Document identifier
-            collection: Target collection
             delete_versions: If True, also delete version history
 
         Returns:
@@ -1989,7 +1954,7 @@ class Keeper:
         chroma_deleted = self._store.delete(chroma_coll, id, delete_versions=delete_versions)
         return doc_deleted or chroma_deleted
 
-    def revert(self, id: str, *, collection: Optional[str] = None) -> Optional[Item]:
+    def revert(self, id: str) -> Optional[Item]:
         """
         Revert to the previous version, or delete if no versions exist.
 
@@ -2002,7 +1967,7 @@ class Keeper:
 
         if version_count == 0:
             # No history — full delete
-            self.delete(id, collection=collection)
+            self.delete(id)
             return None
 
         # Get the versioned ChromaDB ID we need to promote
@@ -2016,7 +1981,7 @@ class Keeper:
 
         if restored is None:
             # Shouldn't happen given version_count > 0, but be safe
-            self.delete(id, collection=collection)
+            self.delete(id)
             return None
 
         # Update ChromaDB: replace current with restored version's data
@@ -2035,7 +2000,7 @@ class Keeper:
         except ValueError:
             pass  # May not exist if it was a tag-only change
 
-        return self.get(id, collection=collection)
+        return self.get(id)
 
     # -------------------------------------------------------------------------
     # Current Working Context (Now)
@@ -2085,24 +2050,17 @@ class Keeper:
         """
         return self.remember(content, id=NOWDOC_ID, tags=tags)
 
-    def list_system_documents(
-        self,
-        *,
-        collection: Optional[str] = None,
-    ) -> list[Item]:
+    def list_system_documents(self) -> list[Item]:
         """
         List all system documents.
 
         System documents are identified by the `category: system` tag.
         These are preloaded on init and provide foundational content.
 
-        Args:
-            collection: Target collection (default: default collection)
-
         Returns:
             List of system document Items
         """
-        return self.query_tag("category", "system", collection=collection)
+        return self.query_tag("category", "system")
 
     def reset_system_documents(self) -> dict:
         """
@@ -2154,8 +2112,6 @@ class Keeper:
         self,
         id: str,
         tags: Optional[dict[str, str]] = None,
-        *,
-        collection: Optional[str] = None,
     ) -> Optional[Item]:
         """
         Update tags on an existing document without re-processing.
@@ -2170,7 +2126,6 @@ class Keeper:
         Args:
             id: Document identifier
             tags: Tags to add/update/delete (empty string = delete)
-            collection: Target collection
 
         Returns:
             Updated Item if found, None if document doesn't exist
@@ -2179,7 +2134,7 @@ class Keeper:
         chroma_coll = self._resolve_chroma_collection()
 
         # Get existing item (prefer document store, fall back to ChromaDB)
-        existing = self.get(id, collection=collection)
+        existing = self.get(id)
         if existing is None:
             return None
 
@@ -2209,7 +2164,7 @@ class Keeper:
         self._store.update_tags(chroma_coll, id, final_tags)
 
         # Return updated item
-        return self.get(id, collection=collection)
+        return self.get(id)
 
     # -------------------------------------------------------------------------
     # Collection Management
@@ -2224,7 +2179,7 @@ class Keeper:
         chroma_collections = set(self._store.list_collections())
         return sorted(doc_collections | chroma_collections)
     
-    def count(self, *, collection: Optional[str] = None) -> int:
+    def count(self) -> int:
         """
         Count items in a collection.
 
@@ -2243,7 +2198,6 @@ class Keeper:
         *,
         since: Optional[str] = None,
         order_by: str = "updated",
-        collection: Optional[str] = None,
         include_history: bool = False,
     ) -> list[Item]:
         """
@@ -2253,7 +2207,6 @@ class Keeper:
             limit: Maximum number to return (default 10)
             since: Only include items updated since (ISO duration like P3D, or date)
             order_by: Sort order - "updated" (default) or "accessed"
-            collection: Collection to query (uses default if not specified)
             include_history: Include archived versions alongside current items
 
         Returns:
@@ -2336,7 +2289,7 @@ class Keeper:
                     user_tags = filter_non_system_tags(doc.tags)
                     if user_tags:
                         context = self._gather_context(
-                            item.id, item.collection, user_tags
+                            item.id, user_tags
                         )
 
                 # Generate real summary (with optional context)
@@ -2444,7 +2397,6 @@ class Keeper:
 
     def reconcile(
         self,
-        collection: Optional[str] = None,
         fix: bool = False,
     ) -> dict:
         """
@@ -2455,7 +2407,6 @@ class Keeper:
         - Documents in ChromaDB missing from DocumentStore (orphaned embeddings)
 
         Args:
-            collection: Collection to check (None = default collection)
             fix: If True, re-index documents missing from ChromaDB
 
         Returns:
