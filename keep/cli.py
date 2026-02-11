@@ -629,6 +629,10 @@ def find(
     include_self: Annotated[bool, typer.Option(
         help="Include the queried item (only with --id)"
     )] = False,
+    text: Annotated[bool, typer.Option(
+        "--text",
+        help="Use full-text search instead of semantic similarity"
+    )] = False,
     tag: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Filter by tag (key or key=value, repeatable)"
@@ -637,21 +641,30 @@ def find(
     collection: CollectionOption = "default",
     limit: LimitOption = 10,
     since: SinceOption = None,
+    history: Annotated[bool, typer.Option(
+        "--history",
+        help="Include archived versions of matching items"
+    )] = False,
 ):
     """
-    Find items using semantic similarity search.
+    Find items by semantic similarity (default) or full-text search.
 
     \b
     Examples:
-        keep find "authentication"              # Search by text
+        keep find "authentication"              # Semantic search
+        keep find "auth" --text                 # Full-text search
         keep find --id file:///path/to/doc.md   # Find similar to item
         keep find "auth" -t project=myapp       # Search + filter by tag
+        keep find "auth" --history              # Include archived versions
     """
     if id and query:
         typer.echo("Error: Specify either a query or --id, not both", err=True)
         raise typer.Exit(1)
     if not id and not query:
         typer.echo("Error: Specify a query or --id", err=True)
+        raise typer.Exit(1)
+    if id and text:
+        typer.echo("Error: --text cannot be used with --id", err=True)
         raise typer.Exit(1)
 
     kp = _get_keeper(store, collection)
@@ -661,6 +674,8 @@ def find(
 
     if id:
         results = kp.find_similar(id, limit=search_limit, since=since, include_self=include_self)
+    elif text:
+        results = kp.query_fulltext(query, limit=search_limit, since=since)
     else:
         results = kp.find(query, limit=search_limit, since=since)
 
@@ -668,10 +683,20 @@ def find(
     if tag:
         results = _filter_by_tags(results, tag)
 
-    typer.echo(_format_items(results[:limit], as_json=_get_json_output()))
+    results = results[:limit]
+
+    # Expand with archived versions if requested
+    if history:
+        expanded: list[Item] = []
+        for item in results:
+            versions = kp.list_versions(item.id, limit=limit, collection=collection)
+            expanded.extend(_versions_to_items(item.id, item, versions))
+        results = expanded
+
+    typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
-@app.command()
+@app.command(hidden=True)
 def search(
     query: Annotated[str, typer.Argument(default=..., help="Full-text search query")],
     store: StoreOption = None,
@@ -680,7 +705,7 @@ def search(
     since: SinceOption = None,
 ):
     """
-    Search item summaries using full-text search.
+    Search item summaries using full-text search (alias for find --text).
     """
     kp = _get_keeper(store, collection)
     results = kp.query_fulltext(query, limit=limit, since=since)
