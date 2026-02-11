@@ -51,15 +51,15 @@ This works because the tool and the skill reinforce each other. The tool stores 
 
 ### Integration
 
-The skill instructions install into your agent's system prompt automatically on first use (Claude Code, OpenAI Codex, OpenClaw). For deeper integration:
+The skill instructions and hooks install into your agent's configuration automatically on first use (Claude Code, Kiro, OpenAI Codex, OpenClaw). Hooks inject `keep now` context at session start, on each prompt, and at session end — so the agent always knows its current intentions.
 
 | Layer | What it does |
 |-------|-------------|
 | **Skill prompt** | Always in system prompt — guides reflection, breakdown capture, document indexing |
-| **Plugin hook** | Injects `keep now` context at the start of each agent turn ([OpenClaw plugin](SKILL.md#openclaw-integration)) |
+| **Hooks** | Inject `keep now -n 10` context at session start, prompt submit, and session end |
 | **Daily cron** | Scheduled deep reflection in an isolated session ([OpenClaw cron](SKILL.md#openclaw-integration)) |
 
-The CLI alone is enough to start. The plugin and cron make it automatic.
+The CLI alone is enough to start. The hooks make it automatic.
 
 ---
 

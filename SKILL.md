@@ -37,7 +37,7 @@ Before you can practice, ensure the practice is available in future sessions.
 |-----------|----------|
 | Claude Code | `~/.claude/CLAUDE.md` |
 | OpenAI Codex | `~/.codex/AGENTS.md` |
-| Kiro | `~/.kiro/steering/AGENTS.md` |
+| Kiro | `~/.kiro/steering/keep.md` + `~/.kiro/hooks/*.kiro.hook` |
 | OpenClaw | `AGENTS.md` in workspace (auto-detected via cwd) |
 
 Installing the Protocol Block at the global level makes it available across all projects. Prefer global installation when possible.
@@ -78,7 +78,7 @@ openclaw plugins enable keep
 openclaw gateway restart
 ```
 
-This installs a `before_agent_start` hook that runs `keep now` and injects the output as prepended context. The agent starts each turn knowing its current intentions and context.
+This installs a `before_agent_start` hook that runs `keep now -n 10` and injects the output as prepended context. The agent starts each turn knowing its current intentions and context.
 
 **Cron — daily reflection:**
 
@@ -103,14 +103,14 @@ This runs in an isolated session so reflection doesn't interrupt the main conver
 | Layer | Mechanism | What it does |
 |-------|-----------|-------------|
 | Skill prompt | Always in system prompt | Guides real-time reflection, breakdown capture |
-| Plugin hook | `before_agent_start` | Injects `keep now` context each turn |
+| Plugin hook | `before_agent_start` | Injects `keep now -n 10` context each turn |
 | Daily cron | 9pm isolated session | Deep reflection, pattern review, memory curation |
 
 ### Why This Matters
 
 An agent that loses skill context on restart cannot develop mastery. By installing the Protocol Block, the practice becomes part of the project.  This is meta-reflection: the skill maintains its own presence.
 
-Note: `keep` auto-installs the Protocol Block and session hooks on first use when it detects a supported tool. Check status with `keep config`.
+Note: `keep` auto-installs the Protocol Block and session hooks on first use when it detects a supported tool (Claude Code, Kiro, Codex). Hooks are versioned and upgraded automatically. Check status with `keep config`.
 
 ---
 
