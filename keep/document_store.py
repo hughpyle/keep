@@ -838,6 +838,65 @@ class DocumentStore:
             for row in cursor
         ]
 
+    def list_recent_with_history(
+        self,
+        collection: str,
+        limit: int = 10,
+        order_by: str = "updated",
+    ) -> list[DocumentRecord]:
+        """
+        List recent documents including archived versions.
+
+        Returns DocumentRecords sorted by timestamp. Archived versions
+        have '_version' tag set to their offset (1=previous, 2=two ago...).
+        Current versions have no '_version' tag (equivalent to offset 0).
+        """
+        allowed_order = {"updated": "updated_at", "accessed": "accessed_at"}
+        order_col = allowed_order.get(order_by)
+        if order_col is None:
+            raise ValueError(f"Invalid order_by: {order_by!r} (expected 'updated' or 'accessed')")
+
+        cursor = self._conn.execute(f"""
+            SELECT id, summary, tags_json, {order_col} as sort_ts,
+                   0 as version_offset, content_hash, accessed_at
+            FROM documents
+            WHERE collection = ?
+
+            UNION ALL
+
+            SELECT dv.id, dv.summary, dv.tags_json, dv.created_at as sort_ts,
+                   (mv.max_v - dv.version + 1) as version_offset,
+                   dv.content_hash, NULL as accessed_at
+            FROM document_versions dv
+            JOIN (SELECT id, collection, MAX(version) as max_v
+                  FROM document_versions
+                  GROUP BY id, collection) mv
+            ON dv.id = mv.id AND dv.collection = mv.collection
+            WHERE dv.collection = ?
+
+            ORDER BY sort_ts DESC
+            LIMIT ?
+        """, (collection, collection, limit))
+
+        records = []
+        for row in cursor:
+            tags = json.loads(row["tags_json"])
+            offset = row["version_offset"]
+            if offset > 0:
+                tags["_version"] = str(offset)
+            records.append(DocumentRecord(
+                id=row["id"],
+                collection=collection,
+                summary=row["summary"],
+                tags=tags,
+                created_at=row["sort_ts"],
+                updated_at=row["sort_ts"],
+                content_hash=row["content_hash"],
+                accessed_at=row["accessed_at"],
+            ))
+
+        return records
+
     def count(self, collection: str) -> int:
         """Count documents in a collection."""
         cursor = self._conn.execute("""

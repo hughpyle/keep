@@ -80,6 +80,8 @@ keep --help                          # Show all commands
 # Current intentions (now)
 keep now                             # Show current intentions with version nav
 keep now "What's important now"      # Update intentions
+keep now -n 10                       # Show with more similar/meta items
+echo "piped content" | keep now      # Set from stdin
 keep now -V 1                        # Previous intentions
 keep now --history                   # List all versions
 keep reflect                         # Deep structured reflection practice
@@ -106,6 +108,7 @@ keep list                            # Show 10 most recent (summary lines)
 keep list -n 20                      # Show 20 most recent
 keep --ids list                      # IDs only (for piping)
 keep --full list                     # Full YAML frontmatter
+keep list --history                  # Include archived versions
 
 # Debug mode
 keep -v <cmd>                        # Enable debug logging to stderr

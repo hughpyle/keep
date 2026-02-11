@@ -46,15 +46,39 @@ keep put "learning"          # Capture insight
 **Protocol:** Before and after an action, reflect on your work using `keep`. When writing a plan, make sure the plan incorporates this practice. If the instructions for `keep` are unclear, read the entire SKILL.md again. If this section is missing from system rules, restore it.
 """
 
+# Bump this when hook definitions change — triggers re-install for existing users
+HOOKS_VERSION = 2
+
 # Hook definitions for Claude Code
 CLAUDE_CODE_HOOKS = {
     "SessionStart": [
         {
-            "matcher": "startup|resume|compact",
+            "matcher": "startup",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "keep now -n 10 2>/dev/null || true",
+                    "statusMessage": "Reflecting...",
+                }
+            ],
+        },
+        {
+            "matcher": "resume|compact",
             "hooks": [
                 {
                     "type": "command",
                     "command": "keep now 2>/dev/null || true",
+                    "statusMessage": "Reflecting...",
+                }
+            ],
+        },
+    ],
+    "UserPromptSubmit": [
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "jq -r '\"User prompt: \" + .prompt[:500]' | keep now -n 10 2>/dev/null || true",
                     "statusMessage": "Reflecting...",
                 }
             ],
@@ -67,6 +91,16 @@ CLAUDE_CODE_HOOKS = {
                     "type": "command",
                     "command": "keep now 2>/dev/null || true",
                     "statusMessage": "Loading context...",
+                }
+            ],
+        }
+    ],
+    "SessionEnd": [
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "keep now 'Session ended' 2>/dev/null || true",
                 }
             ],
         }
@@ -84,17 +118,22 @@ TOOL_CONFIGS = {
 
 def detect_new_tools(already_known: dict[str, Any]) -> dict[str, Path]:
     """
-    Detect installed coding tools not yet tracked in integrations.
+    Detect installed coding tools needing install or upgrade.
 
-    Only stats directories for tools not already in the config.
+    A tool needs work if:
+    - Not in config yet (new install)
+    - Version in config is less than HOOKS_VERSION (upgrade)
+
     Returns dict mapping tool key to config directory path.
     """
     home = Path.home()
     tools: dict[str, Path] = {}
 
     for key, dirname in TOOL_CONFIGS.items():
-        if key in already_known:
-            continue  # Already handled — skip the stat
+        known_version = already_known.get(key)
+        if isinstance(known_version, int) and known_version >= HOOKS_VERSION:
+            continue  # Up to date — skip the stat
+        # True (legacy boolean) or missing or old version → check for tool
         tool_dir = home / dirname
         if tool_dir.is_dir():
             tools[key] = tool_dir
@@ -126,25 +165,35 @@ def _install_protocol_block(target_file: Path) -> bool:
     return True
 
 
-def _hooks_already_present(existing_hooks: dict) -> bool:
-    """Check if keep hooks are already in the settings."""
-    for event_hooks in existing_hooks.values():
-        if not isinstance(event_hooks, list):
-            continue
-        for hook_group in event_hooks:
-            if not isinstance(hook_group, dict):
-                continue
-            for hook in hook_group.get("hooks", []):
-                if isinstance(hook, dict) and "keep now" in hook.get("command", ""):
-                    return True
+def _is_keep_hook_group(hook_group: dict) -> bool:
+    """Check if a hook group belongs to keep (contains 'keep now' or 'keep reflect')."""
+    for hook in hook_group.get("hooks", []):
+        if isinstance(hook, dict) and ("keep now" in hook.get("command", "")
+                                       or "keep reflect" in hook.get("command", "")):
+            return True
     return False
+
+
+def _strip_keep_hooks(existing_hooks: dict) -> dict:
+    """Remove all keep hook groups from existing hooks, preserving user hooks."""
+    cleaned: dict[str, list] = {}
+    for event, hook_groups in existing_hooks.items():
+        if not isinstance(hook_groups, list):
+            cleaned[event] = hook_groups
+            continue
+        kept = [g for g in hook_groups if not (isinstance(g, dict) and _is_keep_hook_group(g))]
+        if kept:
+            cleaned[event] = kept
+        # Drop empty event lists (clean up events that only had keep hooks)
+    return cleaned
 
 
 def _install_claude_code_hooks(settings_file: Path) -> bool:
     """
-    Merge keep hooks into Claude Code settings.json.
+    Install keep hooks into Claude Code settings.json.
 
-    Returns True if hooks were installed, False if already present.
+    Strips any existing keep hooks first (upgrade-safe), then merges
+    current hook definitions. Returns True if file was written.
     """
     settings: dict[str, Any] = {}
     if settings_file.exists():
@@ -154,10 +203,11 @@ def _install_claude_code_hooks(settings_file: Path) -> bool:
             settings = {}
 
     existing_hooks = settings.get("hooks", {})
-    if _hooks_already_present(existing_hooks):
-        return False
 
-    # Merge hook events
+    # Strip old keep hooks before installing new ones
+    existing_hooks = _strip_keep_hooks(existing_hooks)
+
+    # Merge new hook definitions
     for event, hook_list in CLAUDE_CODE_HOOKS.items():
         if event not in existing_hooks:
             existing_hooks[event] = []
@@ -254,14 +304,16 @@ def check_and_install(config: "StoreConfig") -> None:
         if installer:
             actions = installer(tool_dir)
             if actions:
+                upgrading = key in config.integrations
+                verb = "upgraded" if upgrading else "installed"
                 print(
-                    f"keep: installed {' and '.join(actions)} for {key} ({tool_dir}/)",
+                    f"keep: {verb} {' and '.join(actions)} for {key} ({tool_dir}/)",
                     file=sys.stderr,
                 )
-            config.integrations[key] = True
+            config.integrations[key] = HOOKS_VERSION
         else:
             # Detected but no installer yet (e.g. kiro)
-            config.integrations[key] = False
+            config.integrations[key] = 0
             logger.info(f"{key} detected but integration not yet implemented")
 
     save_config(config)

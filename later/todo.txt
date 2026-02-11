@@ -1,4 +1,24 @@
 
+* claude-code hooks - especially SessionStart and TaskCompleted
+    - SubagentStart / Stop?
+    Can define these in the skill frontmatter, apparently.  Or in the global settings.json if needed.
+    Claude parses _json_ output only? or text response? e.g. from `keep now` or `keep reflect`
+    https://code.claude.com/docs/en/hooks
+
+* VS Code hooks 
+    https://docs.github.com/en/copilot/reference/hooks-configuration
+    Session Start - output is ignored!
+    User Prompt Submitted
+
+* Kiro hooks
+    https://kiro.dev/docs/hooks/types/
+    Prompt Submit - inject the `keep now` context, searching for relevance based on the prompt text.
+
+* Codex hooks
+    (haven't yet investigated)
+
+* doc: make it really clear that `keep now foo` does NOT update the tags, the previous tags are still there
+
 x Outside of any project/topic tags, I'm not seeing commitments... looks like a query bug?
     (no, user error - wasn't using act= tags)
     - need to make sure the tagging instructions are as clear as poss
@@ -242,3 +262,4 @@ x `context` text alongside summaries? (no, summary is good now)
 . readme note Shinn et al. "Reflexion" (very cool, and a lot earlier)
 . add persistence instructions for Kiro
 . small extension to bootstrap instructions
+. `keep now -f` removed (not useful)

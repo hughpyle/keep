@@ -2049,6 +2049,7 @@ class Keeper:
         since: Optional[str] = None,
         order_by: str = "updated",
         collection: Optional[str] = None,
+        include_history: bool = False,
     ) -> list[Item]:
         """
         List recent items ordered by timestamp.
@@ -2058,6 +2059,7 @@ class Keeper:
             since: Only include items updated since (ISO duration like P3D, or date)
             order_by: Sort order - "updated" (default) or "accessed"
             collection: Collection to query (uses default if not specified)
+            include_history: Include archived versions alongside current items
 
         Returns:
             List of Items, most recent first
@@ -2066,7 +2068,10 @@ class Keeper:
 
         # Fetch extra when filtering by date
         fetch_limit = limit * 3 if since is not None else limit
-        records = self._document_store.list_recent(coll, fetch_limit, order_by=order_by)
+        if include_history:
+            records = self._document_store.list_recent_with_history(coll, fetch_limit, order_by=order_by)
+        else:
+            records = self._document_store.list_recent(coll, fetch_limit, order_by=order_by)
         items = [_record_to_item(rec) for rec in records]
 
         # Apply date filter if specified

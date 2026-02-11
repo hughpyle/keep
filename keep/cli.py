@@ -332,9 +332,9 @@ def main_callback(
         kp = _get_keeper(None, "default")
         item = kp.get_now()
         version_nav = kp.get_version_nav(NOWDOC_ID, None, collection="default")
-        similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection="default")
+        similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection="default")  # bare `keep`: default 3
         similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-        meta_sections = kp.resolve_meta(NOWDOC_ID, collection="default")
+        meta_sections = kp.resolve_meta(NOWDOC_ID, limit_per_doc=3, collection="default")
         typer.echo(_format_item(
             item,
             as_json=_get_json_output(),
@@ -691,6 +691,10 @@ def list_recent(
         help="Sort order: 'updated' (default) or 'accessed'"
     )] = "updated",
     since: SinceOption = None,
+    history: Annotated[bool, typer.Option(
+        "--history",
+        help="Include archived versions in listing"
+    )] = False,
 ):
     """
     List recent items, filter by tags, or list tag keys/values.
@@ -705,6 +709,7 @@ def list_recent(
         keep list --tags=              # List all tag keys
         keep list --tags=foo           # List values for tag 'foo'
         keep list --since P3D          # Items updated in last 3 days
+        keep list --history            # Include archived versions
     """
     kp = _get_keeper(store, collection)
 
@@ -751,7 +756,7 @@ def list_recent(
         return
 
     # Default: recent items
-    results = kp.list_recent(limit=limit, since=since, order_by=sort, collection=collection)
+    results = kp.list_recent(limit=limit, since=since, order_by=sort, collection=collection, include_history=history)
     typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
@@ -968,6 +973,10 @@ def now(
         "--tag", "-t",
         help="Set tag (with content) or filter (without content)"
     )] = None,
+    limit: Annotated[int, typer.Option(
+        "--limit", "-n",
+        help="Max similar/meta items to show (default 3)"
+    )] = 3,
 ):
     """
     Get or set the current working intentions.
@@ -986,6 +995,7 @@ def now(
         keep now "What's important now"  # Update intentions
         keep now "Auth work" -t project=myapp  # Update with tag
         keep now -t project=myapp        # Find version with tag
+        keep now -n 10                   # Show with more similar/meta items
         keep now --reset                 # Reset to default from system
         keep now -V 1                    # Previous version
         keep now --history               # List all versions
@@ -1071,6 +1081,10 @@ def now(
         ))
         return
 
+    # Read from stdin if piped and no content argument
+    if content is None and not reset and not sys.stdin.isatty():
+        content = sys.stdin.read().strip() or None
+
     # Determine if we're getting or setting
     setting = content is not None or reset
 
@@ -1095,9 +1109,9 @@ def now(
         item = kp.set_now(new_content, tags=parsed_tags or None)
 
         # Surface similar items and meta sections (occasion for reflection)
-        similar_items = kp.get_similar_for_display(item.id, limit=3, collection=collection)
+        similar_items = kp.get_similar_for_display(item.id, limit=limit, collection=collection)
         similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-        meta_sections = kp.resolve_meta(item.id, collection=collection)
+        meta_sections = kp.resolve_meta(item.id, limit_per_doc=limit, collection=collection)
 
         typer.echo(_format_item(
             item,
@@ -1122,9 +1136,9 @@ def now(
             # Standard: get current with version navigation and similar items
             item = kp.get_now()
             version_nav = kp.get_version_nav(NOWDOC_ID, None, collection=collection)
-            similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3, collection=collection)
+            similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=limit, collection=collection)
             similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-            meta_sections = kp.resolve_meta(NOWDOC_ID, collection=collection)
+            meta_sections = kp.resolve_meta(NOWDOC_ID, limit_per_doc=limit, collection=collection)
             typer.echo(_format_item(
                 item,
                 as_json=_get_json_output(),
