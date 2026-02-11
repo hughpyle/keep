@@ -1,4 +1,10 @@
-"""Tests for Keeper class."""
+"""Tests for Keeper class.
+
+These tests use a real Keeper with real embedding providers.
+They are skipped when no embedding provider is available (no API keys,
+no local ML extras). Run with `keep-skill[local]` installed or with
+an API key set to enable these tests.
+"""
 
 import tempfile
 from pathlib import Path
@@ -6,6 +12,26 @@ from pathlib import Path
 import pytest
 
 from keep.api import Keeper
+
+
+def _has_embedding_provider() -> bool:
+    """Check if an embedding provider can be configured."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            kp = Keeper(store_path=Path(tmpdir))
+            if kp._config.embedding is None:
+                kp.close()
+                return False
+            kp.close()
+            return True
+        except Exception:
+            return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _has_embedding_provider(),
+    reason="No embedding provider available (install keep-skill[local] or set API key)",
+)
 
 
 @pytest.fixture(scope="module")

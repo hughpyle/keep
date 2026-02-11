@@ -51,10 +51,6 @@ kp = Keeper()
 # Custom store location
 kp = Keeper(store_path="/path/to/store")
 
-# Override collection
-import os
-os.environ["KEEP_COLLECTION"] = "work"
-kp = Keeper()  # Uses work collection
 ```
 
 ### Core Operations
@@ -299,7 +295,7 @@ except Exception as e:
 Common errors:
 - Missing provider configuration (no API key or local models)
 - Invalid URI format
-- Embedding dimension mismatch (changing models requires new collection)
+- Embedding provider changes (auto-migrated, use `kp.reindex()` if needed)
 
 ## See Also
 

@@ -363,11 +363,7 @@ Same content = same ID = enables versioning via tag changes.
 * Retrieve by semantic similarity, full-text search, or tags.
 * Transfer context between agents or sessions seamlessly.
 
-The data is partitioned by *collection*. Collection names are lowercase ASCII with underscores.
-
 ## Functionality
-
-within a collection:
 
 `update(id: URI, tags: dict)` - inserts or updates the document at `URI` into the store.  This process delegates the work of embedding, summarization and tagging, then updates the store.  Any `tags` are merged with existing tags (overlay, not replace) and stored alongside the "derived tags" produced by the tagging service.
 
@@ -577,7 +573,6 @@ See [QUICKSTART.md](QUICKSTART.md#provider-options) for available embedding, sum
 | Situation | Behavior |
 |-----------|----------|
 | Store path doesn't exist | Created automatically |
-| Collection doesn't exist | Created on first `update()` |
 | URI unreachable | `IOError` raised from `update()` |
 | Item not found | `get()` returns `None`, `find_similar()` raises `KeyError` |
 | No results | Empty list returned |

@@ -177,7 +177,6 @@ MAX_SUMMARY_ATTEMPTS = 5
 
 
 # Collection name validation: lowercase ASCII and underscores only
-COLLECTION_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Environment variable prefix for auto-applied tags
 ENV_TAG_PREFIX = "KEEP_TAG_"
@@ -398,7 +397,6 @@ class Keeper:
     def __init__(
         self,
         store_path: Optional[str | Path] = None,
-        collection: str = "default",
         decay_half_life_days: float = 30.0
     ) -> None:
         """
@@ -407,18 +405,10 @@ class Keeper:
         Args:
             store_path: Path to store directory. Uses default if not specified.
                        Overrides any store.path setting in config.
-            collection: Default collection name.
             decay_half_life_days: Memory decay half-life in days (ACT-R model).
                 After this many days, an item's effective relevance is halved.
                 Set to 0 or negative to disable decay.
         """
-        # Validate collection name
-        if not COLLECTION_NAME_PATTERN.match(collection):
-            raise ValueError(
-                f"Invalid collection name '{collection}'. "
-                "Must be lowercase ASCII, starting with a letter."
-            )
-        self._default_collection = collection
         self._decay_half_life_days = decay_half_life_days
 
         # Resolve config and store paths
@@ -471,9 +461,10 @@ class Keeper:
         # Check store consistency and reconcile in background if needed
         if self._check_store_consistency():
             import threading
-            coll = self._resolve_collection(None)
+            chroma_coll = self._resolve_chroma_collection()
+            doc_coll = self._resolve_doc_collection()
             threading.Thread(
-                target=self._auto_reconcile_safe, args=(coll,), daemon=True
+                target=self._auto_reconcile_safe, args=(chroma_coll, doc_coll), daemon=True
             ).start()
 
         # System doc migration deferred to first write (needs embeddings)
@@ -490,11 +481,12 @@ class Keeper:
         embedding provider is available.
         """
         try:
-            coll = self._resolve_collection(None)
-            doc_ids = self._document_store.list_ids(coll)
-            missing = self._store.find_missing_ids(coll, doc_ids)
+            chroma_coll = self._resolve_chroma_collection()
+            doc_coll = self._resolve_doc_collection()
+            doc_ids = self._document_store.list_ids(doc_coll)
+            missing = self._store.find_missing_ids(chroma_coll, doc_ids)
             # Check for orphaned ChromaDB entries
-            chroma_ids = self._store.list_ids(coll)
+            chroma_ids = self._store.list_ids(chroma_coll)
             doc_id_set = set(doc_ids)
             orphaned = [cid for cid in chroma_ids if cid not in doc_id_set]
             if missing or orphaned:
@@ -507,26 +499,35 @@ class Keeper:
             logger.debug("Store consistency check failed: %s", e)
         return False
 
-    def _auto_reconcile_safe(self, collection: str) -> None:
+    def _auto_reconcile_safe(self, chroma_coll: str, doc_coll: str) -> None:
         """Background-safe wrapper for auto-reconcile. Silently handles failures."""
         try:
-            self._auto_reconcile(collection)
+            self._auto_reconcile(chroma_coll, doc_coll)
         except Exception as e:
             logger.debug("Background reconcile failed: %s", e)
 
-    def _auto_reconcile(self, collection: str) -> None:
-        """Fix store divergence using summaries (no content re-fetch needed)."""
-        doc_ids = self._document_store.list_ids(collection)
-        missing = self._store.find_missing_ids(collection, doc_ids)
+    def _auto_reconcile(self, chroma_coll: str, doc_coll: str) -> None:
+        """Fix store divergence using summaries (no content re-fetch needed).
+
+        Requires an embedding provider to re-embed missing items.
+        Skips entirely if no provider is configured (avoids removing orphans
+        without being able to re-embed missing items).
+        """
+        if self._config.embedding is None:
+            logger.debug("Skipping reconciliation: no embedding provider configured")
+            return
+
+        doc_ids = self._document_store.list_ids(doc_coll)
+        missing = self._store.find_missing_ids(chroma_coll, doc_ids)
 
         # Items in DocumentStore but missing from ChromaDB — re-embed summary
         for doc_id in missing:
             try:
-                record = self._document_store.get(collection, doc_id)
+                record = self._document_store.get(doc_coll, doc_id)
                 if record:
                     embedding = self._get_embedding_provider().embed(record.summary)
                     self._store.upsert(
-                        collection=collection, id=doc_id,
+                        collection=chroma_coll, id=doc_id,
                         embedding=embedding, summary=record.summary, tags=record.tags,
                     )
                     logger.info("Reconciled missing item: %s", doc_id)
@@ -534,12 +535,12 @@ class Keeper:
                 logger.warning("Failed to reconcile %s: %s", doc_id, e)
 
         # Items in ChromaDB but not in DocumentStore — remove orphaned embeddings
-        chroma_ids = self._store.list_ids(collection)
+        chroma_ids = self._store.list_ids(chroma_coll)
         doc_id_set = set(doc_ids)
         for orphan_id in chroma_ids:
             if orphan_id not in doc_id_set:
                 try:
-                    self._store.delete(collection, orphan_id)
+                    self._store.delete(chroma_coll, orphan_id)
                     logger.info("Removed orphaned embedding: %s", orphan_id)
                 except Exception as e:
                     logger.warning("Failed to remove orphan %s: %s", orphan_id, e)
@@ -588,7 +589,7 @@ class Keeper:
                         self.delete(doc.id)
                         stats["cleaned"] += 1
                         logger.info("Cleaned up old system doc: %s", doc.id)
-        except (OSError, ValueError, KeyError) as e:
+        except (OSError, ValueError, KeyError, RuntimeError) as e:
             logger.debug("Error scanning old system docs: %s", e)
 
         # Second pass: rename old prefixes to new
@@ -604,35 +605,36 @@ class Keeper:
                 elif old_item:
                     self.delete(old_id)
                     stats["cleaned"] += 1
-            except (OSError, ValueError, KeyError) as e:
+            except (OSError, ValueError, KeyError, RuntimeError) as e:
                 logger.debug("Error renaming %s: %s", old_id, e)
 
         # Rename _text:hash → %hash (transfer embeddings directly, no re-embedding)
         # Preserves original timestamps — these are user memories with meaningful dates
         try:
-            coll = self._resolve_collection(None)
-            old_text_docs = self._document_store.query_by_id_prefix(coll, "_text:")
+            doc_coll = self._resolve_doc_collection()
+            chroma_coll_name = self._resolve_chroma_collection()
+            old_text_docs = self._document_store.query_by_id_prefix(doc_coll, "_text:")
             for rec in old_text_docs:
                 new_id = "%" + rec.id[len("_text:"):]
-                if not self._document_store.get(coll, new_id):
+                if not self._document_store.get(doc_coll, new_id):
                     # Direct SQL copy preserving created_at and updated_at
                     tags_json = json.dumps(rec.tags, ensure_ascii=False)
                     self._document_store._conn.execute("""
                         INSERT OR REPLACE INTO documents
                         (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (new_id, coll, rec.summary, tags_json,
+                    """, (new_id, doc_coll, rec.summary, tags_json,
                           rec.created_at, rec.updated_at, rec.content_hash, rec.accessed_at))
                     self._document_store._conn.commit()
                     # Transfer embedding from ChromaDB (no re-embedding needed)
                     try:
-                        chroma_coll = self._store._get_collection(coll)
-                        result = chroma_coll.get(
+                        chroma_coll_obj = self._store._get_collection(chroma_coll_name)
+                        result = chroma_coll_obj.get(
                             ids=[rec.id],
                             include=["embeddings", "metadatas", "documents"])
                         if result["ids"] and result["embeddings"]:
                             meta = result["metadatas"][0] or {}
-                            chroma_coll.upsert(
+                            chroma_coll_obj.upsert(
                                 ids=[new_id],
                                 embeddings=[result["embeddings"][0]],
                                 documents=[result["documents"][0] or rec.summary],
@@ -670,7 +672,7 @@ class Keeper:
                 tags["bundled_hash"] = bundled_hash
 
                 # Check for user edits before overwriting
-                existing_doc = self._document_store.get(coll, new_id)
+                existing_doc = self._document_store.get(doc_coll, new_id)
                 if existing_doc:
                     prev_hash = existing_doc.tags.get("bundled_hash")
                     if prev_hash and existing_doc.content_hash != prev_hash:
@@ -679,15 +681,29 @@ class Keeper:
                         logger.info("Preserving user-edited system doc: %s", new_id)
                         continue
 
-                # Store via remember() for embedding/versioning, then patch
-                # summary to full verbatim content (system docs are reference
-                # material — never summarize them)
-                self.remember(content, id=new_id, tags=tags)
+                # Store to DocumentStore directly (always works, no embedding needed).
+                # System docs are reference material — store full verbatim content.
+                from .types import utc_now as _utc_now
+                now_ts = _utc_now()
+                tags.setdefault("_created", now_ts)
+                tags["_updated"] = now_ts
+                tags["_updated_date"] = now_ts[:10]
+                tags["_source"] = "inline"
                 self._document_store.upsert(
-                    collection=coll, id=new_id, summary=content,
-                    tags=self._document_store.get(coll, new_id).tags,
-                    content_hash=bundled_hash,
+                    collection=doc_coll, id=new_id, summary=content,
+                    tags=tags, content_hash=bundled_hash,
                 )
+                # Also embed to ChromaDB if provider is available
+                try:
+                    embedding = self._get_embedding_provider().embed(content)
+                    self._store.upsert(
+                        collection=chroma_coll_name, id=new_id,
+                        embedding=embedding, summary=content, tags=tags,
+                    )
+                except (RuntimeError, Exception) as e:
+                    # No embedding provider or embedding failed — that's fine,
+                    # reconciliation will pick it up later
+                    logger.debug("Skipped embedding for system doc %s: %s", new_id, e)
                 if existing_doc:
                     stats["migrated"] += 1
                     logger.info("Updated system doc: %s", new_id)
@@ -718,9 +734,13 @@ class Keeper:
         if self._embedding_provider is None:
             if self._config.embedding is None:
                 raise RuntimeError(
-                    "No embedding provider configured. Install one with:\n"
-                    "  pip install 'keep-skill[local]'   # local models\n"
-                    "Or set VOYAGE_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY."
+                    "No embedding provider configured.\n"
+                    "\n"
+                    "To use keep, configure a provider:\n"
+                    "  API-based:  export VOYAGE_API_KEY=...  (or OPENAI_API_KEY, GEMINI_API_KEY)\n"
+                    "  Local:      pip install 'keep-skill[local]'\n"
+                    "\n"
+                    "Read-only operations (get, list, find --text) work without embeddings."
                 )
             registry = get_registry()
             base_provider = registry.create_embedding(
@@ -843,10 +863,8 @@ class Keeper:
         Validate embedding provider matches stored identity, or record it.
 
         On first use, records the embedding identity to config.
-        On subsequent uses, validates that the current provider matches.
-
-        Raises:
-            ValueError: If embedding provider changed incompatibly
+        On subsequent uses, if the provider changed, silently updates config
+        and triggers background reindex into the new ChromaDB collection.
         """
         # Get current provider's identity
         current = EmbeddingIdentity(
@@ -862,34 +880,191 @@ class Keeper:
             self._config.embedding_identity = current
             save_config(self._config)
         else:
-            # Validate compatibility
+            # Check for provider change
             if (stored.provider != current.provider or
                 stored.model != current.model or
                 stored.dimension != current.dimension):
-                raise ValueError(
-                    f"Embedding provider mismatch!\n"
-                    f"  Stored: {stored.provider}/{stored.model} ({stored.dimension}d)\n"
-                    f"  Current: {current.provider}/{current.model} ({current.dimension}d)\n"
-                    f"\n"
-                    f"Changing embedding providers invalidates existing embeddings.\n"
-                    f"Options:\n"
-                    f"  1. Use the original provider\n"
-                    f"  2. Delete .keep/ and re-index\n"
-                    f"  3. (Future) Run migration to re-embed with new provider"
+                logger.info(
+                    "Embedding provider changed: %s/%s (%dd) → %s/%s (%dd)",
+                    stored.provider, stored.model, stored.dimension,
+                    current.provider, current.model, current.dimension,
                 )
+                self._config.embedding_identity = current
+                save_config(self._config)
+                # Update store dimension for new model
+                self._store.reset_embedding_dimension(current.dimension)
+                # Trigger background reindex into new ChromaDB collection
+                self._trigger_background_reindex()
+
+    def _trigger_background_reindex(self) -> None:
+        """Spawn background thread to populate new ChromaDB collection from DocumentStore."""
+        import threading
+        chroma_coll = self._resolve_chroma_collection()
+        doc_coll = self._resolve_doc_collection()
+        threading.Thread(
+            target=self._background_reindex_safe,
+            args=(chroma_coll, doc_coll),
+            daemon=True,
+        ).start()
+
+    def _background_reindex_safe(self, chroma_coll: str, doc_coll: str) -> None:
+        """Background-safe wrapper for reindex. Silently handles failures."""
+        try:
+            self._background_reindex(chroma_coll, doc_coll)
+        except Exception as e:
+            logger.warning("Background reindex failed: %s", e)
+
+    def _background_reindex(self, chroma_coll: str, doc_coll: str) -> None:
+        """Populate ChromaDB collection from DocumentStore summaries using batch embedding."""
+        doc_ids = self._document_store.list_ids(doc_coll)
+        if not doc_ids:
+            return
+
+        # Find which IDs are missing from ChromaDB
+        missing = self._store.find_missing_ids(chroma_coll, doc_ids)
+        if not missing:
+            logger.info("Background reindex: all %d items already indexed", len(doc_ids))
+            return
+
+        logger.info("Background reindex: %d of %d items to index", len(missing), len(doc_ids))
+
+        # Collect records to embed
+        records = []
+        for doc_id in missing:
+            record = self._document_store.get(doc_coll, doc_id)
+            if record:
+                records.append((doc_id, record))
+
+        # Batch embed and upsert
+        BATCH_SIZE = 50
+        indexed = 0
+        provider = self._get_embedding_provider()
+
+        for i in range(0, len(records), BATCH_SIZE):
+            batch = records[i:i + BATCH_SIZE]
+            try:
+                summaries = [rec.summary for _, rec in batch]
+                embeddings = provider.embed_batch(summaries)
+                for (doc_id, rec), embedding in zip(batch, embeddings):
+                    self._store.upsert(
+                        collection=chroma_coll, id=doc_id,
+                        embedding=embedding, summary=rec.summary, tags=rec.tags,
+                    )
+                    indexed += 1
+            except Exception:
+                # Fall back to individual embedding on batch failure
+                for doc_id, rec in batch:
+                    try:
+                        embedding = provider.embed(rec.summary)
+                        self._store.upsert(
+                            collection=chroma_coll, id=doc_id,
+                            embedding=embedding, summary=rec.summary, tags=rec.tags,
+                        )
+                        indexed += 1
+                    except Exception as e:
+                        logger.warning("Reindex failed for %s: %s", doc_id, e)
+
+        # Also handle versioned embeddings (@v{N})
+        for doc_id, record in records:
+            for vi in self._document_store.list_versions(doc_coll, doc_id, limit=100):
+                try:
+                    emb = provider.embed(vi.summary)
+                    versioned_id = f"{doc_id}@v{vi.version}"
+                    self._store.upsert_version(
+                        collection=chroma_coll, id=doc_id,
+                        version=vi.version, embedding=emb,
+                        summary=vi.summary, tags=vi.tags,
+                    )
+                except Exception:
+                    pass  # Version embedding failure is non-critical
+
+        logger.info("Background reindex complete: %d items indexed", indexed)
+
+    def reindex(self) -> dict:
+        """
+        Rebuild search index with current embedding provider (foreground).
+
+        Re-embeds all items from DocumentStore into the current ChromaDB
+        collection. Use as an explicit backstop when background reindex
+        didn't complete.
+
+        Returns:
+            Dict with stats: total, indexed, failed
+        """
+        chroma_coll = self._resolve_chroma_collection()
+        doc_coll = self._resolve_doc_collection()
+
+        doc_ids = self._document_store.list_ids(doc_coll)
+        total = len(doc_ids)
+        indexed = 0
+        failed = 0
+
+        BATCH_SIZE = 50
+        provider = self._get_embedding_provider()
+
+        # Collect all records
+        records = []
+        for doc_id in doc_ids:
+            record = self._document_store.get(doc_coll, doc_id)
+            if record:
+                records.append((doc_id, record))
+
+        # Batch embed and upsert
+        for i in range(0, len(records), BATCH_SIZE):
+            batch = records[i:i + BATCH_SIZE]
+            try:
+                summaries = [rec.summary for _, rec in batch]
+                embeddings = provider.embed_batch(summaries)
+                for (doc_id, rec), embedding in zip(batch, embeddings):
+                    self._store.upsert(
+                        collection=chroma_coll, id=doc_id,
+                        embedding=embedding, summary=rec.summary, tags=rec.tags,
+                    )
+                    indexed += 1
+            except Exception:
+                for doc_id, rec in batch:
+                    try:
+                        embedding = provider.embed(rec.summary)
+                        self._store.upsert(
+                            collection=chroma_coll, id=doc_id,
+                            embedding=embedding, summary=rec.summary, tags=rec.tags,
+                        )
+                        indexed += 1
+                    except Exception as e:
+                        logger.warning("Reindex failed for %s: %s", doc_id, e)
+                        failed += 1
+
+        # Also re-embed versions
+        version_count = 0
+        for doc_id, record in records:
+            for vi in self._document_store.list_versions(doc_coll, doc_id, limit=100):
+                try:
+                    emb = provider.embed(vi.summary)
+                    self._store.upsert_version(
+                        collection=chroma_coll, id=doc_id,
+                        version=vi.version, embedding=emb,
+                        summary=vi.summary, tags=vi.tags,
+                    )
+                    version_count += 1
+                except Exception:
+                    pass
+
+        return {"total": total, "indexed": indexed, "failed": failed, "versions": version_count}
 
     @property
     def embedding_identity(self) -> EmbeddingIdentity | None:
         """Current embedding identity (provider, model, dimension)."""
         return self._config.embedding_identity
     
-    def _resolve_collection(self, collection: Optional[str]) -> str:
-        """Resolve collection name, validating if provided."""
-        if collection is None:
-            return self._default_collection
-        if not COLLECTION_NAME_PATTERN.match(collection):
-            raise ValueError(f"Invalid collection name: {collection}")
-        return collection
+    def _resolve_chroma_collection(self) -> str:
+        """ChromaDB collection name derived from embedding identity."""
+        if self._config.embedding_identity:
+            return self._config.embedding_identity.key
+        return "default"
+
+    def _resolve_doc_collection(self) -> str:
+        """DocumentStore collection — always 'default'."""
+        return "default"
     
     # -------------------------------------------------------------------------
     # Write Operations
@@ -906,7 +1081,8 @@ class Keeper:
         collection: Optional[str] = None,
     ) -> Item:
         """Core upsert logic shared by update() and remember()."""
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
 
         # Deferred init tasks (run on first write when embeddings are available)
         if self._needs_sysdoc_migration:
@@ -915,11 +1091,11 @@ class Keeper:
 
         # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
         existing_tags = {}
-        existing_doc = self._document_store.get(coll, id)
+        existing_doc = self._document_store.get(doc_coll, id)
         if existing_doc:
             existing_tags = filter_non_system_tags(existing_doc.tags)
         else:
-            existing = self._store.get(coll, id)
+            existing = self._store.get(chroma_coll, id)
             if existing:
                 existing_tags = filter_non_system_tags(existing.tags)
 
@@ -957,7 +1133,7 @@ class Keeper:
 
         # Get embedding: reuse stored if content unchanged, compute if new/changed
         if content_unchanged:
-            embedding = self._store.get_embedding(coll, id)
+            embedding = self._store.get_embedding(chroma_coll, id)
             if embedding is None:
                 embedding = self._get_embedding_provider().embed(content)
         else:
@@ -979,21 +1155,21 @@ class Keeper:
             logger.debug("Tags changed, queueing re-summarization for %s", id)
             final_summary = existing_doc.summary
             if len(content) > max_len:
-                self._pending_queue.enqueue(id, coll, content)
+                self._pending_queue.enqueue(id, doc_coll, content)
         elif len(content) <= max_len:
             final_summary = content
         else:
             final_summary = content[:max_len] + "..."
-            self._pending_queue.enqueue(id, coll, content)
+            self._pending_queue.enqueue(id, doc_coll, content)
 
         # Save old embedding before ChromaDB upsert overwrites it (for version archival)
         old_embedding = None
         if existing_doc is not None and not content_unchanged:
-            old_embedding = self._store.get_embedding(coll, id)
+            old_embedding = self._store.get_embedding(chroma_coll, id)
 
         # Dual-write: document store (canonical) + ChromaDB (embedding index)
         result, content_changed = self._document_store.upsert(
-            collection=coll,
+            collection=doc_coll,
             id=id,
             summary=final_summary,
             tags=merged_tags,
@@ -1001,7 +1177,7 @@ class Keeper:
         )
 
         self._store.upsert(
-            collection=coll,
+            collection=chroma_coll,
             id=id,
             embedding=embedding,
             summary=final_summary,
@@ -1010,12 +1186,12 @@ class Keeper:
 
         # If content changed and we archived a version, also store versioned embedding
         if existing_doc is not None and content_changed:
-            version_count = self._document_store.version_count(coll, id)
+            version_count = self._document_store.version_count(doc_coll, id)
             if version_count > 0:
                 if old_embedding is None:
                     old_embedding = self._get_embedding_provider().embed(existing_doc.summary)
                 self._store.upsert_version(
-                    collection=coll,
+                    collection=chroma_coll,
                     id=id,
                     version=version_count,
                     embedding=old_embedding,
@@ -1213,7 +1389,8 @@ class Keeper:
             since: Only include items updated since (ISO duration like P3D, or date)
             collection: Target collection
         """
-        coll = self._resolve_collection(collection)
+        chroma_coll = self._resolve_chroma_collection()
+        doc_coll = self._resolve_doc_collection()
 
         # Embed query
         embedding = self._get_embedding_provider().embed(query)
@@ -1222,7 +1399,7 @@ class Keeper:
         fetch_limit = limit * 2 if self._decay_half_life_days > 0 else limit
         if since is not None:
             fetch_limit = max(fetch_limit, limit * 3)  # Fetch more when filtering
-        results = self._store.query_embedding(coll, embedding, limit=fetch_limit)
+        results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit)
 
         # Convert to Items and apply decay
         items = [r.to_item() for r in results]
@@ -1235,7 +1412,7 @@ class Keeper:
         final = items[:limit]
         # Touch accessed_at for returned items
         if final:
-            self._document_store.touch_many(coll, [i.id for i in final])
+            self._document_store.touch_many(doc_coll, [i.id for i in final])
         return final
 
     def find_similar(
@@ -1257,20 +1434,21 @@ class Keeper:
             include_self: Include the queried item in results
             collection: Target collection
         """
-        coll = self._resolve_collection(collection)
+        chroma_coll = self._resolve_chroma_collection()
+        doc_coll = self._resolve_doc_collection()
 
         # Get the item's stored embedding from ChromaDB
-        item = self._store.get(coll, id)
+        item = self._store.get(chroma_coll, id)
         if item is None:
             raise KeyError(f"Item not found: {id}")
 
-        embedding = self._store.get_embedding(coll, id)
+        embedding = self._store.get_embedding(chroma_coll, id)
         if embedding is None:
             embedding = self._get_embedding_provider().embed(item.summary)
         actual_limit = limit + 1 if not include_self else limit
         if since is not None:
             actual_limit = max(actual_limit, limit * 3)
-        results = self._store.query_embedding(coll, embedding, limit=actual_limit)
+        results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit)
 
         # Filter self if needed
         if not include_self:
@@ -1287,7 +1465,7 @@ class Keeper:
         final = items[:limit]
         # Touch accessed_at for returned items
         if final:
-            self._document_store.touch_many(coll, [i.id for i in final])
+            self._document_store.touch_many(doc_coll, [i.id for i in final])
         return final
 
     def get_similar_for_display(
@@ -1311,16 +1489,16 @@ class Keeper:
         Returns:
             List of similar items, one per unique base document
         """
-        coll = self._resolve_collection(collection)
+        chroma_coll = self._resolve_chroma_collection()
 
         # Get the stored embedding (no re-embedding)
-        embedding = self._store.get_embedding(coll, id)
+        embedding = self._store.get_embedding(chroma_coll, id)
         if embedding is None:
             return []
 
         # Fetch more than needed to account for version filtering
         fetch_limit = limit * 3
-        results = self._store.query_embedding(coll, embedding, limit=fetch_limit)
+        results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit)
 
         # Convert to Items
         items = [r.to_item() for r in results]
@@ -1367,8 +1545,8 @@ class Keeper:
         if not version_tag:
             return 0  # Current version
         base_id = item.tags.get("_base_id", item.id)
-        coll = self._resolve_collection(collection)
-        version_count = self._document_store.version_count(coll, base_id)
+        doc_coll = self._resolve_doc_collection()
+        version_count = self._document_store.version_count(doc_coll, base_id)
         return version_count - int(version_tag) + 1
 
     def resolve_meta(
@@ -1394,10 +1572,10 @@ class Keeper:
         Returns:
             Dict of {meta_name: [matching Items]}. Empty results omitted.
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
 
         # Find all .meta/* documents
-        meta_records = self._document_store.query_by_id_prefix(coll, ".meta/")
+        meta_records = self._document_store.query_by_id_prefix(doc_coll, ".meta/")
         if not meta_records:
             return {}
 
@@ -1544,11 +1722,12 @@ class Keeper:
             since: Only include items updated since (ISO duration like P3D, or date)
             collection: Target collection
         """
-        coll = self._resolve_collection(collection)
+        chroma_coll = self._resolve_chroma_collection()
+        doc_coll = self._resolve_doc_collection()
 
         # Fetch extra when filtering by date
         fetch_limit = limit * 3 if since is not None else limit
-        results = self._store.query_fulltext(coll, query, limit=fetch_limit)
+        results = self._store.query_fulltext(chroma_coll, query, limit=fetch_limit)
         items = [r.to_item() for r in results]
 
         # Apply date filter if specified
@@ -1558,7 +1737,7 @@ class Keeper:
         final = items[:limit]
         # Touch accessed_at for returned items
         if final:
-            self._document_store.touch_many(coll, [i.id for i in final])
+            self._document_store.touch_many(doc_coll, [i.id for i in final])
         return final
 
     def query_tag(
@@ -1592,7 +1771,8 @@ class Keeper:
             collection: Target collection
             **tags: Additional tag filters as keyword arguments
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
 
         # Key-only query: find docs that have this tag key (any value)
         # Uses DocumentStore which supports efficient SQL date filtering
@@ -1600,7 +1780,7 @@ class Keeper:
             # Convert since to cutoff date for SQL query
             since_date = _parse_since(since) if since else None
             docs = self._document_store.query_by_tag_key(
-                coll, key, limit=limit, since_date=since_date
+                doc_coll, key, limit=limit, since_date=since_date
             )
             return [_record_to_item(d) for d in docs]
 
@@ -1628,7 +1808,7 @@ class Keeper:
 
         # Fetch extra when filtering by date
         fetch_limit = limit * 3 if since is not None else limit
-        results = self._store.query_metadata(coll, where, limit=fetch_limit)
+        results = self._store.query_metadata(chroma_coll, where, limit=fetch_limit)
         items = [r.to_item() for r in results]
 
         # Apply date filter if specified (post-filter)
@@ -1654,12 +1834,12 @@ class Keeper:
         Returns:
             Sorted list of distinct keys or values
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
 
         if key is None:
-            return self._document_store.list_distinct_tag_keys(coll)
+            return self._document_store.list_distinct_tag_keys(doc_coll)
         else:
-            return self._document_store.list_distinct_tag_values(coll, key)
+            return self._document_store.list_distinct_tag_values(doc_coll, key)
     
     # -------------------------------------------------------------------------
     # Direct Access
@@ -1672,16 +1852,17 @@ class Keeper:
         Reads from document store (canonical), falls back to ChromaDB for legacy data.
         Touches accessed_at on successful retrieval.
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
 
         # Try document store first (canonical)
-        doc_record = self._document_store.get(coll, id)
+        doc_record = self._document_store.get(doc_coll, id)
         if doc_record:
-            self._document_store.touch(coll, id)
+            self._document_store.touch(doc_coll, id)
             return _record_to_item(doc_record)
 
         # Fall back to ChromaDB for legacy data
-        result = self._store.get(coll, id)
+        result = self._store.get(chroma_coll, id)
         if result is None:
             return None
         return result.to_item()
@@ -1710,14 +1891,14 @@ class Keeper:
         Returns:
             Item if found, None if version doesn't exist
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
 
         if offset == 0:
             # Current version
             return self.get(id, collection=collection)
 
         # Get archived version
-        version_info = self._document_store.get_version(coll, id, offset)
+        version_info = self._document_store.get_version(doc_coll, id, offset)
         if version_info is None:
             return None
 
@@ -1748,8 +1929,8 @@ class Keeper:
         Returns:
             List of VersionInfo, newest archived first
         """
-        coll = self._resolve_collection(collection)
-        return self._document_store.list_versions(coll, id, limit)
+        doc_coll = self._resolve_doc_collection()
+        return self._document_store.list_versions(doc_coll, id, limit)
 
     def get_version_nav(
         self,
@@ -1771,16 +1952,17 @@ class Keeper:
         Returns:
             Dict with 'prev' and optionally 'next' lists of VersionInfo.
         """
-        coll = self._resolve_collection(collection)
-        return self._document_store.get_version_nav(coll, id, current_version, limit)
+        doc_coll = self._resolve_doc_collection()
+        return self._document_store.get_version_nav(doc_coll, id, current_version, limit)
 
     def exists(self, id: str, *, collection: Optional[str] = None) -> bool:
         """
         Check if an item exists in the store.
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
         # Check document store first, then ChromaDB
-        return self._document_store.exists(coll, id) or self._store.exists(coll, id)
+        return self._document_store.exists(doc_coll, id) or self._store.exists(chroma_coll, id)
     
     def delete(
         self,
@@ -1800,10 +1982,11 @@ class Keeper:
         Returns:
             True if item existed and was deleted.
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
         # Delete from both stores (including versions)
-        doc_deleted = self._document_store.delete(coll, id, delete_versions=delete_versions)
-        chroma_deleted = self._store.delete(coll, id, delete_versions=delete_versions)
+        doc_deleted = self._document_store.delete(doc_coll, id, delete_versions=delete_versions)
+        chroma_deleted = self._store.delete(chroma_coll, id, delete_versions=delete_versions)
         return doc_deleted or chroma_deleted
 
     def revert(self, id: str, *, collection: Optional[str] = None) -> Optional[Item]:
@@ -1812,9 +1995,10 @@ class Keeper:
 
         Returns the restored item, or None if the item was fully deleted.
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
 
-        version_count = self._document_store.version_count(coll, id)
+        version_count = self._document_store.version_count(doc_coll, id)
 
         if version_count == 0:
             # No history — full delete
@@ -1825,10 +2009,10 @@ class Keeper:
         versioned_chroma_id = f"{id}@v{version_count}"
 
         # Get the archived embedding from ChromaDB
-        archived_embedding = self._store.get_embedding(coll, versioned_chroma_id)
+        archived_embedding = self._store.get_embedding(chroma_coll, versioned_chroma_id)
 
         # Restore in DocumentStore (promotes latest version to current)
-        restored = self._document_store.restore_latest_version(coll, id)
+        restored = self._document_store.restore_latest_version(doc_coll, id)
 
         if restored is None:
             # Shouldn't happen given version_count > 0, but be safe
@@ -1838,16 +2022,16 @@ class Keeper:
         # Update ChromaDB: replace current with restored version's data
         if archived_embedding:
             self._store.upsert(
-                collection=coll, id=id,
+                collection=chroma_coll, id=id,
                 embedding=archived_embedding,
                 summary=restored.summary,
                 tags=restored.tags,
             )
 
         # Delete the versioned entry from ChromaDB
-        chroma_coll = self._store._get_collection(coll)
+        chroma_coll_handle = self._store._get_collection(chroma_coll)
         try:
-            chroma_coll.delete(ids=[versioned_chroma_id])
+            chroma_coll_handle.delete(ids=[versioned_chroma_id])
         except ValueError:
             pass  # May not exist if it was a tag-only change
 
@@ -1933,7 +2117,7 @@ class Keeper:
         from .config import SYSTEM_DOCS_VERSION, save_config
 
         stats = {"reset": 0}
-        coll = self._resolve_collection(None)
+        doc_coll = self._resolve_doc_collection()
 
         for path in SYSTEM_DOC_DIR.glob("*.md"):
             new_id = SYSTEM_DOC_IDS.get(path.name)
@@ -1950,8 +2134,8 @@ class Keeper:
                 self.delete(new_id)
                 self.remember(content, id=new_id, tags=tags)
                 self._document_store.upsert(
-                    collection=coll, id=new_id, summary=content,
-                    tags=self._document_store.get(coll, new_id).tags,
+                    collection=doc_coll, id=new_id, summary=content,
+                    tags=self._document_store.get(doc_coll, new_id).tags,
                     content_hash=bundled_hash,
                 )
                 stats["reset"] += 1
@@ -1991,7 +2175,8 @@ class Keeper:
         Returns:
             Updated Item if found, None if document doesn't exist
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
 
         # Get existing item (prefer document store, fall back to ChromaDB)
         existing = self.get(id, collection=collection)
@@ -2020,8 +2205,8 @@ class Keeper:
         final_tags = {**user_tags, **system_tags}
 
         # Dual-write to both stores
-        self._document_store.update_tags(coll, id, final_tags)
-        self._store.update_tags(coll, id, final_tags)
+        self._document_store.update_tags(doc_coll, id, final_tags)
+        self._store.update_tags(chroma_coll, id, final_tags)
 
         # Return updated item
         return self.get(id, collection=collection)
@@ -2045,11 +2230,12 @@ class Keeper:
 
         Returns count from document store if available, else ChromaDB.
         """
-        coll = self._resolve_collection(collection)
-        doc_count = self._document_store.count(coll)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
+        doc_count = self._document_store.count(doc_coll)
         if doc_count > 0:
             return doc_count
-        return self._store.count(coll)
+        return self._store.count(chroma_coll)
 
     def list_recent(
         self,
@@ -2073,14 +2259,14 @@ class Keeper:
         Returns:
             List of Items, most recent first
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
 
         # Fetch extra when filtering by date
         fetch_limit = limit * 3 if since is not None else limit
         if include_history:
-            records = self._document_store.list_recent_with_history(coll, fetch_limit, order_by=order_by)
+            records = self._document_store.list_recent_with_history(doc_coll, fetch_limit, order_by=order_by)
         else:
-            records = self._document_store.list_recent(coll, fetch_limit, order_by=order_by)
+            records = self._document_store.list_recent(doc_coll, fetch_limit, order_by=order_by)
         items = [_record_to_item(rec) for rec in records]
 
         # Apply date filter if specified
@@ -2275,13 +2461,14 @@ class Keeper:
         Returns:
             Dict with 'missing_from_chroma', 'orphaned_in_chroma', 'fixed' counts
         """
-        coll = self._resolve_collection(collection)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
 
         # Find mismatches between stores
-        doc_ids = self._document_store.list_ids(coll)
-        missing_from_chroma = self._store.find_missing_ids(coll, doc_ids)
+        doc_ids = self._document_store.list_ids(doc_coll)
+        missing_from_chroma = self._store.find_missing_ids(chroma_coll, doc_ids)
 
-        chroma_ids = self._store.list_ids(coll)
+        chroma_ids = self._store.list_ids(chroma_coll)
         doc_id_set = set(doc_ids)
         orphaned_in_chroma = {cid for cid in chroma_ids if cid not in doc_id_set}
 
@@ -2291,11 +2478,11 @@ class Keeper:
             # Re-index items missing from ChromaDB using stored summary
             for doc_id in missing_from_chroma:
                 try:
-                    doc_record = self._document_store.get(coll, doc_id)
+                    doc_record = self._document_store.get(doc_coll, doc_id)
                     if doc_record:
                         embedding = self._get_embedding_provider().embed(doc_record.summary)
                         self._store.upsert(
-                            collection=coll,
+                            collection=chroma_coll,
                             id=doc_id,
                             embedding=embedding,
                             summary=doc_record.summary,
@@ -2309,7 +2496,7 @@ class Keeper:
             # Remove orphaned ChromaDB entries
             for orphan_id in orphaned_in_chroma:
                 try:
-                    self._store.delete(coll, orphan_id)
+                    self._store.delete(chroma_coll, orphan_id)
                     removed += 1
                     logger.info("Removed orphan: %s", orphan_id)
                 except Exception as e:
