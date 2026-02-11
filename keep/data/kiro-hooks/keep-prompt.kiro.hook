@@ -8,6 +8,6 @@
   },
   "then": {
     "type": "runCommand",
-    "command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now -n 10 2>/dev/null || true"
+    "command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now 2>/dev/null || true"
   }
 }
