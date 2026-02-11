@@ -221,7 +221,7 @@ owner = "alice"
 
 ### Recommended Tags
 
-See [REFERENCE.md](REFERENCE.md#organizing-by-project-and-topic) for details on:
+See [TAGGING.md](TAGGING.md#organizing-by-project-and-topic) for details on:
 - `project` — Bounded work context
 - `topic` — Cross-project subject area
 - `act` — Speech-act category (commitment, request, assertion, etc.)

@@ -1,11 +1,25 @@
 
+. Separate functional docs/KEEP-NOW.md, docs/KEEP-FIND.md, docs/KEEP-PUT.md etc
+
+* Maybe the metadoc should say how many results to produce by default?
+    (e.g. closures: 10, learnings: 3)
+
+* `keep save "thread-name"` — move now history into a named item, reset now
+    - especially when you filter by tag(s)
+    - rename current `now` doc (with all version history) to a named item
+    - useful for closing finished threads: "this conversation is done, archive it"
+    - implementation: rename across SQLite + ChromaDB (both document_store and vector store)
+    - pointers?: saved item gets a markdown link back to where it came from, now gets a link to saved item
+
 * VS Code hooks 
     https://docs.github.com/en/copilot/reference/hooks-configuration
     Session Start - output is ignored!
     User Prompt Submitted
 
 * Codex hooks
-    (haven't yet investigated)
+    https://developers.openai.com/codex/config-advanced/#notifications
+    Notification - can just log the user prompts for the turn (better than nothing)
+    "We are actively working on designing a hooks system" (https://github.com/openai/codex/pull/11067#issuecomment-3866360949)
 
 * doc: make it really clear that `keep now foo` does NOT update the tags, the previous tags are still there
 
@@ -111,21 +125,6 @@
     - background task can detect current config and maintain compat
 
 * review the CLI completely.  Can the common tasks have single-letter aliases for their commands?
-
-* how do we get the claude-code model context?
-
-* how do we get the vscode model context?  I really don't want to require a plugin too
-    - can the agent just tell keep how to find the current providers??
-    - that would be commandline, or per-session config, not per-repo or whatever (right???)
-
-* can we do something similar for kiro?
-
-* `keep save "thread-name"` — move now history into a named item, reset now
-    - rename current `now` doc (with all version history) to a named item
-    - useful for closing finished threads: "this conversation is done, archive it"
-    - less clear for context switching (there-and-back-again) — tags on `now` may be better
-    - implementation: rename across SQLite + ChromaDB (both document_store and vector store)
-    - pointers: saved item gets a markdown link back to where it came from, now gets a link to saved item
 
 * better update/degrade memory strategies: compare with current best of breed
     - want something that tracks last-retrieval time
