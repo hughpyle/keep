@@ -271,18 +271,18 @@ KIRO_HOOKS = {
 
 def _install_kiro_hooks(config_dir: Path) -> bool:
     """
-    Install keep hooks into Kiro agent configuration.
+    Install keep hooks into Kiro hooks directory.
 
-    Creates a minimal agent config at ~/.kiro/agents/keep/agent.json
-    with lifecycle hooks. Returns True if file was written.
+    Creates ~/.kiro/hooks/keep.json with lifecycle hooks.
+    Returns True if file was written.
     """
-    agent_dir = config_dir / "agents" / "keep"
-    agent_file = agent_dir / "agent.json"
+    hooks_dir = config_dir / "hooks"
+    hooks_file = hooks_dir / "keep.json"
 
     config: dict[str, Any] = {}
-    if agent_file.exists():
+    if hooks_file.exists():
         try:
-            config = json.loads(agent_file.read_text(encoding="utf-8"))
+            config = json.loads(hooks_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             config = {}
 
@@ -298,8 +298,8 @@ def _install_kiro_hooks(config_dir: Path) -> bool:
         existing_hooks[event].extend(hook_list)
 
     config["hooks"] = existing_hooks
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    agent_file.write_text(
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hooks_file.write_text(
         json.dumps(config, indent=2) + "\n", encoding="utf-8"
     )
     return True
@@ -310,7 +310,7 @@ def install_kiro(config_dir: Path) -> list[str]:
     Install protocol block and hooks for Kiro.
 
     Steering file goes in ~/.kiro/steering/keep.md.
-    Agent hooks go in ~/.kiro/agents/keep/agent.json.
+    Hooks go in ~/.kiro/hooks/keep.json.
 
     Returns list of actions taken.
     """
