@@ -49,7 +49,7 @@ keep put "learning"          # Capture insight
 """
 
 # Bump this when hook definitions change — triggers re-install for existing users
-HOOKS_VERSION = 4
+HOOKS_VERSION = 5
 
 # Hook definitions for Claude Code
 CLAUDE_CODE_HOOKS = {
@@ -80,7 +80,7 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "jq -r '\"User prompt: \" + .prompt[:500]' 2>/dev/null | keep now -n 10 2>/dev/null || true",
+                    "command": "jq -r '\"User prompt: \" + .prompt[:500]' 2>/dev/null | keep now 2>/dev/null || true",
                     "statusMessage": "Reflecting...",
                 }
             ],

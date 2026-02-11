@@ -1125,8 +1125,6 @@ def now(
             similar_offsets=similar_offsets if similar_items else None,
             meta_sections=meta_sections if meta_sections else None,
         ))
-        if not _get_json_output() and not _get_ids_output() and not sys.stdout.isatty():
-            typer.echo("\nAs an agent, you should reflect on this work. (run: `keep reflect`)")
     else:
         # Get current intentions (or search version history if tags specified)
         if tags:
@@ -1152,8 +1150,6 @@ def now(
                 similar_offsets=similar_offsets,
                 meta_sections=meta_sections,
             ))
-            if not _get_json_output() and not _get_ids_output() and not sys.stdout.isatty():
-                typer.echo("\nAs an agent, you should reflect on this work. (run: `keep reflect`)")
 
 
 def _find_now_version_by_tags(kp, tags: list[str], collection: str):
