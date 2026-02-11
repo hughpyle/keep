@@ -459,7 +459,7 @@ class Keeper:
         )
 
         # Check store consistency and reconcile in background if needed
-        if self._check_store_consistency():
+        if self._check_store_consistency() and self._config.embedding is not None:
             import threading
             chroma_coll = self._resolve_chroma_collection()
             doc_coll = self._resolve_doc_collection()
@@ -510,11 +510,19 @@ class Keeper:
         """Fix store divergence using summaries (no content re-fetch needed).
 
         Requires an embedding provider to re-embed missing items.
-        Skips entirely if no provider is configured (avoids removing orphans
-        without being able to re-embed missing items).
+        Skips entirely if no provider is configured or provider creation
+        fails (avoids removing orphans without being able to re-embed).
         """
         if self._config.embedding is None:
             logger.debug("Skipping reconciliation: no embedding provider configured")
+            return
+
+        # Validate provider before entering loop — catches broken installs
+        # (e.g. mlx configured but not installed) early and cleanly
+        try:
+            provider = self._get_embedding_provider()
+        except Exception as e:
+            logger.debug("Skipping reconciliation: provider unavailable: %s", e)
             return
 
         doc_ids = self._document_store.list_ids(doc_coll)
@@ -525,7 +533,7 @@ class Keeper:
             try:
                 record = self._document_store.get(doc_coll, doc_id)
                 if record:
-                    embedding = self._get_embedding_provider().embed(record.summary)
+                    embedding = provider.embed(record.summary)
                     self._store.upsert(
                         collection=chroma_coll, id=doc_id,
                         embedding=embedding, summary=record.summary, tags=record.tags,

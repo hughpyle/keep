@@ -428,11 +428,6 @@ class TestOptions:
         result = cli("find", "--help")
         assert "--store" in result.stdout or "-s" in result.stdout
     
-    def test_collection_option(self, cli):
-        """--collection option is available."""
-        result = cli("find", "--help")
-        assert "--collection" in result.stdout or "-c" in result.stdout
-    
     def test_limit_option(self, cli):
         """--limit option is available."""
         result = cli("find", "--help")

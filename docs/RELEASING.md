@@ -12,14 +12,20 @@
    - All command examples in docs actually work
    - Help text uses consistent terminology
 
-3. **Version bump**
-   - `SKILL.md` frontmatter: `version: X.Y.Z`
+3. **Version bump** (all 5 locations)
    - `pyproject.toml`: `version = "X.Y.Z"`
+   - `keep/__init__.py`: `__version__ = "X.Y.Z"`
+   - `SKILL.md` frontmatter: `version: X.Y.Z`
+   - `keep/data/openclaw-plugin/openclaw.plugin.json`: `"version": "X.Y.Z"`
+   - `keep/data/openclaw-plugin/package.json`: `"version": "X.Y.Z"`
 
 4. **Tests**
    ```bash
-   pytest
+   uv run --extra dev python -m pytest -q
    ```
+   Note: plain `pytest` may use your global shim instead of the project venv.
+   Tests requiring an embedding provider (`test_keeper.py`) are skipped
+   automatically when no provider is available.
 
 ## Release
 
