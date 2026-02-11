@@ -478,6 +478,20 @@ def _format_item(
     return _format_summary_line(item)
 
 
+def _versions_to_items(doc_id: str, current: Item | None, versions: list) -> list[Item]:
+    """Convert current item + archived VersionInfo list into Items for _format_items."""
+    items: list[Item] = []
+    if current:
+        items.append(current)
+    for i, v in enumerate(versions, start=1):
+        tags = dict(v.tags)
+        tags["_version"] = str(i)
+        tags["_updated"] = v.created_at or ""
+        tags["_updated_date"] = (v.created_at or "")[:10]
+        items.append(Item(id=doc_id, summary=v.summary, tags=tags))
+    return items
+
+
 def _format_items(items: list[Item], as_json: bool = False) -> str:
     """Format multiple items for display."""
     if _get_ids_output():
@@ -1006,51 +1020,10 @@ def now(
 
     # Handle history listing
     if history:
-        versions = kp.list_versions(NOWDOC_ID, limit=50, collection=collection)
+        versions = kp.list_versions(NOWDOC_ID, limit=limit, collection=collection)
         current = kp.get(NOWDOC_ID, collection=collection)
-
-        if _get_ids_output():
-            # Output version identifiers, one per line
-            if current:
-                typer.echo(f"{NOWDOC_ID}@V{{0}}")
-            for i in range(1, len(versions) + 1):
-                typer.echo(f"{NOWDOC_ID}@V{{{i}}}")
-        elif _get_json_output():
-            result = {
-                "id": NOWDOC_ID,
-                "current": {
-                    "summary": current.summary if current else None,
-                    "offset": 0,
-                    "vid": f"{NOWDOC_ID}@V{{0}}",
-                } if current else None,
-                "versions": [
-                    {
-                        "offset": i + 1,
-                        "vid": f"{NOWDOC_ID}@V{{{i + 1}}}",
-                        "version": v.version,
-                        "summary": v.summary[:60],
-                        "created_at": v.created_at,
-                    }
-                    for i, v in enumerate(versions)
-                ],
-            }
-            typer.echo(json.dumps(result, indent=2))
-        else:
-            if current:
-                summary_preview = current.summary[:60].replace("\n", " ")
-                if len(current.summary) > 60:
-                    summary_preview += "..."
-                typer.echo(f"v0 (current): {summary_preview}")
-            if versions:
-                typer.echo(f"\nArchived:")
-                for i, v in enumerate(versions, start=1):
-                    date_part = v.created_at[:10] if v.created_at else "unknown"
-                    summary_preview = v.summary[:50].replace("\n", " ")
-                    if len(v.summary) > 50:
-                        summary_preview += "..."
-                    typer.echo(f"  v{i} ({date_part}): {summary_preview}")
-            else:
-                typer.echo("No version history.")
+        items = _versions_to_items(NOWDOC_ID, current, versions)
+        typer.echo(_format_items(items, as_json=_get_json_output()))
         return
 
     # Handle version retrieval
@@ -1309,54 +1282,8 @@ def _get_one(
         # List all versions
         versions = kp.list_versions(actual_id, limit=limit, collection=collection)
         current = kp.get(actual_id, collection=collection)
-
-        if _get_ids_output():
-            # Output version identifiers, one per line
-            lines = []
-            if current:
-                lines.append(f"{actual_id}@V{{0}}")
-            for i in range(1, len(versions) + 1):
-                lines.append(f"{actual_id}@V{{{i}}}")
-            return "\n".join(lines)
-        elif _get_json_output():
-            result = {
-                "id": actual_id,
-                "current": {
-                    "summary": current.summary if current else None,
-                    "tags": current.tags if current else {},
-                    "offset": 0,
-                    "vid": f"{actual_id}@V{{0}}",
-                } if current else None,
-                "versions": [
-                    {
-                        "offset": i + 1,
-                        "vid": f"{actual_id}@V{{{i + 1}}}",
-                        "version": v.version,
-                        "summary": v.summary,
-                        "created_at": v.created_at,
-                    }
-                    for i, v in enumerate(versions)
-                ],
-            }
-            return json.dumps(result, indent=2)
-        else:
-            lines = []
-            if current:
-                summary_preview = current.summary[:60].replace("\n", " ")
-                if len(current.summary) > 60:
-                    summary_preview += "..."
-                lines.append(f"v0 (current): {summary_preview}")
-            if versions:
-                lines.append(f"\nArchived:")
-                for i, v in enumerate(versions, start=1):
-                    date_part = v.created_at[:10] if v.created_at else "unknown"
-                    summary_preview = v.summary[:50].replace("\n", " ")
-                    if len(v.summary) > 50:
-                        summary_preview += "..."
-                    lines.append(f"  v{i} ({date_part}): {summary_preview}")
-            else:
-                lines.append("No version history.")
-            return "\n".join(lines)
+        items = _versions_to_items(actual_id, current, versions)
+        return _format_items(items, as_json=_get_json_output())
 
     if similar:
         # List similar items
