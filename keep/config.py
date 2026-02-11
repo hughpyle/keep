@@ -160,30 +160,6 @@ def read_openclaw_config() -> dict | None:
         return None
 
 
-def get_openclaw_memory_search_config(openclaw_config: dict | None) -> dict | None:
-    """
-    Extract memorySearch config from OpenClaw config.
-
-    Returns the memorySearch settings or None if not configured.
-
-    Example structure:
-        {
-            "provider": "openai" | "gemini" | "local" | "auto",
-            "model": "text-embedding-3-small",
-            "remote": {
-                "apiKey": "sk-...",
-                "baseUrl": "https://..."
-            }
-        }
-    """
-    if not openclaw_config:
-        return None
-
-    return (openclaw_config
-            .get("agents", {})
-            .get("defaults", {})
-            .get("memorySearch", None))
-
 
 def _detect_ollama() -> dict | None:
     """
