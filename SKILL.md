@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.28.1
+version: 0.29.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -50,7 +50,7 @@ keep get .tag/act            # Speech-act tag reference
 
 ```
 
-For integration details (tool locations, hooks, OpenClaw plugin): see [docs/QUICKSTART.md](docs/QUICKSTART.md#tool-integrations).
+For integration details (tool locations, hooks): see [docs/QUICKSTART.md](docs/QUICKSTART.md#tool-integrations). For OpenClaw: see [docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md).
 
 ---
 
@@ -64,15 +64,15 @@ Reflection means that you understand the context, and the likely effects of your
 
 ### Why Reflect
 
-"I am the owner of my deeds and heir to my deeds. Deeds are my womb, my relative, and my refuge. I shall be the heir of whatever deeds I do, whether good or bad." (AN5.57) What you do becomes what you are. Consequences are the result of action.
+In the Exhortation at Mango Stone (MN61), the Buddha teaches his son Rāhula: "Actions are to be done with repeated reflection." Would this lead to harm? Is it leading to harm? Did it lead to harm?
 
-Another sutta (MN61) teaches: actions are to be reflected upon before, during, and after — like looking in a mirror. Would this lead to harm? Is it leading to harm? Did it lead to harm?
+In "Subjects for Regular Reviewing" (AN5.57), one topic is this: "I am the owner of my deeds and heir to my deeds. Deeds are my womb, my relative, and my refuge. I shall be the heir of whatever deeds I do, whether good or bad." Consequences are the result of action.
 
 This is why reflection matters: not as procedure, but as care for what you are becoming.
 
 ### Recognizing the Conversation
 
-The Language-Action Perspective (Winograd & Flores) teaches that work is commitment management.
+The Language-Action Perspective (Winograd & Flores) teaches that the work of language is commitment management.
 Recognizing the structure enables skillful work.
 
 | Signal | Type | Your Stance |

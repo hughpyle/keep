@@ -135,6 +135,13 @@ x Outside of any project/topic tags, I'm not seeing commitments... looks like a 
 
 * can we do something similar for kiro?
 
+* `keep save "thread-name"` — move now history into a named item, reset now
+    - rename current `now` doc (with all version history) to a named item
+    - useful for closing finished threads: "this conversation is done, archive it"
+    - less clear for context switching (there-and-back-again) — tags on `now` may be better
+    - implementation: rename across SQLite + ChromaDB (both document_store and vector store)
+    - pointers: saved item gets a markdown link back to where it came from, now gets a link to saved item
+
 * better update/degrade memory strategies: compare with current best of breed
     - want something that tracks last-retrieval time
     - not sure how that applies to the ranking for retrieval
