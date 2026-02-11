@@ -640,7 +640,7 @@ class Keeper:
                         result = chroma_coll_obj.get(
                             ids=[rec.id],
                             include=["embeddings", "metadatas", "documents"])
-                        if result["ids"] and result["embeddings"]:
+                        if result["ids"] and result["embeddings"] is not None and len(result["embeddings"]) > 0:
                             meta = result["metadatas"][0] or {}
                             chroma_coll_obj.upsert(
                                 ids=[new_id],
@@ -1654,7 +1654,7 @@ class Keeper:
             anchor_result = chroma_coll.get(
                 ids=[anchor_id], include=["embeddings"]
             )
-            if not anchor_result["ids"] or not anchor_result["embeddings"]:
+            if not anchor_result["ids"] or anchor_result["embeddings"] is None or len(anchor_result["embeddings"]) == 0:
                 return self._apply_recency_decay(candidates)
             anchor_emb = anchor_result["embeddings"][0]
 
@@ -1669,7 +1669,7 @@ class Keeper:
 
         # Build id → embedding lookup (some candidates may not have embeddings)
         emb_lookup: dict[str, list[float]] = {}
-        if cand_result["ids"] and cand_result["embeddings"]:
+        if cand_result["ids"] and cand_result["embeddings"] is not None and len(cand_result["embeddings"]) > 0:
             for cid, cemb in zip(cand_result["ids"], cand_result["embeddings"]):
                 if cemb is not None:
                     emb_lookup[cid] = cemb
