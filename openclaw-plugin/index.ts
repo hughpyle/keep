@@ -346,6 +346,31 @@ export default function register(api: PluginApi) {
   }, { commands: ["memory"] });
 
   // ─────────────────────────────────────────────────────────────
+  // Hook: before_agent_start → inject keep now context
+  // ─────────────────────────────────────────────────────────────
+  api.on("before_agent_start", async () => {
+    try {
+      const output = await callKeep(pluginConfig, ["now", "-n", "10"], workspace);
+      if (output?.trim()) {
+        return { prependContext: `\`keep now\`:\n${output.trim()}` };
+      }
+    } catch {
+      // Silent — don't block agent start
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // Hook: after_agent_stop → update intentions
+  // ─────────────────────────────────────────────────────────────
+  api.on("after_agent_stop", async () => {
+    try {
+      await callKeep(pluginConfig, ["now", "Session ended"], workspace);
+    } catch {
+      // Silent
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────
   // Background service (optional watcher)
   // ─────────────────────────────────────────────────────────────
   api.registerService({
