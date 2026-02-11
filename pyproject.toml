@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "keep-skill"
-version = "0.29.1"
+version = "0.29.2"
 description = "Reflective memory - remember and search documents by meaning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -67,14 +67,15 @@ packages = ["keep"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "SKILL.md" = "keep/SKILL.md"
-"docs/library" = "keep/docs/library"
+"README.md" = "keep/README.md"
+"docs" = "keep/docs"
 "commands/reflect.md" = "keep/data/reflect.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
     "/keep",
     "/keep/data/kiro-hooks",
-    "/docs/library",
+    "/docs",
     "/commands/reflect.md",
     "/SKILL.md",
     "/README.md",
