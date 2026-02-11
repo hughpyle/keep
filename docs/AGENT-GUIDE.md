@@ -72,6 +72,7 @@ keep find "recent work" --since P1D   # Last 24 hours
 **Ending a session:**
 ```bash
 keep now "Completed OAuth2 flow. Token refresh working. Next: add tests." -t topic=auth
+keep save "auth-thread" -t project=myapp  # Archive this thread of work
 ```
 
 ---
