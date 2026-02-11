@@ -32,6 +32,13 @@ from .types import Item
 from .logging_config import configure_quiet_mode, enable_debug_mode
 
 
+def _output_width() -> int:
+    """Terminal width for summary truncation. Use generous default when not a TTY."""
+    if not sys.stdout.isatty():
+        return 200
+    return shutil.get_terminal_size((120, 24)).columns
+
+
 # Configure quiet mode by default (suppress verbose library output)
 # Set KEEP_VERBOSE=1 to enable debug mode via environment
 if os.environ.get("KEEP_VERBOSE") == "1":
@@ -162,7 +169,7 @@ def _format_yaml_frontmatter(
     are ordered newest-first, matching list_versions() ordering.
     Changing that ordering would break the vN = -V N correspondence.
     """
-    cols = shutil.get_terminal_size((120, 24)).columns
+    cols = _output_width()
 
     def _truncate_summary(summary: str, prefix_len: int) -> str:
         """Truncate summary to fit terminal width, matching _format_summary_line."""
@@ -266,7 +273,7 @@ def _format_summary_line(item: Item, id_width: int = 0) -> str:
     date = item.tags.get("_updated_date") or item.tags.get("_updated", "")[:10] or item.tags.get("_created", "")[:10] or ""
 
     # Truncate summary to fit terminal width, collapse newlines
-    cols = shutil.get_terminal_size((120, 24)).columns
+    cols = _output_width()
     prefix_len = len(padded_id) + 1 + len(date) + 1  # "id date "
     max_summary = max(cols - prefix_len, 20)
     summary = item.summary.replace("\n", " ")

@@ -8,6 +8,6 @@
   },
   "then": {
     "type": "askAgent",
-    "command": "Reflect on the work just completed using `keep reflect`"
+    "prompt": "Reflect on the work just completed using `keep reflect`"
   }
 }
