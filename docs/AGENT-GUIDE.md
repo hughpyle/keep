@@ -77,6 +77,38 @@ keep save "auth-thread" -t project=myapp  # Archive this thread of work
 
 ---
 
+## Saving Threads
+
+As you work, `keep now` accumulates version history — a trace of how intentions evolved. `keep save` lets you name and archive that history, making room for what's next.
+
+**Snapshot before pivoting.** When the conversation shifts topic, save what you have so far before moving on:
+```bash
+keep save "auth-work" -t project=myapp       # Archive the auth thread
+keep now "Starting on database migration"    # Fresh context for new work
+```
+
+**Incremental archival.** Save to the same name repeatedly — versions append, building a running log across sessions:
+```bash
+# Session 1
+keep save "design-log" -t project=myapp
+# Session 2 (more work on same project)
+keep save "design-log" -t project=myapp      # Appends new versions
+```
+
+**End-of-session archive.** When a thread of work is complete:
+```bash
+keep save "auth-thread" -t project=myapp
+```
+
+**Tag-filtered extraction.** When a session mixes multiple projects, extract just the thread you want:
+```bash
+keep save "frontend-work" -t project=frontend   # Leaves backend versions in now
+```
+
+The saved item is a full versioned document — browse with `keep get name --history`, navigate with `-V 1`, `-V 2`, etc.
+
+---
+
 ## Index Important Documents
 
 Whenever you encounter documents important to the task, index them:

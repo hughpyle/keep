@@ -106,4 +106,9 @@ If commitments need tracking:
 keep put "I'll address the performance issue next session" -t act=commitment -t status=open
 ```
 
+If a thread of work is complete, or the conversation is pivoting to a new topic, save the history:
+```bash
+keep save "thread-name" -t project=myapp     # Archive and make room for what's next
+```
+
 Present a brief summary of the reflection to the user. The value is in the reflection itself, not in lengthy output.

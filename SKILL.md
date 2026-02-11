@@ -114,6 +114,13 @@ keep put "file:///path/to/important.pdf" -t type=reference -t topic=security
 ```
 Ask: What is this document? Why is it important? Tag appropriately. Documents indexed during work become navigable knowledge.
 
+**Save when pivoting.** When a thread of work is complete, or the conversation shifts topic, save the now history before moving on:
+```bash
+keep save "auth-thread" -t project=myapp     # Archive and pivot
+keep save "design-log" -t project=myapp      # Incremental — appends if name exists
+```
+Saving clears matched versions from now, making room for what's next. Tag filtering lets you extract one project's thread from a mixed session.
+
 **Breakdowns are valuable.** When the normal flow is interrupted — an assumption has been revealed. The breakdown is where learning happens.
 
 * When in conversation, use this practice. Reflect before, during and after action.
