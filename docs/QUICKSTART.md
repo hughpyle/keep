@@ -222,7 +222,7 @@ On first use, `keep` detects coding tools and installs a protocol block and hook
 | Claude Code (`~/.claude/`) | `CLAUDE.md` — reflective practice prompt | `settings.json` — session start, prompt submit, subagent, session end |
 | Kiro (`~/.kiro/`) | `steering/keep.md` — reflective practice prompt | `hooks/*.kiro.hook` — agent spawn, prompt submit, agent stop |
 | OpenAI Codex (`~/.codex/`) | `AGENTS.md` — reflective practice prompt | — |
-| OpenClaw (cwd) | `AGENTS.md` — reflective practice prompt (if found in cwd) | [Plugin](../SKILL.md#openclaw-integration) — agent start, agent stop |
+| OpenClaw (cwd) | `AGENTS.md` — reflective practice prompt (if found in cwd) | [Plugin](OPENCLAW-INTEGRATION.md) — agent start, agent stop |
 
 Hooks inject `keep now` context at key moments (session start, prompt submit) so the agent always has current intentions and relevant context. The protocol block teaches the reflective practice itself.
 
@@ -258,4 +258,5 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # OAuth token alternative
 - [PYTHON-API.md](PYTHON-API.md) — Python API for embedding keep in applications
 - [AGENT-GUIDE.md](AGENT-GUIDE.md) — Working session patterns
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System internals
+- [OPENCLAW-INTEGRATION.md](OPENCLAW-INTEGRATION.md) — OpenClaw plugin setup
 - [SKILL.md](../SKILL.md) — The reflective practice
