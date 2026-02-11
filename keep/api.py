@@ -2074,20 +2074,21 @@ class Keeper:
         Extract version history from a source document into a named item.
 
         Moves matching versions (filtered by tags if provided) from source_id
-        to a new item with the given name. The source retains non-matching
-        versions; if fully emptied and source is 'now', it resets to default.
+        to a named item. If the target already exists, extracted versions are
+        appended to its history. The source retains non-matching versions;
+        if fully emptied and source is 'now', it resets to default.
 
         Args:
-            name: ID for the new saved item (must not already exist)
+            name: ID for the saved item (created if new, extended if exists)
             source_id: Document to extract from (default: now)
             tags: If provided, only extract versions whose tags contain
                   all specified key=value pairs. If None, extract all.
 
         Returns:
-            The newly created saved Item.
+            The saved Item.
 
         Raises:
-            ValueError: If name is empty, target exists, source doesn't exist,
+            ValueError: If name is empty, source doesn't exist,
                         or no versions match the filter.
         """
         if not name:
@@ -2120,34 +2121,54 @@ class Keeper:
             current_matches = True
 
         # Extract in DocumentStore (SQLite side)
-        extracted, new_source = self._document_store.extract_versions(
+        extracted, new_source, base_version = self._document_store.extract_versions(
             doc_coll, source_id, name, tag_filter=tags
         )
 
         # ChromaDB side: move embeddings
+        coll = self._store._get_collection(chroma_coll)
+
         # 1. Collect source ChromaDB IDs for matched versions
         source_chroma_ids = [f"{source_id}@v{n}" for n in matched_version_nums]
         if current_matches:
             source_chroma_ids.append(source_id)
 
-        # 2. Batch-get embeddings from source
-        coll = self._store._get_collection(chroma_coll)
+        # 2. If target already exists, archive its current embedding
+        # (extract_versions already archived the SQLite side; we mirror in ChromaDB)
+        if base_version > 1:
+            archive_version = base_version - 1  # version assigned by _archive_current_unlocked
+            existing_emb = coll.get(
+                ids=[name],
+                include=["embeddings", "documents", "metadatas"],
+            )
+            if existing_emb["ids"] and existing_emb["embeddings"] is not None:
+                archived_vid = f"{name}@v{archive_version}"
+                archived_meta = dict(existing_emb["metadatas"][0]) if existing_emb["metadatas"] else {}
+                archived_meta["_version"] = str(archive_version)
+                archived_meta["_base_id"] = name
+                coll.upsert(
+                    ids=[archived_vid],
+                    embeddings=[list(existing_emb["embeddings"][0])],
+                    documents=[existing_emb["documents"][0]] if existing_emb["documents"] else [None],
+                    metadatas=[archived_meta],
+                )
+
+        # 3. Batch-get embeddings from source
+        embedding_map = {}
         if source_chroma_ids:
             result = coll.get(
                 ids=source_chroma_ids,
                 include=["embeddings", "documents", "metadatas"],
             )
-            # Build a map: chroma_id → embedding
-            embedding_map = {}
             if result["ids"] and result["embeddings"] is not None:
                 for i, cid in enumerate(result["ids"]):
                     embedding_map[cid] = list(result["embeddings"][i])
 
-            # 3. Batch-delete source entries
+            # 4. Batch-delete source entries
             if result["ids"]:
                 coll.delete(ids=list(result["ids"]))
 
-        # 4. Insert target entries with new IDs
+        # 5. Insert target entries with new IDs
         # The extracted list is chronological (oldest first),
         # last one is current, rest are history
         target_ids = []
@@ -2155,8 +2176,8 @@ class Keeper:
         target_summaries = []
         target_metadatas = []
 
-        # History versions (sequential 1, 2, ...)
-        for seq, vi in enumerate(extracted[:-1], start=1):
+        # History versions (sequential from base_version)
+        for seq, vi in enumerate(extracted[:-1], start=base_version):
             target_vid = f"{name}@v{seq}"
             # Find the embedding for this version
             source_vid = f"{source_id}@v{vi.version}" if vi.version > 0 else source_id
@@ -2184,7 +2205,7 @@ class Keeper:
             target_summaries.append(newest.summary)
             target_metadatas.append(self._store._tags_to_metadata(cur_tags))
 
-        # Batch-insert into ChromaDB
+        # 6. Batch-insert/update into ChromaDB
         if target_ids:
             coll.upsert(
                 ids=target_ids,

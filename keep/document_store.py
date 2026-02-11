@@ -585,41 +585,45 @@ class DocumentStore:
         source_id: str,
         target_id: str,
         tag_filter: Optional[dict[str, str]] = None,
-    ) -> tuple[list[VersionInfo], Optional[DocumentRecord]]:
+    ) -> tuple[list[VersionInfo], Optional[DocumentRecord], int]:
         """
-        Extract matching versions from source into a new target document.
+        Extract matching versions from source into a target document.
 
         Moves matching archived versions (and optionally the current document)
-        from source_id to target_id. The target gets fresh sequential version
-        numbering. Source retains non-matching versions (gaps are tolerated).
+        from source_id to target_id. If target already exists, its current is
+        archived and the extracted versions are appended on top. Source retains
+        non-matching versions (gaps are tolerated).
 
         Args:
             collection: Collection name
             source_id: Document to extract from
-            target_id: New document to create (must not exist)
+            target_id: Document to create or extend
             tag_filter: If provided, only extract versions whose tags
                         contain all specified key=value pairs.
                         If None, extract everything.
 
         Returns:
-            Tuple of (extracted_versions, new_source_current_or_None).
+            Tuple of (extracted_versions, new_source_current_or_None, base_version).
             extracted_versions: list of VersionInfo that were moved to target.
             new_source_current: the new current state of the source document
                 after extraction, or None if source was fully emptied.
+            base_version: the starting version number used for the extracted
+                history in the target (1 for new targets, higher for appends).
 
         Raises:
-            ValueError: If target_id already exists or source_id doesn't exist.
+            ValueError: If source_id doesn't exist or no versions match.
         """
         def _tags_match(tags: dict[str, str], filt: dict[str, str]) -> bool:
             return all(tags.get(k) == v for k, v in filt.items())
 
         with self._lock:
-            # Validate
+            # Validate source
             source = self._get_unlocked(collection, source_id)
             if source is None:
                 raise ValueError(f"Source document '{source_id}' not found")
-            if self._get_unlocked(collection, target_id) is not None:
-                raise ValueError(f"Target document '{target_id}' already exists")
+
+            # Check if target already exists (append mode)
+            existing_target = self._get_unlocked(collection, target_id)
 
             # Get all archived versions (oldest first for sequential renumbering)
             cursor = self._conn.execute("""
@@ -670,26 +674,39 @@ class DocumentStore:
                     WHERE id = ? AND collection = ? AND version IN ({placeholders})
                 """, (source_id, collection, *version_nums))
 
-            # Create target: newest extracted → current, rest → version history
-            # extracted is in chronological order (oldest first)
+            # Determine base version for target history
             now = self._now()
+            if existing_target:
+                # Archive existing target's current into its history
+                self._archive_current_unlocked(collection, target_id, existing_target)
+                # Get the next version number after archiving
+                cursor = self._conn.execute("""
+                    SELECT COALESCE(MAX(version), 0) + 1
+                    FROM document_versions
+                    WHERE id = ? AND collection = ?
+                """, (target_id, collection))
+                base_version = cursor.fetchone()[0]
+            else:
+                base_version = 1
+
+            # extracted is in chronological order (oldest first)
             target_current = extracted[-1]  # newest
             target_history = extracted[:-1]  # older ones
 
-            # Insert target current into documents table
+            # Insert or update target current in documents table
             self._conn.execute("""
-                INSERT INTO documents
+                INSERT OR REPLACE INTO documents
                 (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 target_id, collection, target_current.summary,
                 json.dumps(target_current.tags, ensure_ascii=False),
-                target_current.created_at, now,
-                target_current.content_hash, now,
+                existing_target.created_at if existing_target else target_current.created_at,
+                now, target_current.content_hash, now,
             ))
 
-            # Insert target version history with fresh sequential numbering
-            for seq, vi in enumerate(target_history, start=1):
+            # Insert target version history with sequential numbering
+            for seq, vi in enumerate(target_history, start=base_version):
                 self._conn.execute("""
                     INSERT INTO document_versions
                     (id, collection, version, summary, tags_json, content_hash, created_at)
@@ -736,7 +753,7 @@ class DocumentStore:
 
             self._conn.commit()
 
-        return extracted, new_source
+        return extracted, new_source, base_version
 
     # -------------------------------------------------------------------------
     # Read Operations
