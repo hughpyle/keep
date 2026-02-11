@@ -255,46 +255,22 @@ def install_codex(config_dir: Path) -> list[str]:
     return actions
 
 
-# Hook definitions for Kiro — each becomes a separate .kiro.hook file
-KIRO_HOOKS = [
-    {
-        "name": "keep-spawn",
-        "trigger": "agentSpawn",
-        "action": "command",
-        "command": "keep now -n 10 </dev/null 2>/dev/null || true",
-    },
-    {
-        "name": "keep-prompt",
-        "trigger": "userPromptSubmit",
-        "action": "command",
-        "command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now -n 10 2>/dev/null || true",
-    },
-    {
-        "name": "keep-stop",
-        "trigger": "stop",
-        "action": "command",
-        "command": "keep now 'Session ended' 2>/dev/null || true",
-    },
-]
-
-
 def _install_kiro_hooks(config_dir: Path) -> bool:
     """
     Install keep hooks into Kiro hooks directory.
 
-    Creates individual .kiro.hook files in ~/.kiro/hooks/.
+    Copies .kiro.hook files from package data to ~/.kiro/hooks/.
     Returns True if any file was written.
     """
     hooks_dir = config_dir / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
-    wrote = False
 
-    for hook_def in KIRO_HOOKS:
-        hook_file = hooks_dir / f"{hook_def['name']}.kiro.hook"
-        content = {k: v for k, v in hook_def.items() if k != "name"}
-        hook_file.write_text(
-            json.dumps(content, indent=2) + "\n", encoding="utf-8"
-        )
+    # Source hook files from package data
+    source_dir = Path(__file__).parent / "data" / "kiro-hooks"
+    wrote = False
+    for src in source_dir.glob("*.kiro.hook"):
+        dst = hooks_dir / src.name
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
         wrote = True
 
     return wrote

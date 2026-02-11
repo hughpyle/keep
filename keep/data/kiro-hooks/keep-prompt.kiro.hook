@@ -1,0 +1,5 @@
+{
+  "trigger": "userPromptSubmit",
+  "action": "command",
+  "command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now -n 10 2>/dev/null || true"
+}
