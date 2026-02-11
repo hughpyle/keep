@@ -1,5 +1,13 @@
 {
-  "trigger": "userPromptSubmit",
-  "action": "command",
-  "command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now -n 10 2>/dev/null || true"
+  "enabled": true,
+  "name": "Keep User-Prompt Hook",
+  "description": "Update intentions with user prompt and surface related context from keep",
+  "version": "1",
+  "when": {
+    "type": "promptSubmit"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now -n 10 2>/dev/null || true"
+  }
 }

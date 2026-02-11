@@ -1,5 +1,13 @@
 {
-  "trigger": "stop",
-  "action": "command",
-  "command": "keep now 'Session ended' 2>/dev/null || true"
+  "enabled": true,
+  "name": "Keep Stop Hook",
+  "description": "Prompt the agent to reflect on completed work using keep",
+  "version": "1",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "askAgent",
+    "command": "Reflect on the work just completed using `keep reflect`"
+  }
 }

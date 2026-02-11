@@ -1,5 +1,13 @@
 {
-  "trigger": "agentSpawn",
-  "action": "command",
-  "command": "keep now -n 10 </dev/null 2>/dev/null || true"
+  "enabled": true,
+  "name": "Keep Agent-Spawn Hook",
+  "description": "Load current intentions and related context from keep at agent start",
+  "version": "1",
+  "when": {
+    "type": "agentSpawn"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "keep now -n 10 </dev/null 2>/dev/null || true"
+  }
 }
