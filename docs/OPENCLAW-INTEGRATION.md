@@ -1,347 +1,79 @@
-# Provider Configuration
+# OpenClaw Integration
 
-**Status:** Available in v0.1.0+
-
----
-
-## Overview
-
-keep auto-detects available AI providers from environment variables. This enables:
-
-- **Zero-config setup** — Set an API key and go
-- **Local-first by default** — Local embeddings when no API keys are set
-- **Seamless fallback** — Graceful degradation through the provider priority chain
+How to install and configure keep as an OpenClaw plugin.
 
 ---
 
-## How It Works
-
-### Detection Priority
-
-**For embeddings**, keep checks in this order:
-
-1. **Voyage** — if `VOYAGE_API_KEY` set (Anthropic's recommended partner)
-2. **OpenAI** — if `OPENAI_API_KEY` set
-3. **Gemini** — if `GEMINI_API_KEY` set
-4. **Ollama** — if running locally with models (auto-detected)
-5. **MLX** — Apple Silicon local models
-6. **Fallback** — sentence-transformers (local, always works)
-
-**For summarization**, keep checks in this order:
-
-1. **Anthropic** — if `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` set
-2. **OpenAI** — if `OPENAI_API_KEY` set
-3. **Gemini** — if `GEMINI_API_KEY` set
-4. **Ollama** — if running locally with a generative model
-5. **MLX** — Apple Silicon local models
-6. **Fallback** — truncate (first 500 chars)
-
-### What Gets Shared
-
-**API keys** are resolved from environment variables:
-- `VOYAGE_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`
-- `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`
-
-These are the same variables that OpenClaw and other tools set, so provider selection works automatically when both tools share the same shell environment.
-
-**Stays local:**
-- **Store** remains in `~/.keep/` (not shared with OpenClaw)
-- Falls back to **sentence-transformers** or **MLX** if no API keys available
-
-> **Note:** Direct reading of OpenClaw's `openclaw.json` config file is not yet implemented. Provider selection is currently based entirely on environment variables.
-
----
-
-## Setup
-
-### Option 1: API Providers (Recommended)
+## Install the Plugin
 
 ```bash
-# 1. Install keep (API SDKs included)
-uv tool install keep-skill
-
-# 2. Set API key(s) - simplest is OpenAI (does both embeddings + summarization)
-export OPENAI_API_KEY=sk-...
-
-# 3. First use auto-initializes
-keep put "test note"
+openclaw plugins install -l $(keep config openclaw-plugin)
+openclaw plugins enable keep
+openclaw gateway restart
 ```
 
-For best quality embeddings with Anthropic summarization:
-```bash
-export VOYAGE_API_KEY=...       # Embeddings (Anthropic's partner)
-export ANTHROPIC_API_KEY=...    # Summarization (or CLAUDE_CODE_OAUTH_TOKEN)
-keep put "test note"
-```
+This installs the lightweight plugin from keep's package data directory.
 
-### Option 2: Local Models (No API)
+## What Gets Installed
 
-```bash
-uv tool install 'keep-skill[local]'
-keep put "test note"         # MLX on Apple Silicon, sentence-transformers elsewhere
-```
+**Protocol block** — `AGENTS.md` in your OpenClaw workspace gets the keep protocol block appended automatically (on any `keep` command, if `AGENTS.md` exists in the current directory).
 
-### Option 3: Ollama (Local Server)
+**Plugin hooks:**
+
+| Hook | Event | What it does |
+|------|-------|-------------|
+| `before_agent_start` | Agent turn begins | Runs `keep now -n 10`, injects output as prepended context |
+| `after_agent_stop` | Agent turn ends | Runs `keep now 'Session ended'` to update intentions |
+
+The agent starts each turn knowing its current intentions, similar items, open commitments, and recent learnings.
+
+## Reinstall / Upgrade
+
+After upgrading keep, reinstall the plugin:
 
 ```bash
-# Start Ollama with an embedding model
-ollama pull llama3.2:3b
-keep put "test note"         # Auto-detected if Ollama is running
+openclaw plugins install -l $(keep config openclaw-plugin)
+openclaw gateway restart
 ```
 
----
+The plugin source lives at `$(keep config openclaw-plugin)` — this resolves to the `openclaw-plugin/` directory inside the installed keep package.
 
-## Configuration Files
+## Optional: Daily Reflection Cron
 
-### keep Config Location
-
-Created at: `~/.keep/keep.toml` (user home)
-
-**Example (OpenClaw integration active):**
-```toml
-[store]
-version = 2
-created = "2026-01-30T12:00:00Z"
-
-[embedding]
-name = "sentence-transformers"
-
-[summarization]
-name = "anthropic"
-model = "claude-sonnet-4-20250514"
-
-[document]
-name = "composite"
-```
-
----
-
-## Model Defaults
-
-When using Anthropic for summarization, keep uses `claude-3-5-haiku-20241022` by default (fast, inexpensive). This can be overridden in `keep.toml`:
-
-```toml
-[summarization]
-name = "anthropic"
-model = "claude-sonnet-4-20250514"
-```
-
----
-
-## Environment Variables
-
-| Variable | Purpose | Embeddings | Summarization |
-|----------|---------|------------|---------------|
-| `VOYAGE_API_KEY` | Voyage AI (Anthropic's partner) | ✓ | - |
-| `OPENAI_API_KEY` | OpenAI API | ✓ | ✓ |
-| `GEMINI_API_KEY` | Google Gemini API | ✓ | ✓ |
-| `ANTHROPIC_API_KEY` | Anthropic API (API key) | - | ✓ |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Anthropic API (OAuth token) | - | ✓ |
-| `OLLAMA_HOST` | Override Ollama server address | ✓ | ✓ |
-| `KEEP_STORE_PATH` | Override store location | - | - |
-
----
-
-## Privacy & Local-First
-
-### What Stays Local
-
-✅ **Vector database** — ChromaDB runs locally
-✅ **Embedding cache** — Cached embeddings stored locally
-✅ **Configuration** — Stored in `~/.keep/` locally
-✅ **Original documents** — Never stored, only summaries and embeddings
-
-### What May Use API
-
-⚠️ **Embeddings** — Local by default (`[local]` install or Ollama), or API (Voyage/OpenAI/Gemini)
-⚠️ **Summarization** — Local with Ollama or MLX, or API (Anthropic/OpenAI/Gemini)
-
-For maximum privacy, use Ollama or `pip install 'keep-skill[local]'` with no API keys set.
-
----
-
-## Use Cases
-
-### Scenario 1: Single API Key (Simplest)
-
-**Setup:**
-```bash
-pip install keep-skill
-export OPENAI_API_KEY=sk-...
-keep put "test"
-```
-
-**Result:**
-- Embeddings: OpenAI (text-embedding-3-small)
-- Summarization: OpenAI (gpt-4o-mini)
-- Cost: ~$0.0001 per document
-- Privacy: Content sent to OpenAI API
-
----
-
-### Scenario 2: Best Quality (Voyage + Anthropic)
-
-**Setup:**
-```bash
-pip install keep-skill
-export VOYAGE_API_KEY=...
-export ANTHROPIC_API_KEY=...
-keep put "test"
-```
-
-**Result:**
-- Embeddings: Voyage (voyage-3.5-lite) — Anthropic's recommended partner
-- Summarization: Anthropic (claude-3-haiku)
-- Cost: ~$0.0001 per document
-- Privacy: Content sent to Voyage and Anthropic APIs
-
----
-
-### Scenario 3: Pure Local (No API Calls)
-
-**Setup:**
-```bash
-pip install 'keep-skill[local]'
-keep put "test"
-```
-
-**Result (Apple Silicon):**
-- Embeddings: MLX or sentence-transformers (local)
-- Summarization: MLX (local LLM)
-- Cost: $0 (all local)
-- Privacy: Nothing leaves your machine
-
-**Result (Other platforms):**
-- Embeddings: sentence-transformers (local)
-- Summarization: Truncate (first 500 chars)
-- Cost: $0
-- Privacy: Nothing leaves your machine
-
----
-
-## Customization
-
-### Override Provider After Init
-
-Edit `~/.keep/keep.toml`:
-
-```toml
-[summarization]
-name = "anthropic"
-model = "claude-3-5-haiku-20241022"  # Use Haiku instead of Sonnet
-max_tokens = 300  # Longer summaries
-```
-
-### Use Different Models for Different Collections
-
-Not yet supported. Roadmap feature for v0.2.
-
----
-
-## Troubleshooting
-
-### "No embedding provider configured"
-
-**Cause:** No API key set and local models not installed
-
-**Fix (API):**
-```bash
-export OPENAI_API_KEY=sk-...    # Or VOYAGE_API_KEY, GEMINI_API_KEY
-keep put "test"
-```
-
-**Fix (Local):**
-```bash
-pip install 'keep-skill[local]'
-keep put "test"
-```
-
----
-
-### "Anthropic/OpenAI/Gemini API key required"
-
-**Cause:** Trying to use a provider without the required API key
-
-**Fix:** Set the appropriate environment variable, or use a different provider.
-
----
-
-### "Want local-only operation"
-
-**Solution:** Install with `[local]` extra and don't set any API keys.
+For automatic deep reflection, create a cron job:
 
 ```bash
-pip install 'keep-skill[local]'
-keep put "test"              # Uses MLX on Apple Silicon
+openclaw cron add \
+  --name keep-reflect \
+  --cron "0 21 * * *" \
+  --session isolated \
+  --system-event "Reflect on this day with \`keep reflect\`. Follow the practice."
 ```
 
----
+This runs in an isolated session at 9pm daily. Delivery is silent — the value is in what gets written to the store.
 
-## Architecture Notes
+## Optional: Full Plugin
 
-### Why Embeddings Stay Local
-
-Embeddings are computed frequently (every document indexed, every query). Using an API would:
-- 💸 Cost too much (~$0.0001 per call × thousands of calls)
-- 🐌 Be too slow (network latency on every query)
-- 🔒 Leak query content (privacy issue)
-
-Local embeddings (sentence-transformers) are:
-- ✅ Free
-- ✅ Fast (~100ms on M1)
-- ✅ Private
-
-### Why Summarization Can Use API
-
-Summaries are computed once per document. Using an API:
-- 💸 Reasonable cost (~$0.0001 per document)
-- ⚡ Acceptable speed (happens during `update`, not `find`)
-- 📝 Better quality than truncation
-- 🔄 Original content not stored anyway
-
----
-
-## Future Enhancements
-
-- [ ] Read OpenClaw config (`~/.openclaw/openclaw.json`) for provider/model selection
-- [ ] Per-collection provider config
-- [ ] Batch summarization for cost optimization
-
----
-
-## Example: Full Workflow
+The lightweight plugin (installed above) handles hooks only. A full plugin with CLI commands (`openclaw memory search`, `openclaw memory status`) and a file watcher is available at the repo root:
 
 ```bash
-# 1. Install keep (API SDKs included)
-pip install keep-skill
-
-# 2. Set API key(s)
-export OPENAI_API_KEY=sk-...    # Simplest: does both embeddings + summarization
-
-# 3. First use auto-initializes
-keep put "file://./README.md" -t type=docs
-# Store created at ~/.keep/
-
-# 4. Search semantically
-keep find "installation instructions" --limit 3
-
-# 5. Check configuration
-keep config
-# Shows detected providers, store location, etc.
+openclaw plugins install -l /path/to/keep/openclaw-plugin
 ```
 
----
+This registers `memory_search` and `memory_get` as OpenClaw tools, plus `openclaw memory` CLI commands.
 
-## Summary
+## Provider Configuration
 
-**API providers (recommended for quality):**
-- 🧠 Best summarization quality with LLM providers
-- 💰 Cost-effective (~$0.0001/document)
-- ⚡ Simple setup: just set API key(s)
+keep auto-detects AI providers from environment variables. Set one and go:
 
-**Local providers (recommended for privacy):**
-- 🏠 Pure local-first (MLX on Apple Silicon)
-- 💸 Zero cost
-- 🔒 Maximum privacy — nothing leaves your machine
+```bash
+export OPENAI_API_KEY=...      # Simplest (handles both embeddings + summarization)
+# Or: GEMINI_API_KEY=...       # Also does both
+# Or: VOYAGE_API_KEY=... and ANTHROPIC_API_KEY=...  # Separate services
+```
 
-**Recommendation:** Use `OPENAI_API_KEY` for simplest setup (one key does both). Use Voyage + Anthropic for best quality. Use `[local]` install for maximum privacy.
+If Ollama is running locally, it's auto-detected with no configuration needed.
+
+For local-only operation (no API keys): `uv tool install 'keep-skill[local]'`
+
+See [QUICKSTART.md](QUICKSTART.md) for full provider options, model configuration, and troubleshooting.
