@@ -255,6 +255,77 @@ def install_codex(config_dir: Path) -> list[str]:
     return actions
 
 
+# Hook definitions for Kiro CLI agents
+KIRO_HOOKS = {
+    "agentSpawn": [
+        {"command": "keep now -n 10 </dev/null 2>/dev/null || true"},
+    ],
+    "userPromptSubmit": [
+        {"command": "keep now </dev/null 2>/dev/null || true"},
+    ],
+    "stop": [
+        {"command": "keep now 'Session ended' 2>/dev/null || true"},
+    ],
+}
+
+
+def _install_kiro_hooks(config_dir: Path) -> bool:
+    """
+    Install keep hooks into Kiro agent configuration.
+
+    Creates a minimal agent config at ~/.kiro/agents/keep/agent.json
+    with lifecycle hooks. Returns True if file was written.
+    """
+    agent_dir = config_dir / "agents" / "keep"
+    agent_file = agent_dir / "agent.json"
+
+    config: dict[str, Any] = {}
+    if agent_file.exists():
+        try:
+            config = json.loads(agent_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            config = {}
+
+    existing_hooks = config.get("hooks", {})
+
+    # Strip old keep hooks before installing new ones
+    existing_hooks = _strip_keep_hooks(existing_hooks)
+
+    # Merge new hook definitions
+    for event, hook_list in KIRO_HOOKS.items():
+        if event not in existing_hooks:
+            existing_hooks[event] = []
+        existing_hooks[event].extend(hook_list)
+
+    config["hooks"] = existing_hooks
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    agent_file.write_text(
+        json.dumps(config, indent=2) + "\n", encoding="utf-8"
+    )
+    return True
+
+
+def install_kiro(config_dir: Path) -> list[str]:
+    """
+    Install protocol block and hooks for Kiro.
+
+    Steering file goes in ~/.kiro/steering/keep.md.
+    Agent hooks go in ~/.kiro/agents/keep/agent.json.
+
+    Returns list of actions taken.
+    """
+    actions = []
+
+    steering_md = config_dir / "steering" / "keep.md"
+    if _install_protocol_block(steering_md):
+        actions.append("steering")
+
+    if _install_kiro_hooks(config_dir):
+        actions.append("hooks")
+
+    return actions
+
+
 def _check_cwd_agents_md() -> None:
     """
     Install protocol block into AGENTS.md in cwd if present.
@@ -297,6 +368,7 @@ def check_and_install(config: "StoreConfig") -> None:
     installers = {
         "claude_code": install_claude_code,
         "codex": install_codex,
+        "kiro": install_kiro,
     }
 
     for key, tool_dir in new_tools.items():
@@ -312,8 +384,8 @@ def check_and_install(config: "StoreConfig") -> None:
                 )
             config.integrations[key] = HOOKS_VERSION
         else:
-            # Detected but no installer yet (e.g. kiro)
+            # Detected but no installer
             config.integrations[key] = 0
-            logger.info(f"{key} detected but integration not yet implemented")
+            logger.info(f"{key} detected but no installer defined")
 
     save_config(config)
