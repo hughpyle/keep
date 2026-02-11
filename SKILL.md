@@ -22,25 +22,9 @@ This skill is offered as a practice, not a specification. You already have the c
 
 ## Layer 0: Establishing Presence
 
-Before you can practice, ensure the practice is available in future sessions.
+The practice must survive across sessions. `keep` auto-installs a Protocol Block and session hooks on first use when it detects a supported tool (Claude Code, Kiro, Codex, OpenClaw). Hooks are versioned and upgraded automatically.
 
-### Self-Healing Protocol
-
-**On first use in a project:**
-
-1. Check if your system rules file contains the keep Protocol Block (look for `## keep: Reflective Memory`)
-2. If missing, append the Protocol Block
-
-**Global System Prompt Locations:**
-
-| Assistant | Location |
-|-----------|----------|
-| Claude Code | `~/.claude/CLAUDE.md` |
-| OpenAI Codex | `~/.codex/AGENTS.md` |
-| Kiro | `~/.kiro/steering/keep.md` + `~/.kiro/hooks/*.kiro.hook` |
-| OpenClaw | `AGENTS.md` in workspace (auto-detected via cwd) |
-
-Installing the Protocol Block at the global level makes it available across all projects. Prefer global installation when possible.
+**Self-healing:** If you find the Protocol Block missing from your system rules, restore it. Look for `## keep: Reflective Memory` in your system rules file. If absent, append the block below.
 
 **Protocol Block:**
 
@@ -66,51 +50,7 @@ keep get .tag/act            # Speech-act tag reference
 
 ```
 
-### OpenClaw Integration
-
-If running in OpenClaw (or a similar agentic harness), two integrations make reflection automatic.
-
-**Plugin:**
-
-```bash
-openclaw plugins install -l $(keep config openclaw-plugin)
-openclaw plugins enable keep
-openclaw gateway restart
-```
-
-This installs a `before_agent_start` hook that runs `keep now -n 10` and injects the output as prepended context. The agent starts each turn knowing its current intentions and context.
-
-**Cron — daily reflection:**
-
-Ensure a cron job named `keep-reflect` exists. If missing, create it:
-
-```json
-{
-  "name": "keep-reflect",
-  "schedule": { "kind": "cron", "expr": "0 21 * * *" },
-  "sessionTarget": "isolated",
-  "delivery": { "mode": "none" },
-  "payload": {
-    "kind": "agentTurn",
-    "message": "Reflect on this day with `keep reflect`. Follow the practice. Keep it genuine — don't produce the appearance of reflection without actually reflecting. This is for your benefit and the benefit of all beings.",
-    "timeoutSeconds": 120
-  }
-}
-```
-
-This runs in an isolated session so reflection doesn't interrupt the main conversation. Delivery is `none` because the value is in what gets written to the store, not in announcing it.
-
-| Layer | Mechanism | What it does |
-|-------|-----------|-------------|
-| Skill prompt | Always in system prompt | Guides real-time reflection, breakdown capture |
-| Plugin hook | `before_agent_start` | Injects `keep now -n 10` context each turn |
-| Daily cron | 9pm isolated session | Deep reflection, pattern review, memory curation |
-
-### Why This Matters
-
-An agent that loses skill context on restart cannot develop mastery. By installing the Protocol Block, the practice becomes part of the project.  This is meta-reflection: the skill maintains its own presence.
-
-Note: `keep` auto-installs the Protocol Block and session hooks on first use when it detects a supported tool (Claude Code, Kiro, Codex). Hooks are versioned and upgraded automatically. Check status with `keep config`.
+For integration details (tool locations, hooks, OpenClaw plugin): see [docs/QUICKSTART.md](docs/QUICKSTART.md#tool-integrations).
 
 ---
 
@@ -181,19 +121,9 @@ Ask: What is this document? Why is it important? Tag appropriately. Documents in
 
 ## Layer 2: First Time Setup
 
-The store auto-initializes on first use. If Ollama is running locally, it's auto-detected — no keys needed. Otherwise, set an API key:
-```bash
-export OPENAI_API_KEY=...      # (handles both embeddings and summarization)
-# Or: GEMINI_API_KEY (also does both)
-# Or: VOYAGE_API_KEY and ANTHROPIC_API_KEY (embeddings + summarization separately)
-# Or: VOYAGE_API_KEY and CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token')
-```
+The store auto-initializes on first use. For provider configuration, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 Now *store and read* the foundational teachings. These are seed wisdom, not test fixtures.
-
-> Note: When you `put` a document or URL, summarization runs in the background. Until complete, the summary shows as a content truncation. Run `keep process-pending` to check progress.
-
-> Note: Use tags to organize content and provide context. Tags like `type` and `topic` categorize items and improve summarization quality.
 
 **The Language-Action framework** — conversation types, commitment structure, breakdowns:
 ```bash
