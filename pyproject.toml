@@ -90,3 +90,6 @@ markers = [
     "slow: marks tests as slow (require ML models)",
     "e2e: marks tests as end-to-end (require real providers)",
 ]
+filterwarnings = [
+    "ignore::DeprecationWarning:importlib._bootstrap",
+]
