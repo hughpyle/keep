@@ -82,7 +82,7 @@ These tags are actively set and maintained by the system.
 
 **Behavior:** Set if the document provider returns a content type.
 
-**Example:** `"text/markdown"`, `"text/html"`, `"application/pdf"`
+**Example:** `"text/markdown"`, `"text/html"`, `"application/pdf"`, `"audio/mpeg"`, `"image/jpeg"`
 
 **Note:** Not set for inline content (CLI: `keep put "text"`, API: `kp.remember()`).
 

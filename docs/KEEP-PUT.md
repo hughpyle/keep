@@ -73,6 +73,26 @@ keep put doc.pdf                       # Generic summary
 keep put doc.pdf -t topic=auth         # Re-queued for contextual summary
 ```
 
+## Supported formats
+
+| Format | Extensions | Content extracted | Auto-tags |
+|--------|-----------|-------------------|-----------|
+| **Text** | .md, .txt, .py, .js, .json, .yaml, ... | Full text | — |
+| **PDF** | .pdf | Text from all pages | — |
+| **HTML** | .html, .htm | Text (scripts/styles removed) | — |
+| **DOCX** | .docx | Paragraphs + tables | `author`, `title` |
+| **PPTX** | .pptx | Slides + notes | `author`, `title` |
+| **Audio** | .mp3, .flac, .ogg, .wav, .aiff, .m4a, .wma | Structured metadata | `artist`, `album`, `genre`, `year`, `title` |
+| **Images** | .jpg, .png, .tiff, .webp | EXIF metadata | `dimensions`, `camera`, `date` |
+
+Auto-extracted tags merge with user-provided tags. User tags win on collision:
+
+```bash
+keep put file:///path/to/song.mp3                    # Auto-tags: artist, album, genre, year
+keep put file:///path/to/song.mp3 -t genre="Nu Jazz" # Overrides auto-extracted genre
+keep put file:///path/to/photo.jpg -t topic=vacation  # Adds topic alongside auto camera/date
+```
+
 ## Indexing documents
 
 Index important documents encountered during work:
