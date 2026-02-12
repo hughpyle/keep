@@ -1,4 +1,9 @@
 
+* metadocs for media (group-by)
+
+* metadoc matcher needs some filter by wildcard, e.g `genre=*`
+    saying: must have a genre tag, but value doesn't matter
+
 * Maybe the metadoc should say how many results to produce by default?
     (e.g. closures: 10, learnings: 3)
 
