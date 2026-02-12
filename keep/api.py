@@ -230,29 +230,42 @@ SYSTEM_DOC_IDS = {
     "tag-type.md": ".tag/type",
     "meta-todo.md": ".meta/todo",
     "meta-learnings.md": ".meta/learnings",
+    "meta-genre.md": ".meta/genre",
+    "meta-artist.md": ".meta/artist",
+    "meta-album.md": ".meta/album",
 }
 
 # Pattern for meta-doc query lines: key=value pairs separated by spaces
 _META_QUERY_PAIR = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*=\S+$')
 # Pattern for context-match lines: key= (bare, no value)
 _META_CONTEXT_KEY = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*)=$')
+# Pattern for prerequisite lines: key=* (item must have this tag)
+_META_PREREQ_KEY = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*)=\*$')
 
 
-def _parse_meta_doc(content: str) -> tuple[list[dict[str, str]], list[str]]:
+def _parse_meta_doc(content: str) -> tuple[list[dict[str, str]], list[str], list[str]]:
     """
-    Parse meta-doc content into query lines and context-match keys.
+    Parse meta-doc content into query lines, context-match keys, and prerequisites.
 
     Returns:
-        (query_lines, context_keys) where:
+        (query_lines, context_keys, prereq_keys) where:
         - query_lines: list of dicts, each {key: value, ...} for AND queries
         - context_keys: list of tag keys for context matching
+        - prereq_keys: list of tag keys the current item must have
     """
     query_lines: list[dict[str, str]] = []
     context_keys: list[str] = []
+    prereq_keys: list[str] = []
 
     for line in content.split("\n"):
         line = line.strip()
         if not line:
+            continue
+
+        # Check for prerequisite: exactly "key=*"
+        prereq_match = _META_PREREQ_KEY.match(line)
+        if prereq_match:
+            prereq_keys.append(prereq_match.group(1))
             continue
 
         # Check for context-match: exactly "key=" with no value
@@ -276,7 +289,7 @@ def _parse_meta_doc(content: str) -> tuple[list[dict[str, str]], list[str]]:
         if is_query and pairs:
             query_lines.append(pairs)
 
-    return query_lines, context_keys
+    return query_lines, context_keys, prereq_keys
 
 # Old IDs for migration (maps old → new)
 _OLD_ID_RENAMES = {
@@ -1610,9 +1623,14 @@ class Keeper:
             meta_id = rec.id
             short_name = meta_id.split("/", 1)[1] if "/" in meta_id else meta_id
 
-            query_lines, context_keys = _parse_meta_doc(rec.summary)
-            if not query_lines:
+            query_lines, context_keys, prereq_keys = _parse_meta_doc(rec.summary)
+            if not query_lines and not context_keys:
                 continue
+
+            # Check prerequisites: current item must have all required tags
+            if prereq_keys:
+                if not all(current_tags.get(k) for k in prereq_keys):
+                    continue
 
             # Get context values from current item's tags
             context_values: dict[str, str] = {}
@@ -1623,10 +1641,14 @@ class Keeper:
 
             # Build expanded queries: cross-product of query lines × context values
             expanded: list[dict[str, str]] = []
-            if context_values:
+            if context_values and query_lines:
                 for query in query_lines:
                     for ctx_key, ctx_val in context_values.items():
                         expanded.append({**query, ctx_key: ctx_val})
+            elif context_values:
+                # Context-only (group-by): each context value becomes a query
+                for ctx_key, ctx_val in context_values.items():
+                    expanded.append({ctx_key: ctx_val})
             else:
                 # No context → use query lines as-is
                 expanded = list(query_lines)
