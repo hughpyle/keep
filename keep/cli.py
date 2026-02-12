@@ -1219,7 +1219,9 @@ def save(
         raise typer.Exit(1)
 
     as_json = _get_json_output()
-    typer.echo(_format_item(saved, as_json=as_json))
+    versions = kp.list_versions(name, limit=100)
+    items = _versions_to_items(name, saved, versions)
+    typer.echo(_format_items(items, as_json=as_json))
 
 
 @app.command()
