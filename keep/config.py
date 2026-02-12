@@ -113,6 +113,9 @@ class StoreConfig:
     # Maximum length for summaries (used for smart remember and validation)
     max_summary_length: int = 2000
 
+    # Maximum file size in bytes for document fetching (default 100MB)
+    max_file_size: int = 100_000_000
+
     # System docs version (tracks which bundled docs have been applied to this store)
     system_docs_version: int = 0
 
@@ -430,6 +433,9 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse max_summary_length (default 2000)
     max_summary_length = data.get("store", {}).get("max_summary_length", 2000)
 
+    # Parse max_file_size (default 100MB)
+    max_file_size = data.get("store", {}).get("max_file_size", 100_000_000)
+
     # Parse system_docs_version (default 0 for stores that predate this feature)
     system_docs_version = data.get("store", {}).get("system_docs_version", 0)
 
@@ -448,6 +454,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         embedding_identity=parse_embedding_identity(data.get("embedding_identity")),
         default_tags=default_tags,
         max_summary_length=max_summary_length,
+        max_file_size=max_file_size,
         system_docs_version=system_docs_version,
         integrations=integrations,
     )
@@ -491,6 +498,9 @@ def save_config(config: StoreConfig) -> None:
     # Only write max_summary_length if not default
     if config.max_summary_length != 2000:
         store_section["max_summary_length"] = config.max_summary_length
+    # Only write max_file_size if not default
+    if config.max_file_size != 100_000_000:
+        store_section["max_file_size"] = config.max_file_size
     # Write system_docs_version if set (tracks migration state)
     if config.system_docs_version > 0:
         store_section["system_docs_version"] = config.system_docs_version

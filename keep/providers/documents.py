@@ -48,6 +48,12 @@ class FileDocumentProvider:
     Performs text extraction for PDF and HTML files.
     """
 
+    # Default max file size: 100MB
+    MAX_FILE_SIZE = 100_000_000
+
+    def __init__(self, max_size: int | None = None):
+        self.max_size = max_size or self.MAX_FILE_SIZE
+
     EXTENSION_TYPES = {
         ".md": "text/markdown",
         ".markdown": "text/markdown",
@@ -110,6 +116,15 @@ class FileDocumentProvider:
         home = Path.home().resolve()
         if not path.is_relative_to(home):
             raise IOError(f"Path traversal blocked: {path} is outside home directory")
+
+        # Check file size before processing
+        file_size = path.stat().st_size
+        if file_size > self.max_size:
+            raise IOError(
+                f"File too large: {file_size:,} bytes "
+                f"(limit: {self.max_size:,} bytes). "
+                f"Configure max_file_size in store config to increase."
+            )
 
         # Detect content type
         suffix = path.suffix.lower()
