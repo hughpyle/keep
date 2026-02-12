@@ -1216,21 +1216,40 @@ def save(
         "--tag", "-t",
         help="Only extract versions matching these tags (key=value)"
     )] = None,
+    from_source: Annotated[Optional[str], typer.Option(
+        "--from",
+        help="Source item to extract from (default: now)"
+    )] = None,
+    only: Annotated[bool, typer.Option(
+        "--only",
+        help="Move only the current (tip) version"
+    )] = False,
     store: StoreOption = None,
 ):
     """
-    Save now history as a named item.
+    Save versions from now (or another item) as a named item.
 
-    Extracts version history from now into a new named item.
-    With -t, only versions matching the tag filter are extracted;
-    non-matching versions remain in now.
-    Without -t, all history is moved and now resets to default.
+    Requires either -t (tag filter) or --only (tip only).
+    With -t, matching versions are extracted from the source.
+    With --only, just the current version is moved.
+    With --from, extract from a specific item instead of now.
     """
+    if not tags and not only:
+        typer.echo(
+            "Error: use -t to filter by tags, or --only to move just the current version",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     kp = _get_keeper(store)
     tag_filter = _parse_tags(tags) if tags else None
+    source_id = from_source if from_source else None
 
     try:
-        saved = kp.save(name, tags=tag_filter)
+        kwargs: dict = {"tags": tag_filter, "only_current": only}
+        if source_id:
+            kwargs["source_id"] = source_id
+        saved = kp.save(name, **kwargs)
     except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)

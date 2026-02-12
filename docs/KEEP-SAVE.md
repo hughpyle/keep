@@ -1,15 +1,16 @@
 # keep save
 
-Save now history as a named item, archiving a thread of work.
+Save versions from now (or another item) as a named item.
 
-As you update `keep now` throughout a session, version history accumulates. `keep save` extracts that history into a named item, resetting now for the next thread. With tag filtering, you can save only the versions relevant to a specific project.
+As you update `keep now` throughout a session, version history accumulates. `keep save` extracts selected versions into a named item. Requires either `-t` (tag filter) or `--only` (cherry-pick the tip).
 
 ## Usage
 
 ```bash
-keep save "thread-name"                        # Save all now history
-keep save "auth-thread" -t project=myapp       # Save only matching versions
+keep save "auth-thread" -t project=myapp       # Save matching versions from now
 keep save "auth-thread" -t project=myapp       # Incremental: appends more
+keep save "quick-note" --only                   # Move just the current version
+keep save "target" --from "source" -t topic=X  # Reorganize between items
 ```
 
 ## Options
@@ -17,18 +18,51 @@ keep save "auth-thread" -t project=myapp       # Incremental: appends more
 | Option | Description |
 |--------|-------------|
 | `-t`, `--tag KEY=VALUE` | Only extract versions matching these tags (repeatable) |
+| `--only` | Move only the current (tip) version |
+| `--from ITEM_ID` | Source item to extract from (default: now) |
 | `-s`, `--store PATH` | Override store directory |
+
+**Required:** at least one of `-t` or `--only` must be specified.
 
 ## How it works
 
-1. Versions matching the tag filter (or all, if no filter) are moved from now to the named item
-2. Non-matching versions remain in now's history, with gaps tolerated
-3. If now is fully emptied, it resets to its default content
+1. Versions matching the filter are moved from the source to the named target
+2. Non-matching versions remain in the source, with gaps tolerated
+3. If the source is fully emptied and is `now`, it resets to default content
 4. The saved item gets `_saved_from` and `_saved_at` system tags
+
+## Cherry-picking with --only
+
+`--only` moves just the current (tip) version, one at a time. This is the cherry-picker for reorganizing untagged items:
+
+```bash
+keep save "thread-a" --only          # Move tip to thread-a
+keep save "thread-b" --only          # Move next tip to thread-b
+keep save "thread-a" --only          # Append another to thread-a
+```
+
+Combine with `-t` to only move the tip if it matches:
+
+```bash
+keep save "auth-log" --only -t topic=auth   # Move tip only if tagged auth
+```
+
+## Reorganizing with --from
+
+Use `--from` to extract versions from any item, not just now:
+
+```bash
+# Over-grabbed? Pull specific versions out
+keep save "auth-thread" --from "big-dump" -t project=auth
+keep save "docs-thread" --from "big-dump" -t project=docs
+
+# Cherry-pick one version from an existing item
+keep save "highlights" --from "session-log" --only
+```
 
 ## Incremental save
 
-Saving to an existing name **appends** the new versions on top of the existing history. This enables incremental archival across sessions:
+Saving to an existing name **appends** the new versions on top of the existing history:
 
 ```bash
 # Session 1

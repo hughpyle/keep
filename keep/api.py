@@ -2078,6 +2078,7 @@ class Keeper:
         *,
         source_id: str = NOWDOC_ID,
         tags: Optional[dict[str, str]] = None,
+        only_current: bool = False,
     ) -> Item:
         """
         Extract version history from a source document into a named item.
@@ -2092,6 +2093,8 @@ class Keeper:
             source_id: Document to extract from (default: now)
             tags: If provided, only extract versions whose tags contain
                   all specified key=value pairs. If None, extract all.
+            only_current: If True, only extract the current (tip) version,
+                        not any archived history.
 
         Returns:
             The saved Item.
@@ -2119,7 +2122,14 @@ class Keeper:
         def _tags_match(item_tags: dict, filt: dict) -> bool:
             return all(item_tags.get(k) == v for k, v in filt.items())
 
-        if tags:
+        if only_current:
+            # Only extract the tip — no archived versions
+            matched_version_nums = []
+            if tags:
+                current_matches = _tags_match(source_current.tags, tags)
+            else:
+                current_matches = True
+        elif tags:
             matched_version_nums = [
                 v.version for v in source_versions
                 if _tags_match(v.tags, tags)
@@ -2131,7 +2141,8 @@ class Keeper:
 
         # Extract in DocumentStore (SQLite side)
         extracted, new_source, base_version = self._document_store.extract_versions(
-            doc_coll, source_id, name, tag_filter=tags
+            doc_coll, source_id, name, tag_filter=tags,
+            only_current=only_current,
         )
 
         # ChromaDB side: move embeddings

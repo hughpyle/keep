@@ -2,8 +2,6 @@
 * Maybe the metadoc should say how many results to produce by default?
     (e.g. closures: 10, learnings: 3)
 
-* `keep save --from ITEM_ID` — extend save to extract from any versioned item, not just now
-
 * VS Code hooks 
     https://docs.github.com/en/copilot/reference/hooks-configuration
     Session Start - output is ignored!
@@ -13,8 +11,6 @@
     https://developers.openai.com/codex/config-advanced/#notifications
     Notification - can just log the user prompts for the turn (better than nothing)
     "We are actively working on designing a hooks system" (https://github.com/openai/codex/pull/11067#issuecomment-3866360949)
-
-* doc: make it really clear that `keep now foo` does NOT update the tags, the previous tags are still there
 
 * need to make sure the tagging instructions are as clear as poss
     - reference `keep get .tag/act` directly
@@ -27,6 +23,8 @@
 * lectio
     - encourage "deep reflection" on items that were important
       e.g. URLs and files that were captured recently
+
+* check - what is your emotional response when encountering this project the first time?
 
 * let's explore some semantic relationships that are important
     the thing we're talking about is related to (many of):
@@ -88,7 +86,8 @@
     - want this to be pluggable, guide the model-driven tagging from a sysdoc that defines how it works
     - want "references" for this too... maybe later
 
-* check - what is your emotional response when encountering this project the first time?
+* Other auto-taggers:
+    - geolocation-tagger to extract location stuff from latlong
 
 * check for compatibility with linux (so far I've exclusively been running on macOS)
     can deploy on rpi at home
@@ -100,30 +99,16 @@
     - this is all investigation work, not implementation  (I don't have a test environment)
 
 * add support for the kimi/moonshot models, etc - what are we missing? compare claude code, openclaw
-
-* add an audio track (mp3, flac, or something similar) to the library
-    - keep it small tho, under a megabyte?
-    - public domain recording of a song that resonates with the instructional content?
-    - use as content but don't really want add dependencies on mp3/flace/wav decoding (especially anything requiring a license such as the fraunhofer stuff, all our deps must be MIT-compatible)
-    - getting tags out of the file would be a great test case
-    - analysis of the audio content will depend on the available models, but some might do a good job
-    - whisper-cpp etc? outside our scope
-      but I do want a semantic index of my music library
-
-* add an image; same strategy as audio
-
-* also support docx
-
-* multi-embeddings
-    - background task can detect current config and maintain compat
-
-* review the CLI completely.  Can the common tasks have single-letter aliases for their commands?
-
-* better update/degrade memory strategies: compare with current best of breed
-    - want something that tracks last-retrieval time
-    - not sure how that applies to the ranking for retrieval
-    - do we need any of this to be config not code??
  
+* Multi-file (pass a path to a folder, recurse flag, etc.)
+
+* media-summarization support (images, video)
+    - mlx support for media-summarization models, e.g. Qwen2-VL-2B-Instruct, Moondream2
+    - separate model selection with API keys too
+    - good defaults!
+
+* whisper.cpp or similar text-extraction?
+
 ----
 
 Done: (finished items go at the end)
@@ -253,3 +238,6 @@ x `context` text alongside summaries? (no, summary is good now)
 . `keep save "name"`: extract now history into named item, with tag-filtered variant (-t)
 . gap-tolerant version numbering: get_version() uses OFFSET, revert() uses max_version(), list_recent_with_history() uses ROW_NUMBER()
 . repaired malformed SQLite database (iterdump + rebuild)
+. media: pptx, docx
+. media: images, audio (tag extraction, not multimodal models yet)
+. `keep save --from ITEM_ID` — extend save to extract from any versioned item, not just now
