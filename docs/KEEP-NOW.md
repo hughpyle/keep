@@ -66,16 +66,16 @@ meta/learnings:
 Working on auth flow
 ```
 
-## keep save
+## keep move
 
-When a thread of work is complete, save the now history as a named item. Requires either `-t` (tag filter) or `--only` (cherry-pick the tip).
+When a thread of work is complete, move the now history into a named item. Requires either `-t` (tag filter) or `--only` (cherry-pick the tip).
 
 ```bash
-keep save "auth-thread" -t project=myapp   # Save matching versions
-keep save "quick-note" --only              # Move just the current version
+keep move "auth-thread" -t project=myapp   # Move matching versions
+keep move "quick-note" --only              # Move just the current version
 ```
 
-Saving to an existing name appends incrementally. Use `--from` to reorganize between items. See [KEEP-SAVE.md](KEEP-SAVE.md) for details.
+Moving to an existing name appends incrementally. Use `--from` to reorganize between items. See [KEEP-MOVE.md](KEEP-MOVE.md) for details.
 
 ## keep reflect
 
@@ -87,7 +87,7 @@ keep reflect
 
 ## See Also
 
-- [KEEP-SAVE.md](KEEP-SAVE.md) — Save now history as named items
+- [KEEP-MOVE.md](KEEP-MOVE.md) — Move now history into named items
 - [TAGGING.md](TAGGING.md) — Tag system and speech-act tracking
 - [VERSIONING.md](VERSIONING.md) — Version history and navigation
 - [META-DOCS.md](META-DOCS.md) — How meta sections surface contextual items
