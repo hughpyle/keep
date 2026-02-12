@@ -334,19 +334,21 @@ class TestMetaDocParser:
     def test_query_lines(self):
         """Query lines with key=value pairs are parsed."""
         from keep.api import _parse_meta_doc
-        queries, ctx = _parse_meta_doc("act=commitment status=open\ntype=learning")
+        queries, ctx, prereqs = _parse_meta_doc("act=commitment status=open\ntype=learning")
         assert queries == [
             {"act": "commitment", "status": "open"},
             {"type": "learning"},
         ]
         assert ctx == []
+        assert prereqs == []
 
     def test_context_match_keys(self):
         """Context-match lines (key=) are parsed."""
         from keep.api import _parse_meta_doc
-        queries, ctx = _parse_meta_doc("project=\ntopic=")
+        queries, ctx, prereqs = _parse_meta_doc("project=\ntopic=")
         assert queries == []
         assert ctx == ["project", "topic"]
+        assert prereqs == []
 
     def test_prose_ignored(self):
         """Prose lines are ignored by the parser."""
@@ -359,9 +361,10 @@ act=commitment status=open
 
 project=
 """
-        queries, ctx = _parse_meta_doc(content)
+        queries, ctx, prereqs = _parse_meta_doc(content)
         assert queries == [{"act": "commitment", "status": "open"}]
         assert ctx == ["project"]
+        assert prereqs == []
 
     def test_mixed_content(self):
         """Full meta-doc with prose, queries, and context."""
@@ -377,33 +380,62 @@ type=gotcha
 project=
 topic=
 """
-        queries, ctx = _parse_meta_doc(content)
+        queries, ctx, prereqs = _parse_meta_doc(content)
         assert len(queries) == 3
         assert queries[0] == {"type": "learning"}
         assert queries[1] == {"type": "breakdown"}
         assert queries[2] == {"type": "gotcha"}
         assert ctx == ["project", "topic"]
+        assert prereqs == []
 
     def test_empty_content(self):
         """Empty content returns empty lists."""
         from keep.api import _parse_meta_doc
-        queries, ctx = _parse_meta_doc("")
+        queries, ctx, prereqs = _parse_meta_doc("")
         assert queries == []
         assert ctx == []
+        assert prereqs == []
 
     def test_markdown_headings_are_prose(self):
         """Markdown headings and formatting are treated as prose."""
         from keep.api import _parse_meta_doc
-        queries, ctx = _parse_meta_doc("# Heading\n**bold text**\n- list item")
+        queries, ctx, prereqs = _parse_meta_doc("# Heading\n**bold text**\n- list item")
         assert queries == []
         assert ctx == []
+        assert prereqs == []
 
     def test_partial_key_value_is_prose(self):
         """Lines with mixed tokens (some not key=value) are prose."""
         from keep.api import _parse_meta_doc
-        queries, ctx = _parse_meta_doc("act=commitment and also open")
+        queries, ctx, prereqs = _parse_meta_doc("act=commitment and also open")
         assert queries == []
         assert ctx == []
+        assert prereqs == []
+
+    def test_prerequisite_wildcard(self):
+        """Prerequisite lines (key=*) gate metadoc on tag existence."""
+        from keep.api import _parse_meta_doc
+        queries, ctx, prereqs = _parse_meta_doc("genre=*\ngenre=")
+        assert queries == []
+        assert ctx == ["genre"]
+        assert prereqs == ["genre"]
+
+    def test_mixed_prereq_query_context(self):
+        """Full metadoc with prerequisites, queries, and context."""
+        from keep.api import _parse_meta_doc
+        content = """# .meta/genre — Similar genres
+
+Items in the same genre, for media with genre tags.
+
+genre=*
+type=learning
+genre=
+project=
+"""
+        queries, ctx, prereqs = _parse_meta_doc(content)
+        assert prereqs == ["genre"]
+        assert queries == [{"type": "learning"}]
+        assert ctx == ["genre", "project"]
 
 
 # -----------------------------------------------------------------------------
@@ -428,14 +460,15 @@ class TestSystemDocs:
             assert doc_id == doc_id.strip(), f"{doc_id} has whitespace"
 
     def test_meta_docs_have_query_lines(self):
-        """Meta-docs must contain at least one parseable query line."""
+        """Meta-docs must contain at least one parseable query or context line."""
         from keep.api import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR, _load_frontmatter, _parse_meta_doc
         for filename, doc_id in SYSTEM_DOC_IDS.items():
             if not doc_id.startswith(".meta/"):
                 continue
             content, _ = _load_frontmatter(SYSTEM_DOC_DIR / filename)
-            queries, _ = _parse_meta_doc(content)
-            assert len(queries) > 0, f"{doc_id} has no query lines — meta-doc would be inert"
+            queries, ctx, _ = _parse_meta_doc(content)
+            assert len(queries) > 0 or len(ctx) > 0, \
+                f"{doc_id} has no query or context lines — meta-doc would be inert"
 
     def test_tag_docs_have_structure(self):
         """.tag/* docs should have documented structure (values, characteristics, or lifecycle)."""

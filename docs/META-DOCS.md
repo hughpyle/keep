@@ -37,7 +37,7 @@ keep put "JSON validation before deploy saves hours" -t type=learning -t project
 
 ## Bundled Meta-Docs
 
-keep ships with two meta-docs:
+keep ships with five meta-docs:
 
 ### `.meta/todo` — Open Loops
 
@@ -62,16 +62,42 @@ Surfaces past learnings, breakdowns, and gotchas. Before starting work, check wh
 
 **Context keys:** `project=`, `topic=`
 
+### `.meta/genre` — Same Genre
+
+Groups media items by genre. Only activates for items that have a `genre` tag.
+
+**Prerequisites:** `genre=*`
+**Context keys:** `genre=`
+
+### `.meta/artist` — Same Artist
+
+Groups media items by artist/creator. Only activates for items that have an `artist` tag.
+
+**Prerequisites:** `artist=*`
+**Context keys:** `artist=`
+
+### `.meta/album` — Same Album
+
+Groups tracks from the same release. Only activates for items that have an `album` tag.
+
+**Prerequisites:** `album=*`
+**Context keys:** `album=`
+
 ## Query Structure
 
 A meta-doc file contains prose (for humans and LLMs) plus structured lines:
 
 - **Query lines** like `act=commitment status=open` — each `key=value` pair is an AND filter; multiple query lines are OR'd together
 - **Context-match lines** like `project=` — a bare key whose value is filled from the current item's tags
+- **Prerequisite lines** like `genre=*` — the current item must have this tag or the entire meta-doc is skipped
 
 Context matching is what makes meta-docs contextual. If the current item has `project=myapp`, then the query `act=commitment status=open` combined with context key `project=` becomes `act=commitment status=open project=myapp`. This scopes results to the current project.
 
 If the current item has no matching tag for a context key, the query runs without that filter.
+
+Prerequisites act as gates. A meta-doc with `genre=*` only activates for items that have a `genre` tag — items without one skip the meta-doc entirely. This lets you create meta-docs that only apply to certain kinds of items (e.g., media files tagged with genre, artist, album) without polluting results for unrelated items.
+
+A meta-doc with only prerequisites and context keys (no query lines) becomes a pure **group-by**: it finds items sharing the same tag value as the current item. For example, `genre=*` + `genre=` means "find other items with the same genre as this one."
 
 ## Ranking
 
@@ -110,6 +136,24 @@ keep put "Assumed UTC, server was local time" -t type=breakdown -t project=myapp
 # Gotchas (surface in meta/learnings)
 keep put "CI cache invalidation needs manual clear after dep change" -t type=gotcha -t topic=ci
 ```
+
+### Media Library
+
+The media meta-docs (`genre`, `artist`, `album`) surface related media automatically. Tag your audio files when ingesting them:
+
+```bash
+keep put ~/Music/OK_Computer/01_Airbag.flac -t artist=Radiohead -t album="OK Computer" -t genre=rock
+keep put ~/Music/OK_Computer/02_Paranoid_Android.flac -t artist=Radiohead -t album="OK Computer" -t genre=rock
+keep put ~/Music/Kid_A/01_Everything.flac -t artist=Radiohead -t album="Kid A" -t genre=electronic
+```
+
+Now when you `keep get` any of these items, you'll see:
+
+- `meta/artist:` — other tracks by Radiohead
+- `meta/album:` — other tracks from the same album
+- `meta/genre:` — other rock (or electronic) items
+
+Items without media tags won't see these sections at all — the `genre=*` prerequisite ensures they're skipped.
 
 The tag taxonomy is documented in system docs:
 
