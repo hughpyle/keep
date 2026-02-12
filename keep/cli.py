@@ -1210,8 +1210,8 @@ def reflect():
 
 
 @app.command()
-def save(
-    name: Annotated[str, typer.Argument(help="Name for the saved thread")],
+def move(
+    name: Annotated[str, typer.Argument(help="Target item name")],
     tags: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Only extract versions matching these tags (key=value)"
@@ -1227,7 +1227,7 @@ def save(
     store: StoreOption = None,
 ):
     """
-    Save versions from now (or another item) as a named item.
+    Move versions from now (or another item) into a named item.
 
     Requires either -t (tag filter) or --only (tip only).
     With -t, matching versions are extracted from the source.
@@ -1249,7 +1249,7 @@ def save(
         kwargs: dict = {"tags": tag_filter, "only_current": only}
         if source_id:
             kwargs["source_id"] = source_id
-        saved = kp.save(name, **kwargs)
+        saved = kp.move(name, **kwargs)
     except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)

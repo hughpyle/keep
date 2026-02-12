@@ -2085,7 +2085,7 @@ class Keeper:
         """
         return self.remember(content, id=NOWDOC_ID, tags=tags)
 
-    def save(
+    def move(
         self,
         name: str,
         *,
@@ -2094,7 +2094,7 @@ class Keeper:
         only_current: bool = False,
     ) -> Item:
         """
-        Extract version history from a source document into a named item.
+        Move versions from a source document into a named item.
 
         Moves matching versions (filtered by tags if provided) from source_id
         to a named item. If the target already exists, extracted versions are
@@ -2102,7 +2102,7 @@ class Keeper:
         if fully emptied and source is 'now', it resets to default.
 
         Args:
-            name: ID for the saved item (created if new, extended if exists)
+            name: ID for the target item (created if new, extended if exists)
             source_id: Document to extract from (default: now)
             tags: If provided, only extract versions whose tags contain
                   all specified key=value pairs. If None, extract all.
@@ -2110,7 +2110,7 @@ class Keeper:
                         not any archived history.
 
         Returns:
-            The saved Item.
+            The moved Item.
 
         Raises:
             ValueError: If name is empty, source doesn't exist,

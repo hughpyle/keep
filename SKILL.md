@@ -114,12 +114,12 @@ keep put "file:///path/to/important.pdf" -t type=reference -t topic=security
 ```
 Ask: What is this document? Why is it important? Tag appropriately. Documents indexed during work become navigable knowledge.
 
-**Save when pivoting.** When a thread of work is complete, or the conversation shifts topic, save the now history before moving on:
+**Move when pivoting.** When a thread of work is complete, or the conversation shifts topic, move the now history before moving on:
 ```bash
-keep save "auth-thread" -t project=myapp     # Archive matching versions
-keep save "design-log" --only                # Move just the tip version
+keep move "auth-thread" -t project=myapp     # Archive matching versions
+keep move "design-log" --only                # Move just the tip version
 ```
-Saving clears matched versions from now, making room for what's next. Tag filtering lets you extract one project's thread from a mixed session.
+Moving clears matched versions from now, making room for what's next. Tag filtering lets you extract one project's thread from a mixed session.
 
 **Breakdowns are valuable.** When the normal flow is interrupted — an assumption has been revealed. The breakdown is where learning happens.
 
@@ -176,9 +176,9 @@ For installation options, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 keep now                              # Current intentions
 keep now "Working on auth flow"       # Update intentions
 keep now -V 1                         # Previous intentions
-keep save "name" -t project=foo       # Save matching versions from now
-keep save "name" --only               # Move just the current version
-keep save "name" --from "source" -t X # Reorganize between items
+keep move "name" -t project=foo       # Move matching versions from now
+keep move "name" --only               # Move just the current version
+keep move "name" --from "source" -t X # Reorganize between items
 
 keep find "authentication"            # Search by meaning
 keep find "auth" -t project=myapp     # Search with tag filter

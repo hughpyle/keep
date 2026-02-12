@@ -72,40 +72,40 @@ keep find "recent work" --since P1D   # Last 24 hours
 **Ending a session:**
 ```bash
 keep now "Completed OAuth2 flow. Token refresh working. Next: add tests." -t topic=auth
-keep save "auth-thread" -t project=myapp  # Archive this thread of work
+keep move "auth-thread" -t project=myapp  # Archive this thread of work
 ```
 
 ---
 
-## Saving Threads
+## Moving Threads
 
-As you work, `keep now` accumulates version history — a trace of how intentions evolved. `keep save` lets you name and archive that history, making room for what's next. It requires `-t` (tag filter) or `--only` (tip only) to prevent accidental grab-all saves.
+As you work, `keep now` accumulates version history — a trace of how intentions evolved. `keep move` lets you name and archive that history, making room for what's next. It requires `-t` (tag filter) or `--only` (tip only) to prevent accidental grab-all moves.
 
-**Snapshot before pivoting.** When the conversation shifts topic, save what you have so far before moving on:
+**Snapshot before pivoting.** When the conversation shifts topic, move what you have so far before moving on:
 ```bash
-keep save "auth-work" -t project=myapp       # Archive the auth thread
+keep move "auth-work" -t project=myapp       # Archive the auth thread
 keep now "Starting on database migration"    # Fresh context for new work
 ```
 
-**Incremental archival.** Save to the same name repeatedly — versions append, building a running log across sessions:
+**Incremental archival.** Move to the same name repeatedly — versions append, building a running log across sessions:
 ```bash
 # Session 1
-keep save "design-log" -t project=myapp
+keep move "design-log" -t project=myapp
 # Session 2 (more work on same project)
-keep save "design-log" -t project=myapp      # Appends new versions
+keep move "design-log" -t project=myapp      # Appends new versions
 ```
 
 **End-of-session archive.** When a thread of work is complete:
 ```bash
-keep save "auth-thread" -t project=myapp
+keep move "auth-thread" -t project=myapp
 ```
 
 **Tag-filtered extraction.** When a session mixes multiple projects, extract just the thread you want:
 ```bash
-keep save "frontend-work" -t project=frontend   # Leaves backend versions in now
+keep move "frontend-work" -t project=frontend   # Leaves backend versions in now
 ```
 
-The saved item is a full versioned document — browse with `keep get name --history`, navigate with `-V 1`, `-V 2`, etc.
+The moved item is a full versioned document — browse with `keep get name --history`, navigate with `-V 1`, `-V 2`, etc.
 
 ---
 
