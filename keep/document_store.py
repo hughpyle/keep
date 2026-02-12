@@ -585,6 +585,7 @@ class DocumentStore:
         source_id: str,
         target_id: str,
         tag_filter: Optional[dict[str, str]] = None,
+        only_current: bool = False,
     ) -> tuple[list[VersionInfo], Optional[DocumentRecord], int]:
         """
         Extract matching versions from source into a target document.
@@ -601,6 +602,8 @@ class DocumentStore:
             tag_filter: If provided, only extract versions whose tags
                         contain all specified key=value pairs.
                         If None, extract everything.
+            only_current: If True, only extract the current (tip) version,
+                        not any archived history.
 
         Returns:
             Tuple of (extracted_versions, new_source_current_or_None, base_version).
@@ -643,7 +646,14 @@ class DocumentStore:
                 ))
 
             # Partition: matching vs remaining
-            if tag_filter:
+            if only_current:
+                # Only extract the current (tip) version, skip all history
+                matching_versions = []
+                if tag_filter:
+                    current_matches = _tags_match(source.tags, tag_filter)
+                else:
+                    current_matches = True
+            elif tag_filter:
                 matching_versions = [v for v in all_versions if _tags_match(v.tags, tag_filter)]
                 current_matches = _tags_match(source.tags, tag_filter)
             else:

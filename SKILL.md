@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.33.0
+version: 0.34.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -116,8 +116,8 @@ Ask: What is this document? Why is it important? Tag appropriately. Documents in
 
 **Save when pivoting.** When a thread of work is complete, or the conversation shifts topic, save the now history before moving on:
 ```bash
-keep save "auth-thread" -t project=myapp     # Archive and pivot
-keep save "design-log" -t project=myapp      # Incremental — appends if name exists
+keep save "auth-thread" -t project=myapp     # Archive matching versions
+keep save "design-log" --only                # Move just the tip version
 ```
 Saving clears matched versions from now, making room for what's next. Tag filtering lets you extract one project's thread from a mixed session.
 
@@ -176,8 +176,9 @@ For installation options, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 keep now                              # Current intentions
 keep now "Working on auth flow"       # Update intentions
 keep now -V 1                         # Previous intentions
-keep save "thread-name"               # Save now history as named item
-keep save "name" -t project=foo       # Save only matching versions
+keep save "name" -t project=foo       # Save matching versions from now
+keep save "name" --only               # Move just the current version
+keep save "name" --from "source" -t X # Reorganize between items
 
 keep find "authentication"            # Search by meaning
 keep find "auth" -t project=myapp     # Search with tag filter
