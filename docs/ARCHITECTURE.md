@@ -294,9 +294,12 @@ Fetch content from URIs with content regularization.
 **Content Regularization:**
 - **PDF**: text extracted via pypdf
 - **HTML**: text extracted via BeautifulSoup (scripts/styles removed)
+- **DOCX/PPTX**: text + tables/slides extracted via python-docx/python-pptx; auto-tags: author, title
+- **Audio** (MP3, FLAC, OGG, WAV, AIFF, M4A, WMA): metadata via tinytag; auto-tags: artist, album, genre, year
+- **Images** (JPEG, PNG, TIFF, WEBP): EXIF metadata via Pillow; auto-tags: dimensions, camera, date
 - **Other formats**: treated as plain text
 
-This ensures both embedding and summarization receive clean text.
+Provider-extracted tags merge with user tags (user wins on collision). This ensures both embedding and summarization receive clean text.
 
 ---
 
