@@ -79,7 +79,7 @@ keep save "auth-thread" -t project=myapp  # Archive this thread of work
 
 ## Saving Threads
 
-As you work, `keep now` accumulates version history — a trace of how intentions evolved. `keep save` lets you name and archive that history, making room for what's next.
+As you work, `keep now` accumulates version history — a trace of how intentions evolved. `keep save` lets you name and archive that history, making room for what's next. It requires `-t` (tag filter) or `--only` (tip only) to prevent accidental grab-all saves.
 
 **Snapshot before pivoting.** When the conversation shifts topic, save what you have so far before moving on:
 ```bash

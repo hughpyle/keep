@@ -68,14 +68,14 @@ Working on auth flow
 
 ## keep save
 
-When a thread of work is complete, save the now history as a named item. Tag filtering lets you extract only the versions relevant to a specific project.
+When a thread of work is complete, save the now history as a named item. Requires either `-t` (tag filter) or `--only` (cherry-pick the tip).
 
 ```bash
-keep save "thread-name"                    # Save all now history
-keep save "auth-thread" -t project=myapp   # Save only matching versions
+keep save "auth-thread" -t project=myapp   # Save matching versions
+keep save "quick-note" --only              # Move just the current version
 ```
 
-Saving to an existing name appends incrementally. See [KEEP-SAVE.md](KEEP-SAVE.md) for details.
+Saving to an existing name appends incrementally. Use `--from` to reorganize between items. See [KEEP-SAVE.md](KEEP-SAVE.md) for details.
 
 ## keep reflect
 
