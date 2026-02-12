@@ -64,6 +64,26 @@ class FileDocumentProvider:
         ".xml": "application/xml",
         ".rst": "text/x-rst",
         ".pdf": "application/pdf",
+        # Office documents
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        # Audio
+        ".mp3": "audio/mpeg",
+        ".flac": "audio/flac",
+        ".aiff": "audio/aiff",
+        ".aif": "audio/aiff",
+        ".ogg": "audio/ogg",
+        ".wav": "audio/wav",
+        ".m4a": "audio/mp4",
+        ".alac": "audio/mp4",
+        ".wma": "audio/x-ms-wma",
+        # Images
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".tiff": "image/tiff",
+        ".tif": "image/tiff",
+        ".webp": "image/webp",
     }
     
     def supports(self, uri: str) -> bool:
@@ -96,10 +116,19 @@ class FileDocumentProvider:
         content_type = self.EXTENSION_TYPES.get(suffix, "text/plain")
 
         # Extract text based on file type
+        extracted_tags: dict[str, str] | None = None
         if suffix == ".pdf":
             content = self._extract_pdf_text(path)
         elif suffix in (".html", ".htm"):
             content = self._extract_html_text(path)
+        elif suffix in (".docx",):
+            content, extracted_tags = self._extract_docx(path)
+        elif suffix in (".pptx",):
+            content, extracted_tags = self._extract_pptx(path)
+        elif content_type and content_type.startswith("audio/"):
+            content, extracted_tags = self._extract_audio_metadata(path)
+        elif content_type and content_type.startswith("image/"):
+            content, extracted_tags = self._extract_image_metadata(path)
         else:
             # Read as plain text
             try:
@@ -120,7 +149,251 @@ class FileDocumentProvider:
             content=content,
             content_type=content_type,
             metadata=metadata,
+            tags=extracted_tags,
         )
+
+    def _extract_docx(self, path: Path) -> tuple[str, dict[str, str]]:
+        """Extract text and metadata from DOCX file."""
+        try:
+            from docx import Document as DocxDocument
+        except ImportError:
+            raise IOError(
+                f"DOCX support requires 'python-docx' library. "
+                f"Install with: pip install python-docx\n"
+                f"Cannot read DOCX: {path}"
+            )
+
+        try:
+            doc = DocxDocument(path)
+            parts = []
+
+            # Extract paragraph text
+            for para in doc.paragraphs:
+                text = para.text.strip()
+                if text:
+                    parts.append(text)
+
+            # Extract table text
+            for table in doc.tables:
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        parts.append(" | ".join(cells))
+
+            if not parts:
+                raise IOError(f"No text extracted from DOCX: {path}")
+
+            content = "\n\n".join(parts)
+
+            # Extract metadata tags
+            tags: dict[str, str] = {}
+            props = doc.core_properties
+            if props.author:
+                tags["author"] = props.author
+            if props.title:
+                tags["title"] = props.title
+
+            return content, tags or None
+        except ImportError:
+            raise
+        except IOError:
+            raise
+        except Exception as e:
+            raise IOError(f"Failed to extract text from DOCX {path}: {e}")
+
+    def _extract_pptx(self, path: Path) -> tuple[str, dict[str, str]]:
+        """Extract text and metadata from PPTX file."""
+        try:
+            from pptx import Presentation
+        except ImportError:
+            raise IOError(
+                f"PPTX support requires 'python-pptx' library. "
+                f"Install with: pip install python-pptx\n"
+                f"Cannot read PPTX: {path}"
+            )
+
+        try:
+            prs = Presentation(path)
+            parts = []
+
+            for i, slide in enumerate(prs.slides, 1):
+                slide_texts = []
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for para in shape.text_frame.paragraphs:
+                            text = para.text.strip()
+                            if text:
+                                slide_texts.append(text)
+                if slide_texts:
+                    parts.append(f"Slide {i}:\n" + "\n".join(slide_texts))
+
+                # Extract notes
+                if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                    notes = slide.notes_slide.notes_text_frame.text.strip()
+                    if notes:
+                        parts.append(f"Notes:\n{notes}")
+
+            if not parts:
+                raise IOError(f"No text extracted from PPTX: {path}")
+
+            content = "\n\n".join(parts)
+
+            # Extract metadata tags
+            tags: dict[str, str] = {}
+            props = prs.core_properties
+            if props.author:
+                tags["author"] = props.author
+            if props.title:
+                tags["title"] = props.title
+
+            return content, tags or None
+        except ImportError:
+            raise
+        except IOError:
+            raise
+        except Exception as e:
+            raise IOError(f"Failed to extract text from PPTX {path}: {e}")
+
+    def _extract_audio_metadata(self, path: Path) -> tuple[str, dict[str, str]]:
+        """Extract metadata from audio file as structured text."""
+        try:
+            from tinytag import TinyTag
+        except ImportError:
+            raise IOError(
+                f"Audio metadata support requires 'tinytag' library. "
+                f"Install with: pip install tinytag\n"
+                f"Cannot read audio metadata: {path}"
+            )
+
+        try:
+            tag = TinyTag.get(path)
+            lines = []
+            tags: dict[str, str] = {}
+
+            if tag.title:
+                lines.append(f"Title: {tag.title}")
+                tags["title"] = tag.title
+            if tag.artist:
+                lines.append(f"Artist: {tag.artist}")
+                tags["artist"] = tag.artist
+            if tag.album:
+                lines.append(f"Album: {tag.album}")
+                tags["album"] = tag.album
+            if tag.albumartist:
+                lines.append(f"Album Artist: {tag.albumartist}")
+            if tag.track:
+                lines.append(f"Track: {tag.track}")
+            if tag.genre:
+                lines.append(f"Genre: {tag.genre}")
+                tags["genre"] = tag.genre
+            if tag.year:
+                lines.append(f"Year: {tag.year}")
+                tags["year"] = str(tag.year)
+            if tag.duration:
+                mins, secs = divmod(int(tag.duration), 60)
+                lines.append(f"Duration: {mins}:{secs:02d}")
+            if tag.bitrate:
+                lines.append(f"Bitrate: {int(tag.bitrate)} kbps")
+            if tag.samplerate:
+                lines.append(f"Sample Rate: {tag.samplerate} Hz")
+            if tag.comment:
+                lines.append(f"Comment: {tag.comment}")
+
+            if not lines:
+                lines.append(f"Audio file: {path.name}")
+
+            content = "\n".join(lines)
+            return content, tags or None
+        except ImportError:
+            raise
+        except Exception as e:
+            raise IOError(f"Failed to extract audio metadata from {path}: {e}")
+
+    def _extract_image_metadata(self, path: Path) -> tuple[str, dict[str, str]]:
+        """Extract EXIF metadata from image file as structured text."""
+        try:
+            from PIL import Image
+            from PIL.ExifTags import TAGS as EXIF_TAGS
+        except ImportError:
+            raise IOError(
+                f"Image metadata support requires 'Pillow' library. "
+                f"Install with: pip install Pillow\n"
+                f"Cannot read image metadata: {path}"
+            )
+
+        try:
+            img = Image.open(path)
+            lines = []
+            tags: dict[str, str] = {}
+
+            # Basic image info
+            w, h = img.size
+            lines.append(f"Dimensions: {w}x{h}")
+            tags["dimensions"] = f"{w}x{h}"
+            lines.append(f"Format: {img.format}")
+
+            # EXIF data
+            exif = img.getexif()
+            if exif:
+                # Camera model
+                model = exif.get(0x0110)  # Model
+                make = exif.get(0x010F)  # Make
+                if model:
+                    camera = f"{make} {model}".strip() if make else model
+                    lines.append(f"Camera: {camera}")
+                    tags["camera"] = camera
+
+                # Date taken
+                date = exif.get(0x9003) or exif.get(0x0132)  # DateTimeOriginal or DateTime
+                if date:
+                    lines.append(f"Date: {date}")
+                    tags["date"] = date
+
+                # Focal length
+                focal = exif.get(0x920A)  # FocalLength
+                if focal:
+                    if hasattr(focal, 'numerator'):
+                        focal_val = focal.numerator / focal.denominator
+                        lines.append(f"Focal Length: {focal_val:.0f}mm")
+                    else:
+                        lines.append(f"Focal Length: {focal}mm")
+
+                # ISO
+                iso = exif.get(0x8827)  # ISOSpeedRatings
+                if iso:
+                    lines.append(f"ISO: {iso}")
+
+                # Exposure time
+                exposure = exif.get(0x829A)  # ExposureTime
+                if exposure:
+                    if hasattr(exposure, 'numerator'):
+                        if exposure.numerator == 1:
+                            lines.append(f"Exposure: 1/{exposure.denominator}s")
+                        else:
+                            lines.append(f"Exposure: {exposure.numerator}/{exposure.denominator}s")
+                    else:
+                        lines.append(f"Exposure: {exposure}s")
+
+                # F-number
+                fnumber = exif.get(0x829D)  # FNumber
+                if fnumber:
+                    if hasattr(fnumber, 'numerator'):
+                        fval = fnumber.numerator / fnumber.denominator
+                        lines.append(f"Aperture: f/{fval:.1f}")
+                    else:
+                        lines.append(f"Aperture: f/{fnumber}")
+
+            img.close()
+
+            if not lines:
+                lines.append(f"Image file: {path.name}")
+
+            content = "\n".join(lines)
+            return content, tags or None
+        except ImportError:
+            raise
+        except Exception as e:
+            raise IOError(f"Failed to extract image metadata from {path}: {e}")
 
     def _extract_pdf_text(self, path: Path) -> str:
         """Extract text from PDF file."""

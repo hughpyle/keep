@@ -1255,13 +1255,22 @@ class Keeper:
 
         doc = self._document_provider.fetch(id)
 
+        # Merge provider-extracted tags with user tags (user wins on collision)
+        merged_tags: dict[str, str] | None = None
+        if doc.tags or tags:
+            merged_tags = {}
+            if doc.tags:
+                merged_tags.update(doc.tags)
+            if tags:
+                merged_tags.update(tags)  # User tags override provider tags
+
         system_tags = {"_source": "uri"}
         if doc.content_type:
             system_tags["_content_type"] = doc.content_type
 
         return self._upsert(
             id, doc.content,
-            tags=tags, summary=summary,
+            tags=merged_tags, summary=summary,
             system_tags=system_tags,
         )
 
