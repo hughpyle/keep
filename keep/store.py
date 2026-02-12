@@ -78,6 +78,11 @@ class ChromaStore:
         # Cache of collection handles
         self._collections: dict[str, Any] = {}
     
+    @property
+    def embedding_dimension(self) -> Optional[int]:
+        """Current expected embedding dimension (may be None before first write)."""
+        return self._embedding_dimension
+
     def reset_embedding_dimension(self, dimension: int) -> None:
         """Update expected embedding dimension (for provider changes)."""
         self._embedding_dimension = dimension
@@ -596,6 +601,87 @@ class ChromaStore:
         """Return the number of items in a collection."""
         coll = self._get_collection(collection)
         return coll.count()
+
+    # -------------------------------------------------------------------------
+    # Batch Operations
+    # -------------------------------------------------------------------------
+
+    def get_entries_full(
+        self, collection: str, ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """
+        Batch get entries with embeddings, summaries, and metadata.
+
+        Returns list of dicts with keys: id, embedding, summary, tags.
+        Only entries that exist are returned (missing IDs are silently skipped).
+        """
+        if not ids:
+            return []
+        coll = self._get_collection(collection)
+        result = coll.get(
+            ids=ids,
+            include=["embeddings", "documents", "metadatas"],
+        )
+        entries = []
+        if result["ids"]:
+            for i, entry_id in enumerate(result["ids"]):
+                embedding = None
+                if result["embeddings"] is not None and i < len(result["embeddings"]):
+                    emb = result["embeddings"][i]
+                    embedding = list(emb) if emb is not None else None
+                summary = ""
+                if result["documents"] is not None and i < len(result["documents"]):
+                    summary = result["documents"][i] or ""
+                tags = {}
+                if result["metadatas"] is not None and i < len(result["metadatas"]):
+                    tags = self._metadata_to_tags(result["metadatas"][i])
+                entries.append({
+                    "id": entry_id,
+                    "embedding": embedding,
+                    "summary": summary,
+                    "tags": tags,
+                })
+        return entries
+
+    def upsert_batch(
+        self,
+        collection: str,
+        ids: list[str],
+        embeddings: list[list[float]],
+        summaries: list[str],
+        tags: list[dict[str, str]],
+    ) -> None:
+        """
+        Batch upsert entries with embeddings.
+
+        All lists must have the same length. Tags are converted to store
+        metadata format internally.
+        """
+        if not ids:
+            return
+        coll = self._get_collection(collection)
+        metadatas = [self._tags_to_metadata(t) for t in tags]
+        coll.upsert(
+            ids=ids,
+            embeddings=embeddings,
+            documents=summaries,
+            metadatas=metadatas,
+        )
+
+    def delete_entries(self, collection: str, ids: list[str]) -> None:
+        """
+        Delete specific entries by ID.
+
+        Unlike delete(), this does not expand version IDs — it deletes
+        exactly the IDs given. Silently ignores IDs that don't exist.
+        """
+        if not ids:
+            return
+        coll = self._get_collection(collection)
+        try:
+            coll.delete(ids=ids)
+        except ValueError:
+            pass  # Some IDs may not exist
 
     # -------------------------------------------------------------------------
     # Resource Management

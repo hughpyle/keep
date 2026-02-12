@@ -159,8 +159,10 @@ from .paths import get_config_dir, get_default_store_path
 from .pending_summaries import PendingSummaryQueue
 from .providers import get_registry
 from .providers.base import (
+    Document,
     DocumentProvider,
     EmbeddingProvider,
+    MediaDescriber,
     SummarizationProvider,
 )
 from .providers.embedding_cache import CachingEmbeddingProvider
@@ -410,7 +412,12 @@ class Keeper:
     def __init__(
         self,
         store_path: Optional[str | Path] = None,
-        decay_half_life_days: float = 30.0
+        decay_half_life_days: float = 30.0,
+        *,
+        config: Optional[StoreConfig] = None,
+        doc_store=None,
+        vector_store=None,
+        pending_queue=None,
     ) -> None:
         """
         Initialize or open an existing reflective memory store.
@@ -421,57 +428,68 @@ class Keeper:
             decay_half_life_days: Memory decay half-life in days (ACT-R model).
                 After this many days, an item's effective relevance is halved.
                 Set to 0 or negative to disable decay.
+            config: Pre-loaded StoreConfig (skips filesystem config discovery).
+            doc_store: Injected document store (skips SQLite DocumentStore creation).
+            vector_store: Injected vector store (skips ChromaDB ChromaStore creation).
+            pending_queue: Injected summary queue (skips PendingSummaryQueue creation).
         """
         self._decay_half_life_days = decay_half_life_days
 
-        # Resolve config and store paths
-        # If store_path is explicitly provided, use it as both config and store location
-        # Otherwise, discover config via tree-walk and let config determine store
-        if store_path is not None:
-            self._store_path = Path(store_path).resolve()
-            config_dir = self._store_path
+        # --- Config resolution ---
+        if config is not None:
+            # Injected config — skip filesystem discovery
+            self._config: StoreConfig = config
+            self._store_path = config.path if config.path else Path(".")
         else:
-            # Discover config directory (tree-walk or envvar)
-            config_dir = get_config_dir()
+            # Resolve config and store paths from filesystem
+            if store_path is not None:
+                self._store_path = Path(store_path).resolve()
+                config_dir = self._store_path
+            else:
+                config_dir = get_config_dir()
 
-        # Load or create configuration
-        self._config: StoreConfig = load_or_create_config(config_dir)
+            self._config = load_or_create_config(config_dir)
 
-        # If store_path wasn't explicit, resolve from config
-        if store_path is None:
-            self._store_path = get_default_store_path(self._config)
+            if store_path is None:
+                self._store_path = get_default_store_path(self._config)
 
-        # Initialize document provider (needed for most operations)
+        # --- Document provider ---
         registry = get_registry()
         self._document_provider: DocumentProvider = registry.create_document(
             self._config.document.name,
             self._config.document.params,
         )
-        # Apply max_file_size from config to file providers
         self._apply_file_size_limit(self._document_provider)
 
         # Lazy-loaded providers (created on first use to avoid network access for read-only ops)
         self._embedding_provider: Optional[EmbeddingProvider] = None
         self._summarization_provider: Optional[SummarizationProvider] = None
+        self._media_describer: Optional[MediaDescriber] = None
 
-        # Initialize pending summary queue
-        queue_path = self._store_path / "pending_summaries.db"
-        self._pending_queue = PendingSummaryQueue(queue_path)
+        # --- Storage backends (injected or default) ---
+        if pending_queue is not None:
+            self._pending_queue = pending_queue
+        else:
+            queue_path = self._store_path / "pending_summaries.db"
+            self._pending_queue = PendingSummaryQueue(queue_path)
 
-        # Initialize document store (canonical records)
-        from .document_store import DocumentStore
-        doc_store_path = self._store_path / "documents.db"
-        self._document_store = DocumentStore(doc_store_path)
+        if doc_store is not None:
+            self._document_store = doc_store
+        else:
+            from .document_store import DocumentStore
+            doc_store_path = self._store_path / "documents.db"
+            self._document_store = DocumentStore(doc_store_path)
 
-        # Initialize ChromaDB store (embedding index)
-        # Use dimension from stored identity if available (allows offline read-only access)
-        embedding_dim = None
-        if self._config.embedding_identity:
-            embedding_dim = self._config.embedding_identity.dimension
-        self._store = ChromaStore(
-            self._store_path,
-            embedding_dimension=embedding_dim,
-        )
+        if vector_store is not None:
+            self._store = vector_store
+        else:
+            embedding_dim = None
+            if self._config.embedding_identity:
+                embedding_dim = self._config.embedding_identity.dimension
+            self._store = ChromaStore(
+                self._store_path,
+                embedding_dimension=embedding_dim,
+            )
 
         # Check store consistency and reconcile in background if needed
         if self._check_store_consistency() and self._config.embedding is not None:
@@ -651,28 +669,20 @@ class Keeper:
             for rec in old_text_docs:
                 new_id = "%" + rec.id[len("_text:"):]
                 if not self._document_store.get(doc_coll, new_id):
-                    # Direct SQL copy preserving created_at and updated_at
-                    tags_json = json.dumps(rec.tags, ensure_ascii=False)
-                    self._document_store._conn.execute("""
-                        INSERT OR REPLACE INTO documents
-                        (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (new_id, doc_coll, rec.summary, tags_json,
-                          rec.created_at, rec.updated_at, rec.content_hash, rec.accessed_at))
-                    self._document_store._conn.commit()
+                    # Copy record preserving original timestamps
+                    self._document_store.copy_record(doc_coll, rec.id, new_id)
                     # Transfer embedding from ChromaDB (no re-embedding needed)
                     try:
-                        chroma_coll_obj = self._store._get_collection(chroma_coll_name)
-                        result = chroma_coll_obj.get(
-                            ids=[rec.id],
-                            include=["embeddings", "metadatas", "documents"])
-                        if result["ids"] and result["embeddings"] is not None and len(result["embeddings"]) > 0:
-                            meta = result["metadatas"][0] or {}
-                            chroma_coll_obj.upsert(
-                                ids=[new_id],
-                                embeddings=[result["embeddings"][0]],
-                                documents=[result["documents"][0] or rec.summary],
-                                metadatas=[meta])
+                        entries = self._store.get_entries_full(chroma_coll_name, [rec.id])
+                        if entries and entries[0].get("embedding") is not None:
+                            entry = entries[0]
+                            self._store.upsert_batch(
+                                chroma_coll_name,
+                                [new_id],
+                                [entry["embedding"]],
+                                [entry["summary"] or rec.summary],
+                                [entry["tags"]],
+                            )
                     except (ValueError, KeyError) as e:
                         logger.debug("ChromaDB transfer skipped for %s: %s", rec.id, e)
                 self.delete(rec.id)
@@ -796,8 +806,8 @@ class Keeper:
             # Validate or record embedding identity
             self._validate_embedding_identity(self._embedding_provider)
             # Update store's embedding dimension if it wasn't known at init
-            if self._store._embedding_dimension is None:
-                self._store._embedding_dimension = self._embedding_provider.dimension
+            if self._store.embedding_dimension is None:
+                self._store.reset_embedding_dimension(self._embedding_provider.dimension)
         return self._embedding_provider
 
     def _get_summarization_provider(self) -> SummarizationProvider:
@@ -820,6 +830,34 @@ class Keeper:
                 )
             self._summarization_provider = provider
         return self._summarization_provider
+
+    def _get_media_describer(self) -> Optional[MediaDescriber]:
+        """
+        Get media describer, creating it lazily on first use.
+
+        Returns None if no media provider is configured or creation fails.
+        For MLX (local GPU) providers, wraps with a lifecycle lock.
+        """
+        if self._media_describer is None:
+            if self._config.media is None:
+                return None
+            registry = get_registry()
+            try:
+                provider = registry.create_media(
+                    self._config.media.name,
+                    self._config.media.params,
+                )
+            except (ValueError, RuntimeError) as e:
+                logger.warning("Media describer unavailable: %s", e)
+                return None
+            if self._config.media.name == "mlx":
+                from .model_lock import LockedMediaDescriber
+                provider = LockedMediaDescriber(
+                    provider,
+                    self._store_path / ".media.lock",
+                )
+            self._media_describer = provider
+        return self._media_describer
 
     def _gather_context(
         self,
@@ -1290,6 +1328,26 @@ class Keeper:
             if tags:
                 merged_tags.update(tags)  # User tags override provider tags
 
+        # Media description: enrich non-text content with model-based description
+        if doc.content_type and not doc.content_type.startswith("text/"):
+            describer = self._get_media_describer()
+            if describer:
+                try:
+                    file_path = id.removeprefix("file://") if id.startswith("file://") else id
+                    description = describer.describe(file_path, doc.content_type)
+                    if description:
+                        doc = Document(
+                            uri=doc.uri,
+                            content=doc.content + "\n\nDescription:\n" + description,
+                            content_type=doc.content_type,
+                            metadata=doc.metadata,
+                            tags=doc.tags,
+                        )
+                        logger.info("Added media description for %s (%d chars)",
+                                    id, len(description))
+                except Exception as e:
+                    logger.warning("Media description failed for %s: %s", id, e)
+
         system_tags = {"_source": "uri"}
         if doc.content_type:
             system_tags["_content_type"] = doc.content_type
@@ -1577,11 +1635,9 @@ class Keeper:
         doc_coll = self._resolve_doc_collection()
         # Count versions >= this one to get the offset (handles gaps)
         internal_version = int(version_tag)
-        cursor = self._document_store._conn.execute("""
-            SELECT COUNT(*) FROM document_versions
-            WHERE id = ? AND collection = ? AND version >= ?
-        """, (base_id, doc_coll, internal_version))
-        return cursor.fetchone()[0]
+        return self._document_store.count_versions_from(
+            doc_coll, base_id, internal_version
+        )
 
     def resolve_meta(
         self,
@@ -1697,31 +1753,25 @@ class Keeper:
         if not candidates:
             return candidates
 
-        # Get anchor embedding from ChromaDB
+        # Get anchor + candidate embeddings from store
         try:
-            chroma_coll = self._store._get_collection(coll)
-            anchor_result = chroma_coll.get(
-                ids=[anchor_id], include=["embeddings"]
-            )
-            if not anchor_result["ids"] or anchor_result["embeddings"] is None or len(anchor_result["embeddings"]) == 0:
-                return self._apply_recency_decay(candidates)
-            anchor_emb = anchor_result["embeddings"][0]
-
-            # Batch-fetch candidate embeddings
             candidate_ids = [c.id for c in candidates]
-            cand_result = chroma_coll.get(
-                ids=candidate_ids, include=["embeddings"]
-            )
+            all_ids = [anchor_id] + candidate_ids
+            entries = self._store.get_entries_full(coll, all_ids)
         except Exception as e:
             logger.debug("Embedding lookup failed, falling back to recency: %s", e)
             return self._apply_recency_decay(candidates)
 
-        # Build id → embedding lookup (some candidates may not have embeddings)
+        # Build id → embedding lookup
         emb_lookup: dict[str, list[float]] = {}
-        if cand_result["ids"] and cand_result["embeddings"] is not None and len(cand_result["embeddings"]) > 0:
-            for cid, cemb in zip(cand_result["ids"], cand_result["embeddings"]):
-                if cemb is not None:
-                    emb_lookup[cid] = cemb
+        for entry in entries:
+            if entry.get("embedding") is not None:
+                emb_lookup[entry["id"]] = entry["embedding"]
+
+        # Extract anchor embedding
+        anchor_emb = emb_lookup.get(anchor_id)
+        if anchor_emb is None:
+            return self._apply_recency_decay(candidates)
 
         # Score each candidate: cosine similarity
         def _cosine_sim(a: list[float], b: list[float]) -> float:
@@ -2051,11 +2101,7 @@ class Keeper:
             )
 
         # Delete the versioned entry from ChromaDB
-        chroma_coll_handle = self._store._get_collection(chroma_coll)
-        try:
-            chroma_coll_handle.delete(ids=[versioned_chroma_id])
-        except ValueError:
-            pass  # May not exist if it was a tag-only change
+        self._store.delete_entries(chroma_coll, [versioned_chroma_id])
 
         return self.get(id)
 
@@ -2181,7 +2227,6 @@ class Keeper:
         )
 
         # ChromaDB side: move embeddings
-        coll = self._store._get_collection(chroma_coll)
 
         # 1. Collect source ChromaDB IDs for matched versions
         source_chroma_ids = [f"{source_id}@v{n}" for n in matched_version_nums]
@@ -2192,36 +2237,33 @@ class Keeper:
         # (extract_versions already archived the SQLite side; we mirror in ChromaDB)
         if base_version > 1:
             archive_version = base_version - 1  # version assigned by _archive_current_unlocked
-            existing_emb = coll.get(
-                ids=[name],
-                include=["embeddings", "documents", "metadatas"],
-            )
-            if existing_emb["ids"] and existing_emb["embeddings"] is not None:
+            existing = self._store.get_entries_full(chroma_coll, [name])
+            if existing and existing[0].get("embedding") is not None:
+                entry = existing[0]
                 archived_vid = f"{name}@v{archive_version}"
-                archived_meta = dict(existing_emb["metadatas"][0]) if existing_emb["metadatas"] else {}
-                archived_meta["_version"] = str(archive_version)
-                archived_meta["_base_id"] = name
-                coll.upsert(
-                    ids=[archived_vid],
-                    embeddings=[list(existing_emb["embeddings"][0])],
-                    documents=[existing_emb["documents"][0]] if existing_emb["documents"] else [None],
-                    metadatas=[archived_meta],
+                archived_tags = dict(entry["tags"])
+                archived_tags["_version"] = str(archive_version)
+                archived_tags["_base_id"] = name
+                self._store.upsert_batch(
+                    chroma_coll,
+                    [archived_vid],
+                    [entry["embedding"]],
+                    [entry["summary"] or ""],
+                    [archived_tags],
                 )
 
         # 3. Batch-get embeddings from source
-        embedding_map = {}
+        embedding_map: dict[str, list[float]] = {}
         if source_chroma_ids:
-            result = coll.get(
-                ids=source_chroma_ids,
-                include=["embeddings", "documents", "metadatas"],
-            )
-            if result["ids"] and result["embeddings"] is not None:
-                for i, cid in enumerate(result["ids"]):
-                    embedding_map[cid] = list(result["embeddings"][i])
+            source_entries = self._store.get_entries_full(chroma_coll, source_chroma_ids)
+            for entry in source_entries:
+                if entry.get("embedding") is not None:
+                    embedding_map[entry["id"]] = entry["embedding"]
 
             # 4. Batch-delete source entries
-            if result["ids"]:
-                coll.delete(ids=list(result["ids"]))
+            found_ids = [entry["id"] for entry in source_entries]
+            if found_ids:
+                self._store.delete_entries(chroma_coll, found_ids)
 
         # 5. Insert target entries with new IDs
         # The extracted list is chronological (oldest first),
@@ -2229,7 +2271,7 @@ class Keeper:
         target_ids = []
         target_embeddings = []
         target_summaries = []
-        target_metadatas = []
+        target_tags = []
 
         # History versions (sequential from base_version)
         for seq, vi in enumerate(extracted[:-1], start=base_version):
@@ -2244,7 +2286,7 @@ class Keeper:
                 target_ids.append(target_vid)
                 target_embeddings.append(emb)
                 target_summaries.append(vi.summary)
-                target_metadatas.append(self._store._tags_to_metadata(ver_tags))
+                target_tags.append(ver_tags)
 
         # Current (newest extracted)
         newest = extracted[-1]
@@ -2258,15 +2300,16 @@ class Keeper:
             target_ids.append(name)
             target_embeddings.append(cur_emb)
             target_summaries.append(newest.summary)
-            target_metadatas.append(self._store._tags_to_metadata(cur_tags))
+            target_tags.append(cur_tags)
 
         # 6. Batch-insert/update into ChromaDB
         if target_ids:
-            coll.upsert(
-                ids=target_ids,
-                embeddings=target_embeddings,
-                documents=target_summaries,
-                metadatas=target_metadatas,
+            self._store.upsert_batch(
+                chroma_coll,
+                target_ids,
+                target_embeddings,
+                target_summaries,
+                target_tags,
             )
 
         # Add system tags to the saved document in DocumentStore too
@@ -2720,6 +2763,10 @@ class Keeper:
         if self._summarization_provider is not None:
             if hasattr(self._summarization_provider, 'release'):
                 self._summarization_provider.release()
+
+        if self._media_describer is not None:
+            if hasattr(self._media_describer, 'release'):
+                self._media_describer.release()
 
         # Close ChromaDB store
         if hasattr(self, '_store') and self._store is not None:

@@ -556,8 +556,28 @@ See: https://github.com/hughpyle/keep#installation
 
 
 def _get_keeper(store: Optional[Path]) -> Keeper:
-    """Initialize memory, handling errors gracefully."""
+    """Initialize memory, handling errors gracefully.
+
+    Returns a local Keeper or RemoteKeeper depending on config.
+    Both satisfy the same protocol — the CLI doesn't distinguish.
+    """
     import atexit
+
+    # Check for remote backend config (env vars or TOML [remote] section)
+    api_url = os.environ.get("KEEPNOTES_API_URL")
+    api_key = os.environ.get("KEEPNOTES_API_KEY")
+    if api_url and api_key:
+        from .config import get_config_dir, load_or_create_config
+        from .remote import RemoteKeeper
+        try:
+            config_dir = get_config_dir()
+            config = load_or_create_config(config_dir)
+            kp = RemoteKeeper(api_url, api_key, config)
+            atexit.register(kp.close)
+            return kp
+        except Exception as e:
+            typer.echo(f"Error connecting to remote: {e}", err=True)
+            raise typer.Exit(1)
 
     # Check global override from --store on main command
     actual_store = store if store is not None else _get_store_override()
@@ -565,6 +585,19 @@ def _get_keeper(store: Optional[Path]) -> Keeper:
         kp = Keeper(actual_store)
         # Ensure close() runs before interpreter shutdown to release model locks
         atexit.register(kp.close)
+
+        # Check for remote config in TOML (loaded during Keeper init)
+        if kp._config and kp._config.remote:
+            from .remote import RemoteKeeper
+            remote = RemoteKeeper(
+                kp._config.remote.api_url,
+                kp._config.remote.api_key,
+                kp._config,
+            )
+            atexit.register(remote.close)
+            kp.close()  # Don't need the local Keeper
+            return remote
+
         # Warn (don't exit) if no embedding provider — read-only ops still work
         if kp._config and kp._config.embedding is None:
             typer.echo(NO_PROVIDER_ERROR.strip(), err=True)

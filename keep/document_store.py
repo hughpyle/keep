@@ -975,6 +975,48 @@ class DocumentStore:
         """, (id, collection))
         return cursor.fetchone()[0]
 
+    def count_versions_from(
+        self, collection: str, id: str, from_version: int
+    ) -> int:
+        """Count archived versions with version >= from_version."""
+        cursor = self._conn.execute("""
+            SELECT COUNT(*) FROM document_versions
+            WHERE id = ? AND collection = ? AND version >= ?
+        """, (id, collection, from_version))
+        return cursor.fetchone()[0]
+
+    def copy_record(
+        self, collection: str, from_id: str, to_id: str
+    ) -> Optional["DocumentRecord"]:
+        """
+        Copy a document record to a new ID, preserving all fields
+        including timestamps.
+
+        Returns the new DocumentRecord, or None if source not found.
+        Does nothing if to_id already exists.
+        """
+        with self._lock:
+            # Check source exists
+            source = self.get(collection, from_id)
+            if source is None:
+                return None
+            # Check target doesn't exist
+            if self.get(collection, to_id) is not None:
+                return self.get(collection, to_id)
+            # Copy with original timestamps
+            import json
+            tags_json = json.dumps(source.tags, ensure_ascii=False)
+            self._conn.execute("""
+                INSERT OR REPLACE INTO documents
+                (id, collection, summary, tags_json, created_at, updated_at,
+                 content_hash, accessed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (to_id, collection, source.summary, tags_json,
+                  source.created_at, source.updated_at,
+                  source.content_hash, source.accessed_at))
+            self._conn.commit()
+            return self.get(collection, to_id)
+
     def get_many(
         self,
         collection: str,

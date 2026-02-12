@@ -31,6 +31,8 @@ keep move "target" --from "source" -t topic=X  # Reorganize between items
 3. If the source is fully emptied and is `now`, it resets to default content
 4. The moved item gets `_saved_from` and `_saved_at` system tags
 
+**Note on URI-shaped target names:** The target name is just a string ID — it can be anything, including a URI like `https://example.com/doc` or `file:///path/to/file`. However, if the target name looks like a URI, a subsequent `keep put <that-uri>` will re-fetch content from the URL and overwrite what was moved there. This is by design (the ID is its fetch source), but be aware that `move` can effectively create an item whose ID points to a different origin than its content. This is analogous to a redirect — the stored content came from `now`, but the ID says `https://...`.
+
 ## Cherry-picking with --only
 
 `--only` moves just the current (tip) version, one at a time. This is the cherry-picker for reorganizing untagged items:

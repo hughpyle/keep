@@ -487,13 +487,77 @@ class OllamaTagging:
 class NoopTagging:
     """
     Tagging provider that returns empty tags.
-    
+
     Useful when tagging is disabled or for testing.
     """
-    
+
     def tag(self, content: str) -> dict[str, str]:
         """Return empty tags."""
         return {}
+
+
+# -----------------------------------------------------------------------------
+# Media Description Providers
+# -----------------------------------------------------------------------------
+
+class OllamaMediaDescriber:
+    """
+    Media description using Ollama's vision models.
+
+    Supports image description via multimodal models (llava, moondream, etc.).
+    Audio transcription is not supported via Ollama.
+
+    Respects OLLAMA_HOST env var (default: http://localhost:11434).
+    """
+
+    IMAGE_PROMPT = (
+        "Describe this image in detail. Include the subject, setting, "
+        "colors, composition, and any text visible in the image. "
+        "Be specific and factual."
+    )
+
+    def __init__(
+        self,
+        model: str = "llava",
+        base_url: str | None = None,
+    ):
+        self.model = model
+        if base_url is None:
+            base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        if not base_url.startswith("http"):
+            base_url = f"http://{base_url}"
+        self.base_url = base_url.rstrip("/")
+
+    def describe(self, path: str, content_type: str) -> str | None:
+        """Describe an image using Ollama vision model."""
+        if not content_type.startswith("image/"):
+            return None
+
+        import base64
+        import requests
+
+        with open(path, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode("utf-8")
+
+        response = requests.post(
+            f"{self.base_url}/api/chat",
+            json={
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": self.IMAGE_PROMPT,
+                        "images": [image_data],
+                    },
+                ],
+                "stream": False,
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+
+        text = response.json()["message"]["content"].strip()
+        return text if text else None
 
 
 # Register providers
@@ -507,3 +571,4 @@ _registry.register_tagging("anthropic", AnthropicTagging)
 _registry.register_tagging("openai", OpenAITagging)
 _registry.register_tagging("ollama", OllamaTagging)
 _registry.register_tagging("noop", NoopTagging)
+_registry.register_media("ollama", OllamaMediaDescriber)

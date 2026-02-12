@@ -252,6 +252,159 @@ Respond with ONLY a JSON object, no explanation or other text."""
             return {}
 
 
+class MLXVisionDescriber:
+    """
+    Image description using MLX-VLM on Apple Silicon.
+
+    Uses local vision-language models to generate text descriptions of images.
+    No API key required.
+
+    Requires: pip install mlx-vlm
+    """
+
+    IMAGE_PROMPT = (
+        "Describe this image in detail. Include the subject, setting, "
+        "colors, composition, and any text visible in the image. "
+        "Be specific and factual."
+    )
+
+    def __init__(
+        self,
+        model: str = "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+        max_tokens: int = 300,
+    ):
+        try:
+            from mlx_vlm import load as vlm_load
+        except ImportError:
+            raise RuntimeError(
+                "MLXVisionDescriber requires 'mlx-vlm'. "
+                "Install with: pip install mlx-vlm"
+            )
+
+        self.model_name = model
+        self.max_tokens = max_tokens
+        self._model, self._processor = vlm_load(model)
+
+    def describe(self, path: str, content_type: str) -> str | None:
+        """Describe an image using MLX-VLM."""
+        if not content_type.startswith("image/"):
+            return None
+
+        from mlx_vlm import generate as vlm_generate
+
+        response = vlm_generate(
+            self._model,
+            self._processor,
+            prompt=self.IMAGE_PROMPT,
+            image=path,
+            max_tokens=self.max_tokens,
+            verbose=False,
+        )
+
+        return response.strip() if response else None
+
+
+class MLXWhisperDescriber:
+    """
+    Audio transcription using MLX-Whisper on Apple Silicon.
+
+    Uses local Whisper models to transcribe speech to text.
+    No API key required.
+
+    Requires: pip install mlx-whisper
+    """
+
+    def __init__(
+        self,
+        model: str = "mlx-community/whisper-large-v3-turbo",
+    ):
+        try:
+            import mlx_whisper  # noqa: F401
+        except ImportError:
+            raise RuntimeError(
+                "MLXWhisperDescriber requires 'mlx-whisper'. "
+                "Install with: pip install mlx-whisper"
+            )
+
+        self.model_name = model
+
+    def describe(self, path: str, content_type: str) -> str | None:
+        """Transcribe audio using MLX-Whisper."""
+        if not content_type.startswith("audio/"):
+            return None
+
+        import mlx_whisper
+
+        result = mlx_whisper.transcribe(
+            path,
+            path_or_hf_repo=self.model_name,
+        )
+
+        text = result.get("text", "").strip()
+        return text if text else None
+
+
+class MLXMediaDescriber:
+    """
+    Combined media describer for Apple Silicon.
+
+    Handles both image description (via mlx-vlm) and audio transcription
+    (via mlx-whisper). Sub-providers are created lazily — only loaded when
+    first needed for that content type.
+
+    Requires: pip install mlx-vlm (images) and/or mlx-whisper (audio)
+    """
+
+    def __init__(
+        self,
+        vision_model: str = "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+        whisper_model: str = "mlx-community/whisper-large-v3-turbo",
+        max_tokens: int = 300,
+    ):
+        self._vision_model = vision_model
+        self._whisper_model = whisper_model
+        self._max_tokens = max_tokens
+        self._vision: MLXVisionDescriber | None = None
+        self._whisper: MLXWhisperDescriber | None = None
+        self._vision_checked = False
+        self._whisper_checked = False
+
+    def describe(self, path: str, content_type: str) -> str | None:
+        """Describe media using the appropriate sub-provider."""
+        if content_type.startswith("image/"):
+            return self._describe_image(path, content_type)
+        elif content_type.startswith("audio/"):
+            return self._describe_audio(path, content_type)
+        return None
+
+    def _describe_image(self, path: str, content_type: str) -> str | None:
+        if not self._vision_checked:
+            self._vision_checked = True
+            try:
+                self._vision = MLXVisionDescriber(
+                    model=self._vision_model,
+                    max_tokens=self._max_tokens,
+                )
+            except RuntimeError:
+                pass  # mlx-vlm not installed
+        if self._vision:
+            return self._vision.describe(path, content_type)
+        return None
+
+    def _describe_audio(self, path: str, content_type: str) -> str | None:
+        if not self._whisper_checked:
+            self._whisper_checked = True
+            try:
+                self._whisper = MLXWhisperDescriber(
+                    model=self._whisper_model,
+                )
+            except RuntimeError:
+                pass  # mlx-whisper not installed
+        if self._whisper:
+            return self._whisper.describe(path, content_type)
+        return None
+
+
 def is_apple_silicon() -> bool:
     """Check if running on Apple Silicon."""
     import platform
@@ -264,3 +417,4 @@ if is_apple_silicon():
     _registry.register_embedding("mlx", MLXEmbedding)
     _registry.register_summarization("mlx", MLXSummarization)
     _registry.register_tagging("mlx", MLXTagging)
+    _registry.register_media("mlx", MLXMediaDescriber)

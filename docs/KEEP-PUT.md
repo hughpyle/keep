@@ -82,8 +82,10 @@ keep put doc.pdf -t topic=auth         # Re-queued for contextual summary
 | **HTML** | .html, .htm | Text (scripts/styles removed) | — |
 | **DOCX** | .docx | Paragraphs + tables | `author`, `title` |
 | **PPTX** | .pptx | Slides + notes | `author`, `title` |
-| **Audio** | .mp3, .flac, .ogg, .wav, .aiff, .m4a, .wma | Structured metadata | `artist`, `album`, `genre`, `year`, `title` |
-| **Images** | .jpg, .png, .tiff, .webp | EXIF metadata | `dimensions`, `camera`, `date` |
+| **Audio** | .mp3, .flac, .ogg, .wav, .aiff, .m4a, .wma | Structured metadata (+ transcription\*) | `artist`, `album`, `genre`, `year`, `title` |
+| **Images** | .jpg, .png, .tiff, .webp | EXIF metadata (+ description\*) | `dimensions`, `camera`, `date` |
+
+\* When a media description provider is configured (`[media]` in `keep.toml`), images get vision-model descriptions and audio files get speech-to-text transcription, appended to the extracted metadata. See [QUICKSTART.md](QUICKSTART.md#media-description-optional) for setup.
 
 Auto-extracted tags merge with user-provided tags. User tags win on collision:
 
