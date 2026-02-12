@@ -102,13 +102,6 @@
  
 * Multi-file (pass a path to a folder, recurse flag, etc.)
 
-* media-summarization support (images, video)
-    - mlx support for media-summarization models, e.g. Qwen2-VL-2B-Instruct, Moondream2
-    - separate model selection with API keys too
-    - good defaults!
-
-* whisper.cpp or similar text-extraction?
-
 ----
 
 Done: (finished items go at the end)
@@ -241,3 +234,4 @@ x `context` text alongside summaries? (no, summary is good now)
 . media: pptx, docx
 . media: images, audio (tag extraction, not multimodal models yet)
 . `keep save --from ITEM_ID` — extend save to extract from any versioned item, not just now
+. media description: MediaDescriber protocol, MLX (vision + whisper), Ollama (vision), LockedMediaDescriber, config detection, lazy sub-providers, graceful degradation, [media] optional extra

@@ -56,6 +56,11 @@ model = "all-MiniLM-L6-v2"
 name = "mlx"                           # or "anthropic", "openai", "ollama"
 model = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 
+[media]
+name = "mlx"                           # or "ollama" (auto-detected)
+vision_model = "mlx-community/Qwen2-VL-2B-Instruct-4bit"
+whisper_model = "mlx-community/whisper-large-v3-turbo"
+
 [document]
 name = "composite"
 
@@ -86,6 +91,7 @@ KEEP_NO_SETUP=1                       # Skip auto-install of tool integrations
 | `providers` | All provider configuration |
 | `providers.embedding` | Embedding provider name |
 | `providers.summarization` | Summarization provider name |
+| `providers.media` | Media description provider name |
 
 Subpath output is raw (unquoted) for shell scripting:
 

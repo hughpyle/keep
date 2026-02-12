@@ -269,6 +269,37 @@ class SummarizationProvider(Protocol):
 
 
 # -----------------------------------------------------------------------------
+# Media Description
+# -----------------------------------------------------------------------------
+
+@runtime_checkable
+class MediaDescriber(Protocol):
+    """
+    Generates text descriptions of media files.
+
+    Image describers produce visual descriptions of what's in an image.
+    Audio describers produce transcriptions of speech content.
+
+    Returns None for unsupported content types, allowing composites
+    to try multiple describers.
+    """
+
+    def describe(self, path: str, content_type: str) -> str | None:
+        """
+        Generate a text description of a media file.
+
+        Args:
+            path: Absolute filesystem path to the media file
+            content_type: MIME type (e.g., "image/jpeg", "audio/mpeg")
+
+        Returns:
+            Text description/transcription, or None if this describer
+            does not support the given content_type.
+        """
+        ...
+
+
+# -----------------------------------------------------------------------------
 # Tagging
 # -----------------------------------------------------------------------------
 
@@ -339,6 +370,7 @@ class ProviderRegistry:
         self._summarization_providers: dict[str, type] = {}
         self._tagging_providers: dict[str, type] = {}
         self._document_providers: dict[str, type] = {}
+        self._media_providers: dict[str, type] = {}
         self._lazy_loaded = False
     
     def _ensure_providers_loaded(self) -> None:
@@ -392,6 +424,10 @@ class ProviderRegistry:
     def register_document(self, name: str, provider_class: type) -> None:
         """Register a document provider class."""
         self._document_providers[name] = provider_class
+
+    def register_media(self, name: str, provider_class: type) -> None:
+        """Register a media describer class."""
+        self._media_providers[name] = provider_class
     
     # Factory methods
 
@@ -449,6 +485,24 @@ class ProviderRegistry:
                 f"Make sure required dependencies are installed."
             ) from e
     
+    def create_media(self, name: str, params: dict | None = None) -> MediaDescriber:
+        """Create a media describer instance."""
+        self._ensure_providers_loaded()
+        if name not in self._media_providers:
+            available = ", ".join(self._media_providers.keys()) or "none"
+            raise ValueError(
+                f"Unknown media describer: '{name}'. "
+                f"Available providers: {available}. "
+                f"Install missing dependencies or check provider name."
+            )
+        try:
+            return self._media_providers[name](**(params or {}))
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create media describer '{name}': {e}\n"
+                f"Make sure required dependencies are installed."
+            ) from e
+
     def create_document(self, name: str, params: dict | None = None) -> DocumentProvider:
         """Create a document provider instance."""
         self._ensure_providers_loaded()
@@ -484,6 +538,10 @@ class ProviderRegistry:
     def list_document_providers(self) -> list[str]:
         """List registered document provider names."""
         return list(self._document_providers.keys())
+
+    def list_media_providers(self) -> list[str]:
+        """List registered media describer names."""
+        return list(self._media_providers.keys())
 
 
 # Global registry instance

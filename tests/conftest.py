@@ -211,6 +211,7 @@ class MockDocumentStore:
         r.content_hash = content_hash
         r.created_at = created_at
         r.updated_at = now
+        r.accessed_at = now
         return (r, content_changed)
 
     def get(self, collection: str, id: str):
@@ -227,6 +228,7 @@ class MockDocumentStore:
         r.content_hash = rec.get("content_hash")
         r.created_at = rec["created_at"]
         r.updated_at = rec["updated_at"]
+        r.accessed_at = rec.get("accessed_at", rec["updated_at"])
         return r
 
     def exists(self, collection: str, id: str) -> bool:
@@ -277,6 +279,7 @@ class MockDocumentStore:
             r.content_hash = rec.get("content_hash")
             r.created_at = rec["created_at"]
             r.updated_at = rec["updated_at"]
+            r.accessed_at = rec.get("accessed_at", rec["updated_at"])
             records.append(r)
         return records
 
@@ -297,6 +300,7 @@ class MockDocumentStore:
                 r.content_hash = rec.get("content_hash")
                 r.created_at = rec["created_at"]
                 r.updated_at = rec["updated_at"]
+                r.accessed_at = rec.get("accessed_at", rec["updated_at"])
                 results.append(r)
         return results[:limit]
 

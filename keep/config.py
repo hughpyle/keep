@@ -91,6 +91,13 @@ class EmbeddingIdentity:
 
 
 @dataclass
+class RemoteConfig:
+    """Configuration for remote keepnotes.ai backend."""
+    api_url: str  # e.g., "https://api.keepnotes.ai"
+    api_key: str  # e.g., "kn_live_..."
+
+
+@dataclass
 class StoreConfig:
     """Complete store configuration."""
     path: Path  # Store path (where data lives)
@@ -103,6 +110,9 @@ class StoreConfig:
     embedding: Optional[ProviderConfig] = field(default_factory=lambda: ProviderConfig("sentence-transformers"))
     summarization: ProviderConfig = field(default_factory=lambda: ProviderConfig("truncate"))
     document: ProviderConfig = field(default_factory=lambda: ProviderConfig("composite"))
+
+    # Media description provider (optional - if None, media indexing is metadata-only)
+    media: Optional[ProviderConfig] = None
 
     # Embedding identity (set after first use, used for validation)
     embedding_identity: Optional[EmbeddingIdentity] = None
@@ -121,6 +131,9 @@ class StoreConfig:
 
     # Tool integrations tracking (presence of key = handled, value = installed or skipped)
     integrations: dict[str, Any] = field(default_factory=dict)
+
+    # Remote backend (if set, Keeper delegates to keepnotes.ai API)
+    remote: Optional[RemoteConfig] = None
 
     @property
     def config_path(self) -> Path:
@@ -351,6 +364,44 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
 
     providers["summarization"] = summarization_provider
 
+    # --- Media description provider ---
+    # Priority: Ollama (if has vision model) > MLX (Apple Silicon) > None
+    media_provider: ProviderConfig | None = None
+
+    # 1. Ollama with a vision-capable model
+    if media_provider is None:
+        ollama = get_ollama()
+        if ollama:
+            vision_keywords = ("llava", "moondream", "bakllava", "llama3.2-vision")
+            vision_models = [
+                m for m in ollama["models"]
+                if any(v in m.split(":")[0] for v in vision_keywords)
+            ]
+            if vision_models:
+                params: dict[str, Any] = {"model": vision_models[0]}
+                if ollama["base_url"] != "http://localhost:11434":
+                    params["base_url"] = ollama["base_url"]
+                media_provider = ProviderConfig("ollama", params)
+
+    # 2. MLX (Apple Silicon with mlx-vlm or mlx-whisper)
+    if media_provider is None and is_apple_silicon:
+        _has_media_mlx = False
+        try:
+            import mlx_vlm  # noqa
+            _has_media_mlx = True
+        except ImportError:
+            pass
+        if not _has_media_mlx:
+            try:
+                import mlx_whisper  # noqa
+                _has_media_mlx = True
+            except ImportError:
+                pass
+        if _has_media_mlx:
+            media_provider = ProviderConfig("mlx")
+
+    providers["media"] = media_provider
+
     # Document provider is always composite
     providers["document"] = ProviderConfig("composite")
 
@@ -381,6 +432,7 @@ def create_default_config(config_dir: Path, store_path: Optional[Path] = None) -
         embedding=providers["embedding"],
         summarization=providers["summarization"],
         document=providers["document"],
+        media=providers.get("media"),
     )
 
 
@@ -442,6 +494,17 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse integrations section (presence = handled)
     integrations = data.get("integrations", {})
 
+    # Parse optional media section
+    media_config = parse_provider(data["media"]) if "media" in data else None
+
+    # Parse remote backend config (env vars override TOML)
+    remote = None
+    remote_data = data.get("remote", {})
+    api_url = os.environ.get("KEEPNOTES_API_URL") or remote_data.get("api_url")
+    api_key = os.environ.get("KEEPNOTES_API_KEY") or remote_data.get("api_key")
+    if api_url and api_key:
+        remote = RemoteConfig(api_url=api_url, api_key=api_key)
+
     return StoreConfig(
         path=actual_store,
         config_dir=config_dir,
@@ -451,12 +514,14 @@ def load_config(config_dir: Path) -> StoreConfig:
         embedding=parse_provider(data["embedding"]) if "embedding" in data else None,
         summarization=parse_provider(data.get("summarization", {"name": "truncate"})),
         document=parse_provider(data.get("document", {"name": "composite"})),
+        media=media_config,
         embedding_identity=parse_embedding_identity(data.get("embedding_identity")),
         default_tags=default_tags,
         max_summary_length=max_summary_length,
         max_file_size=max_file_size,
         system_docs_version=system_docs_version,
         integrations=integrations,
+        remote=remote,
     )
 
 
@@ -516,6 +581,8 @@ def save_config(config: StoreConfig) -> None:
         data["summarization"] = provider_to_dict(config.summarization)
     if config.document:
         data["document"] = provider_to_dict(config.document)
+    if config.media:
+        data["media"] = provider_to_dict(config.media)
 
     # Add embedding identity if set
     if config.embedding_identity:
@@ -533,8 +600,24 @@ def save_config(config: StoreConfig) -> None:
     if config.integrations:
         data["integrations"] = config.integrations
 
+    # Add remote backend config if set (only from TOML, not env vars)
+    if config.remote and not (
+        os.environ.get("KEEPNOTES_API_URL") or os.environ.get("KEEPNOTES_API_KEY")
+    ):
+        data["remote"] = {
+            "api_url": config.remote.api_url,
+            "api_key": config.remote.api_key,
+        }
+
     with open(config.config_path, "wb") as f:
         tomli_w.dump(data, f)
+
+    # Restrict file permissions when config contains secrets
+    if config.remote:
+        try:
+            config.config_path.chmod(0o600)
+        except OSError:
+            pass  # Best-effort (may not work on all platforms)
 
 
 def load_or_create_config(config_dir: Path, store_path: Optional[Path] = None) -> StoreConfig:

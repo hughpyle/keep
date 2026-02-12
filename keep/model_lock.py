@@ -199,3 +199,34 @@ class LockedSummarizationProvider:
         self._provider = None
         gc.collect()
         logger.debug("Released summarization provider")
+
+
+class LockedMediaDescriber:
+    """
+    Per-call locked wrapper for a media describer.
+
+    Same pattern as LockedSummarizationProvider — acquires the lock only
+    during describe() calls.
+    """
+
+    def __init__(self, provider, lock_path: Path):
+        self._provider = provider
+        self._lock = ModelLock(lock_path)
+
+    @property
+    def model_name(self) -> str:
+        return getattr(self._provider, "model_name", "unknown")
+
+    def describe(self, path: str, content_type: str) -> str | None:
+        with self._lock:
+            return self._provider.describe(path, content_type)
+
+    def release(self) -> None:
+        """Free the model."""
+        try:
+            del self._provider
+        except AttributeError:
+            pass
+        self._provider = None
+        gc.collect()
+        logger.debug("Released media describer")

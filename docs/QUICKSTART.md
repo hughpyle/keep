@@ -198,6 +198,21 @@ name = "anthropic"
 model = "claude-3-haiku-20240307"
 ```
 
+### Media Description (optional)
+
+When configured, images and audio files get model-generated descriptions alongside their extracted metadata, making them semantically searchable. Without this, media files are indexed with metadata only (EXIF, ID3 tags).
+
+```toml
+[media]
+name = "mlx"
+vision_model = "mlx-community/Qwen2-VL-2B-Instruct-4bit"
+whisper_model = "mlx-community/whisper-large-v3-turbo"
+```
+
+Install media dependencies (Apple Silicon): `pip install keep-skill[media]`
+
+Auto-detected if `mlx-vlm` or `mlx-whisper` is installed, or if Ollama has a vision model (e.g. `llava`).
+
 ### Available Models
 
 | Provider | Type | Models |
@@ -210,8 +225,10 @@ model = "claude-3-haiku-20240307"
 | **Gemini** | Summarization | `gemini-3-flash-preview` (default), `gemini-3-pro-preview` |
 | **Ollama** | Embeddings | Any model; prefer `nomic-embed-text`, `mxbai-embed-large` |
 | **Ollama** | Summarization | Any generative model (e.g. `llama3.2`, `mistral`, `phi3`) |
+| **Ollama** | Media | Vision models: `llava`, `moondream`, `bakllava` (images only) |
 | **Local** | Embeddings | `all-MiniLM-L6-v2` (sentence-transformers) |
 | **Local** | Summarization | MLX models (Apple Silicon only) |
+| **Local** | Media | `mlx-vlm` for images, `mlx-whisper` for audio (Apple Silicon only) |
 
 ## Tool Integrations
 
