@@ -10,6 +10,7 @@ Usage:
 import json
 import os
 import re
+import select
 import shutil
 import sys
 from pathlib import Path
@@ -37,6 +38,22 @@ def _output_width() -> int:
     if not sys.stdout.isatty():
         return 200
     return shutil.get_terminal_size((120, 24)).columns
+
+
+def _has_stdin_data() -> bool:
+    """Check if stdin has data available without blocking.
+
+    Returns True only when stdin is a pipe with data ready to read.
+    Returns False for TTYs, sockets (exec sandbox), and empty pipes.
+    This prevents hanging when stdin is a socket that never sends EOF.
+    """
+    if sys.stdin.isatty():
+        return False
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        return bool(ready)
+    except (ValueError, OSError):
+        return False
 
 
 # Configure quiet mode by default (suppress verbose library output)
@@ -888,7 +905,7 @@ def put(
     parsed_tags = _parse_tags(tags)
 
     # Determine mode based on source content
-    if source == "-" or (source is None and not sys.stdin.isatty()):
+    if source == "-" or (source is None and _has_stdin_data()):
         # Stdin mode: explicit '-' or piped input
         content = sys.stdin.read()
         content, frontmatter_tags = _parse_frontmatter(content)
@@ -1070,7 +1087,7 @@ def now(
         return
 
     # Read from stdin if piped and no content argument
-    if content is None and not reset and not sys.stdin.isatty():
+    if content is None and not reset and _has_stdin_data():
         content = sys.stdin.read().strip() or None
 
     # Determine if we're getting or setting
