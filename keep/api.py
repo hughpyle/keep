@@ -434,6 +434,8 @@ class Keeper:
             self._config.document.name,
             self._config.document.params,
         )
+        # Apply max_file_size from config to file providers
+        self._apply_file_size_limit(self._document_provider)
 
         # Lazy-loaded providers (created on first use to avoid network access for read-only ops)
         self._embedding_provider: Optional[EmbeddingProvider] = None
@@ -472,6 +474,17 @@ class Keeper:
         self._needs_sysdoc_migration = (
             self._config.system_docs_version < SYSTEM_DOCS_VERSION
         )
+
+    def _apply_file_size_limit(self, provider: DocumentProvider) -> None:
+        """Apply max_file_size config to file-based providers."""
+        from .providers.documents import FileDocumentProvider, CompositeDocumentProvider
+        max_size = self._config.max_file_size
+        if isinstance(provider, FileDocumentProvider):
+            provider.max_size = max_size
+        elif isinstance(provider, CompositeDocumentProvider):
+            for p in provider._providers:
+                if isinstance(p, FileDocumentProvider):
+                    p.max_size = max_size
 
     def _check_store_consistency(self) -> bool:
         """Check if DocumentStore and ChromaDB ID sets match.
