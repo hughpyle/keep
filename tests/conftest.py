@@ -61,6 +61,7 @@ class MockDocumentProvider:
         mock_doc = MagicMock()
         mock_doc.content = f"Content for {uri}"
         mock_doc.content_type = "text/plain"
+        mock_doc.tags = None
         return mock_doc
 
 

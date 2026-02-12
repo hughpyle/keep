@@ -23,11 +23,13 @@ class Document:
         content: Text content of the document
         content_type: MIME type if known (e.g., "text/markdown", "text/plain")
         metadata: Additional metadata from the source (headers, file stats, etc.)
+        tags: Auto-extracted tags from document properties (merged with user tags)
     """
     uri: str
     content: str
     content_type: str | None = None
     metadata: dict[str, Any] | None = None
+    tags: dict[str, str] | None = None
 
 
 @runtime_checkable
