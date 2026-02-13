@@ -259,6 +259,22 @@ ANTHROPIC_API_KEY=sk-ant-...         # For Anthropic summarization only
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # OAuth token alternative
 ```
 
+## Data Security
+
+### Encryption at Rest
+
+Keep stores data in SQLite databases and ChromaDB files on disk. These are **not encrypted** by default.
+
+If you store sensitive content (plans, credentials, reasoning traces), enable disk encryption:
+
+| OS | Solution | How |
+|----|----------|-----|
+| **macOS** | FileVault | System Settings > Privacy & Security > FileVault |
+| **Linux** | LUKS | Encrypt home directory or the partition containing `~/.keep/` |
+| **Windows** | BitLocker | Settings > Privacy & security > Device encryption |
+
+This is the recommended approach because it transparently covers both SQLite and ChromaDB's internal storage without application-level changes.
+
 ## Troubleshooting
 
 **No embedding provider configured:** Set an API key (e.g., `VOYAGE_API_KEY`) or install `keep-skill[local]`.
