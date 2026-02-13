@@ -127,9 +127,9 @@ class RemoteKeeper:
         """Convert API list response to list of Items."""
         if not isinstance(data, dict):
             raise ValueError(f"Expected dict from API, got {type(data).__name__}")
-        items = data.get("items", [])
+        items = data.get("notes", data.get("items", []))
         if not isinstance(items, list):
-            raise ValueError(f"Expected 'items' list from API, got {type(items).__name__}")
+            raise ValueError(f"Expected 'notes' list from API, got {type(items).__name__}")
         return [RemoteKeeper._to_item(item) for item in items]
 
     @staticmethod
@@ -152,7 +152,7 @@ class RemoteKeeper:
         *,
         summary: Optional[str] = None,
     ) -> Item:
-        resp = self._post("/v1/items", json={
+        resp = self._post("/v1/notes", json={
             "uri": id,
             "tags": tags,
             "summary": summary,
@@ -167,7 +167,7 @@ class RemoteKeeper:
         summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
     ) -> Item:
-        resp = self._post("/v1/items", json={
+        resp = self._post("/v1/notes", json={
             "content": content,
             "id": id,
             "tags": tags,
@@ -194,7 +194,7 @@ class RemoteKeeper:
     ) -> Optional[Item]:
         if tags is None:
             return self.get(id)
-        resp = self._patch(f"/v1/items/{id}/tags", json={
+        resp = self._patch(f"/v1/notes/{id}/tags", json={
             "set": {k: v for k, v in tags.items() if v},
             "remove": [k for k, v in tags.items() if not v],
         })
@@ -206,11 +206,11 @@ class RemoteKeeper:
         *,
         delete_versions: bool = True,
     ) -> bool:
-        resp = self._delete(f"/v1/items/{id}")
+        resp = self._delete(f"/v1/notes/{id}")
         return resp.get("deleted", False)
 
     def revert(self, id: str) -> Optional[Item]:
-        resp = self._post(f"/v1/items/{id}/revert", json={})
+        resp = self._post(f"/v1/notes/{id}/revert", json={})
         if resp.get("deleted"):
             return None
         return self._to_item(resp)
@@ -272,7 +272,7 @@ class RemoteKeeper:
         *,
         limit: int = 3,
     ) -> list[Item]:
-        resp = self._get(f"/v1/items/{id}/similar", limit=limit)
+        resp = self._get(f"/v1/notes/{id}/similar", limit=limit)
         return self._to_items(resp)
 
     def query_fulltext(
@@ -310,7 +310,7 @@ class RemoteKeeper:
         elif key:
             resp = self._get(f"/v1/tags/{key}", **params)
         else:
-            resp = self._get("/v1/items", **params)
+            resp = self._get("/v1/notes", **params)
         return self._to_items(resp)
 
     def list_tags(
@@ -329,7 +329,7 @@ class RemoteKeeper:
         *,
         limit_per_doc: int = 3,
     ) -> dict[str, list[Item]]:
-        resp = self._get(f"/v1/items/{item_id}/meta", limit=limit_per_doc)
+        resp = self._get(f"/v1/notes/{item_id}/meta", limit=limit_per_doc)
         result: dict[str, list[Item]] = {}
         for name, items_data in resp.get("sections", {}).items():
             result[name] = [self._to_item(i) for i in items_data]
@@ -345,7 +345,7 @@ class RemoteKeeper:
         include_hidden: bool = False,
     ) -> list[Item]:
         resp = self._get(
-            "/v1/items",
+            "/v1/notes",
             limit=limit,
             since=since,
             order_by=order_by,
@@ -358,7 +358,7 @@ class RemoteKeeper:
 
     def get(self, id: str) -> Optional[Item]:
         try:
-            resp = self._get(f"/v1/items/{id}")
+            resp = self._get(f"/v1/notes/{id}")
             return self._to_item(resp)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -375,7 +375,7 @@ class RemoteKeeper:
         offset: int = 0,
     ) -> Optional[Item]:
         try:
-            resp = self._get(f"/v1/items/{id}/versions/{offset}")
+            resp = self._get(f"/v1/notes/{id}/versions/{offset}")
             return self._to_item(resp)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -387,7 +387,7 @@ class RemoteKeeper:
         id: str,
         limit: int = 10,
     ) -> list[VersionInfo]:
-        resp = self._get(f"/v1/items/{id}/versions", limit=limit)
+        resp = self._get(f"/v1/notes/{id}/versions", limit=limit)
         return [self._to_version_info(v) for v in resp.get("versions", [])]
 
     def get_version_nav(
@@ -397,7 +397,7 @@ class RemoteKeeper:
         limit: int = 3,
     ) -> dict:
         resp = self._get(
-            f"/v1/items/{id}/versions/nav",
+            f"/v1/notes/{id}/versions/nav",
             current_version=current_version,
             limit=limit,
         )
@@ -408,12 +408,12 @@ class RemoteKeeper:
         return result
 
     def get_version_offset(self, item: Item) -> int:
-        resp = self._get(f"/v1/items/{item.id}/version-offset")
+        resp = self._get(f"/v1/notes/{item.id}/version-offset")
         return resp.get("offset", 0)
 
     def exists(self, id: str) -> bool:
         try:
-            self._get(f"/v1/items/{id}")
+            self._get(f"/v1/notes/{id}")
             return True
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
