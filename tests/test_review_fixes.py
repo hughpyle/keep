@@ -219,9 +219,9 @@ class TestEmbeddingProviderAbsent:
         config = StoreConfig(path=tmp_path, embedding=None)
 
         with patch("keep.api.load_or_create_config", return_value=config), \
-             patch("keep.api.ChromaStore"), \
+             patch("keep.store.ChromaStore"), \
              patch("keep.document_store.DocumentStore"), \
-             patch("keep.api.PendingSummaryQueue"):
+             patch("keep.pending_summaries.PendingSummaryQueue"):
             kp = Keeper(store_path=tmp_path)
             with pytest.raises(RuntimeError, match="No embedding provider configured"):
                 kp._get_embedding_provider()
@@ -234,9 +234,9 @@ class TestEmbeddingProviderAbsent:
         config = StoreConfig(path=tmp_path, embedding=None)
 
         with patch("keep.api.load_or_create_config", return_value=config), \
-             patch("keep.api.ChromaStore"), \
+             patch("keep.store.ChromaStore"), \
              patch("keep.document_store.DocumentStore"), \
-             patch("keep.api.PendingSummaryQueue"):
+             patch("keep.pending_summaries.PendingSummaryQueue"):
             kp = Keeper(store_path=tmp_path)
             try:
                 kp._get_embedding_provider()

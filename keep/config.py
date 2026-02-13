@@ -135,6 +135,10 @@ class StoreConfig:
     # Remote backend (if set, Keeper delegates to keepnotes.ai API)
     remote: Optional[RemoteConfig] = None
 
+    # Pluggable backend ("local" = default SQLite+ChromaDB, or entry-point name)
+    backend: str = "local"
+    backend_params: dict[str, Any] = field(default_factory=dict)
+
     @property
     def config_path(self) -> Path:
         """Path to the TOML config file."""
@@ -505,6 +509,10 @@ def load_config(config_dir: Path) -> StoreConfig:
     if api_url and api_key:
         remote = RemoteConfig(api_url=api_url, api_key=api_key)
 
+    # Parse pluggable backend config
+    backend = data.get("store", {}).get("backend", "local")
+    backend_params = data.get("store", {}).get("backend_params", {})
+
     return StoreConfig(
         path=actual_store,
         config_dir=config_dir,
@@ -522,6 +530,8 @@ def load_config(config_dir: Path) -> StoreConfig:
         system_docs_version=system_docs_version,
         integrations=integrations,
         remote=remote,
+        backend=backend,
+        backend_params=backend_params,
     )
 
 
@@ -569,6 +579,11 @@ def save_config(config: StoreConfig) -> None:
     # Write system_docs_version if set (tracks migration state)
     if config.system_docs_version > 0:
         store_section["system_docs_version"] = config.system_docs_version
+    # Only write backend if not default
+    if config.backend != "local":
+        store_section["backend"] = config.backend
+    if config.backend_params:
+        store_section["backend_params"] = config.backend_params
 
     data: dict[str, Any] = {
         "store": store_section,

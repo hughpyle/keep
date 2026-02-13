@@ -424,3 +424,29 @@ class DocumentStoreProtocol(Protocol):
     def delete_collection(self, collection: str) -> int: ...
 
     def close(self) -> None: ...
+
+
+@runtime_checkable
+class PendingQueueProtocol(Protocol):
+    """
+    Abstract pending summary queue.
+
+    Implemented by:
+    - PendingSummaryQueue (local SQLite)
+    - NullPendingQueue (no-op for backends that handle summarization server-side)
+    - Cloud implementations (Postgres-backed queue, etc.)
+    """
+
+    def enqueue(self, id: str, collection: str, content: str) -> None: ...
+
+    def dequeue(self, limit: int = 10) -> list: ...
+
+    def complete(self, id: str, collection: str) -> None: ...
+
+    def count(self) -> int: ...
+
+    def stats(self) -> dict: ...
+
+    def clear(self) -> int: ...
+
+    def close(self) -> None: ...

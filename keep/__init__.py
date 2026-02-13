@@ -38,9 +38,16 @@ if not os.environ.get("KEEP_VERBOSE"):
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 from .api import Keeper, NOWDOC_ID
+from .backend import StoreBundle, NullPendingQueue
+from .protocol import (
+    DocumentStoreProtocol,
+    KeeperProtocol,
+    PendingQueueProtocol,
+    VectorStoreProtocol,
+)
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, INTERNAL_TAGS
 
-__version__ = "0.38.3"
+__version__ = "0.38.4"
 __all__ = [
     "Keeper",
     "Item",
@@ -48,4 +55,11 @@ __all__ = [
     "filter_non_system_tags",
     "SYSTEM_TAG_PREFIX",
     "INTERNAL_TAGS",
+    # Pluggable backend support
+    "StoreBundle",
+    "NullPendingQueue",
+    "DocumentStoreProtocol",
+    "VectorStoreProtocol",
+    "PendingQueueProtocol",
+    "KeeperProtocol",
 ]

@@ -163,7 +163,7 @@ import sys
 
 from .config import load_or_create_config, save_config, StoreConfig, EmbeddingIdentity
 from .paths import get_config_dir, get_default_store_path
-from .pending_summaries import PendingSummaryQueue
+from .protocol import DocumentStoreProtocol, VectorStoreProtocol, PendingQueueProtocol
 from .providers import get_registry
 from .providers.base import (
     Document,
@@ -174,7 +174,6 @@ from .providers.base import (
 )
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import VersionInfo
-from .store import ChromaStore
 from .types import (
     Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, parse_utc_timestamp,
     validate_tag_key, validate_id, MAX_TAG_VALUE_LENGTH,
@@ -425,9 +424,9 @@ class Keeper:
         decay_half_life_days: float = 30.0,
         *,
         config: Optional[StoreConfig] = None,
-        doc_store=None,
-        vector_store=None,
-        pending_queue=None,
+        doc_store: Optional["DocumentStoreProtocol"] = None,
+        vector_store: Optional["VectorStoreProtocol"] = None,
+        pending_queue: Optional["PendingQueueProtocol"] = None,
     ) -> None:
         """
         Initialize or open an existing reflective memory store.
@@ -439,9 +438,9 @@ class Keeper:
                 After this many days, an item's effective relevance is halved.
                 Set to 0 or negative to disable decay.
             config: Pre-loaded StoreConfig (skips filesystem config discovery).
-            doc_store: Injected document store (skips SQLite DocumentStore creation).
-            vector_store: Injected vector store (skips ChromaDB ChromaStore creation).
-            pending_queue: Injected summary queue (skips PendingSummaryQueue creation).
+            doc_store: Injected document store (skips default backend creation).
+            vector_store: Injected vector store (skips default backend creation).
+            pending_queue: Injected summary queue (skips default backend creation).
         """
         self._decay_half_life_days = decay_half_life_days
 
@@ -476,36 +475,29 @@ class Keeper:
         self._summarization_provider: Optional[SummarizationProvider] = None
         self._media_describer: Optional[MediaDescriber] = None
 
-        # --- Storage backends (injected or default) ---
-        if pending_queue is not None:
-            self._pending_queue = pending_queue
-        else:
-            queue_path = self._store_path / "pending_summaries.db"
-            self._pending_queue = PendingSummaryQueue(queue_path)
-
-        if doc_store is not None:
+        # --- Storage backends (injected or factory-created) ---
+        if doc_store is not None and vector_store is not None:
+            # Fully injected (tests, custom setups)
+            from .backend import NullPendingQueue
             self._document_store = doc_store
-        else:
-            from .document_store import DocumentStore
-            doc_store_path = self._store_path / "documents.db"
-            self._document_store = DocumentStore(doc_store_path)
-
-        if vector_store is not None:
             self._store = vector_store
+            self._pending_queue = pending_queue or NullPendingQueue()
+            self._is_local = False
         else:
-            embedding_dim = None
-            if self._config.embedding_identity:
-                embedding_dim = self._config.embedding_identity.dimension
-            self._store = ChromaStore(
-                self._store_path,
-                embedding_dimension=embedding_dim,
-            )
+            # Factory-based creation from config
+            from .backend import create_stores
+            bundle = create_stores(self._config)
+            self._document_store = bundle.doc_store
+            self._store = bundle.vector_store
+            self._pending_queue = bundle.pending_queue
+            self._is_local = bundle.is_local
 
         # Guard against concurrent background reconciliation
         import threading
         self._reconcile_lock = threading.Lock()
 
         # Check store consistency and reconcile in background if needed
+        # (safe for all backends — uses abstract store interface)
         if self._check_store_consistency() and self._config.embedding is not None:
             chroma_coll = self._resolve_chroma_collection()
             doc_coll = self._resolve_doc_collection()
@@ -812,17 +804,21 @@ class Keeper:
                 self._config.embedding.params,
             )
             # Wrap local GPU providers with lifecycle lock
-            if self._config.embedding.name == "mlx":
-                from .model_lock import LockedEmbeddingProvider
-                base_provider = LockedEmbeddingProvider(
+            # Local-only: model locks and embedding cache use filesystem
+            if self._is_local:
+                if self._config.embedding.name == "mlx":
+                    from .model_lock import LockedEmbeddingProvider
+                    base_provider = LockedEmbeddingProvider(
+                        base_provider,
+                        self._store_path / ".embedding.lock",
+                    )
+                cache_path = self._store_path / "embedding_cache.db"
+                self._embedding_provider = CachingEmbeddingProvider(
                     base_provider,
-                    self._store_path / ".embedding.lock",
+                    cache_path=cache_path,
                 )
-            cache_path = self._store_path / "embedding_cache.db"
-            self._embedding_provider = CachingEmbeddingProvider(
-                base_provider,
-                cache_path=cache_path,
-            )
+            else:
+                self._embedding_provider = base_provider
             # Validate or record embedding identity
             self._validate_embedding_identity(self._embedding_provider)
             # Update store's embedding dimension if it wasn't known at init
@@ -842,7 +838,7 @@ class Keeper:
                 self._config.summarization.name,
                 self._config.summarization.params,
             )
-            if self._config.summarization.name == "mlx":
+            if self._is_local and self._config.summarization.name == "mlx":
                 from .model_lock import LockedSummarizationProvider
                 provider = LockedSummarizationProvider(
                     provider,
@@ -870,7 +866,7 @@ class Keeper:
             except (ValueError, RuntimeError) as e:
                 logger.warning("Media describer unavailable: %s", e)
                 return None
-            if self._config.media.name == "mlx":
+            if self._is_local and self._config.media.name == "mlx":
                 from .model_lock import LockedMediaDescriber
                 provider = LockedMediaDescriber(
                     provider,
@@ -1288,8 +1284,8 @@ class Keeper:
                     tags=existing_doc.tags,
                 )
 
-        # Spawn background processor if needed
-        if summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
+        # Spawn background processor if needed (local only — uses filesystem locks)
+        if self._is_local and summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
             self._spawn_processor()
 
         return _record_to_item(result)
