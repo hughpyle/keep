@@ -1,14 +1,14 @@
 # keep move
 
-Move versions from now (or another item) into a named item.
+Move versions from now (or another note) into a named note.
 
-As you update `keep now` throughout a session, version history accumulates. `keep move` extracts selected versions into a named item. Requires either `-t` (tag filter) or `--only` (cherry-pick the tip).
+As you update `keep now` throughout a session, a string of versions accumulates. `keep move` extracts selected versions into a named note. Requires either `-t` (tag filter) or `--only` (cherry-pick the tip).
 
 ## Usage
 
 ```bash
-keep move "auth-thread" -t project=myapp       # Move matching versions from now
-keep move "auth-thread" -t project=myapp       # Incremental: appends more
+keep move "auth-string" -t project=myapp       # Move matching versions from now
+keep move "auth-string" -t project=myapp       # Incremental: appends more
 keep move "quick-note" --only                   # Move just the current version
 keep move "target" --from "source" -t topic=X  # Reorganize between items
 ```
@@ -38,9 +38,9 @@ keep move "target" --from "source" -t topic=X  # Reorganize between items
 `--only` moves just the current (tip) version, one at a time. This is the cherry-picker for reorganizing untagged items:
 
 ```bash
-keep move "thread-a" --only          # Move tip to thread-a
-keep move "thread-b" --only          # Move next tip to thread-b
-keep move "thread-a" --only          # Append another to thread-a
+keep move "string-a" --only          # Move tip to string-a
+keep move "string-b" --only          # Move next tip to string-b
+keep move "string-a" --only          # Append another to string-a
 ```
 
 Combine with `-t` to only move the tip if it matches:
@@ -55,8 +55,8 @@ Use `--from` to extract versions from any item, not just now:
 
 ```bash
 # Over-grabbed? Pull specific versions out
-keep move "auth-thread" --from "big-dump" -t project=auth
-keep move "docs-thread" --from "big-dump" -t project=docs
+keep move "auth-string" --from "big-dump" -t project=auth
+keep move "docs-string" --from "big-dump" -t project=docs
 
 # Cherry-pick one version from an existing item
 keep move "highlights" --from "session-log" --only
@@ -82,14 +82,14 @@ keep get alpha-log --history                     # Shows all 4 versions
 
 ## Tag-filtered move
 
-When you work on multiple projects in one session, tag filtering lets you move each thread separately:
+When you work on multiple projects in one session, tag filtering lets you move each string separately:
 
 ```bash
 keep now "auth: token refresh" -t project=auth
 keep now "docs: update API guide" -t project=docs
 keep now "auth: added tests" -t project=auth
 
-keep move "auth-thread" -t project=auth    # Extracts 2 auth versions
+keep move "auth-string" -t project=auth    # Extracts 2 auth versions
 keep now                                    # Still has docs version
 ```
 
@@ -98,9 +98,9 @@ keep now                                    # Still has docs version
 The moved item has full version history, navigable like any other item:
 
 ```bash
-keep get thread-name                 # Current (newest moved)
-keep get thread-name -V 1            # Previous version
-keep get thread-name --history       # List all versions
+keep get string-name                 # Current (newest moved)
+keep get string-name -V 1            # Previous version
+keep get string-name --history       # List all versions
 ```
 
 ## See Also

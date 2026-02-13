@@ -68,10 +68,10 @@ Working on auth flow
 
 ## keep move
 
-When a thread of work is complete, move the now history into a named item. Requires either `-t` (tag filter) or `--only` (cherry-pick the tip).
+When a string of work is complete, move the now history into a named note. Requires either `-t` (tag filter) or `--only` (cherry-pick the tip).
 
 ```bash
-keep move "auth-thread" -t project=myapp   # Move matching versions
+keep move "auth-string" -t project=myapp   # Move matching versions
 keep move "quick-note" --only              # Move just the current version
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.37.1
+version: 0.38.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -114,12 +114,12 @@ keep put "file:///path/to/important.pdf" -t type=reference -t topic=security
 ```
 Ask: What is this document? Why is it important? Tag appropriately. Documents indexed during work become navigable knowledge.
 
-**Move when pivoting.** When a thread of work is complete, or the conversation shifts topic, move the now history before moving on:
+**Move when pivoting.** When a string of work is complete, or the conversation shifts topic, move the now history before moving on:
 ```bash
-keep move "auth-thread" -t project=myapp     # Archive matching versions
+keep move "auth-string" -t project=myapp     # Archive matching versions
 keep move "design-log" --only                # Move just the tip version
 ```
-Moving clears matched versions from now, making room for what's next. Tag filtering lets you extract one project's thread from a mixed session.
+Moving clears matched versions from now, making room for what's next. Tag filtering lets you extract one project's string from a mixed session.
 
 **Breakdowns are valuable.** When the normal flow is interrupted — an assumption has been revealed. The breakdown is where learning happens.
 

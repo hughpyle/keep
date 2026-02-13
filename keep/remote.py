@@ -335,6 +335,23 @@ class RemoteKeeper:
             result[name] = [self._to_item(i) for i in items_data]
         return result
 
+    def resolve_inline_meta(
+        self,
+        item_id: str,
+        queries: list[dict[str, str]],
+        context_keys: list[str] | None = None,
+        prereq_keys: list[str] | None = None,
+        *,
+        limit: int = 3,
+    ) -> list[Item]:
+        resp = self._post(f"/v1/notes/{item_id}/resolve", json={
+            "queries": queries,
+            "context_keys": context_keys,
+            "prerequisites": prereq_keys,
+            "limit": limit,
+        })
+        return self._to_items(resp)
+
     def list_recent(
         self,
         limit: int = 10,
