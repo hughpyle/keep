@@ -29,7 +29,7 @@ _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 from .api import Keeper, _text_content_id
 from .config import get_tool_directory
 from .document_store import VersionInfo
-from .types import Item
+from .types import Item, local_date
 from .logging_config import configure_quiet_mode, enable_debug_mode
 
 
@@ -219,7 +219,7 @@ def _format_yaml_frontmatter(
         lines.append("similar:")
         for sim_item, sid in zip(similar_items, sim_ids):
             score_str = f"({sim_item.score:.2f})" if sim_item.score else ""
-            date_part = sim_item.tags.get("_updated", sim_item.tags.get("_created", ""))[:10]
+            date_part = local_date(sim_item.tags.get("_updated") or sim_item.tags.get("_created", ""))
             actual_id_len = max(len(sid), id_width)
             prefix_len = 4 + actual_id_len + 1 + len(score_str) + 1 + len(date_part) + 1
             summary_preview = _truncate_summary(sim_item.summary, prefix_len)
@@ -247,7 +247,7 @@ def _format_yaml_frontmatter(
             id_width = max(len(s) for s in prev_ids)
             lines.append("prev:")
             for vid, v in zip(prev_ids, version_nav["prev"]):
-                date_part = v.created_at[:10] if v.created_at else ""
+                date_part = local_date(v.created_at) if v.created_at else ""
                 prefix_len = 4 + id_width + 1 + len(date_part) + 1
                 summary_preview = _truncate_summary(v.summary, prefix_len)
                 lines.append(f"  - {vid.ljust(id_width)} {date_part} {summary_preview}")
@@ -256,7 +256,7 @@ def _format_yaml_frontmatter(
             id_width = max(len(s) for s in next_ids)
             lines.append("next:")
             for vid, v in zip(next_ids, version_nav["next"]):
-                date_part = v.created_at[:10] if v.created_at else ""
+                date_part = local_date(v.created_at) if v.created_at else ""
                 prefix_len = 4 + id_width + 1 + len(date_part) + 1
                 summary_preview = _truncate_summary(v.summary, prefix_len)
                 lines.append(f"  - {vid.ljust(id_width)} {date_part} {summary_preview}")
@@ -286,8 +286,8 @@ def _format_summary_line(item: Item, id_width: int = 0) -> str:
     # Pad ID for column alignment
     padded_id = versioned_id.ljust(id_width) if id_width else versioned_id
 
-    # Get date (from _updated_date or _updated or _created)
-    date = item.tags.get("_updated_date") or item.tags.get("_updated", "")[:10] or item.tags.get("_created", "")[:10] or ""
+    # Get date in local timezone
+    date = local_date(item.tags.get("_updated") or item.tags.get("_created", ""))
 
     # Truncate summary to fit terminal width, collapse newlines
     cols = _output_width()
@@ -331,7 +331,7 @@ def main_callback(
     )] = False,
     full_output: Annotated[bool, typer.Option(
         "--full", "-F",
-        help="Output full items (overrides --ids)",
+        help="Output full notes (overrides --ids)",
         callback=_full_callback,
         is_eager=True,
     )] = False,
@@ -396,7 +396,7 @@ SinceOption = Annotated[
     Optional[str],
     typer.Option(
         "--since",
-        help="Only items updated since (ISO duration: P3D, P1W, PT1H; or date: 2026-01-15)"
+        help="Only notes updated since (ISO duration: P3D, P1W, PT1H; or date: 2026-01-15)"
     )
 ]
 
@@ -446,7 +446,7 @@ def _format_item(
                 {
                     "id": f"{s.tags.get('_base_id', s.id)}@V{{{(similar_offsets or {}).get(s.id, 0)}}}",
                     "score": s.score,
-                    "date": s.tags.get("_updated", s.tags.get("_created", ""))[:10],
+                    "date": local_date(s.tags.get("_updated") or s.tags.get("_created", "")),
                     "summary": s.summary[:60],
                 }
                 for s in similar_items
@@ -587,25 +587,25 @@ def _get_keeper(store: Optional[Path]) -> Keeper:
         atexit.register(kp.close)
 
         # Check for remote config in TOML (loaded during Keeper init)
-        if kp._config and kp._config.remote:
+        if kp.config and kp.config.remote:
             from .remote import RemoteKeeper
             remote = RemoteKeeper(
-                kp._config.remote.api_url,
-                kp._config.remote.api_key,
-                kp._config,
+                kp.config.remote.api_url,
+                kp.config.remote.api_key,
+                kp.config,
             )
             atexit.register(remote.close)
             kp.close()  # Don't need the local Keeper
             return remote
 
         # Warn (don't exit) if no embedding provider — read-only ops still work
-        if kp._config and kp._config.embedding is None:
+        if kp.config and kp.config.embedding is None:
             typer.echo(NO_PROVIDER_ERROR.strip(), err=True)
         # Check tool integrations (fast path: dict lookup, no I/O)
-        if kp._config:
+        if kp.config:
             from .integrations import check_and_install
             try:
-                check_and_install(kp._config)
+                check_and_install(kp.config)
             except (OSError, ValueError) as e:
                 pass  # Never block normal operation
         return kp
@@ -672,10 +672,10 @@ def find(
     query: Annotated[Optional[str], typer.Argument(help="Search query text")] = None,
     id: Annotated[Optional[str], typer.Option(
         "--id",
-        help="Find items similar to this ID (instead of text search)"
+        help="Find notes similar to this ID (instead of text search)"
     )] = None,
     include_self: Annotated[bool, typer.Option(
-        help="Include the queried item (only with --id)"
+        help="Include the queried note (only with --id)"
     )] = False,
     text: Annotated[bool, typer.Option(
         "--text",
@@ -690,17 +690,21 @@ def find(
     since: SinceOption = None,
     history: Annotated[bool, typer.Option(
         "--history", "-H",
-        help="Include archived versions of matching items"
+        help="Include archived versions of matching notes"
+    )] = False,
+    show_all: Annotated[bool, typer.Option(
+        "--all", "-a",
+        help="Include hidden system notes (IDs starting with '.')"
     )] = False,
 ):
     """
-    Find items by semantic similarity (default) or full-text search.
+    Find notes by semantic similarity (default) or full-text search.
 
     \b
     Examples:
         keep find "authentication"              # Semantic search
         keep find "auth" --text                 # Full-text search
-        keep find --id file:///path/to/doc.md   # Find similar to item
+        keep find --id file:///path/to/doc.md   # Find similar notes
         keep find "auth" -t project=myapp       # Search + filter by tag
         keep find "auth" --history              # Include archived versions
     """
@@ -720,11 +724,11 @@ def find(
     search_limit = limit * 5 if tag else limit
 
     if id:
-        results = kp.find_similar(id, limit=search_limit, since=since, include_self=include_self)
+        results = kp.find_similar(id, limit=search_limit, since=since, include_self=include_self, include_hidden=show_all)
     elif text:
-        results = kp.query_fulltext(query, limit=search_limit, since=since)
+        results = kp.query_fulltext(query, limit=search_limit, since=since, include_hidden=show_all)
     else:
-        results = kp.find(query, limit=search_limit, since=since)
+        results = kp.find(query, limit=search_limit, since=since, include_hidden=show_all)
 
     # Post-filter by tags if specified
     if tag:
@@ -751,7 +755,7 @@ def search(
     since: SinceOption = None,
 ):
     """
-    Search item summaries using full-text search (alias for find --text).
+    Search note summaries using full-text search (alias for find --text).
     """
     kp = _get_keeper(store)
     results = kp.query_fulltext(query, limit=limit, since=since)
@@ -777,22 +781,26 @@ def list_recent(
     since: SinceOption = None,
     history: Annotated[bool, typer.Option(
         "--history", "-H",
-        help="Include archived versions in listing"
+        help="Include archived versions in output"
+    )] = False,
+    show_all: Annotated[bool, typer.Option(
+        "--all", "-a",
+        help="Include hidden system notes (IDs starting with '.')"
     )] = False,
 ):
     """
-    List recent items, filter by tags, or list tag keys/values.
+    List recent notes, filter by tags, or list tag keys/values.
 
     \b
     Examples:
-        keep list                      # Recent items (by update time)
-        keep list --sort accessed      # Recent items (by access time)
-        keep list --tag foo            # Items with tag 'foo' (any value)
-        keep list --tag foo=bar        # Items with tag foo=bar
-        keep list --tag foo --tag bar  # Items with both tags
+        keep list                      # Recent notes (by update time)
+        keep list --sort accessed      # Recent notes (by access time)
+        keep list --tag foo            # Notes with tag 'foo' (any value)
+        keep list --tag foo=bar        # Notes with tag foo=bar
+        keep list --tag foo --tag bar  # Notes with both tags
         keep list --tags=              # List all tag keys
         keep list --tags=foo           # List values for tag 'foo'
-        keep list --since P3D          # Items updated in last 3 days
+        keep list --since P3D          # Notes updated in last 3 days
         keep list --history            # Include archived versions
     """
     kp = _get_keeper(store)
@@ -823,10 +831,10 @@ def list_recent(
         for t in tag:
             if "=" in t:
                 key, value = t.split("=", 1)
-                matches = kp.query_tag(key, value, limit=limit, since=since)
+                matches = kp.query_tag(key, value, limit=limit, since=since, include_hidden=show_all)
             else:
                 # Key only - find items with this tag key (any value)
-                matches = kp.query_tag(t, limit=limit, since=since)
+                matches = kp.query_tag(t, limit=limit, since=since, include_hidden=show_all)
 
             if results is None:
                 results = {item.id: item for item in matches}
@@ -840,13 +848,13 @@ def list_recent(
         return
 
     # Default: recent items
-    results = kp.list_recent(limit=limit, since=since, order_by=sort, include_history=history)
+    results = kp.list_recent(limit=limit, since=since, order_by=sort, include_history=history, include_hidden=show_all)
     typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
 @app.command("tag-update")
 def tag_update(
-    ids: Annotated[list[str], typer.Argument(default=..., help="Document IDs to tag")],
+    ids: Annotated[list[str], typer.Argument(default=..., help="Note IDs to tag")],
     tags: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Tag as key=value (empty value removes: key=)"
@@ -858,9 +866,9 @@ def tag_update(
     store: StoreOption = None,
 ):
     """
-    Add, update, or remove tags on existing documents.
+    Add, update, or remove tags on existing notes.
 
-    Does not re-process the document - only updates tags.
+    Does not re-process the note - only updates tags.
 
     \b
     Examples:
@@ -902,7 +910,7 @@ def put(
     )] = None,
     id: Annotated[Optional[str], typer.Option(
         "--id", "-i",
-        help="Document ID (auto-generated for text/stdin modes)"
+        help="Note ID (auto-generated for text/stdin modes)"
     )] = None,
     store: StoreOption = None,
     tags: Annotated[Optional[list[str]], typer.Option(
@@ -915,11 +923,11 @@ def put(
     )] = None,
     suggest_tags: Annotated[bool, typer.Option(
         "--suggest-tags",
-        help="Show tag suggestions from similar items"
+        help="Show tag suggestions from similar notes"
     )] = False,
 ):
     """
-    Add or update a document in the store.
+    Add or update a note in the store.
 
     \b
     Three input modes (auto-detected):
@@ -947,7 +955,7 @@ def put(
             typer.echo("Error: --summary cannot be used with stdin input (original content would be lost)", err=True)
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
             raise typer.Exit(1)
-        max_len = kp._config.max_summary_length
+        max_len = kp.config.max_summary_length
         if len(content) > max_len:
             typer.echo(f"Error: stdin content too long to store inline ({len(content)} chars, max {max_len})", err=True)
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
@@ -964,7 +972,7 @@ def put(
             typer.echo("Error: --summary cannot be used with inline text (original content would be lost)", err=True)
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
             raise typer.Exit(1)
-        max_len = kp._config.max_summary_length
+        max_len = kp.config.max_summary_length
         if len(source) > max_len:
             typer.echo(f"Error: inline text too long to store ({len(source)} chars, max {max_len})", err=True)
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
@@ -1014,7 +1022,7 @@ def update(
     tags: Annotated[Optional[list[str]], typer.Option("--tag", "-t")] = None,
     summary: Annotated[Optional[str], typer.Option("--summary")] = None,
 ):
-    """Add or update a document (alias for 'put')."""
+    """Add or update a note (alias for 'put')."""
     put(source=source, id=id, store=store, tags=tags, summary=summary)
 
 
@@ -1026,7 +1034,7 @@ def add(
     tags: Annotated[Optional[list[str]], typer.Option("--tag", "-t")] = None,
     summary: Annotated[Optional[str], typer.Option("--summary")] = None,
 ):
-    """Add a document (alias for 'put')."""
+    """Add a note (alias for 'put')."""
     put(source=source, id=id, store=store, tags=tags, summary=summary)
 
 
@@ -1054,7 +1062,7 @@ def now(
     )] = None,
     limit: Annotated[int, typer.Option(
         "--limit", "-n",
-        help="Max similar/meta items to show (default 3)"
+        help="Max similar/meta notes to show (default 3)"
     )] = 3,
 ):
     """
@@ -1244,14 +1252,14 @@ def reflect():
 
 @app.command()
 def move(
-    name: Annotated[str, typer.Argument(help="Target item name")],
+    name: Annotated[str, typer.Argument(help="Target note name")],
     tags: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Only extract versions matching these tags (key=value)"
     )] = None,
     from_source: Annotated[Optional[str], typer.Option(
         "--from",
-        help="Source item to extract from (default: now)"
+        help="Source note to extract from (default: now)"
     )] = None,
     only: Annotated[bool, typer.Option(
         "--only",
@@ -1295,7 +1303,7 @@ def move(
 
 @app.command()
 def get(
-    id: Annotated[list[str], typer.Argument(help="URI(s) of item(s) (append @V{N} for version)")],
+    id: Annotated[list[str], typer.Argument(help="URI(s) of note(s) (append @V{N} for version)")],
     version: Annotated[Optional[int], typer.Option(
         "--version", "-V",
         help="Get specific version (0=current, 1=previous, etc.)"
@@ -1306,11 +1314,11 @@ def get(
     )] = False,
     similar: Annotated[bool, typer.Option(
         "--similar", "-S",
-        help="List similar items"
+        help="List similar notes"
     )] = False,
     meta: Annotated[bool, typer.Option(
         "--meta", "-M",
-        help="List meta items"
+        help="List meta notes"
     )] = False,
     tag: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
@@ -1318,19 +1326,19 @@ def get(
     )] = None,
     limit: Annotated[int, typer.Option(
         "--limit", "-n",
-        help="Max items for --history, --similar, or --meta (default: 10)"
+        help="Max notes for --history, --similar, or --meta (default: 10)"
     )] = 10,
     store: StoreOption = None,
 ):
     """
-    Retrieve item(s) by ID.
+    Retrieve note(s) by ID.
 
     Accepts one or more IDs. Version identifiers: Append @V{N} to get a specific version.
 
     \b
     Examples:
-        keep get doc:1                  # Current version with similar items
-        keep get doc:1 doc:2 doc:3      # Multiple items
+        keep get doc:1                  # Current version with similar notes
+        keep get doc:1 doc:2 doc:3      # Multiple notes
         keep get doc:1 -V 1             # Previous version with prev/next nav
         keep get "doc:1@V{1}"           # Same as -V 1
         keep get doc:1 --history        # List all versions
@@ -1415,7 +1423,7 @@ def _get_one(
                     {
                         "id": f"{item.tags.get('_base_id', item.id)}@V{{{similar_offsets.get(item.id, 0)}}}",
                         "score": item.score,
-                        "date": item.tags.get("_updated", item.tags.get("_created", ""))[:10],
+                        "date": local_date(item.tags.get("_updated") or item.tags.get("_created", "")),
                         "summary": item.summary[:60],
                     }
                     for item in similar_items
@@ -1429,13 +1437,13 @@ def _get_one(
                     base_id = item.tags.get("_base_id", item.id)
                     offset = similar_offsets.get(item.id, 0)
                     score_str = f"({item.score:.2f})" if item.score else ""
-                    date_part = item.tags.get("_updated", item.tags.get("_created", ""))[:10]
+                    date_part = local_date(item.tags.get("_updated") or item.tags.get("_created", ""))
                     summary_preview = item.summary[:50].replace("\n", " ")
                     if len(item.summary) > 50:
                         summary_preview += "..."
                     lines.append(f"  {base_id}@V{{{offset}}} {score_str} {date_part} {summary_preview}")
             else:
-                lines.append("  No similar items found.")
+                lines.append("  No similar notes found.")
             return "\n".join(lines)
 
     if meta:
@@ -1466,7 +1474,7 @@ def _get_one(
                         summary_preview += "..."
                     lines.append(f"    {_shell_quote_id(item.id)}  {summary_preview}")
             if len(lines) == 1:
-                lines.append("  No meta items found.")
+                lines.append("  No meta notes found.")
             return "\n".join(lines)
 
     # Get specific version or current
@@ -1523,19 +1531,19 @@ def _get_one(
 
 @app.command("del")
 def del_cmd(
-    id: Annotated[list[str], typer.Argument(help="ID(s) of item(s) to delete")],
+    id: Annotated[list[str], typer.Argument(help="ID(s) of note(s) to delete")],
     store: StoreOption = None,
 ):
     """
-    Delete the current version of item(s).
+    Delete the current version of note(s).
 
-    If an item has version history, reverts to the previous version.
-    If no history exists, removes the item completely.
+    If a note has version history, reverts to the previous version.
+    If no history exists, removes the note completely.
 
     \b
     Examples:
         keep del %abc123def456        # Remove a text note
-        keep del %abc123 %def456      # Remove multiple items
+        keep del %abc123 %def456      # Remove multiple notes
         keep del now                  # Revert now to previous
     """
     kp = _get_keeper(store)
@@ -1570,10 +1578,10 @@ def del_cmd(
 
 @app.command("delete", hidden=True)
 def delete(
-    id: Annotated[list[str], typer.Argument(help="ID(s) of item(s) to delete")],
+    id: Annotated[list[str], typer.Argument(help="ID(s) of note(s) to delete")],
     store: StoreOption = None,
 ):
-    """Delete the current version of item(s) (alias for 'del')."""
+    """Delete the current version of note(s) (alias for 'del')."""
     del_cmd(id=id, store=store)
 
 
@@ -1614,13 +1622,13 @@ def reindex(
     count = kp.count()
 
     if count == 0:
-        typer.echo("No items to reindex.")
+        typer.echo("No notes to reindex.")
         raise typer.Exit(0)
 
     if not yes:
-        typer.confirm(f"Reindex {count} items with current embedding provider?", abort=True)
+        typer.confirm(f"Reindex {count} notes with current embedding provider?", abort=True)
 
-    typer.echo(f"Reindexing {count} items...")
+    typer.echo(f"Reindexing {count} notes...")
     stats = kp.reindex()
 
     if _get_json_output():
@@ -1903,11 +1911,11 @@ def process_pending(
     store: StoreOption = None,
     limit: Annotated[int, typer.Option(
         "--limit", "-n",
-        help="Maximum items to process in this batch"
+        help="Maximum notes to process in this batch"
     )] = 10,
     all_items: Annotated[bool, typer.Option(
         "--all", "-a",
-        help="Process all pending items (ignores --limit)"
+        help="Process all pending notes (ignores --limit)"
     )] = False,
     daemon: Annotated[bool, typer.Option(
         "--daemon",
@@ -2002,7 +2010,7 @@ def process_pending(
                 "errors": totals["errors"][:10],  # Limit error output
             }))
         else:
-            msg = f"✓ Processed {totals['processed']} items"
+            msg = f"✓ Processed {totals['processed']} notes"
             if totals["failed"]:
                 msg += f", {totals['failed']} failed"
             if totals["abandoned"]:
@@ -2026,7 +2034,7 @@ def process_pending(
                 "errors": result["errors"][:10],
             }))
         else:
-            msg = f"✓ Processed {result['processed']} items"
+            msg = f"✓ Processed {result['processed']} notes"
             if result["failed"]:
                 msg += f", {result['failed']} failed"
             if result["abandoned"]:

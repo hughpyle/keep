@@ -2,6 +2,7 @@
 Data types for reflective memory.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -35,6 +36,42 @@ def parse_utc_timestamp(ts: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def local_date(utc_iso: str) -> str:
+    """Convert a UTC ISO timestamp to a local-timezone date string (YYYY-MM-DD).
+
+    Used for short-form display dates. Returns empty string for empty/invalid input.
+    """
+    if not utc_iso:
+        return ""
+    try:
+        dt = parse_utc_timestamp(utc_iso)
+        return dt.astimezone().strftime("%Y-%m-%d")
+    except (ValueError, OverflowError):
+        return utc_iso[:10] if len(utc_iso) >= 10 else utc_iso
+
+
+# Tag keys must be simple: alphanumeric, underscore, hyphen (no JSON path chars)
+_TAG_KEY_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_-]*$')
+
+MAX_ID_LENGTH = 1024
+MAX_TAG_KEY_LENGTH = 128
+MAX_TAG_VALUE_LENGTH = 4096
+
+
+def validate_tag_key(key: str) -> None:
+    """Validate a tag key is safe for JSON path queries."""
+    if not key or len(key) > MAX_TAG_KEY_LENGTH:
+        raise ValueError(f"Tag key must be 1-{MAX_TAG_KEY_LENGTH} characters: {key!r}")
+    if not _TAG_KEY_RE.match(key):
+        raise ValueError(f"Tag key contains invalid characters (allowed: a-z, 0-9, _, -): {key!r}")
+
+
+def validate_id(id: str) -> None:
+    """Validate a document ID length."""
+    if not id or len(id) > MAX_ID_LENGTH:
+        raise ValueError(f"ID must be 1-{MAX_ID_LENGTH} characters")
 
 
 def filter_non_system_tags(tags: dict[str, str]) -> dict[str, str]:
