@@ -500,7 +500,7 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse remote backend config (env vars override TOML)
     remote = None
     remote_data = data.get("remote", {})
-    api_url = os.environ.get("KEEPNOTES_API_URL") or remote_data.get("api_url")
+    api_url = os.environ.get("KEEPNOTES_API_URL") or remote_data.get("api_url", "https://api.keepnotes.ai")
     api_key = os.environ.get("KEEPNOTES_API_KEY") or remote_data.get("api_key")
     if api_url and api_key:
         remote = RemoteConfig(api_url=api_url, api_key=api_key)
