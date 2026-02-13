@@ -39,7 +39,7 @@ What makes this more than a vector store: when you view your current context (`k
 
 Backed by ChromaDB for vectors, SQLite for metadata and versions.
 
-> This is like an opinionated version of [Reflexion](https://github.com/noahshinn/reflexion) from Shinn et al.  If there are other similar research or projects I'd like to hear about them!
+> **[keepnotes.ai](https://keepnotes.ai)** — Hosted service. No local setup, no API keys to manage. Same SDK, managed infrastructure.
 
 ### The Practice
 
