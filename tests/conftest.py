@@ -77,6 +77,7 @@ class MockChromaStore:
     def __init__(self, store_path: Path, embedding_dimension: int = None):
         self._store_path = store_path
         self._embedding_dimension = embedding_dimension or 384
+        self.embedding_dimension = self._embedding_dimension
         self._data: dict[str, dict] = {}  # collection -> {id -> record}
 
     def upsert(self, collection: str, id: str, embedding: list[float],
@@ -121,10 +122,18 @@ class MockChromaStore:
         from keep.store import StoreResult
         if collection not in self._data:
             return []
+
+        # Flatten ChromaDB $and clauses into simple key=value pairs
+        conditions = {}
+        if "$and" in where:
+            for clause in where["$and"]:
+                conditions.update(clause)
+        else:
+            conditions = where
+
         results = []
         for id, rec in list(self._data[collection].items())[:limit]:
-            # Simple filter: check if all where conditions match
-            match = all(rec["tags"].get(k) == v for k, v in where.items())
+            match = all(rec["tags"].get(k) == v for k, v in conditions.items())
             if match:
                 results.append(StoreResult(id=id, summary=rec["summary"], tags=rec["tags"]))
         return results
@@ -150,6 +159,38 @@ class MockChromaStore:
         if collection in self._data and id in self._data[collection]:
             return self._data[collection][id].get("embedding")
         return None
+
+    def get_entries_full(self, collection: str, ids: list[str]) -> list[dict]:
+        results = []
+        if collection not in self._data:
+            return results
+        for id in ids:
+            if id in self._data[collection]:
+                rec = self._data[collection][id]
+                results.append({
+                    "id": id,
+                    "embedding": rec.get("embedding"),
+                    "summary": rec.get("summary"),
+                    "tags": rec.get("tags", {}),
+                })
+        return results
+
+    def upsert_batch(self, collection: str, ids: list[str],
+                     embeddings: list[list[float]], summaries: list[str],
+                     tags: list[dict[str, str]]) -> None:
+        for i, id in enumerate(ids):
+            self.upsert(collection, id, embeddings[i], summaries[i], tags[i])
+
+    def upsert_version(self, collection: str, id: str, version: int,
+                       embedding: list[float], summary: str,
+                       tags: dict[str, str]) -> None:
+        versioned_id = f"{id}@v{version}"
+        self.upsert(collection, versioned_id, embedding, summary, tags)
+
+    def delete_entries(self, collection: str, ids: list[str]) -> None:
+        if collection in self._data:
+            for id in ids:
+                self._data[collection].pop(id, None)
 
     def list_ids(self, collection: str) -> list[str]:
         return list(self._data.get(collection, {}).keys())
@@ -319,6 +360,17 @@ class MockDocumentStore:
                 values.add(rec["tags"][key])
         return sorted(values)
 
+    def max_version(self, collection: str, id: str) -> int:
+        return 0
+
+    def copy_record(self, collection: str, from_id: str, to_id: str):
+        if collection not in self._data or from_id not in self._data[collection]:
+            return None
+        if to_id in self._data[collection]:
+            return None
+        self._data[collection][to_id] = dict(self._data[collection][from_id])
+        return self.get(collection, to_id)
+
     def get_version(self, collection: str, id: str, offset: int = 0):
         return None
 
@@ -337,6 +389,26 @@ class MockDocumentStore:
 
     def touch(self, collection: str, id: str) -> None:
         pass
+
+    def query_by_id_prefix(self, collection: str, prefix: str) -> list:
+        if collection not in self._data:
+            return []
+        results = []
+        for id, rec in self._data[collection].items():
+            if id.startswith(prefix):
+                class Record:
+                    pass
+                r = Record()
+                r.id = id
+                r.collection = collection
+                r.summary = rec["summary"]
+                r.tags = rec["tags"]
+                r.content_hash = rec.get("content_hash")
+                r.created_at = rec["created_at"]
+                r.updated_at = rec["updated_at"]
+                r.accessed_at = rec.get("accessed_at", rec["updated_at"])
+                results.append(r)
+        return results
 
     def touch_many(self, collection: str, ids: list[str]) -> None:
         pass
