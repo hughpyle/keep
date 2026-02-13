@@ -239,11 +239,13 @@ class RemoteKeeper:
         *,
         limit: int = 10,
         since: Optional[str] = None,
+        include_hidden: bool = False,
     ) -> list[Item]:
         resp = self._post("/v1/search", json={
             "query": query,
             "limit": limit,
             "since": since,
+            "include_hidden": include_hidden or None,
         })
         return self._to_items(resp)
 
@@ -254,11 +256,13 @@ class RemoteKeeper:
         limit: int = 10,
         since: Optional[str] = None,
         include_self: bool = False,
+        include_hidden: bool = False,
     ) -> list[Item]:
         resp = self._post(f"/v1/search/similar/{id}", json={
             "limit": limit,
             "since": since,
             "include_self": include_self,
+            "include_hidden": include_hidden or None,
         })
         return self._to_items(resp)
 
@@ -277,11 +281,13 @@ class RemoteKeeper:
         *,
         limit: int = 10,
         since: Optional[str] = None,
+        include_hidden: bool = False,
     ) -> list[Item]:
         resp = self._post("/v1/search/fulltext", json={
             "query": query,
             "limit": limit,
             "since": since,
+            "include_hidden": include_hidden or None,
         })
         return self._to_items(resp)
 
@@ -292,10 +298,13 @@ class RemoteKeeper:
         *,
         limit: int = 100,
         since: Optional[str] = None,
+        include_hidden: bool = False,
     ) -> list[Item]:
         params: dict[str, Any] = {"limit": limit}
         if since:
             params["since"] = since
+        if include_hidden:
+            params["include_hidden"] = True
         if key and value:
             resp = self._get(f"/v1/tags/{key}/{value}", **params)
         elif key:
@@ -333,6 +342,7 @@ class RemoteKeeper:
         since: Optional[str] = None,
         order_by: str = "updated",
         include_history: bool = False,
+        include_hidden: bool = False,
     ) -> list[Item]:
         resp = self._get(
             "/v1/items",
@@ -340,6 +350,7 @@ class RemoteKeeper:
             since=since,
             order_by=order_by,
             include_history=include_history,
+            include_hidden=include_hidden or None,
         )
         return self._to_items(resp)
 

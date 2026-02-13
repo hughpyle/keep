@@ -564,7 +564,7 @@ def _get_keeper(store: Optional[Path]) -> Keeper:
     import atexit
 
     # Check for remote backend config (env vars or TOML [remote] section)
-    api_url = os.environ.get("KEEPNOTES_API_URL")
+    api_url = os.environ.get("KEEPNOTES_API_URL", "https://api.keepnotes.ai")
     api_key = os.environ.get("KEEPNOTES_API_KEY")
     if api_url and api_key:
         from .config import get_config_dir, load_or_create_config
