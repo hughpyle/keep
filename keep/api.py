@@ -13,7 +13,6 @@ import importlib.resources
 import json
 import logging
 import re
-import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -2040,10 +2039,12 @@ class Keeper:
         # Try document store first (canonical)
         try:
             doc_record = self._document_store.get(doc_coll, id)
-        except sqlite3.DatabaseError as e:
+        except Exception as e:
             logger.warning("DocumentStore.get(%s) failed: %s", id, e)
-            if "malformed" in str(e):
-                self._document_store._try_runtime_recover()
+            if self._is_local and "malformed" in str(e):
+                # SQLite-specific recovery — only for local backends
+                if hasattr(self._document_store, '_try_runtime_recover'):
+                    self._document_store._try_runtime_recover()
                 # Retry once after recovery
                 try:
                     doc_record = self._document_store.get(doc_coll, id)
