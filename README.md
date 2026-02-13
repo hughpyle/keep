@@ -67,23 +67,23 @@ The CLI alone is enough to start. The hooks make it automatic.
 
 **Python 3.11–3.13 required.** Use [uv](https://docs.astral.sh/uv/) (recommended) or pip:
 
-If [Ollama](https://ollama.com/) is running locally, keep auto-detects it — no API keys needed.
-
-To use local MLX models on macOS Apple Silicon (no API keys, no Ollama):
-```bash
-uv tool install 'keep-skill[local]'   # macOS Apple Silicon optimized
-```
-
-Or, for API-based summarization and embedding, install and set an API key.
-Providers for Voyage, OpenAI, Anthropic, and Gemini are included:
-
 ```bash
 uv tool install keep-skill
+```
 
+**Hosted** (simplest — no local setup needed):
+```bash
+export KEEPNOTES_API_KEY=...   # Sign up at https://keepnotes.ai
+```
+
+**Self-hosted** with API providers:
+```bash
 export OPENAI_API_KEY=...      # Simplest (handles both embeddings + summarization)
 # Or: GEMINI_API_KEY=...       # Also does both
 # Or: VOYAGE_API_KEY=... and ANTHROPIC_API_KEY=...  # Separate services
 ```
+
+**Local** (offline, no API keys): If [Ollama](https://ollama.com/) is running, keep auto-detects it. Or on macOS Apple Silicon: `uv tool install 'keep-skill[local]'`
 
 See [docs/QUICKSTART.md](docs/QUICKSTART.md) for all provider options.
 

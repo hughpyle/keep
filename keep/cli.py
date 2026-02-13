@@ -544,7 +544,10 @@ No embedding provider configured.
 
 To use keep, configure a provider:
 
-  API-based (recommended):
+  Hosted (simplest — no local setup):
+    export KEEPNOTES_API_KEY=...   # Sign up at https://keepnotes.ai
+
+  API-based:
     export VOYAGE_API_KEY=...      # Get at dash.voyageai.com
     export ANTHROPIC_API_KEY=...   # Optional: for better summaries
 
