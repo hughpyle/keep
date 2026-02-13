@@ -135,7 +135,7 @@ class StoreConfig:
     # Remote backend (if set, Keeper delegates to keepnotes.ai API)
     remote: Optional[RemoteConfig] = None
 
-    # Pluggable backend ("local" = default SQLite+ChromaDB, or entry-point name)
+    # Pluggable backend ("local" = default, or entry-point name)
     backend: str = "local"
     backend_params: dict[str, Any] = field(default_factory=dict)
 
@@ -243,13 +243,13 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     Priority for embeddings:
     1. API keys: VOYAGE_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
     2. Ollama (if running locally with models)
-    3. Local: MLX (Apple Silicon), sentence-transformers
+    3. Local models (if installed)
     4. None if nothing available
 
     Priority for summarization:
     1. API keys: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), OPENAI_API_KEY, GEMINI_API_KEY
     2. Ollama (if running locally with a generative model)
-    3. Local: MLX (Apple Silicon)
+    3. Local models (if installed)
     4. Fallback: truncate (always available)
 
     Returns provider configs for: embedding, summarization, document.

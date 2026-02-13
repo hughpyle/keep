@@ -522,7 +522,7 @@ class Keeper:
                     p.max_size = max_size
 
     def _check_store_consistency(self) -> bool:
-        """Check if DocumentStore and ChromaDB ID sets match.
+        """Check if document store and vector store ID sets match.
 
         Returns True if reconciliation is needed. Does not fix —
         that is deferred to the first _upsert call when the
@@ -779,12 +779,8 @@ class Keeper:
         """
         Get embedding provider, creating it lazily on first use.
 
-        This allows read-only operations to work offline without loading
-        the embedding model (which may try to reach HuggingFace).
-
-        For MLX (local GPU) providers, wraps with a lifecycle lock that
-        serializes model access across processes to prevent GPU memory
-        exhaustion.
+        This allows read-only operations to work without loading
+        the embedding model upfront.
         """
         if self._embedding_provider is None:
             if self._config.embedding is None:
@@ -826,11 +822,7 @@ class Keeper:
         return self._embedding_provider
 
     def _get_summarization_provider(self) -> SummarizationProvider:
-        """
-        Get summarization provider, creating it lazily on first use.
-
-        For MLX (local GPU) providers, wraps with a lifecycle lock.
-        """
+        """Get summarization provider, creating it lazily on first use."""
         if self._summarization_provider is None:
             registry = get_registry()
             provider = registry.create_summarization(
@@ -851,7 +843,6 @@ class Keeper:
         Get media describer, creating it lazily on first use.
 
         Returns None if no media provider is configured or creation fails.
-        For MLX (local GPU) providers, wraps with a lifecycle lock.
         """
         if self._media_describer is None:
             if self._config.media is None:
@@ -949,7 +940,7 @@ class Keeper:
 
         On first use, records the embedding identity to config.
         On subsequent uses, if the provider changed, silently updates config
-        and triggers background reindex into the new ChromaDB collection.
+        and triggers background reindex into the new vector store collection.
         """
         # Get current provider's identity
         current = EmbeddingIdentity(
@@ -982,7 +973,7 @@ class Keeper:
                 self._trigger_background_reindex()
 
     def _trigger_background_reindex(self) -> None:
-        """Spawn background thread to populate new ChromaDB collection from DocumentStore."""
+        """Spawn background thread to populate new vector collection from document store."""
         import threading
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
@@ -1000,7 +991,7 @@ class Keeper:
             logger.warning("Background reindex failed: %s", e)
 
     def _background_reindex(self, chroma_coll: str, doc_coll: str) -> None:
-        """Populate ChromaDB collection from DocumentStore summaries using batch embedding."""
+        """Populate vector collection from document store summaries using batch embedding."""
         doc_ids = self._document_store.list_ids(doc_coll)
         if not doc_ids:
             return
@@ -1069,7 +1060,7 @@ class Keeper:
         """
         Rebuild search index with current embedding provider (foreground).
 
-        Re-embeds all items from DocumentStore into the current ChromaDB
+        Re-embeds all items from the document store into the current vector
         collection. Use as an explicit backstop when background reindex
         didn't complete.
 
@@ -1142,7 +1133,7 @@ class Keeper:
         return self._config.embedding_identity
     
     def _resolve_chroma_collection(self) -> str:
-        """ChromaDB collection name derived from embedding identity."""
+        """Vector collection name derived from embedding identity."""
         if self._config.embedding_identity:
             return self._config.embedding_identity.key
         return "default"
@@ -1824,7 +1815,7 @@ class Keeper:
         """
         Rank candidate items by similarity to anchor + recency decay.
 
-        Uses stored embeddings from ChromaDB — no re-embedding needed.
+        Uses stored embeddings — no re-embedding needed.
         Falls back to recency-only ranking if embeddings unavailable.
         """
         import math
@@ -2029,7 +2020,7 @@ class Keeper:
         """
         Retrieve a specific item by ID.
 
-        Reads from document store (canonical), falls back to ChromaDB for legacy data.
+        Reads from document store (canonical), falls back to vector store for legacy data.
         Touches accessed_at on successful retrieval.
         """
         validate_id(id)
@@ -2593,7 +2584,7 @@ class Keeper:
         """
         Count items in a collection.
 
-        Returns count from document store if available, else ChromaDB.
+        Returns count from document store if available, else vector store.
         """
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
@@ -2814,17 +2805,17 @@ class Keeper:
         fix: bool = False,
     ) -> dict:
         """
-        Check and optionally fix consistency between DocumentStore and ChromaDB.
+        Check and optionally fix consistency between document store and vector store.
 
         Detects:
-        - Documents in DocumentStore missing from ChromaDB (not searchable)
-        - Documents in ChromaDB missing from DocumentStore (orphaned embeddings)
+        - Documents in document store missing from vector store (not searchable)
+        - Documents in vector store missing from document store (orphaned embeddings)
 
         Args:
-            fix: If True, re-index documents missing from ChromaDB
+            fix: If True, re-index documents missing from vector store
 
         Returns:
-            Dict with 'missing_from_chroma', 'orphaned_in_chroma', 'fixed' counts
+            Dict with 'missing_from_index', 'orphaned_in_index', 'fixed' counts
         """
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
@@ -2868,8 +2859,8 @@ class Keeper:
                     logger.warning("Failed to remove orphan %s: %s", orphan_id, e)
 
         return {
-            "missing_from_chroma": len(missing_from_chroma),
-            "orphaned_in_chroma": len(orphaned_in_chroma),
+            "missing_from_index": len(missing_from_chroma),
+            "orphaned_in_index": len(orphaned_in_chroma),
             "fixed": fixed,
             "removed": removed,
             "missing_ids": list(missing_from_chroma) if missing_from_chroma else [],
