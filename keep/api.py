@@ -103,6 +103,12 @@ def _filter_by_date(items: list, since: str) -> list:
     ]
 
 
+def _is_hidden(item) -> bool:
+    """System notes (dot-prefix IDs like .conversations) are hidden by default."""
+    base_id = item.tags.get("_base_id", item.id)
+    return base_id.startswith(".")
+
+
 def _truncate_ts(ts: str) -> str:
     """Normalize timestamp to canonical format: YYYY-MM-DDTHH:MM:SS.
 
@@ -168,7 +174,10 @@ from .providers.base import (
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import VersionInfo
 from .store import ChromaStore
-from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, parse_utc_timestamp
+from .types import (
+    Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, parse_utc_timestamp,
+    validate_tag_key, validate_id, MAX_TAG_VALUE_LENGTH,
+)
 
 
 # Default max length for truncated placeholder summaries
@@ -491,9 +500,12 @@ class Keeper:
                 embedding_dimension=embedding_dim,
             )
 
+        # Guard against concurrent background reconciliation
+        import threading
+        self._reconcile_lock = threading.Lock()
+
         # Check store consistency and reconcile in background if needed
         if self._check_store_consistency() and self._config.embedding is not None:
-            import threading
             chroma_coll = self._resolve_chroma_collection()
             doc_coll = self._resolve_doc_collection()
             threading.Thread(
@@ -545,10 +557,15 @@ class Keeper:
 
     def _auto_reconcile_safe(self, chroma_coll: str, doc_coll: str) -> None:
         """Background-safe wrapper for auto-reconcile. Silently handles failures."""
+        if not self._reconcile_lock.acquire(blocking=False):
+            logger.debug("Reconciliation already in progress, skipping")
+            return
         try:
             self._auto_reconcile(chroma_coll, doc_coll)
         except Exception as e:
             logger.debug("Background reconcile failed: %s", e)
+        finally:
+            self._reconcile_lock.release()
 
     def _auto_reconcile(self, chroma_coll: str, doc_coll: str) -> None:
         """Fix store divergence using summaries (no content re-fetch needed).
@@ -578,11 +595,13 @@ class Keeper:
                 record = self._document_store.get(doc_coll, doc_id)
                 if record:
                     embedding = provider.embed(record.summary)
-                    self._store.upsert(
-                        collection=chroma_coll, id=doc_id,
-                        embedding=embedding, summary=record.summary, tags=record.tags,
-                    )
-                    logger.info("Reconciled missing item: %s", doc_id)
+                    # Re-verify document still exists after (potentially slow) embedding
+                    if self._document_store.get(doc_coll, doc_id) is not None:
+                        self._store.upsert(
+                            collection=chroma_coll, id=doc_id,
+                            embedding=embedding, summary=record.summary, tags=record.tags,
+                        )
+                        logger.info("Reconciled missing item: %s", doc_id)
             except Exception as e:
                 logger.warning("Failed to reconcile %s: %s", doc_id, e)
 
@@ -1317,6 +1336,15 @@ class Keeper:
             if tags is None:
                 tags = source_tags
 
+        # Validate inputs
+        validate_id(id)
+        if tags:
+            for key, value in tags.items():
+                if not key.startswith(SYSTEM_TAG_PREFIX):
+                    validate_tag_key(key)
+                    if len(value) > MAX_TAG_VALUE_LENGTH:
+                        raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
+
         doc = self._document_provider.fetch(id)
 
         # Merge provider-extracted tags with user tags (user wins on collision)
@@ -1469,6 +1497,7 @@ class Keeper:
         *,
         limit: int = 10,
         since: Optional[str] = None,
+        include_hidden: bool = False,
     ) -> list[Item]:
         """
         Find items using semantic similarity search.
@@ -1480,6 +1509,7 @@ class Keeper:
             query: Search query text
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
+            include_hidden: Include system notes (dot-prefix IDs)
         """
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
@@ -1487,19 +1517,19 @@ class Keeper:
         # Embed query
         embedding = self._get_embedding_provider().embed(query)
 
-        # Search (fetch extra to account for re-ranking and date filtering)
-        fetch_limit = limit * 2 if self._decay_half_life_days > 0 else limit
-        if since is not None:
-            fetch_limit = max(fetch_limit, limit * 3)  # Fetch more when filtering
+        # Search (fetch extra to account for re-ranking, date filtering, hidden filtering)
+        fetch_limit = limit * 3 if self._decay_half_life_days > 0 else limit * 2
         results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit)
 
         # Convert to Items and apply decay
         items = [r.to_item() for r in results]
         items = self._apply_recency_decay(items)
 
-        # Apply date filter if specified
+        # Apply filters
         if since is not None:
             items = _filter_by_date(items, since)
+        if not include_hidden:
+            items = [i for i in items if not _is_hidden(i)]
 
         final = items[:limit]
         # Touch accessed_at for returned items
@@ -1514,6 +1544,7 @@ class Keeper:
         limit: int = 10,
         since: Optional[str] = None,
         include_self: bool = False,
+        include_hidden: bool = False,
     ) -> list[Item]:
         """
         Find items similar to an existing item.
@@ -1523,6 +1554,7 @@ class Keeper:
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
             include_self: Include the queried item in results
+            include_hidden: Include system notes (dot-prefix IDs)
         """
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
@@ -1535,9 +1567,7 @@ class Keeper:
         embedding = self._store.get_embedding(chroma_coll, id)
         if embedding is None:
             embedding = self._get_embedding_provider().embed(item.summary)
-        actual_limit = limit + 1 if not include_self else limit
-        if since is not None:
-            actual_limit = max(actual_limit, limit * 3)
+        actual_limit = (limit + 1 if not include_self else limit) * 3
         results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit)
 
         # Filter self if needed
@@ -1548,9 +1578,11 @@ class Keeper:
         items = [r.to_item() for r in results]
         items = self._apply_recency_decay(items)
 
-        # Apply date filter if specified
+        # Apply filters
         if since is not None:
             items = _filter_by_date(items, since)
+        if not include_hidden:
+            items = [i for i in items if not _is_hidden(i)]
 
         final = items[:limit]
         # Touch accessed_at for returned items
@@ -1584,8 +1616,8 @@ class Keeper:
         if embedding is None:
             return []
 
-        # Fetch more than needed to account for version filtering
-        fetch_limit = limit * 3
+        # Fetch more than needed to account for version/hidden filtering
+        fetch_limit = limit * 5
         results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit)
 
         # Convert to Items
@@ -1594,15 +1626,15 @@ class Keeper:
         # Extract base ID of source document
         source_base_id = id.split("@v")[0] if "@v" in id else id
 
-        # Filter to distinct base IDs, excluding source document
+        # Filter to distinct base IDs, excluding source document and hidden notes
         seen_base_ids: set[str] = set()
         filtered: list[Item] = []
         for item in items:
             # Get base ID from tags or parse from ID
             base_id = item.tags.get("_base_id", item.id.split("@v")[0] if "@v" in item.id else item.id)
 
-            # Skip versions of source document
-            if base_id == source_base_id:
+            # Skip versions of source document and hidden system notes
+            if base_id == source_base_id or base_id.startswith("."):
                 continue
 
             # Keep only first version of each document
@@ -1721,8 +1753,8 @@ class Keeper:
                 except (ValueError, Exception):
                     continue
                 for item in items:
-                    # Skip the current item, meta-docs, and dupes
-                    if item.id == item_id or item.id.startswith(".meta/") or item.id in seen_ids:
+                    # Skip the current item, hidden system notes, and dupes
+                    if item.id == item_id or _is_hidden(item) or item.id in seen_ids:
                         continue
                     seen_ids.add(item.id)
                     matches.append(item)
@@ -1801,6 +1833,7 @@ class Keeper:
         *,
         limit: int = 10,
         since: Optional[str] = None,
+        include_hidden: bool = False,
     ) -> list[Item]:
         """
         Search item summaries using full-text search.
@@ -1809,18 +1842,21 @@ class Keeper:
             query: Text to search for in summaries
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
+            include_hidden: Include system notes (dot-prefix IDs)
         """
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
 
-        # Fetch extra when filtering by date
-        fetch_limit = limit * 3 if since is not None else limit
+        # Fetch extra when filtering
+        fetch_limit = limit * 3
         results = self._store.query_fulltext(chroma_coll, query, limit=fetch_limit)
         items = [r.to_item() for r in results]
 
-        # Apply date filter if specified
+        # Apply filters
         if since is not None:
             items = _filter_by_date(items, since)
+        if not include_hidden:
+            items = [i for i in items if not _is_hidden(i)]
 
         final = items[:limit]
         # Touch accessed_at for returned items
@@ -1835,6 +1871,7 @@ class Keeper:
         *,
         limit: int = 100,
         since: Optional[str] = None,
+        include_hidden: bool = False,
         **tags: str
     ) -> list[Item]:
         """
@@ -1857,6 +1894,12 @@ class Keeper:
             since: Only include items updated since (ISO duration like P3D, or date)
             **tags: Additional tag filters as keyword arguments
         """
+        # Validate tag keys
+        if key is not None:
+            validate_tag_key(key)
+        for k in tags:
+            validate_tag_key(k)
+
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
@@ -1866,9 +1909,12 @@ class Keeper:
             # Convert since to cutoff date for SQL query
             since_date = _parse_since(since) if since else None
             docs = self._document_store.query_by_tag_key(
-                doc_coll, key, limit=limit, since_date=since_date
+                doc_coll, key, limit=limit * 3 if not include_hidden else limit, since_date=since_date
             )
-            return [_record_to_item(d) for d in docs]
+            items = [_record_to_item(d) for d in docs]
+            if not include_hidden:
+                items = [i for i in items if not _is_hidden(i)]
+            return items[:limit]
 
         # Build tag filter from positional or keyword args
         tag_filter = {}
@@ -1892,14 +1938,16 @@ class Keeper:
         else:
             where = {"$and": where_conditions}
 
-        # Fetch extra when filtering by date
-        fetch_limit = limit * 3 if since is not None else limit
+        # Fetch extra when filtering
+        fetch_limit = limit * 3
         results = self._store.query_metadata(chroma_coll, where, limit=fetch_limit)
         items = [r.to_item() for r in results]
 
-        # Apply date filter if specified (post-filter)
+        # Apply filters
         if since is not None:
             items = _filter_by_date(items, since)
+        if not include_hidden:
+            items = [i for i in items if not _is_hidden(i)]
 
         return items[:limit]
 
@@ -1917,6 +1965,8 @@ class Keeper:
         Returns:
             Sorted list of distinct keys or values
         """
+        if key is not None:
+            validate_tag_key(key)
         doc_coll = self._resolve_doc_collection()
 
         if key is None:
@@ -1935,6 +1985,7 @@ class Keeper:
         Reads from document store (canonical), falls back to ChromaDB for legacy data.
         Touches accessed_at on successful retrieval.
         """
+        validate_id(id)
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
@@ -1971,6 +2022,7 @@ class Keeper:
         Returns:
             Item if found, None if version doesn't exist
         """
+        validate_id(id)
         doc_coll = self._resolve_doc_collection()
 
         if offset == 0:
@@ -2006,6 +2058,7 @@ class Keeper:
         Returns:
             List of VersionInfo, newest archived first
         """
+        validate_id(id)
         doc_coll = self._resolve_doc_collection()
         return self._document_store.list_versions(doc_coll, id, limit)
 
@@ -2033,6 +2086,7 @@ class Keeper:
         """
         Check if an item exists in the store.
         """
+        validate_id(id)
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
         # Check document store first, then ChromaDB
@@ -2054,6 +2108,7 @@ class Keeper:
         Returns:
             True if item existed and was deleted.
         """
+        validate_id(id)
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
         # Delete from both stores (including versions)
@@ -2067,6 +2122,7 @@ class Keeper:
 
         Returns the restored item, or None if the item was fully deleted.
         """
+        validate_id(id)
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
@@ -2417,6 +2473,15 @@ class Keeper:
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
+        # Validate inputs
+        validate_id(id)
+        if tags:
+            for key, value in tags.items():
+                if not key.startswith(SYSTEM_TAG_PREFIX):
+                    validate_tag_key(key)
+                    if len(value) > MAX_TAG_VALUE_LENGTH:
+                        raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
+
         # Get existing item (prefer document store, fall back to ChromaDB)
         existing = self.get(id)
         if existing is None:
@@ -2483,6 +2548,7 @@ class Keeper:
         since: Optional[str] = None,
         order_by: str = "updated",
         include_history: bool = False,
+        include_hidden: bool = False,
     ) -> list[Item]:
         """
         List recent items ordered by timestamp.
@@ -2492,23 +2558,26 @@ class Keeper:
             since: Only include items updated since (ISO duration like P3D, or date)
             order_by: Sort order - "updated" (default) or "accessed"
             include_history: Include archived versions alongside current items
+            include_hidden: Include system notes (dot-prefix IDs)
 
         Returns:
             List of Items, most recent first
         """
         doc_coll = self._resolve_doc_collection()
 
-        # Fetch extra when filtering by date
-        fetch_limit = limit * 3 if since is not None else limit
+        # Fetch extra when filtering
+        fetch_limit = limit * 3
         if include_history:
             records = self._document_store.list_recent_with_history(doc_coll, fetch_limit, order_by=order_by)
         else:
             records = self._document_store.list_recent(doc_coll, fetch_limit, order_by=order_by)
         items = [_record_to_item(rec) for rec in records]
 
-        # Apply date filter if specified
+        # Apply filters
         if since is not None:
             items = _filter_by_date(items, since)
+        if not include_hidden:
+            items = [i for i in items if not _is_hidden(i)]
 
         return items[:limit]
 
@@ -2745,6 +2814,11 @@ class Keeper:
             "missing_ids": list(missing_from_chroma) if missing_from_chroma else [],
             "orphaned_ids": list(orphaned_in_chroma) if orphaned_in_chroma else [],
         }
+
+    @property
+    def config(self) -> "StoreConfig":
+        """Public access to store configuration."""
+        return self._config
 
     def close(self) -> None:
         """

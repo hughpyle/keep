@@ -34,9 +34,12 @@ class RemoteKeeper:
         self.api_key = api_key
         self._config = config
 
-        # Warn if API URL is not HTTPS (bearer token would be sent in cleartext)
+        # Refuse non-HTTPS for remote APIs (bearer token would be sent in cleartext)
         if not self.api_url.startswith("https://") and "localhost" not in self.api_url and "127.0.0.1" not in self.api_url:
-            logger.warning("Remote API URL is not HTTPS — credentials sent in cleartext: %s", self.api_url)
+            raise ValueError(
+                f"Remote API URL must use HTTPS (got {self.api_url}). "
+                "Use HTTPS to protect API credentials, or use localhost for local development."
+            )
 
         self._client = httpx.Client(
             base_url=self.api_url,
@@ -88,23 +91,46 @@ class RemoteKeeper:
 
     @staticmethod
     def _to_item(data: dict) -> Item:
-        """Convert API response dict to Item."""
-        tags = dict(data.get("tags", {}))
+        """Convert API response dict to Item, with basic validation."""
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected dict from API, got {type(data).__name__}")
+        item_id = data.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            raise ValueError(f"API response missing valid 'id' field: {data!r:.200}")
+        tags = data.get("tags", {})
+        if not isinstance(tags, dict):
+            tags = {}
+        # Ensure tag keys and values are strings
+        tags = {str(k): str(v) for k, v in tags.items()}
         if data.get("created_at"):
-            tags.setdefault("_created", data["created_at"])
+            tags.setdefault("_created", str(data["created_at"]))
         if data.get("updated_at"):
-            tags.setdefault("_updated", data["updated_at"])
+            tags.setdefault("_updated", str(data["updated_at"]))
+        summary = data.get("summary", "")
+        if not isinstance(summary, str):
+            summary = str(summary)
+        score = data.get("score")
+        if score is not None:
+            try:
+                score = float(score)
+            except (TypeError, ValueError):
+                score = None
         return Item(
-            id=data["id"],
-            summary=data.get("summary", ""),
+            id=item_id,
+            summary=summary,
             tags=tags,
-            score=data.get("score"),
+            score=score,
         )
 
     @staticmethod
     def _to_items(data: dict) -> list[Item]:
         """Convert API list response to list of Items."""
-        return [RemoteKeeper._to_item(item) for item in data.get("items", [])]
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected dict from API, got {type(data).__name__}")
+        items = data.get("items", [])
+        if not isinstance(items, list):
+            raise ValueError(f"Expected 'items' list from API, got {type(items).__name__}")
+        return [RemoteKeeper._to_item(item) for item in items]
 
     @staticmethod
     def _to_version_info(data: dict) -> VersionInfo:
