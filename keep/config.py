@@ -512,6 +512,8 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse pluggable backend config
     backend = data.get("store", {}).get("backend", "local")
     backend_params = data.get("store", {}).get("backend_params", {})
+    if backend_params and not isinstance(backend_params, dict):
+        raise ValueError("store.backend_params must be a table/dict")
 
     return StoreConfig(
         path=actual_store,
@@ -628,7 +630,7 @@ def save_config(config: StoreConfig) -> None:
         tomli_w.dump(data, f)
 
     # Restrict file permissions when config contains secrets
-    if config.remote:
+    if config.remote or config.backend_params:
         try:
             config.config_path.chmod(0o600)
         except OSError:

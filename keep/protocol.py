@@ -10,6 +10,7 @@ Defines interface contracts at two levels:
 from typing import Any, Optional, Protocol, runtime_checkable
 
 from .document_store import DocumentRecord, VersionInfo
+from .pending_summaries import PendingSummary
 from .store import StoreResult
 from .types import Item
 
@@ -439,7 +440,7 @@ class PendingQueueProtocol(Protocol):
 
     def enqueue(self, id: str, collection: str, content: str) -> None: ...
 
-    def dequeue(self, limit: int = 10) -> list: ...
+    def dequeue(self, limit: int = 10) -> list[PendingSummary]: ...
 
     def complete(self, id: str, collection: str) -> None: ...
 

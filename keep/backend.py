@@ -78,13 +78,22 @@ def _create_local_stores(config: StoreConfig) -> StoreBundle:
 
     store_path = config.path
 
-    pending_queue = PendingSummaryQueue(store_path / "pending_summaries.db")
-    doc_store = DocumentStore(store_path / "documents.db")
+    pending_queue = None
+    doc_store = None
+    try:
+        pending_queue = PendingSummaryQueue(store_path / "pending_summaries.db")
+        doc_store = DocumentStore(store_path / "documents.db")
 
-    embedding_dim: Optional[int] = None
-    if config.embedding_identity:
-        embedding_dim = config.embedding_identity.dimension
-    vector_store = ChromaStore(store_path, embedding_dimension=embedding_dim)
+        embedding_dim: Optional[int] = None
+        if config.embedding_identity:
+            embedding_dim = config.embedding_identity.dimension
+        vector_store = ChromaStore(store_path, embedding_dimension=embedding_dim)
+    except Exception:
+        if pending_queue:
+            pending_queue.close()
+        if doc_store:
+            doc_store.close()
+        raise
 
     return StoreBundle(
         doc_store=doc_store,
@@ -102,7 +111,13 @@ def _load_backend(name: str, config: StoreConfig) -> StoreBundle:
     for ep in eps:
         if ep.name == name:
             factory = ep.load()
-            return factory(config)
+            bundle = factory(config)
+            if not isinstance(bundle, StoreBundle):
+                raise TypeError(
+                    f"Backend {name!r} factory returned {type(bundle).__name__}, "
+                    f"expected StoreBundle"
+                )
+            return bundle
 
     available = [ep.name for ep in eps]
     if available:
