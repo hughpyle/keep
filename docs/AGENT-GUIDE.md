@@ -72,18 +72,18 @@ keep find "recent work" --since P1D   # Last 24 hours
 **Ending a session:**
 ```bash
 keep now "Completed OAuth2 flow. Token refresh working. Next: add tests." -t topic=auth
-keep move "auth-thread" -t project=myapp  # Archive this thread of work
+keep move "auth-string" -t project=myapp  # Archive this string of work
 ```
 
 ---
 
-## Moving Threads
+## Strings
 
-As you work, `keep now` accumulates version history — a trace of how intentions evolved. `keep move` lets you name and archive that history, making room for what's next. It requires `-t` (tag filter) or `--only` (tip only) to prevent accidental grab-all moves.
+As you work, `keep now` accumulates a string of versions — a trace of how intentions evolved. `keep move` lets you name and archive that string, making room for what's next. It requires `-t` (tag filter) or `--only` (tip only) to prevent accidental grab-all moves.
 
 **Snapshot before pivoting.** When the conversation shifts topic, move what you have so far before moving on:
 ```bash
-keep move "auth-work" -t project=myapp       # Archive the auth thread
+keep move "auth-string" -t project=myapp     # Archive the auth string
 keep now "Starting on database migration"    # Fresh context for new work
 ```
 
@@ -95,12 +95,12 @@ keep move "design-log" -t project=myapp
 keep move "design-log" -t project=myapp      # Appends new versions
 ```
 
-**End-of-session archive.** When a thread of work is complete:
+**End-of-session archive.** When a string of work is complete:
 ```bash
-keep move "auth-thread" -t project=myapp
+keep move "auth-string" -t project=myapp
 ```
 
-**Tag-filtered extraction.** When a session mixes multiple projects, extract just the thread you want:
+**Tag-filtered extraction.** When a session mixes multiple projects, extract just the string you want:
 ```bash
 keep move "frontend-work" -t project=frontend   # Leaves backend versions in now
 ```

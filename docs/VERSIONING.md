@@ -2,6 +2,17 @@
 
 All documents retain history on update. Previous versions are archived automatically.
 
+## Strings
+
+Every note is a **string** — a linear chain of versions that grows each time you update it.
+Your working context (`now`) accumulates a string of intentions as you work.
+When a string of work is complete, `keep move` extracts matching versions by tag
+and strings them into a named note.
+
+This isn't version control (no branches, no merges) and it isn't an append-only log
+(you can reorganize). It's the temporal dimension of how knowledge evolved — and
+unlike other memory stores, you can re-string it by meaning.
+
 ## Version identifiers
 
 Append `@V{N}` to any ID to specify a version by offset:

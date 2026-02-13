@@ -1,4 +1,8 @@
 
+* "threads" vs "strings"
+    - tell the story of what these timelines mean, how to use them
+    (that's one whole dimension right)
+
 * Maybe the metadoc should say how many results to produce by default?
     (e.g. closures: 10, learnings: 3)
 

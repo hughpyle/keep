@@ -1320,6 +1320,10 @@ def get(
         "--meta", "-M",
         help="List meta notes"
     )] = False,
+    resolve: Annotated[Optional[list[str]], typer.Option(
+        "--resolve", "-R",
+        help="Inline meta query (metadoc syntax, repeatable)"
+    )] = None,
     tag: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Require tag (key or key=value, repeatable)"
@@ -1351,7 +1355,7 @@ def get(
     errors = []
 
     for one_id in id:
-        result = _get_one(kp, one_id, version, history, similar, meta, tag, limit)
+        result = _get_one(kp, one_id, version, history, similar, meta, resolve, tag, limit)
         if result is None:
             errors.append(one_id)
         else:
@@ -1372,6 +1376,7 @@ def _get_one(
     history: bool,
     similar: bool,
     meta: bool,
+    resolve: Optional[list[str]],
     tag: Optional[list[str]],
     limit: int,
 ) -> Optional[str]:
@@ -1475,6 +1480,42 @@ def _get_one(
                     lines.append(f"    {_shell_quote_id(item.id)}  {summary_preview}")
             if len(lines) == 1:
                 lines.append("  No meta notes found.")
+            return "\n".join(lines)
+
+    if resolve:
+        # Inline meta-resolve: parse metadoc-syntax strings, union results
+        from .api import _parse_meta_doc
+        all_queries: list[dict[str, str]] = []
+        all_context: list[str] = []
+        all_prereqs: list[str] = []
+        for r in resolve:
+            q, c, p = _parse_meta_doc(r)
+            all_queries.extend(q)
+            all_context.extend(c)
+            all_prereqs.extend(p)
+        # Deduplicate context/prereq keys
+        all_context = list(dict.fromkeys(all_context))
+        all_prereqs = list(dict.fromkeys(all_prereqs))
+        items = kp.resolve_inline_meta(
+            actual_id, all_queries, all_context, all_prereqs, limit=limit,
+        )
+        if _get_ids_output():
+            return "\n".join(_shell_quote_id(item.id) for item in items)
+        elif _get_json_output():
+            result = {
+                "id": actual_id,
+                "resolve": [{"id": item.id, "summary": item.summary[:60]} for item in items],
+            }
+            return json.dumps(result, indent=2)
+        else:
+            lines = [f"Resolve for {actual_id}:"]
+            for item in items:
+                summary_preview = item.summary[:50].replace("\n", " ")
+                if len(item.summary) > 50:
+                    summary_preview += "..."
+                lines.append(f"  {_shell_quote_id(item.id)}  {summary_preview}")
+            if len(lines) == 1:
+                lines.append("  No matching notes found.")
             return "\n".join(lines)
 
     # Get specific version or current

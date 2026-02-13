@@ -1715,58 +1715,109 @@ class Keeper:
             if not query_lines and not context_keys:
                 continue
 
-            # Check prerequisites: current item must have all required tags
-            if prereq_keys:
-                if not all(current_tags.get(k) for k in prereq_keys):
-                    continue
-
-            # Get context values from current item's tags
-            context_values: dict[str, str] = {}
-            for key in context_keys:
-                val = current_tags.get(key)
-                if val and not key.startswith("_"):
-                    context_values[key] = val
-
-            # Build expanded queries: cross-product of query lines × context values
-            expanded: list[dict[str, str]] = []
-            if context_values and query_lines:
-                for query in query_lines:
-                    for ctx_key, ctx_val in context_values.items():
-                        expanded.append({**query, ctx_key: ctx_val})
-            elif context_values:
-                # Context-only (group-by): each context value becomes a query
-                for ctx_key, ctx_val in context_values.items():
-                    expanded.append({ctx_key: ctx_val})
-            else:
-                # No context → use query lines as-is
-                expanded = list(query_lines)
-
-            # Run each expanded query, union results (fetch generously for ranking)
-            seen_ids: set[str] = set()
-            matches: list[Item] = []
-            for query in expanded:
-                try:
-                    items = self.query_tag(
-                        limit=100,  # fetch all candidates for ranking
-                        **query,
-                    )
-                except (ValueError, Exception):
-                    continue
-                for item in items:
-                    # Skip the current item, hidden system notes, and dupes
-                    if item.id == item_id or _is_hidden(item) or item.id in seen_ids:
-                        continue
-                    seen_ids.add(item.id)
-                    matches.append(item)
-
-            if not matches:
-                continue
-
-            # Rank by similarity to current item + recency decay
-            matches = self._rank_by_relevance(self._resolve_chroma_collection(), item_id, matches)
-            result[short_name] = matches[:limit_per_doc]
+            matches = self._resolve_meta_queries(
+                item_id, current_tags, query_lines, context_keys, prereq_keys, limit_per_doc,
+            )
+            if matches:
+                result[short_name] = matches
 
         return result
+
+    def resolve_inline_meta(
+        self,
+        item_id: str,
+        queries: list[dict[str, str]],
+        context_keys: list[str] | None = None,
+        prereq_keys: list[str] | None = None,
+        *,
+        limit: int = 3,
+    ) -> list[Item]:
+        """
+        Resolve an inline meta query against an item's tags.
+
+        Like resolve_meta() but with ad-hoc queries instead of persistent
+        .meta/* documents. Queries use the same tag-based syntax.
+
+        Args:
+            item_id: ID of the item whose tags provide context
+            queries: List of tag-match dicts, each {key: value} for AND queries;
+                     multiple dicts are OR (union)
+            context_keys: Tag keys to expand from the current item's tags
+            prereq_keys: Tag keys the current item must have (or return empty)
+            limit: Max results
+
+        Returns:
+            List of matching Items, ranked by similarity + recency.
+        """
+        current = self.get(item_id)
+        if current is None:
+            return []
+
+        return self._resolve_meta_queries(
+            item_id, current.tags,
+            queries, context_keys or [], prereq_keys or [], limit,
+        )
+
+    def _resolve_meta_queries(
+        self,
+        item_id: str,
+        current_tags: dict[str, str],
+        query_lines: list[dict[str, str]],
+        context_keys: list[str],
+        prereq_keys: list[str],
+        limit: int,
+    ) -> list[Item]:
+        """Shared resolution logic for persistent and inline metadocs."""
+        # Check prerequisites: current item must have all required tags
+        if prereq_keys:
+            if not all(current_tags.get(k) for k in prereq_keys):
+                return []
+
+        # Get context values from current item's tags
+        context_values: dict[str, str] = {}
+        for key in context_keys:
+            val = current_tags.get(key)
+            if val and not key.startswith("_"):
+                context_values[key] = val
+
+        # Build expanded queries: cross-product of query lines × context values
+        expanded: list[dict[str, str]] = []
+        if context_values and query_lines:
+            for query in query_lines:
+                for ctx_key, ctx_val in context_values.items():
+                    expanded.append({**query, ctx_key: ctx_val})
+        elif context_values:
+            # Context-only (group-by): each context value becomes a query
+            for ctx_key, ctx_val in context_values.items():
+                expanded.append({ctx_key: ctx_val})
+        else:
+            # No context → use query lines as-is
+            expanded = list(query_lines)
+
+        # Run each expanded query, union results (fetch generously for ranking)
+        seen_ids: set[str] = set()
+        matches: list[Item] = []
+        for query in expanded:
+            try:
+                items = self.query_tag(
+                    limit=100,  # fetch all candidates for ranking
+                    **query,
+                )
+            except (ValueError, Exception):
+                continue
+            for item in items:
+                # Skip the current item, hidden system notes, and dupes
+                if item.id == item_id or _is_hidden(item) or item.id in seen_ids:
+                    continue
+                seen_ids.add(item.id)
+                matches.append(item)
+
+        if not matches:
+            return []
+
+        # Rank by similarity to current item + recency decay
+        matches = self._rank_by_relevance(self._resolve_chroma_collection(), item_id, matches)
+        return matches[:limit]
 
     def _rank_by_relevance(
         self,
