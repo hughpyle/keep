@@ -4,7 +4,6 @@ Protocol definitions for Keeper and its storage backends.
 Defines interface contracts at two levels:
 - KeeperProtocol: the public API (CLI, RemoteKeeper)
 - VectorStoreProtocol / DocumentStoreProtocol: internal storage backends
-  (ChromaDB/SQLite locally, Postgres/pgvector in cloud)
 """
 
 from typing import Any, Optional, Protocol, runtime_checkable
@@ -21,8 +20,8 @@ class KeeperProtocol(Protocol):
     The public interface for reflective memory operations.
 
     Implemented by:
-    - Keeper (local SQLite + ChromaDB backend)
-    - RemoteKeeper (HTTP client to keepnotes.ai API)
+    - Keeper (local backend)
+    - RemoteKeeper (hosted keepnotes.ai API)
     """
 
     # -- Write operations --
@@ -187,9 +186,7 @@ class VectorStoreProtocol(Protocol):
     """
     Abstract vector search backend.
 
-    Implemented by:
-    - ChromaStore (local ChromaDB)
-    - Cloud implementations (pgvector, Qdrant, etc.)
+    Provides embedding storage, similarity search, and metadata queries.
     """
 
     # -- Embedding dimension --
@@ -302,9 +299,7 @@ class DocumentStoreProtocol(Protocol):
     """
     Abstract document metadata backend.
 
-    Implemented by:
-    - DocumentStore (local SQLite)
-    - Cloud implementations (Postgres, etc.)
+    Provides document storage, versioning, and tag-based queries.
     """
 
     # -- Write --
@@ -432,10 +427,7 @@ class PendingQueueProtocol(Protocol):
     """
     Abstract pending summary queue.
 
-    Implemented by:
-    - PendingSummaryQueue (local SQLite)
-    - NullPendingQueue (no-op for backends that handle summarization server-side)
-    - Cloud implementations (Postgres-backed queue, etc.)
+    Manages background summarization of large content.
     """
 
     def enqueue(self, id: str, collection: str, content: str) -> None: ...

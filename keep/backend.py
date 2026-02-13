@@ -2,8 +2,8 @@
 Pluggable storage backend factory.
 
 Creates storage backends (DocumentStore, VectorStore, PendingQueue) based on
-configuration. Local backends use SQLite + ChromaDB. External backends register
-via the ``keep.backends`` entry point group.
+configuration. External backends register via the ``keep.backends`` entry
+point group.
 
 External backend packages provide a factory function::
 
@@ -59,9 +59,7 @@ def create_stores(config: StoreConfig) -> StoreBundle:
     """
     Create storage backends from configuration.
 
-    For ``backend = "local"`` (default), creates SQLite DocumentStore,
-    ChromaDB ChromaStore, and SQLite PendingSummaryQueue.
-
+    For ``backend = "local"`` (default), creates local storage backends.
     For other values, loads the backend via the ``keep.backends`` entry
     point group.
     """

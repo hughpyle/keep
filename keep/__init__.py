@@ -7,25 +7,15 @@ and tag-based retrieval. Remember everything, find by meaning.
 Quick Start:
     from keep import Keeper
 
-    kp = Keeper()  # uses ~/.keep/ by default
+    kp = Keeper()
     kp.update("file:///path/to/document.md", source_tags={"project": "myproject"})
     results = kp.find("something similar to this query")
 
 CLI Usage:
     keep find "query text"
     keep put file:///path/to/doc.md -t category=docs
-    keep collections --json
 
-Default Store:
-    ~/.keep/ in the user's home directory (created automatically).
-    Override with KEEP_STORE_PATH or explicit path argument.
-
-Environment Variables:
-    KEEP_STORE_PATH      - Override default store location
-    KEEP_OPENAI_API_KEY  - API key for OpenAI providers
-
-The store is initialized automatically on first use. Configuration is persisted
-in a TOML file within the store directory.
+The store is initialized automatically on first use.
 """
 
 # Configure quiet mode early (before any library imports)
@@ -47,7 +37,7 @@ from .protocol import (
 )
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, INTERNAL_TAGS
 
-__version__ = "0.39.0"
+__version__ = "0.39.1"
 __all__ = [
     "Keeper",
     "Item",
