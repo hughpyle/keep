@@ -13,6 +13,7 @@ import importlib.resources
 import json
 import logging
 import re
+import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -2041,7 +2042,19 @@ class Keeper:
         chroma_coll = self._resolve_chroma_collection()
 
         # Try document store first (canonical)
-        doc_record = self._document_store.get(doc_coll, id)
+        try:
+            doc_record = self._document_store.get(doc_coll, id)
+        except sqlite3.DatabaseError as e:
+            logger.warning("DocumentStore.get(%s) failed: %s", id, e)
+            if "malformed" in str(e):
+                self._document_store._try_runtime_recover()
+                # Retry once after recovery
+                try:
+                    doc_record = self._document_store.get(doc_coll, id)
+                except Exception:
+                    doc_record = None
+            else:
+                doc_record = None
         if doc_record:
             self._document_store.touch(doc_coll, id)
             return _record_to_item(doc_record)
