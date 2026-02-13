@@ -531,6 +531,143 @@ class TestShellQuoteId:
 # Command Alias Tests
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Directory Put Tests
+# -----------------------------------------------------------------------------
+
+class TestPutDirectory:
+    """Tests for directory mode in the put command."""
+
+    def test_list_directory_files_basic(self, tmp_path):
+        """_list_directory_files returns regular files sorted by name."""
+        from keep.cli import _list_directory_files
+        (tmp_path / "b.txt").write_text("B")
+        (tmp_path / "a.txt").write_text("A")
+        (tmp_path / "c.txt").write_text("C")
+        files = _list_directory_files(tmp_path)
+        assert [f.name for f in files] == ["a.txt", "b.txt", "c.txt"]
+
+    def test_list_directory_files_skips_subdirs(self, tmp_path):
+        """_list_directory_files skips subdirectories (non-recursive)."""
+        from keep.cli import _list_directory_files
+        (tmp_path / "file.txt").write_text("ok")
+        (tmp_path / "subdir").mkdir()
+        (tmp_path / "subdir" / "nested.txt").write_text("nested")
+        files = _list_directory_files(tmp_path)
+        assert [f.name for f in files] == ["file.txt"]
+
+    def test_list_directory_files_skips_symlinks(self, tmp_path):
+        """_list_directory_files skips symlinks."""
+        from keep.cli import _list_directory_files
+        real_file = tmp_path / "real.txt"
+        real_file.write_text("real")
+        (tmp_path / "link.txt").symlink_to(real_file)
+        files = _list_directory_files(tmp_path)
+        assert [f.name for f in files] == ["real.txt"]
+
+    def test_list_directory_files_skips_hidden(self, tmp_path):
+        """_list_directory_files skips hidden files (dotfiles)."""
+        from keep.cli import _list_directory_files
+        (tmp_path / ".DS_Store").write_text("junk")
+        (tmp_path / ".hidden").write_text("hidden")
+        (tmp_path / "visible.txt").write_text("ok")
+        files = _list_directory_files(tmp_path)
+        assert [f.name for f in files] == ["visible.txt"]
+
+    def test_list_directory_files_empty(self, tmp_path):
+        """_list_directory_files returns empty list for empty directory."""
+        from keep.cli import _list_directory_files
+        files = _list_directory_files(tmp_path)
+        assert files == []
+
+    def test_list_directory_files_only_hidden(self, tmp_path):
+        """_list_directory_files returns empty when only hidden files exist."""
+        from keep.cli import _list_directory_files
+        (tmp_path / ".gitignore").write_text("*")
+        (tmp_path / ".DS_Store").write_text("")
+        files = _list_directory_files(tmp_path)
+        assert files == []
+
+    def test_is_filesystem_path_directory(self, tmp_path):
+        """_is_filesystem_path recognizes existing directories."""
+        from keep.cli import _is_filesystem_path
+        result = _is_filesystem_path(str(tmp_path))
+        assert result is not None
+        assert result.is_dir()
+
+    def test_is_filesystem_path_file(self, tmp_path):
+        """_is_filesystem_path recognizes existing files."""
+        from keep.cli import _is_filesystem_path
+        f = tmp_path / "test.txt"
+        f.write_text("hello")
+        result = _is_filesystem_path(str(f))
+        assert result is not None
+        assert result.is_file()
+
+    def test_is_filesystem_path_nonexistent(self):
+        """_is_filesystem_path returns None for nonexistent paths."""
+        from keep.cli import _is_filesystem_path
+        result = _is_filesystem_path("/nonexistent/path/to/nowhere")
+        assert result is None
+
+    def test_is_filesystem_path_uri(self, tmp_path):
+        """_is_filesystem_path returns None for URIs even if path exists."""
+        from keep.cli import _is_filesystem_path
+        result = _is_filesystem_path(f"file://{tmp_path}")
+        assert result is None
+
+    def test_is_filesystem_path_tilde(self):
+        """_is_filesystem_path expands tilde."""
+        from keep.cli import _is_filesystem_path
+        result = _is_filesystem_path("~")
+        assert result is not None
+        assert result == Path.home()
+
+    def test_put_directory_rejects_summary(self, cli, tmp_path):
+        """Directory mode rejects --summary flag."""
+        (tmp_path / "a.txt").write_text("test")
+        result = cli("put", str(tmp_path), "--summary", "nope")
+        assert result.returncode == 1
+        assert "--summary cannot be used with directory" in result.stderr
+
+    def test_put_directory_rejects_id(self, cli, tmp_path):
+        """Directory mode rejects --id flag."""
+        (tmp_path / "a.txt").write_text("test")
+        result = cli("put", str(tmp_path), "--id", "custom")
+        assert result.returncode == 1
+        assert "--id cannot be used with directory" in result.stderr
+
+    def test_put_empty_directory(self, cli, tmp_path):
+        """Directory mode errors on empty directory."""
+        result = cli("put", str(tmp_path))
+        assert result.returncode == 1
+        assert "no eligible files" in result.stderr
+
+    def test_put_directory_only_hidden(self, cli, tmp_path):
+        """Directory mode errors when only hidden files exist."""
+        (tmp_path / ".DS_Store").write_text("junk")
+        result = cli("put", str(tmp_path))
+        assert result.returncode == 1
+        assert "no eligible files" in result.stderr
+
+    def test_put_file_count_cap(self, cli, tmp_path):
+        """Directory mode rejects directories with too many files."""
+        from keep.cli import MAX_DIR_FILES
+        # Create MAX_DIR_FILES + 1 files
+        for i in range(MAX_DIR_FILES + 1):
+            (tmp_path / f"file_{i:04d}.txt").write_text(f"content {i}")
+        result = cli("put", str(tmp_path))
+        assert result.returncode == 1
+        assert f"{MAX_DIR_FILES + 1} files" in result.stderr
+        assert f"max {MAX_DIR_FILES}" in result.stderr
+
+    def test_put_bare_file_path_help(self, cli):
+        """Put help mentions directory and file modes."""
+        result = cli("put", "--help")
+        assert result.returncode == 0
+        assert "Directory mode" in result.stdout or "directory" in result.stdout.lower()
+
+
 class TestCommandAliases:
     """Tests that old command names still work as hidden aliases."""
 
