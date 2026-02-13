@@ -62,6 +62,8 @@
     lesson one: embeddings plus tagging plus summaries is a whole new thing, actually
         (especially for capturing knowledge about many document, links, references)
 
+    lesson two: metadocs go boom
+
     so, the great use cases?
         - personal agent:
             - first, like a bookmark-manager with superpowers
