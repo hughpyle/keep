@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclass
@@ -112,47 +112,7 @@ class DocumentStore:
             )
         """)
 
-        # Migration: add content_hash column if missing (for existing databases)
-        cursor = self._conn.execute("PRAGMA table_info(documents)")
-        columns = {row[1] for row in cursor.fetchall()}
-        if "content_hash" not in columns:
-            self._conn.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT")
-
-        # Migration: truncate content_hash from 64-char to 10-char
-        self._conn.execute("""
-            UPDATE documents SET content_hash = SUBSTR(content_hash, -10)
-            WHERE content_hash IS NOT NULL AND LENGTH(content_hash) > 10
-        """)
-        cursor = self._conn.execute("""
-            SELECT id, collection, tags_json FROM documents
-            WHERE tags_json LIKE '%bundled_hash%'
-        """)
-        for row in cursor.fetchall():
-            tags = json.loads(row["tags_json"])
-            bh = tags.get("bundled_hash")
-            if bh and len(bh) > 10:
-                tags["bundled_hash"] = bh[-10:]
-                self._conn.execute(
-                    "UPDATE documents SET tags_json = ? WHERE id = ? AND collection = ?",
-                    (json.dumps(tags), row["id"], row["collection"])
-                )
-        self._conn.commit()
-
-        # Index for collection queries
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_documents_collection
-            ON documents(collection)
-        """)
-
-        # Index for timestamp queries
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_documents_updated
-            ON documents(updated_at)
-        """)
-
-        self._conn.commit()
-
-        # Run schema migrations
+        # Run schema migrations (serialized across processes)
         self._migrate_schema()
 
         # Quick integrity check for existing databases
@@ -164,57 +124,117 @@ class DocumentStore:
         """
         Run schema migrations using PRAGMA user_version.
 
+        Uses BEGIN EXCLUSIVE to serialize migrations across concurrent
+        processes (e.g. hooks firing simultaneously).
+
         Migrations:
         - Version 0 → 1: Create document_versions table
+        - Version 1 → 2: Add accessed_at column
+        - Version 2 → 3: One-time hash truncation, indexes
         """
-        cursor = self._conn.execute("PRAGMA user_version")
-        current_version = cursor.fetchone()[0]
+        current_version = self._conn.execute(
+            "PRAGMA user_version"
+        ).fetchone()[0]
 
-        if current_version < 1:
-            # Create versions table for document history
-            self._conn.execute("""
-                CREATE TABLE IF NOT EXISTS document_versions (
-                    id TEXT NOT NULL,
-                    collection TEXT NOT NULL,
-                    version INTEGER NOT NULL,
-                    summary TEXT NOT NULL,
-                    tags_json TEXT NOT NULL,
-                    content_hash TEXT,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY (id, collection, version)
-                )
-            """)
+        if current_version >= SCHEMA_VERSION:
+            return  # Already up to date — no writes needed
 
-            # Index for efficient version lookups
-            self._conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_versions_doc
-                ON document_versions(id, collection, version DESC)
-            """)
+        # Exclusive lock prevents two processes from racing through migrations
+        self._conn.execute("BEGIN EXCLUSIVE")
+        try:
+            # Re-read inside the lock (another process may have migrated)
+            current_version = self._conn.execute(
+                "PRAGMA user_version"
+            ).fetchone()[0]
 
-            self._conn.execute("PRAGMA user_version = 1")
-            self._conn.commit()
+            if current_version >= SCHEMA_VERSION:
+                self._conn.rollback()
+                return
 
-        if current_version < 2:
-            # Add accessed_at column for last-access tracking
-            cursor = self._conn.execute("PRAGMA table_info(documents)")
-            columns = {row[1] for row in cursor.fetchall()}
-            if "accessed_at" not in columns:
-                self._conn.execute(
-                    "ALTER TABLE documents ADD COLUMN accessed_at TEXT"
-                )
-                # Backfill: set accessed_at = updated_at for existing rows
-                self._conn.execute(
-                    "UPDATE documents SET accessed_at = updated_at "
-                    "WHERE accessed_at IS NULL"
-                )
-                # Index for access-ordered listing
+            if current_version < 1:
+                # Create versions table for document history
                 self._conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_documents_accessed
-                    ON documents(accessed_at)
+                    CREATE TABLE IF NOT EXISTS document_versions (
+                        id TEXT NOT NULL,
+                        collection TEXT NOT NULL,
+                        version INTEGER NOT NULL,
+                        summary TEXT NOT NULL,
+                        tags_json TEXT NOT NULL,
+                        content_hash TEXT,
+                        created_at TEXT NOT NULL,
+                        PRIMARY KEY (id, collection, version)
+                    )
+                """)
+                self._conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_versions_doc
+                    ON document_versions(id, collection, version DESC)
+                """)
+
+            if current_version < 2:
+                # Add accessed_at column for last-access tracking
+                columns = {
+                    row[1] for row in
+                    self._conn.execute("PRAGMA table_info(documents)").fetchall()
+                }
+                if "accessed_at" not in columns:
+                    self._conn.execute(
+                        "ALTER TABLE documents ADD COLUMN accessed_at TEXT"
+                    )
+                    self._conn.execute(
+                        "UPDATE documents SET accessed_at = updated_at "
+                        "WHERE accessed_at IS NULL"
+                    )
+                    self._conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_documents_accessed
+                        ON documents(accessed_at)
+                    """)
+
+            if current_version < 3:
+                # Add content_hash column if missing (very old databases)
+                columns = {
+                    row[1] for row in
+                    self._conn.execute("PRAGMA table_info(documents)").fetchall()
+                }
+                if "content_hash" not in columns:
+                    self._conn.execute(
+                        "ALTER TABLE documents ADD COLUMN content_hash TEXT"
+                    )
+
+                # One-time hash truncation (64-char → 10-char)
+                self._conn.execute("""
+                    UPDATE documents SET content_hash = SUBSTR(content_hash, -10)
+                    WHERE content_hash IS NOT NULL AND LENGTH(content_hash) > 10
+                """)
+                cursor = self._conn.execute("""
+                    SELECT id, collection, tags_json FROM documents
+                    WHERE tags_json LIKE '%bundled_hash%'
+                """)
+                for row in cursor.fetchall():
+                    tags = json.loads(row["tags_json"])
+                    bh = tags.get("bundled_hash")
+                    if bh and len(bh) > 10:
+                        tags["bundled_hash"] = bh[-10:]
+                        self._conn.execute(
+                            "UPDATE documents SET tags_json = ? "
+                            "WHERE id = ? AND collection = ?",
+                            (json.dumps(tags), row["id"], row["collection"])
+                        )
+
+                # Create indexes (idempotent)
+                self._conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_documents_collection
+                    ON documents(collection)
+                """)
+                self._conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_documents_updated
+                    ON documents(updated_at)
                 """)
 
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def _recover_malformed(self) -> None:
         """
