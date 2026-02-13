@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "keep-skill"
-version = "0.39.1"
+version = "0.39.2"
 description = "Reflective memory - remember and search documents by meaning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -47,7 +47,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hughpyle/keep"
+Homepage = "https://keepnotes.ai"
+Documentation = "https://docs.keepnotes.ai"
 Repository = "https://github.com/hughpyle/keep"
 
 [project.optional-dependencies]
