@@ -19,6 +19,17 @@ That's it! API providers for Voyage, OpenAI, Anthropic, and Gemini are included.
 
 ## Provider Configuration
 
+### Hosted Service
+
+Sign up at [keepnotes.ai](https://keepnotes.ai) to get an API key — no local models, no database setup:
+
+```bash
+export KEEPNOTES_API_KEY=kn_...
+keep put "test"                    # That's it — storage, search, and summarization handled
+```
+
+Works across all your tools (Claude Code, Kiro, Codex) with the same API key. Project isolation, media pipelines, and backups are managed for you.
+
 ### API Providers
 
 Set environment variables for your preferred providers:
