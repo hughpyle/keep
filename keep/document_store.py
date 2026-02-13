@@ -278,6 +278,21 @@ class DocumentStore:
         # Retry normal initialization
         self._init_db()
 
+    def _try_runtime_recover(self) -> bool:
+        """
+        Attempt runtime recovery when a malformed error is detected mid-session.
+
+        Returns True if recovery succeeded, False otherwise.
+        """
+        try:
+            logger.warning("Runtime database malformation detected, attempting recovery: %s", self._db_path)
+            self._recover_malformed()
+            logger.warning("Runtime recovery succeeded")
+            return True
+        except Exception as e:
+            logger.error("Runtime recovery failed: %s", e)
+            return False
+
     @staticmethod
     def _now() -> str:
         """Current timestamp in canonical UTC format."""
@@ -480,14 +495,23 @@ class DocumentStore:
         return cursor.rowcount > 0
 
     def touch(self, collection: str, id: str) -> None:
-        """Update accessed_at timestamp without changing updated_at."""
+        """Update accessed_at timestamp without changing updated_at.
+
+        Non-fatal: logs errors instead of raising, since touch is a
+        side-effect that should never prevent read operations.
+        """
         now = self._now()
-        with self._lock:
-            self._conn.execute("""
-                UPDATE documents SET accessed_at = ?
-                WHERE id = ? AND collection = ?
-            """, (now, id, collection))
-            self._conn.commit()
+        try:
+            with self._lock:
+                self._conn.execute("""
+                    UPDATE documents SET accessed_at = ?
+                    WHERE id = ? AND collection = ?
+                """, (now, id, collection))
+                self._conn.commit()
+        except sqlite3.DatabaseError as e:
+            logger.warning("touch(%s) failed (non-fatal): %s", id, e)
+            if "malformed" in str(e):
+                self._try_runtime_recover()
 
     def touch_many(self, collection: str, ids: list[str]) -> None:
         """Update accessed_at for multiple documents in one statement."""
