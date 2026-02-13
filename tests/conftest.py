@@ -476,9 +476,9 @@ def mock_providers():
 
     with patch("keep.api.get_registry", return_value=mock_reg), \
          patch("keep.api.CachingEmbeddingProvider", side_effect=lambda p, **kw: p), \
-         patch("keep.api.ChromaStore", MockChromaStore), \
+         patch("keep.store.ChromaStore", MockChromaStore), \
          patch("keep.document_store.DocumentStore", MockDocumentStore), \
-         patch("keep.api.PendingSummaryQueue", MockPendingSummaryQueue):
+         patch("keep.pending_summaries.PendingSummaryQueue", MockPendingSummaryQueue):
         yield {
             "embedding": mock_embed,
             "summarization": mock_summ,
