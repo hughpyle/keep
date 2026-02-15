@@ -125,8 +125,8 @@ from keep import Keeper
 kp = Keeper()
 
 # Index
-kp.update("file:///path/to/doc.md", tags={"project": "myapp"})
-kp.remember("Rate limit is 100 req/min", tags={"topic": "api"})
+kp.put(uri="file:///path/to/doc.md", tags={"project": "myapp"})
+kp.put("Rate limit is 100 req/min", tags={"topic": "api"})
 
 # Search
 results = kp.find("rate limit", limit=5)

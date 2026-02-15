@@ -4,6 +4,7 @@ Error logging utilities for keep CLI.
 Logs full stack traces for debugging while showing clean messages to users.
 """
 
+import os
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,8 @@ def log_exception(exc: Exception, context: str = "") -> Path:
     """
     timestamp = datetime.now(timezone.utc).isoformat()
     ERROR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(ERROR_LOG_PATH, "a") as f:
+    fd = os.open(ERROR_LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as f:
         f.write(f"\n{'='*60}\n")
         f.write(f"[{timestamp}]")
         if context:

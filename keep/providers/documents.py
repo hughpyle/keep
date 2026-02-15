@@ -473,7 +473,13 @@ class HttpDocumentProvider:
     
     @staticmethod
     def _is_private_url(uri: str) -> bool:
-        """Check if URL targets a private/internal network address."""
+        """Check if URL targets a private/internal network address.
+
+        Note: DNS resolution here is inherently TOCTOU — the hostname could
+        resolve to a different address by the time requests.get() connects.
+        Sufficient for CLI use; a hosted service should enforce this at the
+        network layer (firewall/VPC rules) rather than relying on client checks.
+        """
         from urllib.parse import urlparse
         import ipaddress
         import socket

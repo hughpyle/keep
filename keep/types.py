@@ -101,7 +101,7 @@ class Item:
     """
     An item retrieved from the reflective memory store.
     
-    This is a read-only snapshot. To modify an item, use api.update()
+    This is a read-only snapshot. To modify an item, use api.put()
     which returns a new Item with updated values.
     
     Timestamps and other system metadata live in tags, not as explicit fields.

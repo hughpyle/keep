@@ -1,7 +1,10 @@
-
-* "threads" vs "strings"
-    - tell the story of what these timelines mean, how to use them
-    (that's one whole dimension right)
+* URIs: What's safe to normalize?
+  RFC 3986 §6.2.2 defines "syntax-based normalization" that's always safe:
+    - Scheme/host case — always case-insensitive (HTTPS://EXAMPLE.COM → https://example.com)
+    - Percent-encoding of unreserved chars — %41 → A (unreserved chars should not be encoded)
+    - Port normalization — :443 on https, :80 on http are default, can be dropped
+    - Path segment normalization — /./../a → /a (dot segments)
+    - Empty path — https://example.com → https://example.com/
 
 * Maybe the metadoc should say how many results to produce by default?
     (e.g. closures: 10, learnings: 3)
@@ -106,8 +109,6 @@
 
 * add support for the kimi/moonshot models, etc - what are we missing? compare claude code, openclaw
  
-* Multi-file (pass a path to a folder, recurse flag, etc.)
-
 ----
 
 Done: (finished items go at the end)
@@ -132,7 +133,7 @@ Done: (finished items go at the end)
 . [tags] config section for default tags
 . summaries: --summary flag, smart remember (short content verbatim), max_summary_length config
 . documentstore already correct (stores only summaries, not full content)
-. remember vs update: keep separate (different input semantics, both useful)
+x remember vs update: keep separate → unified into put() (v0.42.0)
 . model dimensions: lazy detection for unknown models (OpenAI, Gemini)
 . `keep init` works offline - providers lazy-loaded, no network at init
 . `process-pending` robust to offline - retries with max 5 attempts, graceful degradation
@@ -241,3 +242,13 @@ x `context` text alongside summaries? (no, summary is good now)
 . media: images, audio (tag extraction, not multimodal models yet)
 . `keep save --from ITEM_ID` — extend save to extract from any versioned item, not just now
 . media description: MediaDescriber protocol, MLX (vision + whisper), Ollama (vision), LockedMediaDescriber, config detection, lazy sub-providers, graceful degradation, [media] optional extra
+. threads -> strings
+. constrained tags: sub-doc validation at .tag/KEY/VALUE, fail on invalid values, casefold on write
+. semantic part decomposition: `keep analyze`, @P{N} syntax, --analyze flag on put, linked parts with independent tags
+. multi-file/directory put: `keep put /path/to/dir` recurses and indexes
+. pypi Documentation URL → https://docs.keepnotes.ai/guides/
+. interface refactor: unified remember()+update() into put(content, uri, id, summary, tags)
+. interface refactor: unified find()+find_similar()+query_fulltext() into find(query, similar_to, fulltext, ...)
+. security: error log 0o600 permissions via os.open(), binary stdin handling in put/now, tag validation on all put() paths
+. REST API: unified POST /search endpoint, ValueError→400 handler, include_hidden passthrough fixes
+. protocol consistency: KeeperProtocol fully aligned with Keeper and RemoteKeeper (resolve_inline_meta, include_hidden, move default)

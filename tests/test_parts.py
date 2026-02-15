@@ -262,7 +262,7 @@ class TestKeeperAnalyze:
         kp = Keeper(store_path=tmp_path)
 
         # First store a document
-        kp.remember("A long document about many topics. " * 20,
+        kp.put("A long document about many topics. " * 20,
                      id="test-doc", tags={"project": "test"})
 
         # Mock the LLM call
@@ -292,7 +292,7 @@ class TestKeeperAnalyze:
     def test_analyze_replaces_parts(self, mock_providers, tmp_path):
         """Re-analyze replaces all previous parts."""
         kp = Keeper(store_path=tmp_path)
-        kp.remember("Content " * 50, id="test-doc")
+        kp.put("Content " * 50, id="test-doc")
 
         with patch("keep.api._call_decomposition_llm") as mock_llm:
             # First analysis
@@ -320,7 +320,7 @@ class TestKeeperAnalyze:
     def test_get_part(self, mock_providers, tmp_path):
         """get_part() returns an Item with part metadata."""
         kp = Keeper(store_path=tmp_path)
-        kp.remember("Content " * 50, id="test-doc")
+        kp.put("Content " * 50, id="test-doc")
 
         with patch("keep.api._call_decomposition_llm") as mock_llm:
             mock_llm.return_value = [
@@ -342,7 +342,7 @@ class TestKeeperAnalyze:
     def test_list_parts(self, mock_providers, tmp_path):
         """list_parts() returns PartInfo ordered by part_num."""
         kp = Keeper(store_path=tmp_path)
-        kp.remember("Content " * 50, id="test-doc")
+        kp.put("Content " * 50, id="test-doc")
 
         with patch("keep.api._call_decomposition_llm") as mock_llm:
             mock_llm.return_value = [
@@ -367,7 +367,7 @@ class TestKeeperAnalyze:
         # Create content with clear paragraph structure
         paragraphs = [f"Section {i}. " + "x" * 500 for i in range(5)]
         content = "\n\n".join(paragraphs)
-        kp.remember(content, id="test-doc")
+        kp.put(content, id="test-doc")
 
         with patch("keep.api._call_decomposition_llm") as mock_llm:
             mock_llm.return_value = []  # LLM fails

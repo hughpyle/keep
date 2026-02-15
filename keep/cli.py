@@ -815,11 +815,9 @@ def find(
     search_limit = limit * 5 if tag else limit
 
     if id:
-        results = kp.find_similar(id, limit=search_limit, since=since, include_self=include_self, include_hidden=show_all)
-    elif text:
-        results = kp.query_fulltext(query, limit=search_limit, since=since, include_hidden=show_all)
+        results = kp.find(similar_to=id, limit=search_limit, since=since, include_self=include_self, include_hidden=show_all)
     else:
-        results = kp.find(query, limit=search_limit, since=since, include_hidden=show_all)
+        results = kp.find(query, fulltext=text, limit=search_limit, since=since, include_hidden=show_all)
 
     # Post-filter by tags if specified
     if tag:
@@ -849,7 +847,7 @@ def search(
     Search note summaries using full-text search (alias for find --text).
     """
     kp = _get_keeper(store)
-    results = kp.query_fulltext(query, limit=limit, since=since)
+    results = kp.find(query, fulltext=True, limit=limit, since=since)
     typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
@@ -1027,7 +1025,12 @@ def _put_store(
     """Execute the store operation for put(). Returns Item, or None for directory mode."""
     if source == "-" or (source is None and _has_stdin_data()):
         # Stdin mode: explicit '-' or piped input
-        content = sys.stdin.read()
+        try:
+            content = sys.stdin.read()
+        except UnicodeDecodeError:
+            typer.echo("Error: stdin contains binary data (not valid UTF-8)", err=True)
+            typer.echo("Hint: for binary files, use: keep put file:///path/to/file", err=True)
+            raise typer.Exit(1)
         content, frontmatter_tags = _parse_frontmatter(content)
         parsed_tags = {**frontmatter_tags, **parsed_tags}  # CLI tags override
         if summary is not None:
@@ -1041,7 +1044,7 @@ def _put_store(
             raise typer.Exit(1)
         # Use content-addressed ID for stdin text (enables versioning)
         doc_id = id or _text_content_id(content)
-        return kp.remember(content, id=doc_id, tags=parsed_tags or None)
+        return kp.put(content, id=doc_id, tags=parsed_tags or None)
     elif resolved_path is not None and resolved_path.is_dir():
         # Directory mode: index all regular files in directory
         if summary is not None:
@@ -1065,7 +1068,7 @@ def _put_store(
         for i, fpath in enumerate(files, 1):
             file_uri = f"file://{fpath}"
             try:
-                item = kp.update(file_uri, tags=parsed_tags or None)
+                item = kp.put(uri=file_uri, tags=parsed_tags or None)
                 results.append(item)
                 typer.echo(f"[{i}/{total}] {fpath.name} ok", err=True)
             except Exception as e:
@@ -1087,10 +1090,10 @@ def _put_store(
     elif resolved_path is not None and resolved_path.is_file():
         # File mode: bare file path → normalize to file:// URI
         file_uri = f"file://{resolved_path}"
-        return kp.update(file_uri, tags=parsed_tags or None, summary=summary)
+        return kp.put(uri=file_uri, tags=parsed_tags or None, summary=summary)
     elif source and _URI_SCHEME_PATTERN.match(source):
         # URI mode: fetch from URI (ID is the URI itself)
-        return kp.update(source, tags=parsed_tags or None, summary=summary)
+        return kp.put(uri=source, tags=parsed_tags or None, summary=summary)
     elif source:
         # Text mode: inline content (no :// in source)
         if summary is not None:
@@ -1104,7 +1107,7 @@ def _put_store(
             raise typer.Exit(1)
         # Use content-addressed ID for text (enables versioning)
         doc_id = id or _text_content_id(source)
-        return kp.remember(source, id=doc_id, tags=parsed_tags or None)
+        return kp.put(source, id=doc_id, tags=parsed_tags or None)
     else:
         typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
         raise typer.Exit(1)
@@ -1326,7 +1329,11 @@ def now(
 
     # Read from stdin if piped and no content argument
     if content is None and not reset and _has_stdin_data():
-        content = sys.stdin.read().strip() or None
+        try:
+            content = sys.stdin.read().strip() or None
+        except UnicodeDecodeError:
+            typer.echo("Error: stdin contains binary data (not valid UTF-8)", err=True)
+            raise typer.Exit(1)
 
     # Determine if we're getting or setting
     setting = content is not None or reset
