@@ -19,7 +19,6 @@
 | `keep reflect` | Structured reflection practice | [KEEP-NOW.md](KEEP-NOW.md#keep-reflect) |
 | `keep del` | Remove item or revert to previous version | — |
 | `keep tag-update` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
-| `keep collections` | List all collections in the store | — |
 | `keep reindex` | Rebuild search index | — |
 | `keep process-pending` | Process pending summaries from lazy indexing | — |
 
@@ -140,7 +139,6 @@ keep analyze ID --fg                 # Wait for completion
 # Maintenance
 keep reindex                         # Rebuild search index
 keep reindex -y                      # Skip confirmation
-keep collections                     # List all collections
 keep process-pending                 # Process pending summaries
 keep process-pending --all           # Process all pending
 ```

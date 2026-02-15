@@ -122,13 +122,6 @@ class TestGetConfigValue:
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "store")
         assert result == "/test/store"
 
-    def test_collections(self, mock_keeper):
-        """'collections' returns list (may be empty without real store)."""
-        from keep.cli import _get_config_value
-        result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "collections")
-        # With mock store path, returns empty list
-        assert isinstance(result, list)
-
     def test_providers(self, mock_keeper):
         """'providers' returns dict of provider names."""
         from keep.cli import _get_config_value
@@ -220,13 +213,6 @@ class TestConfigCommand:
         # Output should be a path
         assert "/" in result.stdout or "\\" in result.stdout
 
-    def test_config_collections(self, cli):
-        """'config collections' returns JSON list."""
-        result = cli("config", "collections")
-        assert result.returncode == 0
-        parsed = json.loads(result.stdout)
-        assert isinstance(parsed, list)
-
     def test_config_providers(self, cli):
         """'config providers' returns JSON dict of providers."""
         result = cli("config", "providers")
@@ -259,7 +245,6 @@ class TestConfigCommand:
         assert "file" in parsed
         assert "tool" in parsed
         assert "store" in parsed
-        assert "collections" in parsed
         assert "providers" in parsed
         assert isinstance(parsed["providers"], dict)
 

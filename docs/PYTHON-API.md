@@ -105,9 +105,6 @@ kp.exists(id) → bool
 # List recent items
 kp.list_recent(limit=10, sort="updated") → list[Item]
 # sort options: "updated" (default), "created", "accessed"
-
-# List collections
-kp.list_collections() → list[str]
 ```
 
 #### Tags
