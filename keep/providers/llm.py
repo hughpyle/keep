@@ -104,6 +104,24 @@ class AnthropicSummarization:
             return strip_summary_preamble(response.content[0].text)
         return truncated[:500]  # Fallback for empty response
 
+    def generate(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        """Send a raw prompt to Anthropic and return generated text."""
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        if response.content:
+            return response.content[0].text
+        return None
+
 
 class OpenAISummarization:
     """
@@ -164,6 +182,27 @@ class OpenAISummarization:
 
         return strip_summary_preamble(response.choices[0].message.content.strip())
 
+    def generate(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        """Send a raw prompt to OpenAI and return generated text."""
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.3,
+        )
+        if response.choices:
+            return response.choices[0].message.content
+        return None
+
 
 class OllamaSummarization:
     """
@@ -221,6 +260,31 @@ class OllamaSummarization:
 
         return strip_summary_preamble(response.json()["message"]["content"].strip())
 
+    def generate(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        """Send a raw prompt to Ollama and return generated text."""
+        import requests
+
+        response = requests.post(
+            f"{self.base_url}/api/chat",
+            json={
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "stream": False,
+            },
+            timeout=300,
+        )
+        response.raise_for_status()
+        return response.json()["message"]["content"].strip()
+
 
 class GeminiSummarization:
     """
@@ -269,6 +333,21 @@ class GeminiSummarization:
         )
         return strip_summary_preamble(response.text)
 
+    def generate(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        """Send a raw prompt to Gemini and return generated text."""
+        full_prompt = f"{system}\n\n{user}"
+        response = self._client.models.generate_content(
+            model=self.model,
+            contents=full_prompt,
+        )
+        return response.text
+
 
 class PassthroughSummarization:
     """
@@ -292,6 +371,16 @@ class PassthroughSummarization:
         if len(content) <= limit:
             return content
         return content[:limit].rsplit(" ", 1)[0] + "..."
+
+    def generate(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        """Passthrough has no LLM — return None."""
+        return None
 
 
 # -----------------------------------------------------------------------------

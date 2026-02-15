@@ -162,6 +162,36 @@ class MLXSummarization:
 
         return strip_summary_preamble(response.strip())
 
+    def generate(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        """Send a raw prompt to MLX-LM and return generated text."""
+        from mlx_lm import generate
+
+        if hasattr(self._tokenizer, "apply_chat_template"):
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+            prompt = self._tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+            )
+        else:
+            prompt = f"{system}\n\n{user}"
+
+        response = generate(
+            self._model,
+            self._tokenizer,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            verbose=False,
+        )
+        return response.strip()
+
 
 class MLXTagging:
     """

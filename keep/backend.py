@@ -51,6 +51,9 @@ class NullPendingQueue:
     def clear(self) -> int:
         return 0
 
+    def get_status(self, id: str) -> dict | None:
+        return None
+
     def close(self) -> None:
         pass
 
