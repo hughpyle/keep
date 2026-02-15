@@ -3268,6 +3268,18 @@ class Keeper:
         """
         return self._pending_queue.stats()
 
+    def pending_status(self, id: str) -> Optional[dict]:
+        """
+        Get pending task status for a specific note.
+
+        Returns dict with id, task_type, status, queued_at if the note
+        has pending work, or None if no work is pending. Requires a
+        queue implementation that supports get_status().
+        """
+        if hasattr(self._pending_queue, 'get_status'):
+            return self._pending_queue.get_status(id)
+        return None
+
     @property
     def _processor_pid_path(self) -> Path:
         """Path to the processor PID file."""
