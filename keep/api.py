@@ -172,7 +172,7 @@ from .providers.base import (
     SummarizationProvider,
 )
 from .providers.embedding_cache import CachingEmbeddingProvider
-from .document_store import VersionInfo
+from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, parse_utc_timestamp,
     validate_tag_key, validate_id, MAX_TAG_VALUE_LENGTH,
@@ -407,6 +407,277 @@ def _text_content_id(content: str) -> str:
     return f"%{content_hash}"
 
 
+# -------------------------------------------------------------------------
+# Decomposition helpers (module-level, used by Keeper.analyze)
+# -------------------------------------------------------------------------
+
+DECOMPOSITION_SYSTEM_PROMPT = """You are a document analysis assistant. Your task is to decompose a document into its meaningful structural sections.
+
+For each section, provide:
+- "summary": A concise summary of the section (1-3 sentences)
+- "content": The exact text of the section
+- "tags": A dict of relevant tags for this section (optional)
+
+Return a JSON array of section objects. Example:
+```json
+[
+  {"summary": "Introduction and overview of the topic", "content": "The text of section 1...", "tags": {"topic": "overview"}},
+  {"summary": "Detailed analysis of the main argument", "content": "The text of section 2...", "tags": {"topic": "analysis"}}
+]
+```
+
+Guidelines:
+- Identify natural section boundaries (headings, topic shifts, structural breaks)
+- Each section should be a coherent unit of meaning
+- Preserve the original text exactly in the "content" field
+- Keep summaries concise but descriptive
+- Tags should capture the essence of each section's subject matter
+- Return valid JSON only, no commentary outside the JSON array"""
+
+
+def _call_decomposition_llm(
+    provider: "SummarizationProvider",
+    content: str,
+    guide_context: str = "",
+) -> list[dict]:
+    """
+    Call an LLM to decompose content into sections.
+
+    Detects provider type by attribute introspection and calls
+    the underlying client directly with the decomposition prompt.
+
+    Args:
+        provider: A summarization provider (Anthropic, OpenAI, Ollama, Gemini, etc.)
+        content: Document content to decompose
+        guide_context: Optional tag descriptions for guided decomposition
+
+    Returns:
+        List of dicts with "summary", "content", and optionally "tags" keys.
+        Empty list on failure.
+    """
+    # Unwrap lock wrapper to access underlying provider
+    if hasattr(provider, '_provider') and provider._provider is not None:
+        provider = provider._provider
+
+    # Truncate content for decomposition
+    truncated = content[:80000] if len(content) > 80000 else content
+
+    # Build user prompt
+    user_prompt = truncated
+    if guide_context:
+        user_prompt = (
+            f"Decompose this document into meaningful sections.\n\n"
+            f"Use these tag definitions to guide your tagging:\n\n"
+            f"{guide_context}\n\n"
+            f"---\n\n"
+            f"Document to analyze:\n\n{truncated}"
+        )
+
+    system_prompt = DECOMPOSITION_SYSTEM_PROMPT
+
+    try:
+        # Anthropic provider
+        if hasattr(provider, 'client'):
+            response = provider.client.messages.create(
+                model=provider.model,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            if response.content:
+                return _parse_decomposition_json(response.content[0].text, content)
+
+        # OpenAI provider
+        elif hasattr(provider, '_client') and hasattr(provider._client, 'chat'):
+            response = provider._client.chat.completions.create(
+                model=provider.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=4096,
+                temperature=0.3,
+            )
+            if response.choices:
+                return _parse_decomposition_json(
+                    response.choices[0].message.content, content
+                )
+
+        # Ollama provider
+        elif hasattr(provider, 'base_url'):
+            import requests
+            response = requests.post(
+                f"{provider.base_url}/api/chat",
+                json={
+                    "model": provider.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "stream": False,
+                },
+                timeout=300,
+            )
+            response.raise_for_status()
+            return _parse_decomposition_json(
+                response.json()["message"]["content"], content
+            )
+
+        # Gemini provider
+        elif hasattr(provider, '_client') and hasattr(provider._client, 'models'):
+            full_prompt = f"{system_prompt}\n\n{user_prompt}"
+            response = provider._client.models.generate_content(
+                model=provider.model,
+                contents=full_prompt,
+            )
+            return _parse_decomposition_json(response.text, content)
+
+        # MLX provider (local Apple Silicon)
+        elif hasattr(provider, '_model') and hasattr(provider, '_tokenizer'):
+            from mlx_lm import generate
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            if hasattr(provider._tokenizer, "apply_chat_template"):
+                prompt = provider._tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True,
+                )
+            else:
+                prompt = f"{system_prompt}\n\n{user_prompt}"
+
+            response = generate(
+                provider._model,
+                provider._tokenizer,
+                prompt=prompt,
+                max_tokens=4096,
+                verbose=False,
+            )
+            return _parse_decomposition_json(response.strip(), content)
+
+        # Fallback: try using the summarize method with a decomposition prompt
+        else:
+            logger.warning(
+                "Unknown provider type %s, falling back to simple chunking",
+                type(provider).__name__
+            )
+            return []
+
+    except Exception as e:
+        logger.warning("LLM decomposition failed: %s", e)
+        return []
+
+
+def _parse_decomposition_json(text: str, content: str) -> list[dict]:
+    """
+    Parse JSON from LLM decomposition output.
+
+    Handles:
+    - Code fences (```json ... ```)
+    - Wrapper objects ({"sections": [...]})
+    - Direct JSON arrays
+
+    Args:
+        text: Raw LLM output
+        content: Original content (for fallback)
+
+    Returns:
+        List of section dicts
+    """
+    if not text:
+        return []
+
+    # Strip markdown code fences
+    text = text.strip()
+    if text.startswith("```"):
+        # Remove first line (```json or ```) and last line (```)
+        lines = text.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning("Failed to parse decomposition JSON")
+        return []
+
+    # Handle wrapper objects like {"sections": [...]}
+    if isinstance(data, dict):
+        for key in ("sections", "parts", "chunks", "result", "data"):
+            if key in data and isinstance(data[key], list):
+                data = data[key]
+                break
+        else:
+            return []
+
+    if not isinstance(data, list):
+        return []
+
+    # Validate and normalize entries
+    result = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        # Must have at least summary or content
+        if not entry.get("summary") and not entry.get("content"):
+            continue
+        section = {
+            "summary": str(entry.get("summary", "")),
+            "content": str(entry.get("content", "")),
+        }
+        if entry.get("tags") and isinstance(entry["tags"], dict):
+            section["tags"] = {str(k): str(v) for k, v in entry["tags"].items()}
+        result.append(section)
+
+    return result
+
+
+def _simple_chunk_decomposition(content: str) -> list[dict]:
+    """
+    Paragraph-based fallback when no LLM is available.
+
+    Splits content on double-newlines, groups small paragraphs together.
+    Each chunk gets a truncated summary.
+    """
+    paragraphs = re.split(r'\n\s*\n', content.strip())
+    if not paragraphs:
+        return []
+
+    # Group small paragraphs together (min ~200 chars per chunk)
+    chunks = []
+    current = []
+    current_len = 0
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        current.append(para)
+        current_len += len(para)
+        if current_len >= 500:
+            chunks.append("\n\n".join(current))
+            current = []
+            current_len = 0
+    if current:
+        chunks.append("\n\n".join(current))
+
+    # If we ended up with just 1 chunk that is the whole content, not useful
+    if len(chunks) <= 1:
+        return []
+
+    result = []
+    for chunk in chunks:
+        summary = chunk[:200].rsplit(" ", 1)[0] + "..." if len(chunk) > 200 else chunk
+        result.append({
+            "summary": summary,
+            "content": chunk,
+        })
+    return result
+
+
 class Keeper:
     """
     Reflective memory keeper - persistent storage with similarity search.
@@ -494,6 +765,7 @@ class Keeper:
         # Guard against concurrent background reconciliation
         import threading
         self._reconcile_lock = threading.Lock()
+        self._reconcile_done = threading.Event()
 
         # Check store consistency and reconcile in background if needed
         # (safe for all backends — uses abstract store interface)
@@ -503,6 +775,8 @@ class Keeper:
             threading.Thread(
                 target=self._auto_reconcile_safe, args=(chroma_coll, doc_coll), daemon=True
             ).start()
+        else:
+            self._reconcile_done.set()
 
         # System doc migration deferred to first write (needs embeddings)
         from .config import SYSTEM_DOCS_VERSION
@@ -558,6 +832,7 @@ class Keeper:
             logger.debug("Background reconcile failed: %s", e)
         finally:
             self._reconcile_lock.release()
+            self._reconcile_done.set()
 
     def _auto_reconcile(self, chroma_coll: str, doc_coll: str) -> None:
         """Fix store divergence using summaries (no content re-fetch needed).
@@ -837,6 +1112,35 @@ class Keeper:
                 )
             self._summarization_provider = provider
         return self._summarization_provider
+
+    def _release_summarization_provider(self) -> None:
+        """Release summarization model to free GPU/unified memory.
+
+        Safe to call at any time — the lazy getter will reconstruct
+        the provider on next use.
+        """
+        if self._summarization_provider is not None:
+            if hasattr(self._summarization_provider, 'release'):
+                self._summarization_provider.release()
+            self._summarization_provider = None
+
+    def _release_embedding_provider(self) -> None:
+        """Release embedding model to free GPU/unified memory.
+
+        Also closes the embedding cache. Safe to call at any time —
+        the lazy getter will reconstruct both on next use.
+        """
+        if self._embedding_provider is not None:
+            # Release the locked inner provider (frees model weights)
+            inner = getattr(self._embedding_provider, '_provider', None)
+            if hasattr(inner, 'release'):
+                inner.release()
+            # Close the embedding cache
+            if hasattr(self._embedding_provider, '_cache'):
+                cache = self._embedding_provider._cache
+                if hasattr(cache, 'close'):
+                    cache.close()
+            self._embedding_provider = None
 
     def _get_media_describer(self) -> Optional[MediaDescriber]:
         """
@@ -2211,6 +2515,10 @@ class Keeper:
         # Delete the versioned entry from ChromaDB
         self._store.delete_entries(chroma_coll, [versioned_chroma_id])
 
+        # Clean up stale parts (structural decomposition of old content)
+        self._store.delete_parts(chroma_coll, id)
+        self._document_store.delete_parts(doc_coll, id)
+
         return self.get(id)
 
     # -------------------------------------------------------------------------
@@ -2568,9 +2876,209 @@ class Keeper:
         return self.get(id)
 
     # -------------------------------------------------------------------------
+    # Parts (structural decomposition)
+    # -------------------------------------------------------------------------
+
+    def analyze(
+        self,
+        id: str,
+        *,
+        provider: Optional["SummarizationProvider"] = None,
+        tags: Optional[list[str]] = None,
+    ) -> list[PartInfo]:
+        """
+        Decompose a note or string into meaningful parts.
+
+        For URI-sourced documents: decomposes the document content structurally.
+        For inline notes (strings): assembles the version history and decomposes
+        the temporal sequence into episodic parts.
+
+        Uses an LLM to identify sections with summaries and tags.
+        Re-analysis replaces all previous parts atomically.
+
+        Args:
+            id: Document or string to analyze
+            provider: Override LLM provider for decomposition
+                (default: use configured summarization provider)
+            tags: Guidance tag keys (e.g., ["topic", "type"]) —
+                fetches .tag/xxx descriptions as decomposition context
+
+        Returns:
+            List of PartInfo for the created parts
+        """
+        validate_id(id)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
+
+        # Get the document
+        doc_record = self._document_store.get(doc_coll, id)
+        if doc_record is None:
+            raise ValueError(f"Document not found: {id}")
+
+        # Get content to analyze.
+        # For URI sources: re-fetch the document content.
+        # For inline sources (strings): concatenate the version history,
+        # giving the LLM the full temporal sequence to decompose.
+        content = None
+        source = doc_record.tags.get("_source")
+        if source == "uri":
+            try:
+                doc = self._document_provider.fetch(id)
+                content = doc.content
+            except Exception as e:
+                logger.warning("Could not re-fetch %s: %s, using summary", id, e)
+
+        if not content:
+            # For inline notes, assemble the version string (history + current)
+            versions = self._document_store.list_versions(doc_coll, id, limit=100)
+            if versions:
+                # Build chronological sequence (oldest first)
+                sections = []
+                for v in reversed(versions):
+                    date_str = v.created_at[:10] if v.created_at else ""
+                    sections.append(f"[{date_str}]\n{v.summary}")
+                # Add current as newest
+                sections.append(f"[current]\n{doc_record.summary}")
+                content = "\n\n---\n\n".join(sections)
+            else:
+                content = doc_record.summary
+
+        if not content or len(content.strip()) < 50:
+            raise ValueError(f"Document content too short to analyze: {id}")
+
+        # Build guide context from tag descriptions
+        guide_context = ""
+        if tags:
+            guide_parts = []
+            for tag_key in tags:
+                tag_doc_id = f".tag/{tag_key}"
+                tag_doc = self._document_store.get(doc_coll, tag_doc_id)
+                if tag_doc:
+                    guide_parts.append(
+                        f"## Tag: {tag_key}\n{tag_doc.summary}"
+                    )
+            if guide_parts:
+                guide_context = "\n\n".join(guide_parts)
+
+        # Get the provider for decomposition.
+        # Wait for any background reconciliation to finish first — both
+        # sentence-transformers (embedding) and mlx-lm (summarization)
+        # import the `transformers` package, and concurrent imports
+        # corrupt module state (Python import lock is per-module).
+        if provider is None:
+            self._reconcile_done.wait(timeout=30)
+            provider = self._get_summarization_provider()
+
+        # Call LLM decomposition
+        raw_parts = _call_decomposition_llm(provider, content, guide_context)
+
+        if not raw_parts:
+            # Fallback to simple chunking
+            raw_parts = _simple_chunk_decomposition(content)
+
+        # Content not decomposable — single section is redundant with the note
+        if len(raw_parts) <= 1:
+            logger.info("Content not decomposable into multiple parts: %s", id)
+            return []
+
+        # Build PartInfo list
+        from .types import utc_now
+        now = utc_now()
+
+        # Inherit parent's non-system tags
+        parent_tags = {
+            k: v for k, v in doc_record.tags.items()
+            if not k.startswith(SYSTEM_TAG_PREFIX)
+        }
+
+        parts: list[PartInfo] = []
+        for i, raw in enumerate(raw_parts, 1):
+            part_tags = dict(parent_tags)
+            # Merge part-specific tags from LLM
+            if raw.get("tags"):
+                part_tags.update(raw["tags"])
+
+            part_content = raw.get("content", "")
+            part_summary = raw.get("summary", part_content[:200])
+
+            parts.append(PartInfo(
+                part_num=i,
+                summary=part_summary,
+                tags=part_tags,
+                content=part_content,
+                created_at=now,
+            ))
+
+        # Delete existing parts (re-analysis = fresh decomposition)
+        self._store.delete_parts(chroma_coll, id)
+        self._document_store.delete_parts(doc_coll, id)
+
+        # Store parts in document store
+        self._document_store.upsert_parts(doc_coll, id, parts)
+
+        # Release summarization model before loading embedding model.
+        # Both MLX models resident simultaneously can exhaust unified memory.
+        self._release_summarization_provider()
+
+        # Generate embeddings and store in vector store
+        embed = self._get_embedding_provider()
+        for part in parts:
+            embedding = embed.embed(part.summary)
+            self._store.upsert_part(
+                chroma_coll, id, part.part_num,
+                embedding, part.summary, part.tags,
+            )
+
+        return parts
+
+    def get_part(self, id: str, part_num: int) -> Optional[Item]:
+        """
+        Get a specific part of a document.
+
+        Returns the part as an Item with _part_num, _base_id, and
+        _total_parts metadata tags.
+
+        Args:
+            id: Document identifier
+            part_num: Part number (1-indexed)
+
+        Returns:
+            Item if found, None otherwise
+        """
+        doc_coll = self._resolve_doc_collection()
+        part = self._document_store.get_part(doc_coll, id, part_num)
+        if part is None:
+            return None
+
+        total = self._document_store.part_count(doc_coll, id)
+        tags = dict(part.tags)
+        tags["_part_num"] = str(part.part_num)
+        tags["_base_id"] = id
+        tags["_total_parts"] = str(total)
+
+        return Item(
+            id=id,
+            summary=part.content if part.content else part.summary,
+            tags=tags,
+        )
+
+    def list_parts(self, id: str) -> list[PartInfo]:
+        """
+        List all parts for a document.
+
+        Args:
+            id: Document identifier
+
+        Returns:
+            List of PartInfo, ordered by part_num
+        """
+        doc_coll = self._resolve_doc_collection()
+        return self._document_store.list_parts(doc_coll, id)
+
+    # -------------------------------------------------------------------------
     # Collection Management
     # -------------------------------------------------------------------------
-    
+
     def list_collections(self) -> list[str]:
         """
         List all collections in the store.
@@ -2609,7 +3117,7 @@ class Keeper:
             limit: Maximum number to return (default 10)
             since: Only include items updated since (ISO duration like P3D, or date)
             order_by: Sort order - "updated" (default) or "accessed"
-            include_history: Include archived versions alongside current items
+            include_history: Include previous versions alongside current items
             include_hidden: Include system notes (dot-prefix IDs)
 
         Returns:
@@ -2647,21 +3155,51 @@ class Keeper:
         return {"enabled": False}
 
     # -------------------------------------------------------------------------
-    # Pending Summaries
+    # Pending Work Queue (summaries + analysis)
     # -------------------------------------------------------------------------
+
+    def enqueue_analyze(
+        self,
+        id: str,
+        tags: Optional[list[str]] = None,
+    ) -> None:
+        """
+        Enqueue a note for background analysis (decomposition into parts).
+
+        Validates the document exists, then adds it to the pending work
+        queue for serial processing by the background daemon.
+
+        Args:
+            id: Document ID to analyze
+            tags: Guidance tag keys for decomposition
+        """
+        validate_id(id)
+        doc_coll = self._resolve_doc_collection()
+        doc = self._document_store.get(doc_coll, id)
+        if doc is None:
+            raise ValueError(f"Document not found: {id}")
+
+        metadata = {}
+        if tags:
+            metadata["tags"] = tags
+
+        self._pending_queue.enqueue(
+            id, doc_coll, "",
+            task_type="analyze",
+            metadata=metadata,
+        )
+        self._spawn_processor()
 
     def process_pending(self, limit: int = 10) -> dict:
         """
-        Process pending summaries queued by lazy update/remember.
+        Process pending work items (summaries and analysis).
 
-        Generates real summaries for items that were indexed with
-        truncated placeholders. Updates the stored items in place.
-
-        When items have user tags (non-system tags), context is gathered
-        from similar items with matching tags to produce contextual summaries.
+        Handles two task types serially:
+        - "summarize": generates real summaries for lazy-indexed items
+        - "analyze": decomposes documents into parts via LLM
 
         Items that fail MAX_SUMMARY_ATTEMPTS times are removed from
-        the queue (the truncated placeholder remains in the store).
+        the queue.
 
         Args:
             limit: Maximum number of items to process in this batch
@@ -2676,38 +3214,33 @@ class Keeper:
             # Skip items that have failed too many times
             # (attempts was already incremented by dequeue, so check >= MAX)
             if item.attempts >= MAX_SUMMARY_ATTEMPTS:
-                # Give up - remove from queue, keep truncated placeholder
-                self._pending_queue.complete(item.id, item.collection)
+                # Give up - remove from queue
+                self._pending_queue.complete(
+                    item.id, item.collection, item.task_type
+                )
                 result["abandoned"] += 1
                 logger.warning(
-                    "Abandoned pending summary after %d attempts: %s",
-                    item.attempts, item.id
+                    "Abandoned pending %s after %d attempts: %s",
+                    item.task_type, item.attempts, item.id
                 )
                 continue
 
             try:
-                # Get item's tags for contextual summarization
-                doc = self._document_store.get(item.collection, item.id)
-                context = None
-                if doc:
-                    # Filter to user tags (non-system)
-                    user_tags = filter_non_system_tags(doc.tags)
-                    if user_tags:
-                        context = self._gather_context(
-                            item.id, user_tags
-                        )
-
-                # Generate real summary (with optional context)
-                summary = self._get_summarization_provider().summarize(
-                    item.content, context=context
-                )
-
-                # Update summary in both stores
-                self._document_store.update_summary(item.collection, item.id, summary)
-                self._store.update_summary(item.collection, item.id, summary)
+                if item.task_type == "analyze":
+                    self._process_pending_analyze(item)
+                    # analyze releases summarization internally;
+                    # release embedding after parts are embedded
+                    self._release_embedding_provider()
+                else:
+                    self._process_pending_summarize(item)
+                    # Release summarization model between items to
+                    # prevent both models residing in memory at once
+                    self._release_summarization_provider()
 
                 # Remove from queue
-                self._pending_queue.complete(item.id, item.collection)
+                self._pending_queue.complete(
+                    item.id, item.collection, item.task_type
+                )
                 result["processed"] += 1
 
             except Exception as e:
@@ -2715,10 +3248,38 @@ class Keeper:
                 result["failed"] += 1
                 error_msg = f"{item.id}: {type(e).__name__}: {e}"
                 result["errors"].append(error_msg)
-                logger.warning("Failed to summarize %s (attempt %d): %s",
-                             item.id, item.attempts, e)
+                logger.warning("Failed to %s %s (attempt %d): %s",
+                             item.task_type, item.id, item.attempts, e)
 
         return result
+
+    def _process_pending_summarize(self, item) -> None:
+        """Process a pending summarization work item."""
+        # Get item's tags for contextual summarization
+        doc = self._document_store.get(item.collection, item.id)
+        context = None
+        if doc:
+            # Filter to user tags (non-system)
+            user_tags = filter_non_system_tags(doc.tags)
+            if user_tags:
+                context = self._gather_context(
+                    item.id, user_tags
+                )
+
+        # Generate real summary (with optional context)
+        summary = self._get_summarization_provider().summarize(
+            item.content, context=context
+        )
+
+        # Update summary in both stores
+        self._document_store.update_summary(item.collection, item.id, summary)
+        self._store.update_summary(item.collection, item.id, summary)
+
+    def _process_pending_analyze(self, item) -> None:
+        """Process a pending analysis work item."""
+        tags = item.metadata.get("tags") if item.metadata else None
+        parts = self.analyze(item.id, tags=tags)
+        logger.info("Analyzed %s into %d parts", item.id, len(parts))
 
     def pending_count(self) -> int:
         """Get count of pending summaries awaiting processing."""
@@ -2879,20 +3440,14 @@ class Keeper:
         Releases model locks (freeing GPU memory) before releasing file locks,
         ensuring the next process gets a clean GPU.
         """
-        # Release locked model providers (frees GPU memory + gc before flock release)
-        if self._embedding_provider is not None:
-            # The locked provider may be inside a CachingEmbeddingProvider
-            inner = getattr(self._embedding_provider, '_provider', None)
-            if hasattr(inner, 'release'):
-                inner.release()
-
-        if self._summarization_provider is not None:
-            if hasattr(self._summarization_provider, 'release'):
-                self._summarization_provider.release()
+        # Release locked model providers (frees GPU memory + gc)
+        self._release_embedding_provider()
+        self._release_summarization_provider()
 
         if self._media_describer is not None:
             if hasattr(self._media_describer, 'release'):
                 self._media_describer.release()
+            self._media_describer = None
 
         # Close ChromaDB store
         if hasattr(self, '_store') and self._store is not None:
@@ -2901,13 +3456,6 @@ class Keeper:
         # Close document store (SQLite)
         if hasattr(self, '_document_store') and self._document_store is not None:
             self._document_store.close()
-
-        # Close embedding cache if it was loaded
-        if self._embedding_provider is not None:
-            if hasattr(self._embedding_provider, '_cache'):
-                cache = self._embedding_provider._cache
-                if hasattr(cache, 'close'):
-                    cache.close()
 
         # Close pending summary queue
         if hasattr(self, '_pending_queue'):

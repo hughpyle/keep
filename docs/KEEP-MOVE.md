@@ -20,6 +20,7 @@ keep move "target" --from "source" -t topic=X  # Reorganize between items
 | `-t`, `--tag KEY=VALUE` | Only extract versions matching these tags (repeatable) |
 | `--only` | Move only the current (tip) version |
 | `--from ITEM_ID` | Source item to extract from (default: now) |
+| `--analyze` | Queue background analysis after move (decompose into parts) |
 | `-s`, `--store PATH` | Override store directory |
 
 **Required:** at least one of `-t` or `--only` must be specified.

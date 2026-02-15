@@ -28,10 +28,13 @@ def _has_embedding_provider() -> bool:
             return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _has_embedding_provider(),
-    reason="No embedding provider available (install keep-skill[local] or set API key)",
-)
+pytestmark = [
+    pytest.mark.slow,  # Uses real providers — excluded from default test run
+    pytest.mark.skipif(
+        not _has_embedding_provider(),
+        reason="No embedding provider available (install keep-skill[local] or set API key)",
+    ),
+]
 
 
 @pytest.fixture(scope="module")

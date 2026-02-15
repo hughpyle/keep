@@ -4,15 +4,19 @@ Add or update a document in the store.
 
 ## Usage
 
-Three input modes, auto-detected:
+Four input modes, auto-detected:
 
 ```bash
 keep put "my note"                    # Text mode (inline content)
 keep put file:///path/to/doc.pdf      # URI mode (fetch and index)
 keep put https://example.com/page     # URI mode (web content)
+keep put /path/to/folder/             # Directory mode (index all files)
 keep put -                            # Stdin mode (explicit)
 echo "piped content" | keep put       # Stdin mode (detected)
 ```
+
+Directory mode indexes all regular files in the folder (non-recursive).
+Skips hidden files, symlinks, and subdirectories.
 
 ## Options
 
@@ -22,6 +26,7 @@ echo "piped content" | keep put       # Stdin mode (detected)
 | `-i`, `--id ID` | Custom document ID (auto-generated for text/stdin) |
 | `--summary TEXT` | User-provided summary (skips auto-summarization) |
 | `--suggest-tags` | Show tag suggestions from similar items |
+| `--analyze` | Queue background analysis after put (decompose into parts) |
 | `-s`, `--store PATH` | Override store directory |
 
 ## Text mode and content-addressed IDs

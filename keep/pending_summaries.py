@@ -1,13 +1,16 @@
 """
-Pending summaries queue using SQLite.
+Pending work queue using SQLite.
 
-Stores content that needs summarization for later processing.
-This enables fast indexing with lazy summarization.
+Stores work items (summarization, analysis, etc.) for serial background
+processing. This enables fast indexing with lazy summarization, and
+ensures heavy ML work (MLX model loading) is serialized to prevent
+memory exhaustion.
 """
 
+import json
 import sqlite3
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -15,20 +18,24 @@ from typing import Optional
 
 @dataclass
 class PendingSummary:
-    """A queued item awaiting summarization."""
+    """A queued work item awaiting processing."""
     id: str
     collection: str
     content: str
     queued_at: str
     attempts: int = 0
+    task_type: str = "summarize"
+    metadata: dict = field(default_factory=dict)
 
 
 class PendingSummaryQueue:
     """
-    SQLite-backed queue for pending summarizations.
+    SQLite-backed queue for pending background work.
 
     Items are added during fast indexing (with truncated placeholder summary)
-    and processed later by `keep process-pending` or programmatically.
+    or by enqueue_analyze, and processed later by `keep process-pending`
+    or programmatically. All work is serialized to prevent concurrent
+    ML model loading.
     """
 
     def __init__(self, queue_path: Path):
@@ -58,7 +65,9 @@ class PendingSummaryQueue:
                 content TEXT NOT NULL,
                 queued_at TEXT NOT NULL,
                 attempts INTEGER DEFAULT 0,
-                PRIMARY KEY (id, collection)
+                task_type TEXT DEFAULT 'summarize',
+                metadata TEXT DEFAULT '{}',
+                PRIMARY KEY (id, collection, task_type)
             )
         """)
         self._conn.execute("""
@@ -67,19 +76,68 @@ class PendingSummaryQueue:
         """)
         self._conn.commit()
 
-    def enqueue(self, id: str, collection: str, content: str) -> None:
+        # Migrate existing databases: add new columns if missing
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Migrate existing databases to current schema."""
+        cursor = self._conn.execute("PRAGMA table_info(pending_summaries)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        if "task_type" not in columns:
+            # Old schema: PK is (id, collection). Recreate with (id, collection, task_type).
+            # Preserve any pending items during migration.
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS pending_summaries_new (
+                    id TEXT NOT NULL,
+                    collection TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    queued_at TEXT NOT NULL,
+                    attempts INTEGER DEFAULT 0,
+                    task_type TEXT DEFAULT 'summarize',
+                    metadata TEXT DEFAULT '{}',
+                    PRIMARY KEY (id, collection, task_type)
+                )
+            """)
+            self._conn.execute("""
+                INSERT OR IGNORE INTO pending_summaries_new
+                    (id, collection, content, queued_at, attempts)
+                SELECT id, collection, content, queued_at, attempts
+                FROM pending_summaries
+            """)
+            self._conn.execute("DROP TABLE pending_summaries")
+            self._conn.execute(
+                "ALTER TABLE pending_summaries_new RENAME TO pending_summaries"
+            )
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_queued_at
+                ON pending_summaries(queued_at)
+            """)
+            self._conn.commit()
+
+    def enqueue(
+        self,
+        id: str,
+        collection: str,
+        content: str,
+        *,
+        task_type: str = "summarize",
+        metadata: Optional[dict] = None,
+    ) -> None:
         """
         Add an item to the pending queue.
 
-        If the same id+collection already exists, replaces it (newer content wins).
+        If the same (id, collection, task_type) already exists, replaces it.
+        Different task types for the same document coexist independently.
         """
         now = datetime.now(timezone.utc).isoformat()
+        meta_json = json.dumps(metadata) if metadata else "{}"
         with self._lock:
             self._conn.execute("""
                 INSERT OR REPLACE INTO pending_summaries
-                (id, collection, content, queued_at, attempts)
-                VALUES (?, ?, ?, ?, 0)
-            """, (id, collection, content, now))
+                (id, collection, content, queued_at, attempts, task_type, metadata)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
+            """, (id, collection, content, now, task_type, meta_json))
             self._conn.commit()
 
     def dequeue(self, limit: int = 10) -> list[PendingSummary]:
@@ -91,7 +149,7 @@ class PendingSummaryQueue:
         """
         with self._lock:
             cursor = self._conn.execute("""
-                SELECT id, collection, content, queued_at, attempts
+                SELECT id, collection, content, queued_at, attempts, task_type, metadata
                 FROM pending_summaries
                 ORDER BY queued_at ASC
                 LIMIT ?
@@ -99,33 +157,46 @@ class PendingSummaryQueue:
 
             items = []
             for row in cursor.fetchall():
+                meta = {}
+                if row[6]:
+                    try:
+                        meta = json.loads(row[6])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
                 items.append(PendingSummary(
                     id=row[0],
                     collection=row[1],
                     content=row[2],
                     queued_at=row[3],
                     attempts=row[4],
+                    task_type=row[5] or "summarize",
+                    metadata=meta,
                 ))
 
             # Increment attempt counters
             if items:
-                ids = [(item.id, item.collection) for item in items]
+                keys = [
+                    (item.id, item.collection, item.task_type)
+                    for item in items
+                ]
                 self._conn.executemany("""
                     UPDATE pending_summaries
                     SET attempts = attempts + 1
-                    WHERE id = ? AND collection = ?
-                """, ids)
+                    WHERE id = ? AND collection = ? AND task_type = ?
+                """, keys)
                 self._conn.commit()
 
         return items
 
-    def complete(self, id: str, collection: str) -> None:
+    def complete(
+        self, id: str, collection: str, task_type: str = "summarize"
+    ) -> None:
         """Remove an item from the queue after successful processing."""
         with self._lock:
             self._conn.execute("""
                 DELETE FROM pending_summaries
-                WHERE id = ? AND collection = ?
-            """, (id, collection))
+                WHERE id = ? AND collection = ? AND task_type = ?
+            """, (id, collection, task_type))
             self._conn.commit()
 
     def count(self) -> int:

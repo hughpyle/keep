@@ -1,0 +1,138 @@
+# keep analyze
+
+Decompose a note or string into meaningful parts.
+
+## Usage
+
+```bash
+keep analyze ID                       # Analyze using configured provider
+keep analyze ID -t topic -t type      # With guidance tags
+```
+
+## What it does
+
+`analyze` uses an LLM to decompose content into meaningful sections, each
+with its own summary, tags, and embedding. This enables targeted search:
+`find` matches specific sections, not just whole documents.
+
+Two modes, auto-detected:
+- **Documents** (URI sources): structural decomposition — chapters, topics,
+  headings, thematic units
+- **Strings** (inline notes with version history): episodic decomposition —
+  the version history is assembled chronologically and decomposed into
+  distinct phases, topic shifts, or narrative arcs
+
+Parts are the structural counterpart to versions:
+- **Versions** (`@V{N}`) are temporal — each `put` adds one
+- **Parts** (`@P{N}`) are structural — each `analyze` replaces all parts
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `-t`, `--tag KEY` | Guidance tag keys (repeatable). Fetches `.tag/KEY` descriptions to guide decomposition |
+| `--foreground`, `--fg` | Run in foreground and wait for results (default: background) |
+| `-s`, `--store PATH` | Override store directory |
+
+## Background processing
+
+By default, `analyze` runs in the background, serialized with other ML work
+(summarization, embedding). Use `--fg` to wait for results:
+
+```bash
+keep analyze doc:1                    # Returns immediately, runs in background
+keep analyze doc:1 --fg               # Waits for completion
+```
+
+Background tasks are processed by the same queue as `process-pending` summaries.
+
+## Part addressing
+
+Append `@P{N}` to any ID to access a specific part:
+
+```bash
+keep get "doc:1@P{1}"           # Part 1
+keep get "doc:1@P{3}"           # Part 3
+```
+
+Parts include prev/next navigation:
+```yaml
+---
+id: doc:1@P{2}
+tags: {topic: analysis}
+prev:
+  - @P{1}
+next:
+  - @P{3}
+---
+Detailed analysis of the main argument...
+```
+
+## Parts in get output
+
+When a document has parts, `keep get` shows a parts manifest:
+
+```yaml
+---
+id: doc:1
+similar:
+  - doc:2 (0.85) 2026-01-14 Related document...
+parts:
+  - @P{1} Introduction and overview of the topic
+  - @P{2} Detailed analysis of the main argument
+  - @P{3} Conclusions and future directions
+prev:
+  - @V{1} 2026-01-13 Previous summary...
+---
+Document summary here...
+```
+
+## Parts in search results
+
+Parts have their own embeddings and appear naturally in `find` results:
+
+```bash
+keep find "main argument"
+# doc:1@P{2}  2026-01-14 Detailed analysis of the main argument...
+```
+
+## Re-analysis
+
+Running `analyze` again replaces all previous parts:
+
+```bash
+keep analyze doc:1                    # Creates parts
+keep analyze doc:1 -t topic           # Re-analyze with guidance — replaces all parts
+```
+
+## Guidance tags
+
+Tag keys passed with `-t` fetch the corresponding `.tag/KEY` system documents
+(e.g., `.tag/topic`, `.tag/type`). These descriptions tell the LLM what each
+tag means and what values are appropriate, producing better decomposition and
+more consistent tagging — even with smaller models.
+
+```bash
+keep analyze doc:1 -t topic -t type   # Guided by tag descriptions
+```
+
+## Python API
+
+```python
+kp = Keeper()
+
+# Analyze
+parts = kp.analyze("doc:1")
+parts = kp.analyze("doc:1", tags=["topic", "type"])
+
+# Access parts
+part = kp.get_part("doc:1", 1)        # Returns Item
+parts = kp.list_parts("doc:1")        # Returns list[PartInfo]
+```
+
+## See Also
+
+- [VERSIONING.md](VERSIONING.md) — Versions (temporal) vs parts (structural)
+- [KEEP-GET.md](KEEP-GET.md) — Retrieving items and parts
+- [KEEP-FIND.md](KEEP-FIND.md) — Search results include parts
+- [REFERENCE.md](REFERENCE.md) — Quick reference index

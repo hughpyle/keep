@@ -20,7 +20,8 @@ keep find --id ID                     # Find items similar to an existing item
 | `-t`, `--tag KEY=VALUE` | Filter by tag (repeatable, AND logic) |
 | `-n`, `--limit N` | Maximum results (default 10) |
 | `--since DURATION` | Only items updated since (see time filtering below) |
-| `--history` | Include archived versions of matching items |
+| `-H`, `--history` | Include archived versions of matching items |
+| `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
 | `-s`, `--store PATH` | Override store directory |
 
 ## Semantic vs full-text search

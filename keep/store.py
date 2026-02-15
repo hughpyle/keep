@@ -219,6 +219,78 @@ class ChromaStore:
             metadatas=[self._tags_to_metadata(versioned_tags)],
         )
 
+    def upsert_part(
+        self,
+        collection: str,
+        id: str,
+        part_num: int,
+        embedding: list[float],
+        summary: str,
+        tags: dict[str, str],
+    ) -> None:
+        """
+        Store a document part with a part-numbered ID.
+
+        The part ID format is: {id}@p{part_num}
+        Metadata includes _part_num and _base_id for filtering/navigation.
+
+        Args:
+            collection: Collection name
+            id: Base item identifier (not part-numbered)
+            part_num: Part number (1-indexed)
+            embedding: Vector embedding
+            summary: Human-readable summary of the part
+            tags: All tags for this part
+        """
+        if self._embedding_dimension is None:
+            self._embedding_dimension = len(embedding)
+        elif len(embedding) != self._embedding_dimension:
+            raise ValueError(
+                f"Embedding dimension mismatch: expected {self._embedding_dimension}, "
+                f"got {len(embedding)}"
+            )
+
+        coll = self._get_collection(collection)
+
+        # Part ID format
+        part_id = f"{id}@p{part_num}"
+
+        # Add part metadata
+        part_tags = dict(tags)
+        part_tags["_part_num"] = str(part_num)
+        part_tags["_base_id"] = id
+
+        coll.upsert(
+            ids=[part_id],
+            embeddings=[embedding],
+            documents=[summary],
+            metadatas=[self._tags_to_metadata(part_tags)],
+        )
+
+    def delete_parts(self, collection: str, id: str) -> int:
+        """
+        Delete all parts for a document from the vector store.
+
+        Args:
+            collection: Collection name
+            id: Base item identifier
+
+        Returns:
+            Number of parts deleted
+        """
+        coll = self._get_collection(collection)
+        try:
+            parts = coll.get(
+                where={"_base_id": id},
+                include=[],
+            )
+            part_ids = [pid for pid in parts["ids"] if "@p" in pid]
+            if part_ids:
+                coll.delete(ids=part_ids)
+            return len(part_ids)
+        except ValueError:
+            return 0  # No parts exist
+
     def get_content_hash(self, collection: str, id: str) -> Optional[str]:
         """
         Get the content hash of an existing item.
@@ -263,17 +335,17 @@ class ChromaStore:
         coll.delete(ids=[id])
 
         if delete_versions:
-            # Delete all versioned copies
-            # Query by _base_id metadata to find all versions
+            # Delete all versioned copies and parts
+            # Query by _base_id metadata to find all versions (@v{N}) and parts (@p{N})
             try:
-                versions = coll.get(
+                related = coll.get(
                     where={"_base_id": id},
                     include=[],
                 )
-                if versions["ids"]:
-                    coll.delete(ids=versions["ids"])
+                if related["ids"]:
+                    coll.delete(ids=related["ids"])
             except ValueError:
-                pass  # Metadata filter may fail if no versions exist
+                pass  # Metadata filter may fail if no related entries exist
 
         return True
 

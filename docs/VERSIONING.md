@@ -105,8 +105,20 @@ kp.list_versions(id)            # All archived versions (newest first)
 
 See [PYTHON-API.md](PYTHON-API.md) for complete Python API reference.
 
+## Parts vs versions
+
+Versions and parts are complementary dimensions:
+- **Versions** (`@V{N}`) are temporal — each `put` adds a version
+- **Parts** (`@P{N}`) are structural — `analyze` decomposes content into sections
+
+Versions accumulate (each one happened). Parts replace (each `analyze` produces
+a fresh decomposition). Both use tag-based metadata and appear in search results.
+
+See [KEEP-ANALYZE.md](KEEP-ANALYZE.md) for details on structural decomposition.
+
 ## See Also
 
 - [KEEP-GET.md](KEEP-GET.md) — Retrieving items and versions
 - [KEEP-NOW.md](KEEP-NOW.md) — Nowdoc version history
+- [KEEP-ANALYZE.md](KEEP-ANALYZE.md) — Structural decomposition into parts
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

@@ -20,7 +20,9 @@ keep list --sort accessed             # Sort by last access time
 | `-T`, `--tags=KEY` | List values for a specific tag key |
 | `--sort ORDER` | Sort by `updated` (default) or `accessed` |
 | `--since DURATION` | Only items updated since (ISO duration or date) |
-| `--history` | Include archived versions |
+| `-H`, `--history` | Include archived versions |
+| `-P`, `--parts` | Include structural parts (from `analyze`) |
+| `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
 | `-s`, `--store PATH` | Override store directory |
 
 ## Tag filtering
@@ -50,10 +52,11 @@ keep list --since PT1H               # Last hour
 keep list --since 2026-01-15         # Since specific date
 ```
 
-## Including versions
+## Including versions and parts
 
 ```bash
 keep list --history                   # Include archived versions
+keep list --parts                     # Include structural parts (from analyze)
 ```
 
 ## Pipe composition

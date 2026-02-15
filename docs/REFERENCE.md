@@ -15,10 +15,13 @@
 | `keep list` | List recent items, filter by tags | [KEEP-LIST.md](KEEP-LIST.md) |
 | `keep config` | Show configuration and paths | [KEEP-CONFIG.md](KEEP-CONFIG.md) |
 | `keep move` | Move versions into a named item (`-t` or `--only` required) | [KEEP-MOVE.md](KEEP-MOVE.md) |
+| `keep analyze` | Decompose a note into structural parts | [KEEP-ANALYZE.md](KEEP-ANALYZE.md) |
 | `keep reflect` | Structured reflection practice | [KEEP-NOW.md](KEEP-NOW.md#keep-reflect) |
 | `keep del` | Remove item or revert to previous version | — |
 | `keep tag-update` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
+| `keep collections` | List all collections in the store | — |
 | `keep reindex` | Rebuild search index | — |
+| `keep process-pending` | Process pending summaries from lazy indexing | — |
 
 ## Global Flags
 
@@ -71,6 +74,7 @@ Document summary here...
 ```
 
 Version numbers are **offsets**: @V{0} = current, @V{1} = previous, @V{2} = two versions ago.
+Part numbers are **1-indexed**: @P{1} = first part, @P{2} = second part, etc.
 
 **Output width:** Summaries are truncated to fit the terminal. When stdout is not a TTY (e.g., piped through hooks), output uses 200 columns for wider summaries.
 
@@ -97,16 +101,21 @@ keep reflect                          # Structured reflection practice
 keep move "name" -t project=foo       # Move matching versions from now
 keep move "name" --only               # Move just the current version
 keep move "name" --from "source" -t X # Reorganize between items
+keep move "name" --only --analyze     # Move + decompose into parts
 
 # Add or update
 keep put "inline text" -t topic=auth  # Text mode
 keep put file:///path/to/doc.pdf      # URI mode
+keep put /path/to/folder/             # Directory mode
 keep put "note" --suggest-tags        # Show tag suggestions
+keep put doc.pdf --analyze            # Index + decompose into parts
 
 # Retrieve
 keep get ID                           # Current version
 keep get ID -V 1                      # Previous version
+keep get "ID@P{1}"                    # Part 1 (from analyze)
 keep get ID --history                 # List all versions
+keep get ID --parts                   # List structural parts
 
 # Search
 keep find "query"                     # Semantic search
@@ -123,9 +132,17 @@ keep tag-update ID --tag key=value   # Add/update tag
 keep tag-update ID --remove key      # Remove tag
 keep del ID                          # Remove item or revert to previous version
 
+# Analyze
+keep analyze ID                      # Decompose into parts (background)
+keep analyze ID -t topic -t type     # With guidance tags
+keep analyze ID --fg                 # Wait for completion
+
 # Maintenance
 keep reindex                         # Rebuild search index
 keep reindex -y                      # Skip confirmation
+keep collections                     # List all collections
+keep process-pending                 # Process pending summaries
+keep process-pending --all           # Process all pending
 ```
 
 ## Python API

@@ -187,6 +187,23 @@ class MockChromaStore:
         versioned_id = f"{id}@v{version}"
         self.upsert(collection, versioned_id, embedding, summary, tags)
 
+    def upsert_part(self, collection: str, id: str, part_num: int,
+                    embedding: list[float], summary: str,
+                    tags: dict[str, str]) -> None:
+        part_id = f"{id}@p{part_num}"
+        part_tags = dict(tags)
+        part_tags["_part_num"] = str(part_num)
+        part_tags["_base_id"] = id
+        self.upsert(collection, part_id, embedding, summary, part_tags)
+
+    def delete_parts(self, collection: str, id: str) -> int:
+        if collection not in self._data:
+            return 0
+        part_ids = [k for k in self._data[collection] if k.startswith(f"{id}@p")]
+        for pid in part_ids:
+            del self._data[collection][pid]
+        return len(part_ids)
+
     def delete_entries(self, collection: str, ids: list[str]) -> None:
         if collection in self._data:
             for id in ids:
@@ -220,6 +237,7 @@ class MockDocumentStore:
 
     def __init__(self, db_path: Path):
         self._data: dict[str, dict] = {}  # collection -> {id -> record}
+        self._parts: dict[str, list] = {}  # _parts:{collection}:{id} -> [PartInfo]
 
     def upsert(self, collection: str, id: str, summary: str, tags: dict,
                content_hash: str = None) -> tuple["DocumentRecord", bool]:
@@ -412,6 +430,34 @@ class MockDocumentStore:
 
     def touch_many(self, collection: str, ids: list[str]) -> None:
         pass
+
+    # -- Part methods --
+
+    def upsert_parts(self, collection: str, id: str, parts: list) -> int:
+        key = f"_parts:{collection}:{id}"
+        self._parts[key] = parts
+        return len(parts)
+
+    def get_part(self, collection: str, id: str, part_num: int):
+        key = f"_parts:{collection}:{id}"
+        parts = self._parts.get(key, [])
+        for p in parts:
+            if p.part_num == part_num:
+                return p
+        return None
+
+    def list_parts(self, collection: str, id: str) -> list:
+        key = f"_parts:{collection}:{id}"
+        return sorted(self._parts.get(key, []), key=lambda p: p.part_num)
+
+    def part_count(self, collection: str, id: str) -> int:
+        key = f"_parts:{collection}:{id}"
+        return len(self._parts.get(key, []))
+
+    def delete_parts(self, collection: str, id: str) -> int:
+        key = f"_parts:{collection}:{id}"
+        parts = self._parts.pop(key, [])
+        return len(parts)
 
     def close(self) -> None:
         self._data.clear()
