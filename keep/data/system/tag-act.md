@@ -2,6 +2,7 @@
 tags:
   category: system
   context: tag-description
+  _constrained: "true"
 ---
 # Tag: `act` — Speech-Act Category
 

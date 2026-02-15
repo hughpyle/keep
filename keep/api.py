@@ -174,8 +174,8 @@ from .providers.base import (
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import PartInfo, VersionInfo
 from .types import (
-    Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, parse_utc_timestamp,
-    validate_tag_key, validate_id, MAX_TAG_VALUE_LENGTH,
+    Item, casefold_tags, filter_non_system_tags, SYSTEM_TAG_PREFIX,
+    parse_utc_timestamp, validate_tag_key, validate_id, MAX_TAG_VALUE_LENGTH,
 )
 
 
@@ -234,7 +234,19 @@ SYSTEM_DOC_IDS = {
     "domains.md": ".domains",
     "library.md": ".library",
     "tag-act.md": ".tag/act",
+    "tag-act-commitment.md": ".tag/act/commitment",
+    "tag-act-request.md": ".tag/act/request",
+    "tag-act-offer.md": ".tag/act/offer",
+    "tag-act-assertion.md": ".tag/act/assertion",
+    "tag-act-assessment.md": ".tag/act/assessment",
+    "tag-act-declaration.md": ".tag/act/declaration",
     "tag-status.md": ".tag/status",
+    "tag-status-open.md": ".tag/status/open",
+    "tag-status-blocked.md": ".tag/status/blocked",
+    "tag-status-fulfilled.md": ".tag/status/fulfilled",
+    "tag-status-declined.md": ".tag/status/declined",
+    "tag-status-withdrawn.md": ".tag/status/withdrawn",
+    "tag-status-renegotiated.md": ".tag/status/renegotiated",
     "tag-project.md": ".tag/project",
     "tag-topic.md": ".tag/topic",
     "tag-type.md": ".tag/type",
@@ -1447,6 +1459,45 @@ class Keeper:
         return "default"
     
     # -------------------------------------------------------------------------
+    # Constrained Tag Validation
+    # -------------------------------------------------------------------------
+
+    def _validate_constrained_tags(self, tags: dict[str, str]) -> None:
+        """Check constrained tag values against sub-doc existence.
+
+        For each user tag, looks up `.tag/KEY`. If that doc exists and has
+        `_constrained=true`, checks that `.tag/KEY/VALUE` exists. Raises
+        ValueError with valid values listed if not.
+        """
+        doc_coll = self._resolve_doc_collection()
+        for key, value in tags.items():
+            if key.startswith(SYSTEM_TAG_PREFIX):
+                continue
+            if value == "":
+                continue  # deletion, no validation needed
+            parent_id = f".tag/{key}"
+            parent = self._document_store.get(doc_coll, parent_id)
+            if parent is None:
+                continue  # no tag doc → unconstrained
+            if parent.tags.get("_constrained") != "true":
+                continue  # tag doc exists but not constrained
+            # Check sub-doc existence
+            value_id = f".tag/{key}/{value}"
+            if not self._document_store.get(doc_coll, value_id):
+                valid = self._list_constrained_values(key)
+                raise ValueError(
+                    f"Invalid value for constrained tag '{key}': {value!r}. "
+                    f"Valid values: {', '.join(sorted(valid))}"
+                )
+
+    def _list_constrained_values(self, key: str) -> list[str]:
+        """List valid values for a constrained tag by finding sub-docs."""
+        doc_coll = self._resolve_doc_collection()
+        prefix = f".tag/{key}/"
+        docs = self._document_store.query_by_id_prefix(doc_coll, prefix)
+        return [doc.id[len(prefix):] for doc in docs]
+
+    # -------------------------------------------------------------------------
     # Write Operations
     # -------------------------------------------------------------------------
 
@@ -1485,13 +1536,16 @@ class Keeper:
         merged_tags = {**existing_tags}
 
         if self._config.default_tags:
-            merged_tags.update(self._config.default_tags)
+            merged_tags.update(casefold_tags(self._config.default_tags))
 
-        env_tags = _get_env_tags()
+        env_tags = casefold_tags(_get_env_tags())
         merged_tags.update(env_tags)
 
         if tags:
-            merged_tags.update(filter_non_system_tags(tags))
+            user_tags = casefold_tags(filter_non_system_tags(tags))
+            merged_tags.update(user_tags)
+            # Validate constrained tags (only user-provided, not existing/env)
+            self._validate_constrained_tags(user_tags)
 
         merged_tags.update(system_tags)
 
@@ -1630,11 +1684,18 @@ class Keeper:
         # Validate inputs
         validate_id(id)
         if tags:
+            # Casefold user tags on write
+            tags = casefold_tags(tags)
             for key, value in tags.items():
                 if not key.startswith(SYSTEM_TAG_PREFIX):
                     validate_tag_key(key)
                     if len(value) > MAX_TAG_VALUE_LENGTH:
                         raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
+            # Validate constrained tags
+            self._validate_constrained_tags(
+                {k: v for k, v in tags.items()
+                 if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
+            )
 
         doc = self._document_provider.fetch(id)
 
@@ -2236,6 +2297,13 @@ class Keeper:
             since: Only include items updated since (ISO duration like P3D, or date)
             **tags: Additional tag filters as keyword arguments
         """
+        # Casefold query keys/values to match casefolded storage
+        if key is not None:
+            key = key.casefold()
+        if value is not None:
+            value = value.casefold()
+        tags = {k.casefold(): v.casefold() for k, v in tags.items()}
+
         # Validate tag keys
         if key is not None:
             validate_tag_key(key)
@@ -2836,11 +2904,18 @@ class Keeper:
         # Validate inputs
         validate_id(id)
         if tags:
+            # Casefold user tags on write
+            tags = casefold_tags(tags)
             for key, value in tags.items():
                 if not key.startswith(SYSTEM_TAG_PREFIX):
                     validate_tag_key(key)
                     if len(value) > MAX_TAG_VALUE_LENGTH:
                         raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
+            # Validate constrained tags
+            self._validate_constrained_tags(
+                {k: v for k, v in tags.items()
+                 if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
+            )
 
         # Get existing item (prefer document store, fall back to ChromaDB)
         existing = self.get(id)

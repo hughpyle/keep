@@ -2,6 +2,7 @@
 tags:
   category: system
   context: tag-description
+  _constrained: "true"
 ---
 # Tag: `status` — Lifecycle State
 
@@ -20,9 +21,15 @@ The `status` tag tracks the lifecycle state of speech acts — primarily commitm
 
 The normal flow: `open` → `fulfilled`. `blocked` is a sub-state of open — the commitment still exists but progress is gated on an external dependency. The other transitions handle exceptions — declining, withdrawing, or renegotiating.
 
-## Domain-specific status values
+## Adding custom status values
 
-The `status` tag is also used in domain contexts with different values. For example, in software development: `working`, `broken`, `needs_review`, `deprecated`. These coexist naturally — the value itself disambiguates. An item with `status=open` is a speech-act lifecycle state; an item with `status=broken` is a domain state.
+The `status` tag is constrained — only values with a sub-doc at `.tag/status/VALUE` are accepted. To add domain-specific values (e.g. `working`, `broken`, `needs_review`), create a sub-doc:
+
+```bash
+keep remember "Active work in progress on this item." --id .tag/status/working
+```
+
+The sub-doc's existence makes the value valid. Its content serves as documentation.
 
 ## Examples
 

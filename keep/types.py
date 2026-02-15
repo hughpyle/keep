@@ -74,10 +74,22 @@ def validate_id(id: str) -> None:
         raise ValueError(f"ID must be 1-{MAX_ID_LENGTH} characters")
 
 
+def casefold_tags(tags: dict[str, str]) -> dict[str, str]:
+    """Casefold tag keys and values for case-insensitive storage.
+
+    System tags (prefixed with '_') are left untouched.
+    """
+    return {
+        (k.casefold() if not k.startswith(SYSTEM_TAG_PREFIX) else k):
+        (v.casefold() if not k.startswith(SYSTEM_TAG_PREFIX) else v)
+        for k, v in tags.items()
+    }
+
+
 def filter_non_system_tags(tags: dict[str, str]) -> dict[str, str]:
     """
     Filter out any system tags (those starting with '_').
-    
+
     Use this to ensure source tags and derived tags cannot
     overwrite system-managed values.
     """
