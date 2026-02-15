@@ -384,18 +384,18 @@ class TestApiCliEquivalence:
         assert "semantic" in result.stdout.lower() or "similar" in result.stdout.lower()
         # The CLI find uses mem.find(query, limit=limit)
     
-    def test_put_maps_to_api_update(self, cli):
-        """'put' command maps to Keeper.update()."""
+    def test_put_maps_to_api_put(self, cli):
+        """'put' command maps to Keeper.put()."""
         result = cli("put", "--help")
         assert "URI" in result.stdout or "document" in result.stdout.lower()
-        # The CLI put uses mem.update(id, source_tags=...)
+        # The CLI put uses kp.put(uri=...)
 
-    def test_put_text_mode_maps_to_api_remember(self, cli):
-        """'put' text mode (no ://) maps to Keeper.remember()."""
+    def test_put_text_mode_maps_to_api_put(self, cli):
+        """'put' text mode (no ://) maps to Keeper.put()."""
         result = cli("put", "--help")
         # The help should mention text content mode
         assert "text" in result.stdout.lower() or "content" in result.stdout.lower()
-        # The CLI put with text calls kp.remember() internally
+        # The CLI put with text calls kp.put() internally
     
     def test_get_maps_to_api_get(self, cli):
         """'get' command maps to Keeper.get()."""

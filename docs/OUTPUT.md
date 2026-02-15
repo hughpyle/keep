@@ -18,11 +18,15 @@ meta/todo:                                                # 5. Meta sections
   - %b7c8d9e0 update auth docs for new flow
 meta/learnings:
   - %f1a2b3c4 Token refresh needs clock sync
-prev:                                                     # 6. Version navigation
+parts:                                                    # 6. Parts (structural)
+  - @P{1}  OAuth2 Flow Design (§1, pp.1-7)
+  - @P{2}  Token Storage Strategy (§2, pp.8-13)
+  - @P{3}  Session Management (§3, pp.14-18)
+prev:                                                     # 7. Version navigation
   - @V{1} 2026-01-14 Previous version of this item...
   - @V{2} 2026-01-13 Older version...
 ---
-I'll fix the auth bug by Friday                           # 7. Content
+I'll fix the auth bug by Friday                           # 8. Content
 ```
 
 ## Sections
@@ -92,7 +96,22 @@ These are dynamically resolved — the same item shows different meta sections d
 
 See [META-DOCS.md](META-DOCS.md) for how meta-docs work and how to create custom ones.
 
-### 6. `prev:` / `next:` — Version navigation
+### 6. `parts:` — Structural decomposition
+
+Sections of a document identified by `keep analyze`. Each line:
+
+```
+  - @P{N}  Section summary...
+```
+
+- **`@P{N}`** — part number (1-indexed). Use with `keep get "ID@P{1}"` to view a specific part.
+- Parts have their own tags, embeddings, and similar items — they appear independently in search results.
+- Only appears when a note has been analyzed. View all parts with `keep get ID --parts`.
+- Parts are the structural counterpart to versions: versions are temporal (`@V{N}`), parts are spatial (`@P{N}`).
+
+See [KEEP-ANALYZE.md](KEEP-ANALYZE.md) for how to decompose documents into parts.
+
+### 7. `prev:` / `next:` — Version navigation
 
 Navigate through the item's version history.
 
@@ -108,7 +127,7 @@ prev:
 
 See [VERSIONING.md](VERSIONING.md) for full versioning details.
 
-### 7. Content (after `---`)
+### 8. Content (after `---`)
 
 The item's summary, below the closing `---`. For short content this is the full text; for long documents it's a generated summary.
 

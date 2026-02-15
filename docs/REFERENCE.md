@@ -152,13 +152,13 @@ See [PYTHON-API.md](PYTHON-API.md) for complete Python API reference.
 ```python
 from keep import Keeper
 kp = Keeper()
-kp.remember("note", tags={"project": "myapp"})
+kp.put("note", tags={"project": "myapp"})
 results = kp.find("authentication", limit=5)
 ```
 
 ## When to Use
-- `put` / `update()` — when referencing any file/URL worth remembering
-- `put` / `remember()` — capture conversation insights, decisions, notes
+- `put` / `put(uri=...)` — when referencing any file/URL worth remembering
+- `put` / `put("text")` — capture conversation insights, decisions, notes
 - `find` — before searching filesystem; may already be indexed
 - `find --since` — filter to recent items when recency matters
 

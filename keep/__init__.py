@@ -8,7 +8,7 @@ Quick Start:
     from keep import Keeper
 
     kp = Keeper()
-    kp.update("file:///path/to/document.md", source_tags={"project": "myproject"})
+    kp.put(uri="file:///path/to/document.md", tags={"project": "myproject"})
     results = kp.find("something similar to this query")
 
 CLI Usage:
@@ -37,7 +37,7 @@ from .protocol import (
 )
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, INTERNAL_TAGS
 
-__version__ = "0.41.0"
+__version__ = "0.42.0"
 __all__ = [
     "Keeper",
     "Item",

@@ -2,8 +2,7 @@
 Core API for reflective memory.
 
 This is the minimal working implementation focused on:
-- update(): fetch → embed → summarize → store
-- remember(): embed → summarize → store  
+- put(): fetch/embed → summarize → store
 - find(): embed query → search
 - get(): retrieve by ID
 """
@@ -696,7 +695,7 @@ class Keeper:
 
     Example:
         kp = Keeper()
-        kp.update("file:///path/to/readme.md")
+        kp.put(uri="file:///path/to/readme.md")
         results = kp.find("installation instructions")
     """
     
@@ -931,7 +930,7 @@ class Keeper:
                     filename = Path(doc.id.replace("file://", "")).name
                     new_id = filename_to_id.get(filename)
                     if new_id and not self.exists(new_id):
-                        self.remember(doc.summary, id=new_id, tags=doc.tags)
+                        self.put(doc.summary, id=new_id, tags=doc.tags)
                         self.delete(doc.id)
                         stats["migrated"] += 1
                         logger.info("Migrated system doc: %s -> %s", doc.id, new_id)
@@ -948,7 +947,7 @@ class Keeper:
             try:
                 old_item = self.get(old_id)
                 if old_item and not self.exists(new_id):
-                    self.remember(old_item.summary, id=new_id, tags=old_item.tags)
+                    self.put(old_item.summary, id=new_id, tags=old_item.tags)
                     self.delete(old_id)
                     stats["migrated"] += 1
                     logger.info("Renamed ID: %s -> %s", old_id, new_id)
@@ -1204,7 +1203,7 @@ class Keeper:
 
         # Get similar items (broader search, we'll filter by tags)
         try:
-            similar = self.find_similar(id, limit=20)
+            similar = self.find(similar_to=id, limit=20)
         except KeyError:
             # Item not found yet (first indexing) - no context available
             return None
@@ -1510,7 +1509,7 @@ class Keeper:
         summary: Optional[str] = None,
         system_tags: dict[str, str],
     ) -> Item:
-        """Core upsert logic shared by update() and remember()."""
+        """Core upsert logic used by put()."""
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
@@ -1638,161 +1637,118 @@ class Keeper:
 
         return _record_to_item(result)
 
-    def update(
+    def put(
         self,
-        id: str,
-        tags: Optional[dict[str, str]] = None,
+        content: Optional[str] = None,
         *,
+        uri: Optional[str] = None,
+        id: Optional[str] = None,
         summary: Optional[str] = None,
-        source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
+        tags: Optional[dict[str, str]] = None,
     ) -> Item:
         """
-        Insert or update a document in the store.
+        Store content in the memory.
 
-        Fetches the document, generates embeddings and summary, then stores it.
+        Provide either inline content or a URI to fetch — not both.
 
-        **Summary behavior:**
-        - If summary is provided, use it (skips auto-summarization)
-        - For large content, summarization is async (truncated placeholder
-          stored immediately, real summary generated in background)
+        **Inline mode** (content provided):
+        - Stores text directly. Auto-generates an ID if not provided.
+        - Short content is used verbatim as summary. Large content gets
+          async summarization (truncated placeholder stored immediately).
 
-        **Update behavior:**
-        - Summary: Replaced with user-provided or newly generated summary
-        - Tags: Merged - existing tags are preserved, new tags override
-          on key collision. System tags (prefixed with _) are always managed by
-          the system.
+        **URI mode** (uri provided):
+        - Fetches the document, extracts text, generates embeddings.
+        - Supports file://, http://, https:// URIs.
+        - Non-text content (images, audio, PDF) gets media description.
+
+        **Tag and summary behavior:**
+        - Tags are merged with existing tags (new override on collision).
+        - System tags (_prefixed) are managed automatically.
+        - If summary is provided, it's used directly (skips auto-summarization).
 
         Args:
-            id: URI of document to fetch and index
+            content: Inline text to store
+            uri: URI of document to fetch and index
+            id: Custom ID (auto-generated for inline content if None)
+            summary: User-provided summary (skips auto-summarization)
             tags: User-provided tags to merge with existing tags
-            summary: User-provided summary (skips auto-summarization if given)
-            source_tags: Deprecated alias for 'tags'
 
         Returns:
-            The stored Item with merged tags and new summary
+            The stored Item with merged tags and summary
         """
-        if source_tags is not None:
-            import warnings
-            warnings.warn(
-                "source_tags is deprecated, use 'tags' instead",
-                DeprecationWarning,
-                stacklevel=2
-            )
-            if tags is None:
-                tags = source_tags
+        if content is not None and uri is not None:
+            raise ValueError("Provide content or uri, not both")
+        if content is None and uri is None:
+            raise ValueError("Either content or uri is required")
 
-        # Validate inputs
-        validate_id(id)
+        # Validate and normalize tags (shared by both URI and inline paths)
         if tags:
-            # Casefold user tags on write
             tags = casefold_tags(tags)
             for key, value in tags.items():
                 if not key.startswith(SYSTEM_TAG_PREFIX):
                     validate_tag_key(key)
                     if len(value) > MAX_TAG_VALUE_LENGTH:
                         raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
-            # Validate constrained tags
             self._validate_constrained_tags(
                 {k: v for k, v in tags.items()
                  if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
             )
 
-        doc = self._document_provider.fetch(id)
+        if uri is not None:
+            # URI mode: fetch document, extract content, store
+            validate_id(uri)
 
-        # Merge provider-extracted tags with user tags (user wins on collision)
-        merged_tags: dict[str, str] | None = None
-        if doc.tags or tags:
-            merged_tags = {}
-            if doc.tags:
-                merged_tags.update(doc.tags)
-            if tags:
-                merged_tags.update(tags)  # User tags override provider tags
+            doc = self._document_provider.fetch(uri)
 
-        # Media description: enrich non-text content with model-based description
-        if doc.content_type and not doc.content_type.startswith("text/"):
-            describer = self._get_media_describer()
-            if describer:
-                try:
-                    file_path = id.removeprefix("file://") if id.startswith("file://") else id
-                    description = describer.describe(file_path, doc.content_type)
-                    if description:
-                        doc = Document(
-                            uri=doc.uri,
-                            content=doc.content + "\n\nDescription:\n" + description,
-                            content_type=doc.content_type,
-                            metadata=doc.metadata,
-                            tags=doc.tags,
-                        )
-                        logger.info("Added media description for %s (%d chars)",
-                                    id, len(description))
-                except Exception as e:
-                    logger.warning("Media description failed for %s: %s", id, e)
+            # Merge provider-extracted tags with user tags (user wins on collision)
+            merged_tags: dict[str, str] | None = None
+            if doc.tags or tags:
+                merged_tags = {}
+                if doc.tags:
+                    merged_tags.update(doc.tags)
+                if tags:
+                    merged_tags.update(tags)
 
-        system_tags = {"_source": "uri"}
-        if doc.content_type:
-            system_tags["_content_type"] = doc.content_type
+            # Media description: enrich non-text content
+            if doc.content_type and not doc.content_type.startswith("text/"):
+                describer = self._get_media_describer()
+                if describer:
+                    try:
+                        file_path = uri.removeprefix("file://") if uri.startswith("file://") else uri
+                        description = describer.describe(file_path, doc.content_type)
+                        if description:
+                            doc = Document(
+                                uri=doc.uri,
+                                content=doc.content + "\n\nDescription:\n" + description,
+                                content_type=doc.content_type,
+                                metadata=doc.metadata,
+                                tags=doc.tags,
+                            )
+                            logger.info("Added media description for %s (%d chars)",
+                                        uri, len(description))
+                    except Exception as e:
+                        logger.warning("Media description failed for %s: %s", uri, e)
 
-        return self._upsert(
-            id, doc.content,
-            tags=merged_tags, summary=summary,
-            system_tags=system_tags,
-        )
+            system_tags = {"_source": "uri"}
+            if doc.content_type:
+                system_tags["_content_type"] = doc.content_type
 
-    def remember(
-        self,
-        content: str,
-        *,
-        id: Optional[str] = None,
-        summary: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
-        source_tags: Optional[dict[str, str]] = None,  # Deprecated alias
-    ) -> Item:
-        """
-        Store inline content directly (without fetching from a URI).
-
-        Use for conversation snippets, notes, insights.
-
-        **Smart summary behavior:**
-        - If summary is provided, use it (skips auto-summarization)
-        - If content is short (≤ max_summary_length), use content verbatim
-        - For large content, summarization is async (truncated placeholder
-          stored immediately, real summary generated in background)
-
-        **Update behavior (when id already exists):**
-        - Summary: Replaced with user-provided, content, or generated summary
-        - Tags: Merged - existing tags preserved, new tags override
-          on key collision. System tags (prefixed with _) are always managed by
-          the system.
-
-        Args:
-            content: Text to store and index
-            id: Optional custom ID (auto-generated if None)
-            summary: User-provided summary (skips auto-summarization if given)
-            tags: User-provided tags to merge with existing tags
-            source_tags: Deprecated alias for 'tags'
-
-        Returns:
-            The stored Item with merged tags and new summary
-        """
-        if source_tags is not None:
-            import warnings
-            warnings.warn(
-                "source_tags is deprecated, use 'tags' instead",
-                DeprecationWarning,
-                stacklevel=2
+            return self._upsert(
+                uri, doc.content,
+                tags=merged_tags, summary=summary,
+                system_tags=system_tags,
             )
-            if tags is None:
-                tags = source_tags
+        else:
+            # Inline mode: store content directly
+            if id is None:
+                timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
+                id = f"mem:{timestamp}"
 
-        if id is None:
-            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
-            id = f"mem:{timestamp}"
-
-        return self._upsert(
-            id, content,
-            tags=tags, summary=summary,
-            system_tags={"_source": "inline"},
-        )
+            return self._upsert(
+                id, content,
+                tags=tags, summary=summary,
+                system_tags={"_source": "inline"},
+            )
 
     # -------------------------------------------------------------------------
     # Query Operations
@@ -1845,92 +1801,73 @@ class Keeper:
     
     def find(
         self,
-        query: str,
+        query: Optional[str] = None,
         *,
-        limit: int = 10,
-        since: Optional[str] = None,
-        include_hidden: bool = False,
-    ) -> list[Item]:
-        """
-        Find items using semantic similarity search.
-
-        Scores are adjusted by recency decay (ACT-R model) - older items
-        have reduced effective relevance unless recently accessed.
-
-        Args:
-            query: Search query text
-            limit: Maximum results to return
-            since: Only include items updated since (ISO duration like P3D, or date)
-            include_hidden: Include system notes (dot-prefix IDs)
-        """
-        chroma_coll = self._resolve_chroma_collection()
-        doc_coll = self._resolve_doc_collection()
-
-        # Embed query
-        embedding = self._get_embedding_provider().embed(query)
-
-        # Search (fetch extra to account for re-ranking, date filtering, hidden filtering)
-        fetch_limit = limit * 3 if self._decay_half_life_days > 0 else limit * 2
-        results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit)
-
-        # Convert to Items and apply decay
-        items = [r.to_item() for r in results]
-        items = self._apply_recency_decay(items)
-
-        # Apply filters
-        if since is not None:
-            items = _filter_by_date(items, since)
-        if not include_hidden:
-            items = [i for i in items if not _is_hidden(i)]
-
-        final = items[:limit]
-        # Touch accessed_at for returned items
-        if final:
-            self._document_store.touch_many(doc_coll, [i.id for i in final])
-        return final
-
-    def find_similar(
-        self,
-        id: str,
-        *,
+        similar_to: Optional[str] = None,
+        fulltext: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
         include_self: bool = False,
         include_hidden: bool = False,
     ) -> list[Item]:
         """
-        Find items similar to an existing item.
+        Find items by semantic similarity, full-text search, or similarity to an existing note.
+
+        Exactly one of `query` or `similar_to` must be provided.
 
         Args:
-            id: ID of item to find similar items for
+            query: Search query text (semantic by default, fulltext if fulltext=True)
+            similar_to: Find items similar to this note ID
+            fulltext: Use full-text search instead of semantic similarity (only with query)
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
-            include_self: Include the queried item in results
+            include_self: Include the queried item in results (only with similar_to)
             include_hidden: Include system notes (dot-prefix IDs)
         """
+        if query and similar_to:
+            raise ValueError("Specify either query or similar_to, not both")
+        if not query and not similar_to:
+            raise ValueError("Specify either query or similar_to")
+        if fulltext and similar_to:
+            raise ValueError("fulltext cannot be used with similar_to")
+
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
 
-        # Get the item's stored embedding from ChromaDB
-        item = self._store.get(chroma_coll, id)
-        if item is None:
-            raise KeyError(f"Item not found: {id}")
+        if similar_to:
+            # Similar-to mode: use stored embedding from existing item
+            item = self._store.get(chroma_coll, similar_to)
+            if item is None:
+                raise KeyError(f"Item not found: {similar_to}")
 
-        embedding = self._store.get_embedding(chroma_coll, id)
-        if embedding is None:
-            embedding = self._get_embedding_provider().embed(item.summary)
-        actual_limit = (limit + 1 if not include_self else limit) * 3
-        results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit)
+            embedding = self._store.get_embedding(chroma_coll, similar_to)
+            if embedding is None:
+                embedding = self._get_embedding_provider().embed(item.summary)
+            actual_limit = (limit + 1 if not include_self else limit) * 3
+            results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit)
 
-        # Filter self if needed
-        if not include_self:
-            results = [r for r in results if r.id != id]
+            if not include_self:
+                results = [r for r in results if r.id != similar_to]
 
-        # Convert to Items and apply decay
-        items = [r.to_item() for r in results]
-        items = self._apply_recency_decay(items)
+            items = [r.to_item() for r in results]
+            items = self._apply_recency_decay(items)
 
-        # Apply filters
+        elif fulltext:
+            # Full-text mode: text matching
+            fetch_limit = limit * 3
+            results = self._store.query_fulltext(chroma_coll, query, limit=fetch_limit)
+            items = [r.to_item() for r in results]
+
+        else:
+            # Semantic mode (default): embed query, search by similarity
+            embedding = self._get_embedding_provider().embed(query)
+            fetch_limit = limit * 3 if self._decay_half_life_days > 0 else limit * 2
+            results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit)
+
+            items = [r.to_item() for r in results]
+            items = self._apply_recency_decay(items)
+
+        # Apply common filters
         if since is not None:
             items = _filter_by_date(items, since)
         if not include_hidden:
@@ -2229,43 +2166,6 @@ class Keeper:
         # Sort by score descending
         candidates.sort(key=lambda x: x.score or 0.0, reverse=True)
         return candidates
-
-    def query_fulltext(
-        self,
-        query: str,
-        *,
-        limit: int = 10,
-        since: Optional[str] = None,
-        include_hidden: bool = False,
-    ) -> list[Item]:
-        """
-        Search item summaries using full-text search.
-
-        Args:
-            query: Text to search for in summaries
-            limit: Maximum results to return
-            since: Only include items updated since (ISO duration like P3D, or date)
-            include_hidden: Include system notes (dot-prefix IDs)
-        """
-        chroma_coll = self._resolve_chroma_collection()
-        doc_coll = self._resolve_doc_collection()
-
-        # Fetch extra when filtering
-        fetch_limit = limit * 3
-        results = self._store.query_fulltext(chroma_coll, query, limit=fetch_limit)
-        items = [r.to_item() for r in results]
-
-        # Apply filters
-        if since is not None:
-            items = _filter_by_date(items, since)
-        if not include_hidden:
-            items = [i for i in items if not _is_hidden(i)]
-
-        final = items[:limit]
-        # Touch accessed_at for returned items
-        if final:
-            self._document_store.touch_many(doc_coll, [i.id for i in final])
-        return final
 
     def query_tag(
         self,
@@ -2625,7 +2525,7 @@ class Keeper:
         """
         Set the current working intentions.
 
-        Updates the singleton intentions with new content. Uses remember()
+        Updates the singleton intentions with new content. Uses put()
         internally with the fixed NOWDOC_ID.
 
         Args:
@@ -2635,7 +2535,7 @@ class Keeper:
         Returns:
             The updated context Item
         """
-        return self.remember(content, id=NOWDOC_ID, tags=tags)
+        return self.put(content, id=NOWDOC_ID, tags=tags)
 
     def move(
         self,
@@ -2858,7 +2758,7 @@ class Keeper:
 
                 # Delete existing (if any) and create fresh
                 self.delete(new_id)
-                self.remember(content, id=new_id, tags=tags)
+                self.put(content, id=new_id, tags=tags)
                 self._document_store.upsert(
                     collection=doc_coll, id=new_id, summary=content,
                     tags=self._document_store.get(doc_coll, new_id).tags,

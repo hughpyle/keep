@@ -26,18 +26,11 @@ class KeeperProtocol(Protocol):
 
     # -- Write operations --
 
-    def update(
+    def put(
         self,
-        id: str,
-        tags: Optional[dict[str, str]] = None,
+        content: Optional[str] = None,
         *,
-        summary: Optional[str] = None,
-    ) -> Item: ...
-
-    def remember(
-        self,
-        content: str,
-        *,
+        uri: Optional[str] = None,
         id: Optional[str] = None,
         summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
@@ -69,7 +62,7 @@ class KeeperProtocol(Protocol):
         self,
         name: str,
         *,
-        source_id: str = ...,
+        source_id: str = "now",
         tags: Optional[dict[str, str]] = None,
         only_current: bool = False,
     ) -> Item: ...
@@ -78,19 +71,14 @@ class KeeperProtocol(Protocol):
 
     def find(
         self,
-        query: str,
+        query: Optional[str] = None,
         *,
-        limit: int = 10,
-        since: Optional[str] = None,
-    ) -> list[Item]: ...
-
-    def find_similar(
-        self,
-        id: str,
-        *,
+        similar_to: Optional[str] = None,
+        fulltext: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
         include_self: bool = False,
+        include_hidden: bool = False,
     ) -> list[Item]: ...
 
     def get_similar_for_display(
@@ -100,14 +88,6 @@ class KeeperProtocol(Protocol):
         limit: int = 3,
     ) -> list[Item]: ...
 
-    def query_fulltext(
-        self,
-        query: str,
-        *,
-        limit: int = 10,
-        since: Optional[str] = None,
-    ) -> list[Item]: ...
-
     def query_tag(
         self,
         key: Optional[str] = None,
@@ -115,6 +95,7 @@ class KeeperProtocol(Protocol):
         *,
         limit: int = 100,
         since: Optional[str] = None,
+        include_hidden: bool = False,
     ) -> list[Item]: ...
 
     def list_tags(
@@ -129,6 +110,16 @@ class KeeperProtocol(Protocol):
         limit_per_doc: int = 3,
     ) -> dict[str, list[Item]]: ...
 
+    def resolve_inline_meta(
+        self,
+        item_id: str,
+        queries: list[dict[str, str]],
+        context_keys: list[str] | None = None,
+        prereq_keys: list[str] | None = None,
+        *,
+        limit: int = 3,
+    ) -> list[Item]: ...
+
     def list_recent(
         self,
         limit: int = 10,
@@ -136,6 +127,7 @@ class KeeperProtocol(Protocol):
         since: Optional[str] = None,
         order_by: str = "updated",
         include_history: bool = False,
+        include_hidden: bool = False,
     ) -> list[Item]: ...
 
     # -- Direct access --

@@ -181,10 +181,10 @@ def _keeper_skip_migration(kp):
 
 
 class TestMediaIntegration:
-    """Test media description integration in Keeper.update()."""
+    """Test media description integration in Keeper.put()."""
 
-    def test_update_image_appends_description(self, mock_providers, tmp_path):
-        """When media describer is configured, image update appends description."""
+    def test_put_image_appends_description(self, mock_providers, tmp_path):
+        """When media describer is configured, image put appends description."""
         from keep.api import Keeper
 
         mock_doc = _make_mock_doc(
@@ -202,14 +202,14 @@ class TestMediaIntegration:
         _keeper_skip_migration(kp)
         kp._media_describer = mock_describer
 
-        item = kp.update("file:///test.jpg")
+        item = kp.put(uri="file:///test.jpg")
 
         assert "A sunset over mountains" in item.summary
         assert "Canon EOS R5" in item.summary
         mock_describer.describe.assert_called_once()
         kp.close()
 
-    def test_update_without_media_provider(self, mock_providers, tmp_path):
+    def test_put_without_media_provider(self, mock_providers, tmp_path):
         """Without media provider, image gets metadata-only content."""
         from keep.api import Keeper
 
@@ -222,11 +222,11 @@ class TestMediaIntegration:
         _keeper_skip_migration(kp)
         assert kp._get_media_describer() is None
 
-        item = kp.update("file:///test.jpg")
+        item = kp.put(uri="file:///test.jpg")
         assert "Dimensions: 1920x1080" in item.summary
         kp.close()
 
-    def test_update_media_failure_graceful(self, mock_providers, tmp_path):
+    def test_put_media_failure_graceful(self, mock_providers, tmp_path):
         """Media description failure doesn't block indexing."""
         from keep.api import Keeper
 
@@ -242,7 +242,7 @@ class TestMediaIntegration:
         _keeper_skip_migration(kp)
         kp._media_describer = mock_describer
 
-        item = kp.update("file:///test.jpg")
+        item = kp.put(uri="file:///test.jpg")
         assert item is not None
         assert "Dimensions: 100x100" in item.summary
         kp.close()
@@ -263,7 +263,7 @@ class TestMediaIntegration:
         _keeper_skip_migration(kp)
         kp._media_describer = mock_describer
 
-        kp.update("file:///test.md")
+        kp.put(uri="file:///test.md")
         mock_describer.describe.assert_not_called()
         kp.close()
 
@@ -284,7 +284,7 @@ class TestMediaIntegration:
         _keeper_skip_migration(kp)
         kp._media_describer = mock_describer
 
-        item = kp.update("file:///test.mp3")
+        item = kp.put(uri="file:///test.mp3")
         assert "A rock song with guitar solo" in item.summary
         assert "Title: Song" in item.summary
         mock_describer.describe.assert_called_once_with(
@@ -308,7 +308,7 @@ class TestMediaIntegration:
         _keeper_skip_migration(kp)
         kp._media_describer = mock_describer
 
-        item = kp.update("file:///test.jpg")
+        item = kp.put(uri="file:///test.jpg")
         assert "Description:" not in item.summary
         kp.close()
 

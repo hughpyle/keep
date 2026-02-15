@@ -54,7 +54,7 @@ These tags are actively set and maintained by the system.
 
 **Set by:** `_record_to_item()` in `api.py`, from `accessed_at` column in `DocumentStore`
 
-**Behavior:** Updated whenever the item is retrieved via `get()`, `find()`, `find_similar()`, or `query_fulltext()`. Distinct from `_updated` — reading an item updates `_accessed` but not `_updated`.
+**Behavior:** Updated whenever the item is retrieved via `get()` or `find()`. Distinct from `_updated` — reading an item updates `_accessed` but not `_updated`.
 
 **Example:** `"2026-02-07T09:15:00.123456+00:00"`
 
@@ -78,13 +78,13 @@ These tags are actively set and maintained by the system.
 
 **Purpose:** MIME type of the document content.
 
-**Set by:** `Keeper.update()` in `api.py` (only for URI-based documents)
+**Set by:** `Keeper.put()` in `api.py` (only for URI-based documents)
 
 **Behavior:** Set if the document provider returns a content type.
 
 **Example:** `"text/markdown"`, `"text/html"`, `"application/pdf"`, `"audio/mpeg"`, `"image/jpeg"`
 
-**Note:** Not set for inline content (CLI: `keep put "text"`, API: `kp.remember()`).
+**Note:** Not set for inline content (CLI: `keep put "text"`, API: `kp.put("text")`).
 
 ---
 
@@ -92,11 +92,11 @@ These tags are actively set and maintained by the system.
 
 **Purpose:** How the content was obtained.
 
-**Set by:** `Keeper.update()` and `Keeper.remember()` in `api.py`
+**Set by:** `Keeper.put()` in `api.py`
 
 **Values:**
-- `"uri"` - Content fetched from a URI (CLI: `keep put <uri>`, API: `kp.update()`)
-- `"inline"` - Inline content (CLI: `keep put "text"`, API: `kp.remember()`)
+- `"uri"` - Content fetched from a URI (CLI: `keep put <uri>`, API: `kp.put(uri=...)`)
+- `"inline"` - Inline content (CLI: `keep put "text"`, API: `kp.put("text")`)
 
 **Usage:** Query with `kp.query_tag("_source", "inline")` to find remembered content.
 
@@ -115,7 +115,7 @@ def filter_non_system_tags(tags: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in tags.items() if not k.startswith(SYSTEM_TAG_PREFIX)}
 ```
 
-This function is called before merging user-provided tags in `update()` (API), `remember()` (API), and `tag()` methods.
+This function is called before merging user-provided tags in `put()` and `tag()` methods.
 
 ## Tag Merge Order
 
@@ -124,7 +124,7 @@ When indexing documents, tags are merged in this order (later wins on collision)
 1. **Existing tags** - Preserved from previous version
 2. **Config tags** - From `[tags]` section in `keep.toml`
 3. **Environment tags** - From `KEEP_TAG_*` variables
-4. **User tags** - Passed to `update()`, `remember()`, or `tag()`
+4. **User tags** - Passed to `put()` or `tag()`
 5. **System tags** - Added/updated by system (cannot be overridden)
 
 ## Querying by System Tags

@@ -53,23 +53,23 @@ def keeper():
 class TestKeeperBasics:
     """Basic Keeper operations."""
 
-    def test_remember_returns_item(self, keeper: Keeper) -> None:
-        """remember() returns an Item with id and summary."""
-        item = keeper.remember("Test content for remember.")
+    def test_put_returns_item(self, keeper: Keeper) -> None:
+        """put() returns an Item with id and summary."""
+        item = keeper.put("Test content for remember.")
 
         assert item.id is not None
         assert item.summary is not None
         assert len(item.summary) > 0
 
-    def test_remember_with_explicit_id(self, keeper: Keeper) -> None:
-        """remember() with explicit id uses that id."""
-        item = keeper.remember("Content with explicit id.", id="test:explicit")
+    def test_put_with_explicit_id(self, keeper: Keeper) -> None:
+        """put() with explicit id uses that id."""
+        item = keeper.put("Content with explicit id.", id="test:explicit")
 
         assert item.id == "test:explicit"
 
-    def test_remember_with_tags(self, keeper: Keeper) -> None:
-        """remember() stores provided tags."""
-        item = keeper.remember(
+    def test_put_with_tags(self, keeper: Keeper) -> None:
+        """put() stores provided tags."""
+        item = keeper.put(
             "Content with tags.",
             id="test:tagged",
             tags={"category": "test", "priority": "high"},
@@ -80,7 +80,7 @@ class TestKeeperBasics:
 
     def test_get_retrieves_item(self, keeper: Keeper) -> None:
         """get() retrieves a stored item by id."""
-        keeper.remember("Retrievable content.", id="test:retrieve")
+        keeper.put("Retrievable content.", id="test:retrieve")
 
         item = keeper.get("test:retrieve")
 
@@ -95,7 +95,7 @@ class TestKeeperBasics:
 
     def test_exists_true_for_stored(self, keeper: Keeper) -> None:
         """exists() returns True for stored item."""
-        keeper.remember("Existence test.", id="test:exists")
+        keeper.put("Existence test.", id="test:exists")
 
         assert keeper.exists("test:exists") is True
 
@@ -105,7 +105,7 @@ class TestKeeperBasics:
 
     def test_delete_removes_item(self, keeper: Keeper) -> None:
         """delete() removes an item."""
-        keeper.remember("To be deleted.", id="test:delete")
+        keeper.put("To be deleted.", id="test:delete")
         assert keeper.exists("test:delete") is True
 
         keeper.delete("test:delete")
@@ -116,8 +116,8 @@ class TestKeeperBasics:
         """count() returns number of items."""
         initial = keeper.count()
 
-        keeper.remember("Count test 1.", id="test:count1")
-        keeper.remember("Count test 2.", id="test:count2")
+        keeper.put("Count test 1.", id="test:count1")
+        keeper.put("Count test 2.", id="test:count2")
 
         assert keeper.count() >= initial + 2
 
@@ -127,7 +127,7 @@ class TestKeeperFind:
 
     def test_find_returns_results(self, keeper: Keeper) -> None:
         """find() returns matching items."""
-        keeper.remember(
+        keeper.put(
             "The quick brown fox jumps over the lazy dog.",
             id="test:fox",
         )
@@ -139,7 +139,7 @@ class TestKeeperFind:
 
     def test_find_results_have_scores(self, keeper: Keeper) -> None:
         """find() results include similarity scores."""
-        keeper.remember("Scored content for testing.", id="test:scored")
+        keeper.put("Scored content for testing.", id="test:scored")
 
         results = keeper.find("scored content")
 
@@ -156,15 +156,15 @@ class TestKeeperFind:
 class TestKeeperUpdate:
     """Keeper update (tag merge) behavior."""
 
-    def test_remember_merges_tags(self, keeper: Keeper) -> None:
-        """remember() merges tags on update."""
-        keeper.remember(
+    def test_put_merges_tags(self, keeper: Keeper) -> None:
+        """put() merges tags on update."""
+        keeper.put(
             "Original content.",
             id="test:merge",
             tags={"a": "1", "b": "2"},
         )
 
-        keeper.remember(
+        keeper.put(
             "Updated content.",
             id="test:merge",
             tags={"b": "updated", "c": "3"},

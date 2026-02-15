@@ -18,7 +18,7 @@ from keep.api import Keeper
 def kp(mock_providers, tmp_path):
     """Create a Keeper with seed data for meta-resolution tests.
 
-    The first remember() triggers system doc migration which creates
+    The first put() triggers system doc migration which creates
     the bundled .meta/* docs. We seed items that match their queries:
 
     - .meta/todo queries: act=commitment status=open, act=request status=open, etc.
@@ -28,7 +28,7 @@ def kp(mock_providers, tmp_path):
     kp = Keeper(store_path=tmp_path)
 
     # Force embedding identity setup before storing test data.
-    # The first remember() triggers system doc migration, which sets
+    # The first put() triggers system doc migration, which sets
     # the embedding identity mid-call. Items stored during that first
     # call may go to a different ChromaDB collection. Calling
     # _get_embedding_provider() first avoids the split.
@@ -37,44 +37,44 @@ def kp(mock_providers, tmp_path):
     # ── Seed data ──────────────────────────────────────────────────────
 
     # Commitments (open)
-    kp.remember("I will fix the auth bug", tags={
+    kp.put("I will fix the auth bug", tags={
         "act": "commitment", "status": "open", "project": "myapp",
     })
-    kp.remember("I will write migration docs", tags={
+    kp.put("I will write migration docs", tags={
         "act": "commitment", "status": "open", "project": "myapp",
     })
 
     # Commitment (fulfilled — should not match status=open queries)
-    kp.remember("Deployed v2", tags={
+    kp.put("Deployed v2", tags={
         "act": "commitment", "status": "fulfilled", "project": "myapp",
     })
 
     # Learnings (one shares project=myapp with anchor for context expansion)
-    kp.remember("SQLite WAL mode prevents corruption", tags={
+    kp.put("SQLite WAL mode prevents corruption", tags={
         "type": "learning", "topic": "sqlite", "project": "myapp",
     })
-    kp.remember("Always pin dependencies", tags={
+    kp.put("Always pin dependencies", tags={
         "type": "learning", "topic": "packaging",
     })
 
     # An item with project tag (anchor for context expansion)
-    kp.remember("Working on myapp auth flow", id="anchor", tags={
+    kp.put("Working on myapp auth flow", id="anchor", tags={
         "project": "myapp", "topic": "auth",
     })
 
     # An item without project or genre tag (anchor for prereq tests)
-    kp.remember("General note with no project", id="no-project", tags={
+    kp.put("General note with no project", id="no-project", tags={
         "topic": "general",
     })
 
     # Items with genre tag (for .meta/genre prereq tests)
-    kp.remember("Kind of Blue is a classic", id="album1", tags={
+    kp.put("Kind of Blue is a classic", id="album1", tags={
         "genre": "jazz", "type": "review",
     })
-    kp.remember("Giant Steps pushed boundaries", id="album2", tags={
+    kp.put("Giant Steps pushed boundaries", id="album2", tags={
         "genre": "jazz", "type": "review",
     })
-    kp.remember("Abbey Road is timeless", id="album3", tags={
+    kp.put("Abbey Road is timeless", id="album3", tags={
         "genre": "rock", "type": "review",
     })
 

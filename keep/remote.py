@@ -145,30 +145,18 @@ class RemoteKeeper:
 
     # -- Write operations --
 
-    def update(
+    def put(
         self,
-        id: str,
-        tags: Optional[dict[str, str]] = None,
+        content: Optional[str] = None,
         *,
-        summary: Optional[str] = None,
-    ) -> Item:
-        resp = self._post("/v1/notes", json={
-            "uri": id,
-            "tags": tags,
-            "summary": summary,
-        })
-        return self._to_item(resp)
-
-    def remember(
-        self,
-        content: str,
-        *,
+        uri: Optional[str] = None,
         id: Optional[str] = None,
         summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
     ) -> Item:
         resp = self._post("/v1/notes", json={
             "content": content,
+            "uri": uri,
             "id": id,
             "tags": tags,
             "summary": summary,
@@ -235,33 +223,22 @@ class RemoteKeeper:
 
     def find(
         self,
-        query: str,
+        query: Optional[str] = None,
         *,
-        limit: int = 10,
-        since: Optional[str] = None,
-        include_hidden: bool = False,
-    ) -> list[Item]:
-        resp = self._post("/v1/search", json={
-            "query": query,
-            "limit": limit,
-            "since": since,
-            "include_hidden": include_hidden or None,
-        })
-        return self._to_items(resp)
-
-    def find_similar(
-        self,
-        id: str,
-        *,
+        similar_to: Optional[str] = None,
+        fulltext: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
         include_self: bool = False,
         include_hidden: bool = False,
     ) -> list[Item]:
-        resp = self._post(f"/v1/search/similar/{id}", json={
+        resp = self._post("/v1/search", json={
+            "query": query,
+            "similar_to": similar_to,
+            "fulltext": fulltext or None,
             "limit": limit,
             "since": since,
-            "include_self": include_self,
+            "include_self": include_self or None,
             "include_hidden": include_hidden or None,
         })
         return self._to_items(resp)
@@ -273,22 +250,6 @@ class RemoteKeeper:
         limit: int = 3,
     ) -> list[Item]:
         resp = self._get(f"/v1/notes/{id}/similar", limit=limit)
-        return self._to_items(resp)
-
-    def query_fulltext(
-        self,
-        query: str,
-        *,
-        limit: int = 10,
-        since: Optional[str] = None,
-        include_hidden: bool = False,
-    ) -> list[Item]:
-        resp = self._post("/v1/search/fulltext", json={
-            "query": query,
-            "limit": limit,
-            "since": since,
-            "include_hidden": include_hidden or None,
-        })
         return self._to_items(resp)
 
     def query_tag(

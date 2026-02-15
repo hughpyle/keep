@@ -18,9 +18,9 @@ from keep import Keeper
 kp = Keeper()  # Uses ~/.keep/ by default
 
 # Index documents
-kp.update("file:///path/to/doc.md", tags={"project": "myapp"})
-kp.update("https://example.com/page", tags={"topic": "reference"})
-kp.remember("Important insight about auth patterns")
+kp.put(uri="file:///path/to/doc.md", tags={"project": "myapp"})
+kp.put(uri="https://example.com/page", tags={"topic": "reference"})
+kp.put("Important insight about auth patterns")
 
 # Search
 results = kp.find("authentication", limit=5)
@@ -59,38 +59,36 @@ kp = Keeper(store_path="/path/to/store")
 
 ```python
 # Index from URI (file:// or https://)
-kp.update(uri, tags={}, summary=None) → Item
+kp.put(uri=uri, tags={}, summary=None) → Item
 
 # Index inline content
-kp.remember(content, summary=None, tags={}) → Item
+kp.put(content, tags={}, summary=None) → Item
 
 # Notes:
+# - Exactly one of content or uri must be provided
 # - If summary provided, skips auto-summarization
-# - remember() uses content verbatim if short (≤max_summary_length)
+# - Inline content used verbatim if short (≤max_summary_length)
 # - User tags (domain, topic, etc.) provide context for summarization
 ```
 
 #### Search
 
 ```python
-# Semantic search
-kp.find(query, limit=10, since=None) → list[Item]
+# Semantic search (default)
+kp.find("auth", limit=10) → list[Item]
 
-# Find similar to a document
-kp.find_similar(uri, limit=10, since=None) → list[Item]
+# Full-text search
+kp.find("auth", fulltext=True) → list[Item]
 
-# Similar items using stored embedding
-kp.get_similar_for_display(id, limit=3) → list[Item]
+# Find similar to an existing note
+kp.find(similar_to="note-id", limit=10) → list[Item]
 
 # Tag-based query
 kp.query_tag(key, value=None, since=None) → list[Item]
 
-# Full-text search
-kp.query_fulltext(query, since=None) → list[Item]
-
 # Time filtering (all search methods support since)
 kp.find("auth", since="P7D")      # Last 7 days
-kp.find("auth", since="P1W")      # Last week  
+kp.find("auth", since="P1W")      # Last week
 kp.find("auth", since="PT1H")     # Last hour
 kp.find("auth", since="2026-01-15")  # Since date
 ```
@@ -192,7 +190,7 @@ When indexing, tags merge in priority order (later wins):
 1. Existing tags (from previous version)
 2. Config tags (from `[tags]` in keep.toml)
 3. Environment tags (from `KEEP_TAG_*` variables)
-4. User tags (passed to `update()`, `remember()`, or `tag()`)
+4. User tags (passed to `put()` or `tag()`)
 
 ### Tag Rules
 
@@ -207,7 +205,7 @@ import os
 os.environ["KEEP_TAG_PROJECT"] = "myapp"
 os.environ["KEEP_TAG_OWNER"] = "alice"
 
-kp.remember("note")  # Auto-tagged with project=myapp, owner=alice
+kp.put("note")  # Auto-tagged with project=myapp, owner=alice
 ```
 
 ### Config Tags
