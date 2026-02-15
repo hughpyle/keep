@@ -1,0 +1,30 @@
+name: Security Audit
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pyproject.toml'
+      - 'uv.lock'
+  pull_request:
+    paths:
+      - 'pyproject.toml'
+      - 'uv.lock'
+  schedule:
+    # Run weekly on Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+
+jobs:
+  pip-audit:
+    name: Audit Python dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit dependencies
+        run: uv export --frozen --no-hashes > /tmp/requirements.txt && pip-audit -r /tmp/requirements.txt --desc
