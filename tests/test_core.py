@@ -477,6 +477,9 @@ class TestSystemDocs:
         for filename, doc_id in SYSTEM_DOC_IDS.items():
             if not doc_id.startswith(".tag/"):
                 continue
+            # Skip sub-docs (tag values like .tag/act/commitment)
+            if doc_id.count("/") > 1:
+                continue
             content, _ = _load_frontmatter(SYSTEM_DOC_DIR / filename)
             assert any(m in content for m in markers), \
                 f"{doc_id} missing structure documentation"

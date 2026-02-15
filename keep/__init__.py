@@ -37,7 +37,7 @@ from .protocol import (
 )
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, INTERNAL_TAGS
 
-__version__ = "0.40.0"
+__version__ = "0.41.0"
 __all__ = [
     "Keeper",
     "Item",

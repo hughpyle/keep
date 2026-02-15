@@ -714,7 +714,7 @@ def _parse_tags(tags: Optional[list[str]]) -> dict[str, str]:
             typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value", err=True)
             raise typer.Exit(1)
         k, v = tag.split("=", 1)
-        parsed[k] = v
+        parsed[k.casefold()] = v.casefold()
     return parsed
 
 
@@ -733,10 +733,11 @@ def _filter_by_tags(items: list, tags: list[str]) -> list:
     for t in tags:
         if "=" in t:
             key, value = t.split("=", 1)
+            key, value = key.casefold(), value.casefold()
             result = [item for item in result if item.tags.get(key) == value]
         else:
             # Key only - check if key exists
-            result = [item for item in result if t in item.tags]
+            result = [item for item in result if t.casefold() in item.tags]
     return result
 
 
@@ -1001,13 +1002,112 @@ def tag_update(
     # Process each document
     results = []
     for doc_id in ids:
-        item = kp.tag(doc_id, tags=tag_changes)
+        try:
+            item = kp.tag(doc_id, tags=tag_changes)
+        except ValueError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
         if item is None:
             typer.echo(f"Not found: {doc_id}", err=True)
         else:
             results.append(item)
 
     typer.echo(_format_items(results, as_json=_get_json_output()))
+
+
+def _put_store(
+    kp: "Keeper",
+    source: Optional[str],
+    resolved_path: Optional[Path],
+    parsed_tags: dict,
+    id: Optional[str],
+    summary: Optional[str],
+    do_analyze: bool,
+) -> Optional["Item"]:
+    """Execute the store operation for put(). Returns Item, or None for directory mode."""
+    if source == "-" or (source is None and _has_stdin_data()):
+        # Stdin mode: explicit '-' or piped input
+        content = sys.stdin.read()
+        content, frontmatter_tags = _parse_frontmatter(content)
+        parsed_tags = {**frontmatter_tags, **parsed_tags}  # CLI tags override
+        if summary is not None:
+            typer.echo("Error: --summary cannot be used with stdin input (original content would be lost)", err=True)
+            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
+            raise typer.Exit(1)
+        max_len = kp.config.max_summary_length
+        if len(content) > max_len:
+            typer.echo(f"Error: stdin content too long to store inline ({len(content)} chars, max {max_len})", err=True)
+            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
+            raise typer.Exit(1)
+        # Use content-addressed ID for stdin text (enables versioning)
+        doc_id = id or _text_content_id(content)
+        return kp.remember(content, id=doc_id, tags=parsed_tags or None)
+    elif resolved_path is not None and resolved_path.is_dir():
+        # Directory mode: index all regular files in directory
+        if summary is not None:
+            typer.echo("Error: --summary cannot be used with directory mode", err=True)
+            raise typer.Exit(1)
+        if id is not None:
+            typer.echo("Error: --id cannot be used with directory mode", err=True)
+            raise typer.Exit(1)
+        files = _list_directory_files(resolved_path)
+        if not files:
+            typer.echo(f"Error: no eligible files in {resolved_path}/", err=True)
+            typer.echo("Hint: hidden files, symlinks, and subdirectories are skipped", err=True)
+            raise typer.Exit(1)
+        if len(files) > MAX_DIR_FILES:
+            typer.echo(f"Error: directory has {len(files)} files (max {MAX_DIR_FILES})", err=True)
+            typer.echo("Hint: use a smaller directory or index files individually", err=True)
+            raise typer.Exit(1)
+        results: list[Item] = []
+        errors: list[str] = []
+        total = len(files)
+        for i, fpath in enumerate(files, 1):
+            file_uri = f"file://{fpath}"
+            try:
+                item = kp.update(file_uri, tags=parsed_tags or None)
+                results.append(item)
+                typer.echo(f"[{i}/{total}] {fpath.name} ok", err=True)
+            except Exception as e:
+                errors.append(f"{fpath.name}: {e}")
+                typer.echo(f"[{i}/{total}] {fpath.name} error: {e}", err=True)
+        indexed = len(results)
+        skipped = len(errors)
+        typer.echo(f"\n{indexed} indexed, {skipped} skipped from {resolved_path.name}/", err=True)
+        if results:
+            typer.echo(_format_items(results, as_json=_get_json_output()))
+        if do_analyze and results:
+            for r in results:
+                try:
+                    kp.enqueue_analyze(r.id)
+                except ValueError:
+                    pass
+            typer.echo(f"Queued {len(results)} items for background analysis.", err=True)
+        return None
+    elif resolved_path is not None and resolved_path.is_file():
+        # File mode: bare file path → normalize to file:// URI
+        file_uri = f"file://{resolved_path}"
+        return kp.update(file_uri, tags=parsed_tags or None, summary=summary)
+    elif source and _URI_SCHEME_PATTERN.match(source):
+        # URI mode: fetch from URI (ID is the URI itself)
+        return kp.update(source, tags=parsed_tags or None, summary=summary)
+    elif source:
+        # Text mode: inline content (no :// in source)
+        if summary is not None:
+            typer.echo("Error: --summary cannot be used with inline text (original content would be lost)", err=True)
+            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
+            raise typer.Exit(1)
+        max_len = kp.config.max_summary_length
+        if len(source) > max_len:
+            typer.echo(f"Error: inline text too long to store ({len(source)} chars, max {max_len})", err=True)
+            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
+            raise typer.Exit(1)
+        # Use content-addressed ID for text (enables versioning)
+        doc_id = id or _text_content_id(source)
+        return kp.remember(source, id=doc_id, tags=parsed_tags or None)
+    else:
+        typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
+        raise typer.Exit(1)
 
 
 @app.command("put")
@@ -1066,89 +1166,13 @@ def put(
     # Check for filesystem path (directory or file) before other modes
     resolved_path = _is_filesystem_path(source) if source and source != "-" else None
 
-    if source == "-" or (source is None and _has_stdin_data()):
-        # Stdin mode: explicit '-' or piped input
-        content = sys.stdin.read()
-        content, frontmatter_tags = _parse_frontmatter(content)
-        parsed_tags = {**frontmatter_tags, **parsed_tags}  # CLI tags override
-        if summary is not None:
-            typer.echo("Error: --summary cannot be used with stdin input (original content would be lost)", err=True)
-            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
-            raise typer.Exit(1)
-        max_len = kp.config.max_summary_length
-        if len(content) > max_len:
-            typer.echo(f"Error: stdin content too long to store inline ({len(content)} chars, max {max_len})", err=True)
-            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
-            raise typer.Exit(1)
-        # Use content-addressed ID for stdin text (enables versioning)
-        doc_id = id or _text_content_id(content)
-        item = kp.remember(content, id=doc_id, tags=parsed_tags or None)
-    elif resolved_path is not None and resolved_path.is_dir():
-        # Directory mode: index all regular files in directory
-        if summary is not None:
-            typer.echo("Error: --summary cannot be used with directory mode", err=True)
-            raise typer.Exit(1)
-        if id is not None:
-            typer.echo("Error: --id cannot be used with directory mode", err=True)
-            raise typer.Exit(1)
-        files = _list_directory_files(resolved_path)
-        if not files:
-            typer.echo(f"Error: no eligible files in {resolved_path}/", err=True)
-            typer.echo("Hint: hidden files, symlinks, and subdirectories are skipped", err=True)
-            raise typer.Exit(1)
-        if len(files) > MAX_DIR_FILES:
-            typer.echo(f"Error: directory has {len(files)} files (max {MAX_DIR_FILES})", err=True)
-            typer.echo("Hint: use a smaller directory or index files individually", err=True)
-            raise typer.Exit(1)
-        results: list[Item] = []
-        errors: list[str] = []
-        total = len(files)
-        for i, fpath in enumerate(files, 1):
-            file_uri = f"file://{fpath}"
-            try:
-                item = kp.update(file_uri, tags=parsed_tags or None)
-                results.append(item)
-                typer.echo(f"[{i}/{total}] {fpath.name} ok", err=True)
-            except Exception as e:
-                errors.append(f"{fpath.name}: {e}")
-                typer.echo(f"[{i}/{total}] {fpath.name} error: {e}", err=True)
-        indexed = len(results)
-        skipped = len(errors)
-        typer.echo(f"\n{indexed} indexed, {skipped} skipped from {resolved_path.name}/", err=True)
-        if results:
-            typer.echo(_format_items(results, as_json=_get_json_output()))
-        if do_analyze and results:
-            for r in results:
-                try:
-                    kp.enqueue_analyze(r.id)
-                except ValueError:
-                    pass
-            typer.echo(f"Queued {len(results)} items for background analysis.", err=True)
-        return
-    elif resolved_path is not None and resolved_path.is_file():
-        # File mode: bare file path → normalize to file:// URI
-        file_uri = f"file://{resolved_path}"
-        item = kp.update(file_uri, tags=parsed_tags or None, summary=summary)
-    elif source and _URI_SCHEME_PATTERN.match(source):
-        # URI mode: fetch from URI (ID is the URI itself)
-        item = kp.update(source, tags=parsed_tags or None, summary=summary)
-    elif source:
-        # Text mode: inline content (no :// in source)
-        if summary is not None:
-            typer.echo("Error: --summary cannot be used with inline text (original content would be lost)", err=True)
-            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
-            raise typer.Exit(1)
-        max_len = kp.config.max_summary_length
-        if len(source) > max_len:
-            typer.echo(f"Error: inline text too long to store ({len(source)} chars, max {max_len})", err=True)
-            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
-            raise typer.Exit(1)
-        # Use content-addressed ID for text (enables versioning)
-        doc_id = id or _text_content_id(source)
-        item = kp.remember(source, id=doc_id, tags=parsed_tags or None)
-    else:
-        typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
+    try:
+        item = _put_store(kp, source, resolved_path, parsed_tags, id, summary, do_analyze)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+    if item is None:
+        return  # directory mode already printed output
 
     # Surface similar items (occasion for reflection)
     suggest_limit = 10 if suggest_tags else 3
