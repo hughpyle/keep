@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclass
@@ -42,6 +42,22 @@ class VersionInfo:
     tags: dict[str, str]
     created_at: str
     content_hash: Optional[str] = None
+
+
+@dataclass
+class PartInfo:
+    """
+    Information about a document part (structural section).
+
+    Parts are produced by analyze() — an LLM-driven decomposition
+    of content into meaningful sections. Each part has its own summary,
+    tags, and embedding for targeted search.
+    """
+    part_num: int           # 1-indexed
+    summary: str
+    tags: dict[str, str]
+    content: str            # extracted section text
+    created_at: str
 
 
 @dataclass
@@ -131,6 +147,7 @@ class DocumentStore:
         - Version 0 → 1: Create document_versions table
         - Version 1 → 2: Add accessed_at column
         - Version 2 → 3: One-time hash truncation, indexes
+        - Version 3 → 4: Create document_parts table
         """
         current_version = self._conn.execute(
             "PRAGMA user_version"
@@ -228,6 +245,25 @@ class DocumentStore:
                 self._conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_documents_updated
                     ON documents(updated_at)
+                """)
+
+            if current_version < 4:
+                # Create parts table for structural decomposition
+                self._conn.execute("""
+                    CREATE TABLE IF NOT EXISTS document_parts (
+                        id TEXT NOT NULL,
+                        collection TEXT NOT NULL,
+                        part_num INTEGER NOT NULL,
+                        summary TEXT NOT NULL,
+                        tags_json TEXT NOT NULL DEFAULT '{}',
+                        content TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        PRIMARY KEY (id, collection, part_num)
+                    )
+                """)
+                self._conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_parts_doc
+                    ON document_parts(id, collection, part_num)
                 """)
 
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -633,6 +669,12 @@ class DocumentStore:
                         DELETE FROM document_versions
                         WHERE id = ? AND collection = ?
                     """, (id, collection))
+
+                # Always clean up parts (structural decomposition)
+                self._conn.execute("""
+                    DELETE FROM document_parts
+                    WHERE id = ? AND collection = ?
+                """, (id, collection))
 
                 self._conn.commit()
             except Exception:
@@ -1312,6 +1354,153 @@ class DocumentStore:
             ))
 
         return results
+
+    # -------------------------------------------------------------------------
+    # Part Operations (structural decomposition)
+    # -------------------------------------------------------------------------
+
+    def upsert_parts(
+        self,
+        collection: str,
+        id: str,
+        parts: list[PartInfo],
+    ) -> int:
+        """
+        Replace all parts for a document atomically.
+
+        Re-analysis produces a fresh decomposition — old parts are deleted
+        and new ones inserted in a single transaction.
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+            parts: List of PartInfo to store
+
+        Returns:
+            Number of parts stored
+        """
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Delete existing parts
+                self._conn.execute("""
+                    DELETE FROM document_parts
+                    WHERE id = ? AND collection = ?
+                """, (id, collection))
+
+                # Insert new parts
+                for part in parts:
+                    self._conn.execute("""
+                        INSERT INTO document_parts
+                        (id, collection, part_num, summary, tags_json, content, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        id, collection, part.part_num, part.summary,
+                        json.dumps(part.tags, ensure_ascii=False),
+                        part.content, part.created_at,
+                    ))
+
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+        return len(parts)
+
+    def get_part(
+        self,
+        collection: str,
+        id: str,
+        part_num: int,
+    ) -> Optional[PartInfo]:
+        """
+        Get a specific part by number.
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+            part_num: Part number (1-indexed)
+
+        Returns:
+            PartInfo if found, None otherwise
+        """
+        cursor = self._conn.execute("""
+            SELECT part_num, summary, tags_json, content, created_at
+            FROM document_parts
+            WHERE id = ? AND collection = ? AND part_num = ?
+        """, (id, collection, part_num))
+
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        return PartInfo(
+            part_num=row["part_num"],
+            summary=row["summary"],
+            tags=json.loads(row["tags_json"]),
+            content=row["content"],
+            created_at=row["created_at"],
+        )
+
+    def list_parts(
+        self,
+        collection: str,
+        id: str,
+    ) -> list[PartInfo]:
+        """
+        List all parts for a document, ordered by part number.
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+
+        Returns:
+            List of PartInfo, ordered by part_num
+        """
+        cursor = self._conn.execute("""
+            SELECT part_num, summary, tags_json, content, created_at
+            FROM document_parts
+            WHERE id = ? AND collection = ?
+            ORDER BY part_num
+        """, (id, collection))
+
+        return [
+            PartInfo(
+                part_num=row["part_num"],
+                summary=row["summary"],
+                tags=json.loads(row["tags_json"]),
+                content=row["content"],
+                created_at=row["created_at"],
+            )
+            for row in cursor
+        ]
+
+    def part_count(self, collection: str, id: str) -> int:
+        """Count parts for a document."""
+        cursor = self._conn.execute("""
+            SELECT COUNT(*) FROM document_parts
+            WHERE id = ? AND collection = ?
+        """, (id, collection))
+        return cursor.fetchone()[0]
+
+    def delete_parts(self, collection: str, id: str) -> int:
+        """
+        Delete all parts for a document.
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+
+        Returns:
+            Number of parts deleted
+        """
+        with self._lock:
+            cursor = self._conn.execute("""
+                DELETE FROM document_parts
+                WHERE id = ? AND collection = ?
+            """, (id, collection))
+            self._conn.commit()
+        return cursor.rowcount
 
     # -------------------------------------------------------------------------
     # Tag Queries

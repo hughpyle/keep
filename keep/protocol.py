@@ -8,7 +8,7 @@ Defines interface contracts at two levels:
 
 from typing import Any, Optional, Protocol, runtime_checkable
 
-from .document_store import DocumentRecord, VersionInfo
+from .document_store import DocumentRecord, PartInfo, VersionInfo
 from .pending_summaries import PendingSummary
 from .store import StoreResult
 from .types import Item
@@ -217,6 +217,18 @@ class VectorStoreProtocol(Protocol):
         tags: dict[str, str],
     ) -> None: ...
 
+    def upsert_part(
+        self,
+        collection: str,
+        id: str,
+        part_num: int,
+        embedding: list[float],
+        summary: str,
+        tags: dict[str, str],
+    ) -> None: ...
+
+    def delete_parts(self, collection: str, id: str) -> int: ...
+
     def get(self, collection: str, id: str) -> Optional[StoreResult]: ...
 
     def get_embedding(self, collection: str, id: str) -> Optional[list[float]]: ...
@@ -341,6 +353,30 @@ class DocumentStoreProtocol(Protocol):
         self, collection: str, id: str, from_version: int
     ) -> int: ...
 
+    # -- Parts --
+
+    def upsert_parts(
+        self,
+        collection: str,
+        id: str,
+        parts: list[PartInfo],
+    ) -> int: ...
+
+    def get_part(
+        self,
+        collection: str,
+        id: str,
+        part_num: int,
+    ) -> Optional[PartInfo]: ...
+
+    def list_parts(
+        self, collection: str, id: str
+    ) -> list[PartInfo]: ...
+
+    def part_count(self, collection: str, id: str) -> int: ...
+
+    def delete_parts(self, collection: str, id: str) -> int: ...
+
     # -- Read --
 
     def get(self, collection: str, id: str) -> Optional[DocumentRecord]: ...
@@ -356,7 +392,7 @@ class DocumentStoreProtocol(Protocol):
     ) -> Optional[VersionInfo]: ...
 
     def list_versions(
-        self, collection: str, id: str, limit: Optional[int] = None
+        self, collection: str, id: str, limit: int = 10
     ) -> list[VersionInfo]: ...
 
     def get_version_nav(

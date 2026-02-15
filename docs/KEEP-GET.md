@@ -19,6 +19,8 @@ keep get "ID@V{1}"                    # Same as -V 1 (version identifier syntax)
 | `-H`, `--history` | List all versions (default 10, use `-n` to override) |
 | `-S`, `--similar` | List similar items (default 10) |
 | `-M`, `--meta` | List meta items |
+| `-R`, `--resolve QUERY` | Inline meta query (metadoc syntax, repeatable) |
+| `-P`, `--parts` | List structural parts (from `analyze`) |
 | `-t`, `--tag KEY=VALUE` | Require tag (error if item doesn't match) |
 | `-n`, `--limit N` | Max items for --history, --similar, --meta (default 10) |
 | `-s`, `--store PATH` | Override store directory |
@@ -49,6 +51,18 @@ keep get doc:1 doc:2 doc:3            # Items separated by ---
 keep --ids list -n 5 | xargs keep get # Pipe from list
 ```
 
+## Parts
+
+Access structural parts produced by `keep analyze`:
+
+```bash
+keep get "ID@P{1}"                    # Part 1 of a document
+keep get "ID@P{3}"                    # Part 3
+keep get ID --parts                   # List all parts
+```
+
+Parts include prev/next navigation and part-specific similar items.
+
 ## Display modes
 
 ```bash
@@ -57,6 +71,7 @@ keep get ID --similar -n 20           # Show 20 similar items
 keep get ID --meta                    # Show meta items
 keep get ID --meta -n 5              # Show 5 meta items per section
 keep get ID --history                # List all versions
+keep get ID --parts                  # List structural parts
 ```
 
 ## Tag filtering
