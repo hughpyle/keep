@@ -223,6 +223,27 @@ class PendingSummaryQueue:
             "queue_path": str(self._queue_path),
         }
 
+    def get_status(self, id: str) -> dict | None:
+        """Get pending task status for a specific note.
+
+        Returns dict with id, task_type, status, queued_at if the note
+        has pending work, or None if no work is pending.
+        """
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT id, task_type, queued_at FROM pending_summaries WHERE id = ?",
+                (id,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "task_type": row[1],
+            "status": "queued",
+            "queued_at": row[2],
+        }
+
     def clear(self) -> int:
         """Clear all pending items. Returns count of items cleared."""
         with self._lock:

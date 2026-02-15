@@ -267,6 +267,30 @@ class SummarizationProvider(Protocol):
         """
         ...
 
+    def generate(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        """
+        Send a raw system+user prompt to the underlying LLM and return text.
+
+        This enables callers (e.g. decomposition) to use the configured LLM
+        without introspecting provider internals. Providers that don't wrap
+        an LLM (e.g. PassthroughSummarization) should return None.
+
+        Args:
+            system: System prompt
+            user: User prompt
+            max_tokens: Maximum tokens in response
+
+        Returns:
+            Generated text, or None if the provider has no LLM capability
+        """
+        ...
+
 
 # -----------------------------------------------------------------------------
 # Media Description

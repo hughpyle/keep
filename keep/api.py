@@ -454,11 +454,10 @@ def _call_decomposition_llm(
     """
     Call an LLM to decompose content into sections.
 
-    Detects provider type by attribute introspection and calls
-    the underlying client directly with the decomposition prompt.
+    Uses the provider's generate() method to send the decomposition prompt.
 
     Args:
-        provider: A summarization provider (Anthropic, OpenAI, Ollama, Gemini, etc.)
+        provider: A summarization provider with generate() support
         content: Document content to decompose
         guide_context: Optional tag descriptions for guided decomposition
 
@@ -484,96 +483,21 @@ def _call_decomposition_llm(
             f"Document to analyze:\n\n{truncated}"
         )
 
-    system_prompt = DECOMPOSITION_SYSTEM_PROMPT
-
     try:
-        # Anthropic provider
-        if hasattr(provider, 'client'):
-            response = provider.client.messages.create(
-                model=provider.model,
-                max_tokens=4096,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-            if response.content:
-                return _parse_decomposition_json(response.content[0].text, content)
+        result = provider.generate(
+            DECOMPOSITION_SYSTEM_PROMPT,
+            user_prompt,
+            max_tokens=4096,
+        )
+        if result:
+            return _parse_decomposition_json(result, content)
 
-        # OpenAI provider
-        elif hasattr(provider, '_client') and hasattr(provider._client, 'chat'):
-            response = provider._client.chat.completions.create(
-                model=provider.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=4096,
-                temperature=0.3,
-            )
-            if response.choices:
-                return _parse_decomposition_json(
-                    response.choices[0].message.content, content
-                )
-
-        # Ollama provider
-        elif hasattr(provider, 'base_url'):
-            import requests
-            response = requests.post(
-                f"{provider.base_url}/api/chat",
-                json={
-                    "model": provider.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "stream": False,
-                },
-                timeout=300,
-            )
-            response.raise_for_status()
-            return _parse_decomposition_json(
-                response.json()["message"]["content"], content
-            )
-
-        # Gemini provider
-        elif hasattr(provider, '_client') and hasattr(provider._client, 'models'):
-            full_prompt = f"{system_prompt}\n\n{user_prompt}"
-            response = provider._client.models.generate_content(
-                model=provider.model,
-                contents=full_prompt,
-            )
-            return _parse_decomposition_json(response.text, content)
-
-        # MLX provider (local Apple Silicon)
-        elif hasattr(provider, '_model') and hasattr(provider, '_tokenizer'):
-            from mlx_lm import generate
-
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-            if hasattr(provider._tokenizer, "apply_chat_template"):
-                prompt = provider._tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True,
-                )
-            else:
-                prompt = f"{system_prompt}\n\n{user_prompt}"
-
-            response = generate(
-                provider._model,
-                provider._tokenizer,
-                prompt=prompt,
-                max_tokens=4096,
-                verbose=False,
-            )
-            return _parse_decomposition_json(response.strip(), content)
-
-        # Fallback: try using the summarize method with a decomposition prompt
-        else:
-            logger.warning(
-                "Unknown provider type %s, falling back to simple chunking",
-                type(provider).__name__
-            )
-            return []
+        logger.warning(
+            "Provider %s returned no result for decomposition, "
+            "falling back to simple chunking",
+            type(provider).__name__,
+        )
+        return []
 
     except Exception as e:
         logger.warning("LLM decomposition failed: %s", e)
@@ -3276,9 +3200,7 @@ class Keeper:
         has pending work, or None if no work is pending. Requires a
         queue implementation that supports get_status().
         """
-        if hasattr(self._pending_queue, 'get_status'):
-            return self._pending_queue.get_status(id)
-        return None
+        return self._pending_queue.get_status(id)
 
     @property
     def _processor_pid_path(self) -> Path:
