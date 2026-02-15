@@ -2010,25 +2010,6 @@ def analyze(
             typer.echo(f"  @P{{{p.part_num}}} {summary_preview}")
 
 
-@app.command("collections")
-def list_collections(
-    store: StoreOption = None,
-):
-    """
-    List all collections in the store.
-    """
-    kp = _get_keeper(store)
-    collections = kp.list_collections()
-
-    if _get_json_output():
-        typer.echo(json.dumps(collections))
-    else:
-        if not collections:
-            typer.echo("No collections.")
-        else:
-            for c in collections:
-                typer.echo(c)
-
 
 
 
@@ -2074,7 +2055,6 @@ def _get_config_value(cfg, store_path: Path, path: str):
         tool - package directory (SKILL.md location)
         openclaw-plugin - OpenClaw plugin directory
         store - store path
-        collections - list of collections
 
     Dotted paths into config:
         providers - all provider config
@@ -2096,15 +2076,6 @@ def _get_config_value(cfg, store_path: Path, path: str):
         return str(get_tool_directory() / "docs")
     if path == "store":
         return str(store_path)
-    if path == "collections":
-        # Use ChromaStore directly to avoid full Keeper init
-        from .store import ChromaStore
-        try:
-            chroma = ChromaStore(store_path)
-            return chroma.list_collections()
-        except (OSError, ValueError):
-            return []
-
     # Provider shortcuts
     if path == "providers":
         if cfg:
@@ -2153,14 +2124,6 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
     config_path = cfg.config_path if cfg else None
     lines = []
 
-    # Get collections using ChromaStore directly (no API calls)
-    from .store import ChromaStore
-    try:
-        chroma = ChromaStore(store_path)
-        collections = chroma.list_collections()
-    except (OSError, ValueError):
-        collections = []
-
     # Show paths
     lines.append(f"file: {config_path}")
     lines.append(f"tool: {get_tool_directory()}")
@@ -2168,7 +2131,6 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
     lines.append(f"store: {store_path}")
     import importlib.resources
     lines.append(f"openclaw-plugin: {Path(str(importlib.resources.files('keep'))) / 'data' / 'openclaw-plugin'}")
-    lines.append(f"collections: {collections}")
 
     if cfg:
         lines.append("")
@@ -2302,14 +2264,6 @@ def config(
 
     # Full config output
     if _get_json_output():
-        # Get collections using ChromaStore directly (no API calls)
-        from .store import ChromaStore
-        try:
-            chroma = ChromaStore(store_path)
-            collections = chroma.list_collections()
-        except Exception:
-            collections = []
-
         import importlib.resources
         result = {
             "file": str(config_path) if config_path else None,
@@ -2317,7 +2271,6 @@ def config(
             "docs": str(get_tool_directory() / "docs"),
             "store": str(store_path),
             "openclaw-plugin": str(Path(str(importlib.resources.files("keep"))) / "data" / "openclaw-plugin"),
-            "collections": collections,
             "providers": {
                 "embedding": cfg.embedding.name if cfg and cfg.embedding else None,
                 "summarization": cfg.summarization.name if cfg else None,
