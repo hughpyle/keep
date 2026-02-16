@@ -961,17 +961,20 @@ class Keeper:
                     collection=doc_coll, id=new_id, summary=content,
                     tags=tags, content_hash=bundled_hash,
                 )
-                # Also embed to ChromaDB if provider is available
-                try:
-                    embedding = self._get_embedding_provider().embed(content)
-                    self._store.upsert(
-                        collection=chroma_coll_name, id=new_id,
-                        embedding=embedding, summary=content, tags=tags,
-                    )
-                except (RuntimeError, Exception) as e:
-                    # No embedding provider or embedding failed — that's fine,
-                    # reconciliation will pick it up later
-                    logger.debug("Skipped embedding for system doc %s: %s", new_id, e)
+                # Also embed to ChromaDB if provider is available.
+                # Cloud mode skips — embedding is deferred to background worker
+                # or reconciliation to avoid 26 synchronous embed calls on init.
+                if self._is_local:
+                    try:
+                        embedding = self._get_embedding_provider().embed(content)
+                        self._store.upsert(
+                            collection=chroma_coll_name, id=new_id,
+                            embedding=embedding, summary=content, tags=tags,
+                        )
+                    except (RuntimeError, Exception) as e:
+                        # No embedding provider or embedding failed — that's fine,
+                        # reconciliation will pick it up later
+                        logger.debug("Skipped embedding for system doc %s: %s", new_id, e)
                 if existing_doc:
                     stats["migrated"] += 1
                     logger.info("Updated system doc: %s", new_id)
@@ -1489,14 +1492,6 @@ class Keeper:
             logger.debug("Content and tags unchanged, skipping for %s", id)
             return _record_to_item(existing_doc, changed=False)
 
-        # Get embedding: reuse stored if content unchanged, compute if new/changed
-        if content_unchanged:
-            embedding = self._store.get_embedding(chroma_coll, id)
-            if embedding is None:
-                embedding = self._get_embedding_provider().embed(content)
-        else:
-            embedding = self._get_embedding_provider().embed(content)
-
         # Determine summary
         max_len = self._config.max_summary_length
         if summary is not None:
@@ -1519,6 +1514,37 @@ class Keeper:
         else:
             final_summary = content[:max_len] + "..."
             self._pending_queue.enqueue(id, doc_coll, content)
+
+        # Cloud mode: defer embedding to background worker for faster response.
+        # The doc store write happens immediately; the note is findable by
+        # tags/fulltext/ID right away. Similarity search works once the
+        # background worker computes and stores the embedding.
+        if not self._is_local:
+            result, content_changed = self._document_store.upsert(
+                collection=doc_coll,
+                id=id,
+                summary=final_summary,
+                tags=merged_tags,
+                content_hash=new_hash,
+            )
+            # Enqueue embedding task (content needed for embedding computation)
+            embed_meta = {}
+            if existing_doc is not None and not content_unchanged:
+                embed_meta["content_changed"] = True
+            self._pending_queue.enqueue(
+                id, doc_coll, content,
+                task_type="embed",
+                metadata=embed_meta,
+            )
+            return _record_to_item(result, changed=not content_unchanged)
+
+        # Local mode: compute embedding synchronously
+        if content_unchanged:
+            embedding = self._store.get_embedding(chroma_coll, id)
+            if embedding is None:
+                embedding = self._get_embedding_provider().embed(content)
+        else:
+            embedding = self._get_embedding_provider().embed(content)
 
         # Save old embedding before ChromaDB upsert overwrites it (for version archival)
         old_embedding = None
@@ -1558,7 +1584,7 @@ class Keeper:
                 )
 
         # Spawn background processor if needed (local only — uses filesystem locks)
-        if self._is_local and summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
+        if summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
             self._spawn_processor()
 
         return _record_to_item(result, changed=not content_unchanged)
@@ -3202,9 +3228,10 @@ class Keeper:
 
     def process_pending(self, limit: int = 10) -> dict:
         """
-        Process pending work items (summaries and analysis).
+        Process pending work items (embedding, summaries, and analysis).
 
-        Handles two task types serially:
+        Handles three task types serially:
+        - "embed": computes and stores embeddings (cloud mode deferred writes)
         - "summarize": generates real summaries for lazy-indexed items
         - "analyze": decomposes documents into parts via LLM
 
@@ -3240,6 +3267,9 @@ class Keeper:
                     self._process_pending_analyze(item)
                     # analyze releases summarization internally;
                     # release embedding after parts are embedded
+                    self._release_embedding_provider()
+                elif item.task_type == "embed":
+                    self._process_pending_embed(item)
                     self._release_embedding_provider()
                 else:
                     self._process_pending_summarize(item)
@@ -3284,6 +3314,54 @@ class Keeper:
         # Update summary in both stores
         self._document_store.update_summary(item.collection, item.id, summary)
         self._store.update_summary(item.collection, item.id, summary)
+
+    def _process_pending_embed(self, item) -> None:
+        """Process a deferred embedding task (cloud mode).
+
+        Computes the embedding for the content and writes it to the
+        vector store.  If the doc's content changed (metadata flag),
+        archives the old embedding as a versioned entry first.
+        """
+        doc_coll = item.collection
+        chroma_coll = self._resolve_chroma_collection()
+
+        # Get current doc record (may have been deleted before we got here)
+        doc = self._document_store.get(doc_coll, item.id)
+        if doc is None:
+            return
+
+        content_changed = (item.metadata or {}).get("content_changed", False)
+
+        # Archive old embedding before overwriting (version archival)
+        if content_changed:
+            old_embedding = self._store.get_embedding(chroma_coll, item.id)
+            max_ver = self._document_store.max_version(doc_coll, item.id)
+            if max_ver > 0 and old_embedding is not None:
+                # Get the archived version's metadata for the versioned entry
+                archived = self._document_store.get_version(
+                    doc_coll, item.id, offset=1
+                )
+                if archived:
+                    self._store.upsert_version(
+                        collection=chroma_coll,
+                        id=item.id,
+                        version=max_ver,
+                        embedding=old_embedding,
+                        summary=archived.summary,
+                        tags=archived.tags,
+                    )
+
+        # Compute embedding
+        embedding = self._get_embedding_provider().embed(item.content)
+
+        # Write to vector store
+        self._store.upsert(
+            collection=chroma_coll,
+            id=item.id,
+            embedding=embedding,
+            summary=doc.summary,
+            tags=doc.tags,
+        )
 
     def _process_pending_analyze(self, item) -> None:
         """Process a pending analysis work item."""

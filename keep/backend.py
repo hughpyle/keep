@@ -33,13 +33,16 @@ class StoreBundle(NamedTuple):
 class NullPendingQueue:
     """No-op pending queue for backends that handle summarization server-side."""
 
-    def enqueue(self, id: str, collection: str, content: str) -> None:
+    def enqueue(
+        self, id: str, collection: str, content: str,
+        *, task_type: str = "summarize", metadata: dict | None = None,
+    ) -> None:
         pass
 
     def dequeue(self, limit: int = 10) -> list:
         return []
 
-    def complete(self, id: str, collection: str) -> None:
+    def complete(self, id: str, collection: str, task_type: str = "summarize") -> None:
         pass
 
     def count(self) -> int:
