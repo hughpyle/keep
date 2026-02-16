@@ -274,7 +274,8 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     )
     has_gemini_key = bool(
         os.environ.get("GEMINI_API_KEY") or
-        os.environ.get("GOOGLE_API_KEY")
+        os.environ.get("GOOGLE_API_KEY") or
+        os.environ.get("GOOGLE_CLOUD_PROJECT")
     )
     has_voyage_key = bool(os.environ.get("VOYAGE_API_KEY"))
 
