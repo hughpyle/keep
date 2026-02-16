@@ -304,12 +304,12 @@ class TestKeeperAnalyze:
             parts1 = kp.analyze("test-doc")
             assert len(parts1) == 3
 
-            # Re-analysis with different decomposition
+            # Re-analysis with different decomposition (force=True since content unchanged)
             mock_llm.return_value = [
                 {"summary": "New Part 1", "content": "New text 1"},
                 {"summary": "New Part 2", "content": "New text 2"},
             ]
-            parts2 = kp.analyze("test-doc")
+            parts2 = kp.analyze("test-doc", force=True)
             assert len(parts2) == 2
 
         # Verify only new parts exist
@@ -377,6 +377,139 @@ class TestKeeperAnalyze:
 
 
 # ---------------------------------------------------------------------------
+# analyze() skip / _analyzed_hash tests
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeSkip:
+    """Test _analyzed_hash skip logic in analyze() and enqueue_analyze()."""
+
+    MOCK_PARTS = [
+        {"summary": "Part A", "content": "Text A", "tags": {"topic": "a"}},
+        {"summary": "Part B", "content": "Text B", "tags": {"topic": "b"}},
+    ]
+
+    def test_analyze_sets_analyzed_hash(self, mock_providers, tmp_path):
+        """analyze() sets _analyzed_hash tag on the document after success."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Long content for analysis. " * 20, id="test-doc")
+
+        with patch("keep.api._call_decomposition_llm") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc")
+
+        item = kp.get("test-doc")
+        assert "_analyzed_hash" in item.tags
+        # Hash should match the document's content_hash
+        doc_coll = kp._resolve_doc_collection()
+        doc = kp._document_store.get(doc_coll, "test-doc")
+        assert item.tags["_analyzed_hash"] == doc.content_hash
+
+    def test_analyze_skips_when_current(self, mock_providers, tmp_path):
+        """analyze() skips LLM call when parts are already current."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Long content for analysis. " * 20, id="test-doc")
+
+        with patch("keep.api._call_decomposition_llm") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            parts1 = kp.analyze("test-doc")
+            assert len(parts1) == 2
+
+            # Second call should skip (returns existing parts, no LLM call)
+            mock_llm.reset_mock()
+            parts2 = kp.analyze("test-doc")
+            assert len(parts2) == 2
+            mock_llm.assert_not_called()
+
+    def test_analyze_reruns_after_content_change(self, mock_providers, tmp_path):
+        """analyze() re-runs when content changes after previous analysis."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Original content for analysis. " * 20, id="test-doc")
+
+        with patch("keep.api._call_decomposition_llm") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc")
+
+            # Change content
+            kp.put("Completely different content. " * 20, id="test-doc")
+
+            # Should re-analyze (content_hash changed)
+            mock_llm.reset_mock()
+            mock_llm.return_value = [
+                {"summary": "New A", "content": "New text A"},
+                {"summary": "New B", "content": "New text B"},
+            ]
+            parts = kp.analyze("test-doc")
+            mock_llm.assert_called_once()
+            assert parts[0].summary == "New A"
+
+    def test_analyze_force_overrides_skip(self, mock_providers, tmp_path):
+        """analyze(force=True) re-analyzes even when parts are current."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Long content for analysis. " * 20, id="test-doc")
+
+        with patch("keep.api._call_decomposition_llm") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc")
+
+            # Force re-analysis
+            mock_llm.reset_mock()
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc", force=True)
+            mock_llm.assert_called_once()
+
+    def test_enqueue_skips_when_current(self, mock_providers, tmp_path):
+        """enqueue_analyze() returns False when parts are current."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Long content for analysis. " * 20, id="test-doc")
+
+        with patch("keep.api._call_decomposition_llm") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc")
+
+        # Enqueue should return False (already analyzed)
+        result = kp.enqueue_analyze("test-doc")
+        assert result is False
+
+    def test_enqueue_accepts_when_stale(self, mock_providers, tmp_path):
+        """enqueue_analyze() returns True when content changed."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Long content for analysis. " * 20, id="test-doc")
+
+        with patch("keep.api._call_decomposition_llm") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc")
+
+        # Change content
+        kp.put("Different content entirely. " * 20, id="test-doc")
+
+        # Enqueue should return True (needs re-analysis)
+        result = kp.enqueue_analyze("test-doc")
+        assert result is True
+
+    def test_enqueue_force_overrides(self, mock_providers, tmp_path):
+        """enqueue_analyze(force=True) enqueues even when current."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Long content for analysis. " * 20, id="test-doc")
+
+        with patch("keep.api._call_decomposition_llm") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc")
+
+        # Force enqueue
+        result = kp.enqueue_analyze("test-doc", force=True)
+        assert result is True
+
+    def test_enqueue_accepts_never_analyzed(self, mock_providers, tmp_path):
+        """enqueue_analyze() returns True for never-analyzed documents."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Long content for analysis. " * 20, id="test-doc")
+
+        result = kp.enqueue_analyze("test-doc")
+        assert result is True
+
+
+# ---------------------------------------------------------------------------
 # CLI tests
 # ---------------------------------------------------------------------------
 
@@ -405,3 +538,100 @@ class TestCLIParts:
         line = _format_summary_line(item)
         assert "@P{1}" in line
         assert "Part summary" in line
+
+
+# ---------------------------------------------------------------------------
+# File stat fast-path tests
+# ---------------------------------------------------------------------------
+
+
+class TestFileStatFastPath:
+    """Test stat-based fast path for file:// URI puts."""
+
+    def test_stores_file_stat_tags(self, mock_providers, tmp_path):
+        """put(uri=file://) stores _file_mtime_ns and _file_size tags."""
+        kp = Keeper(store_path=tmp_path)
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("Hello, test content for stat tags.")
+        file_uri = f"file://{test_file}"
+
+        item = kp.put(uri=file_uri)
+        assert item.changed is True
+        assert "_file_mtime_ns" in item.tags
+        assert "_file_size" in item.tags
+        assert item.tags["_file_size"] == str(test_file.stat().st_size)
+
+    def test_skips_read_when_stat_unchanged(self, mock_providers, tmp_path):
+        """put() skips file read when stat (mtime+size) is unchanged."""
+        kp = Keeper(store_path=tmp_path)
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("Hello, test content for stat fast path.")
+        file_uri = f"file://{test_file}"
+
+        kp.put(uri=file_uri)
+
+        # Second put — stat fast path should skip the file read
+        with patch.object(
+            kp._document_provider, "fetch",
+            wraps=kp._document_provider.fetch,
+        ) as mock_fetch:
+            item2 = kp.put(uri=file_uri)
+            assert item2.changed is False
+            mock_fetch.assert_not_called()
+
+    def test_reads_file_when_stat_changes(self, mock_providers, tmp_path):
+        """put() calls fetch() when file stat changes (fast path not used)."""
+        import time
+        kp = Keeper(store_path=tmp_path)
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("Original content.")
+        file_uri = f"file://{test_file}"
+
+        kp.put(uri=file_uri)
+
+        # Modify file (sleep to ensure mtime_ns changes)
+        time.sleep(0.01)
+        test_file.write_text("Modified content, now different!")
+
+        # Verify fetch IS called (stat changed → fast path falls through)
+        with patch.object(
+            kp._document_provider, "fetch",
+            wraps=kp._document_provider.fetch,
+        ) as mock_fetch:
+            kp.put(uri=file_uri)
+            mock_fetch.assert_called_once()
+
+    def test_falls_through_when_tags_differ(self, mock_providers, tmp_path):
+        """put() reads file when user tags differ, even if stat unchanged."""
+        kp = Keeper(store_path=tmp_path)
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("Stable content.")
+        file_uri = f"file://{test_file}"
+
+        kp.put(uri=file_uri, tags={"project": "alpha"})
+
+        # Same file, different tags — must not use fast path
+        with patch.object(
+            kp._document_provider, "fetch",
+            wraps=kp._document_provider.fetch,
+        ) as mock_fetch:
+            kp.put(uri=file_uri, tags={"project": "beta"})
+            mock_fetch.assert_called_once()
+
+    def test_fast_path_with_same_tags(self, mock_providers, tmp_path):
+        """put() uses fast path when user tags are the same as stored."""
+        kp = Keeper(store_path=tmp_path)
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("Content with consistent tags.")
+        file_uri = f"file://{test_file}"
+
+        kp.put(uri=file_uri, tags={"project": "myproject"})
+
+        # Same file, same tags — should use fast path
+        with patch.object(
+            kp._document_provider, "fetch",
+            wraps=kp._document_provider.fetch,
+        ) as mock_fetch:
+            item2 = kp.put(uri=file_uri, tags={"project": "myproject"})
+            assert item2.changed is False
+            mock_fetch.assert_not_called()

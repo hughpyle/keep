@@ -32,6 +32,7 @@ Parts are the structural counterpart to versions:
 |--------|-------------|
 | `-t`, `--tag KEY` | Guidance tag keys (repeatable). Fetches `.tag/KEY` descriptions to guide decomposition |
 | `--foreground`, `--fg` | Run in foreground and wait for results (default: background) |
+| `--force` | Re-analyze even if parts are already current |
 | `-s`, `--store PATH` | Override store directory |
 
 ## Background processing
@@ -96,13 +97,40 @@ keep find "main argument"
 # doc:1@P{2}  2026-01-14 Detailed analysis of the main argument...
 ```
 
+## Smart skip
+
+Analysis is expensive (LLM call per document). To avoid redundant work,
+`analyze` tracks a content hash at the time of analysis. If the document
+hasn't changed since the last analysis, the call is skipped:
+
+```bash
+keep analyze doc:1                    # Analyzes, stores _analyzed_hash
+keep analyze doc:1                    # Skipped — parts are current
+keep put doc:1 "updated content"      # Content changes
+keep analyze doc:1                    # Re-analyzes (content changed)
+```
+
+This makes `put --analyze` safe for cron jobs — point it at a folder daily
+and only new or changed files get analyzed:
+
+```bash
+keep put /path/to/docs/ --analyze     # Only analyzes what needs it
+```
+
+Use `--force` to override the skip:
+
+```bash
+keep analyze doc:1 --force            # Re-analyze regardless
+```
+
 ## Re-analysis
 
-Running `analyze` again replaces all previous parts:
+Running `analyze` on changed content (or with `--force`) replaces all
+previous parts:
 
 ```bash
 keep analyze doc:1                    # Creates parts
-keep analyze doc:1 -t topic           # Re-analyze with guidance — replaces all parts
+keep analyze doc:1 -t topic --force   # Re-analyze with guidance — replaces all parts
 ```
 
 ## Guidance tags
@@ -121,9 +149,14 @@ keep analyze doc:1 -t topic -t type   # Guided by tag descriptions
 ```python
 kp = Keeper()
 
-# Analyze
+# Analyze (skips if parts are current)
 parts = kp.analyze("doc:1")
 parts = kp.analyze("doc:1", tags=["topic", "type"])
+parts = kp.analyze("doc:1", force=True)  # Override skip
+
+# Enqueue for background processing (returns False if skipped)
+enqueued = kp.enqueue_analyze("doc:1")
+enqueued = kp.enqueue_analyze("doc:1", force=True)
 
 # Access parts
 part = kp.get_part("doc:1", 1)        # Returns Item
