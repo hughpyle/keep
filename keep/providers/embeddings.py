@@ -148,29 +148,43 @@ class GeminiEmbedding:
     3. GEMINI_API_KEY or GOOGLE_API_KEY (uses Google AI Studio)
     """
 
-    # Model dimensions (as of 2025)
+    # Default output dimensions per model (full native dimension).
+    # These are used only when no output_dimensionality is requested.
     MODEL_DIMENSIONS = {
         "text-embedding-004": 768,
         "embedding-001": 768,
-        "gemini-embedding-001": 768,
+        "gemini-embedding-001": 3072,
     }
 
     def __init__(
         self,
         model: str = "text-embedding-004",
         api_key: str | None = None,
+        output_dimensionality: int | None = None,
     ):
         """
         Args:
             model: Gemini embedding model name
             api_key: API key (defaults to environment variable)
+            output_dimensionality: Optional reduced dimension (e.g. 768 for
+                gemini-embedding-001 which defaults to 3072). When set, the
+                API returns truncated vectors via Matryoshka representation.
         """
+        from google.genai import types
         from .gemini_client import create_gemini_client
 
         self.model_name = model
-        # Use lookup table if available, otherwise detect lazily from first embedding
-        self._dimension = self.MODEL_DIMENSIONS.get(model)
         self._client = create_gemini_client(api_key)
+
+        # Build embed config if dimensionality is requested
+        self._embed_config: types.EmbedContentConfig | None = None
+        if output_dimensionality is not None:
+            self._embed_config = types.EmbedContentConfig(
+                output_dimensionality=output_dimensionality,
+            )
+            self._dimension: int | None = output_dimensionality
+        else:
+            self._dimension = self.MODEL_DIMENSIONS.get(model)
 
     @property
     def dimension(self) -> int:
@@ -183,10 +197,10 @@ class GeminiEmbedding:
 
     def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text."""
-        result = self._client.models.embed_content(
-            model=self.model_name,
-            contents=text,
-        )
+        kwargs: dict = dict(model=self.model_name, contents=text)
+        if self._embed_config is not None:
+            kwargs["config"] = self._embed_config
+        result = self._client.models.embed_content(**kwargs)
         embedding = list(result.embeddings[0].values)
         # Cache dimension if not yet known
         if self._dimension is None:
@@ -195,10 +209,10 @@ class GeminiEmbedding:
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
-        result = self._client.models.embed_content(
-            model=self.model_name,
-            contents=texts,
-        )
+        kwargs: dict = dict(model=self.model_name, contents=texts)
+        if self._embed_config is not None:
+            kwargs["config"] = self._embed_config
+        result = self._client.models.embed_content(**kwargs)
         return [list(e.values) for e in result.embeddings]
 
 
