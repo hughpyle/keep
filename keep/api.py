@@ -680,6 +680,9 @@ class Keeper:
         self._summarization_provider: Optional[SummarizationProvider] = None
         self._media_describer: Optional[MediaDescriber] = None
 
+        # Cache env tags once per Keeper instance (stable within a process)
+        self._env_tags = casefold_tags(_get_env_tags())
+
         # --- Storage backends (injected or factory-created) ---
         if doc_store is not None and vector_store is not None:
             # Fully injected (tests, custom setups)
@@ -1461,8 +1464,7 @@ class Keeper:
         if self._config.default_tags:
             merged_tags.update(casefold_tags(self._config.default_tags))
 
-        env_tags = casefold_tags(_get_env_tags())
-        merged_tags.update(env_tags)
+        merged_tags.update(self._env_tags)
 
         if tags:
             user_tags = casefold_tags(filter_non_system_tags(tags))
@@ -1622,6 +1624,27 @@ class Keeper:
             # URI mode: fetch document, extract content, store
             validate_id(uri)
 
+            # Fast path for local files: skip expensive read if stat unchanged
+            is_file_uri = uri.startswith("file://") or uri.startswith("/")
+            if is_file_uri and summary is None:
+                try:
+                    fpath = Path(uri.removeprefix("file://")).resolve()
+                    st = fpath.stat()
+                    doc_coll = self._resolve_doc_collection()
+                    existing = self._document_store.get(doc_coll, uri)
+                    if (existing
+                            and existing.tags.get("_file_mtime_ns") == str(st.st_mtime_ns)
+                            and existing.tags.get("_file_size") == str(st.st_size)):
+                        # File stat unchanged — check if tags would also be unchanged
+                        if not tags or not _user_tags_changed(
+                                existing.tags,
+                                {**filter_non_system_tags(existing.tags),
+                                 **casefold_tags(tags)}):
+                            logger.debug("File stat unchanged, skipping read for %s", uri)
+                            return _record_to_item(existing, changed=False)
+                except OSError:
+                    pass  # Fall through to normal fetch
+
             doc = self._document_provider.fetch(uri)
 
             # Merge provider-extracted tags with user tags (user wins on collision)
@@ -1656,6 +1679,16 @@ class Keeper:
             system_tags = {"_source": "uri"}
             if doc.content_type:
                 system_tags["_content_type"] = doc.content_type
+
+            # Store file stat for fast-path change detection on next put
+            if is_file_uri and doc.metadata:
+                try:
+                    fpath = Path(uri.removeprefix("file://")).resolve()
+                    st = fpath.stat()
+                    system_tags["_file_mtime_ns"] = str(st.st_mtime_ns)
+                    system_tags["_file_size"] = str(st.st_size)
+                except OSError:
+                    pass
 
             return self._upsert(
                 uri, doc.content,
@@ -2784,6 +2817,7 @@ class Keeper:
         *,
         provider: Optional["SummarizationProvider"] = None,
         tags: Optional[list[str]] = None,
+        force: bool = False,
     ) -> list[PartInfo]:
         """
         Decompose a note or string into meaningful parts.
@@ -2795,15 +2829,20 @@ class Keeper:
         Uses an LLM to identify sections with summaries and tags.
         Re-analysis replaces all previous parts atomically.
 
+        Skips analysis if the document's content_hash matches the stored
+        _analyzed_hash tag (parts are already current). Use force=True
+        to override.
+
         Args:
             id: Document or string to analyze
             provider: Override LLM provider for decomposition
                 (default: use configured summarization provider)
             tags: Guidance tag keys (e.g., ["topic", "type"]) —
                 fetches .tag/xxx descriptions as decomposition context
+            force: Skip the _analyzed_hash check and re-analyze regardless
 
         Returns:
-            List of PartInfo for the created parts
+            List of PartInfo for the created parts (empty list if skipped)
         """
         validate_id(id)
         doc_coll = self._resolve_doc_collection()
@@ -2813,6 +2852,13 @@ class Keeper:
         doc_record = self._document_store.get(doc_coll, id)
         if doc_record is None:
             raise ValueError(f"Document not found: {id}")
+
+        # Skip if parts are already current (content unchanged since last analysis)
+        if not force and doc_record.content_hash:
+            analyzed_hash = doc_record.tags.get("_analyzed_hash")
+            if analyzed_hash and analyzed_hash == doc_record.content_hash:
+                logger.info("Skipping analysis for %s: parts already current", id)
+                return self.list_parts(id)
 
         # Get content to analyze.
         # For URI sources: re-fetch the document content.
@@ -2927,6 +2973,14 @@ class Keeper:
                 chroma_coll, id, part.part_num,
                 embedding, part.summary, part.tags,
             )
+
+        # Record the content hash at which analysis was performed,
+        # so future calls can skip if content hasn't changed.
+        if doc_record.content_hash:
+            updated_tags = dict(doc_record.tags)
+            updated_tags["_analyzed_hash"] = doc_record.content_hash
+            self._document_store.update_tags(doc_coll, id, updated_tags)
+            self._store.update_tags(chroma_coll, id, updated_tags)
 
         return parts
 
@@ -3061,16 +3115,25 @@ class Keeper:
         self,
         id: str,
         tags: Optional[list[str]] = None,
-    ) -> None:
+        force: bool = False,
+    ) -> bool:
         """
         Enqueue a note for background analysis (decomposition into parts).
 
         Validates the document exists, then adds it to the pending work
         queue for serial processing by the background daemon.
 
+        Skips enqueueing if the document's _analyzed_hash matches its
+        content_hash (parts are already current). Use force=True to
+        override.
+
         Args:
             id: Document ID to analyze
             tags: Guidance tag keys for decomposition
+            force: Enqueue even if parts are already current
+
+        Returns:
+            True if enqueued, False if skipped (parts already current)
         """
         validate_id(id)
         doc_coll = self._resolve_doc_collection()
@@ -3078,9 +3141,18 @@ class Keeper:
         if doc is None:
             raise ValueError(f"Document not found: {id}")
 
+        # Skip if parts are already current
+        if not force and doc.content_hash:
+            analyzed_hash = doc.tags.get("_analyzed_hash")
+            if analyzed_hash and analyzed_hash == doc.content_hash:
+                logger.info("Skipping enqueue for %s: parts already current", id)
+                return False
+
         metadata = {}
         if tags:
             metadata["tags"] = tags
+        if force:
+            metadata["force"] = True
 
         self._pending_queue.enqueue(
             id, doc_coll, "",
@@ -3088,6 +3160,7 @@ class Keeper:
             metadata=metadata,
         )
         self._spawn_processor()
+        return True
 
     def process_pending(self, limit: int = 10) -> dict:
         """
@@ -3177,7 +3250,8 @@ class Keeper:
     def _process_pending_analyze(self, item) -> None:
         """Process a pending analysis work item."""
         tags = item.metadata.get("tags") if item.metadata else None
-        parts = self.analyze(item.id, tags=tags)
+        force = item.metadata.get("force", False) if item.metadata else False
+        parts = self.analyze(item.id, tags=tags, force=force)
         logger.info("Analyzed %s into %d parts", item.id, len(parts))
 
     def pending_count(self) -> int:

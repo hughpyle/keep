@@ -131,10 +131,11 @@ keep tag-update ID --tag key=value   # Add/update tag
 keep tag-update ID --remove key      # Remove tag
 keep del ID                          # Remove item or revert to previous version
 
-# Analyze
+# Analyze (skips if parts are already current)
 keep analyze ID                      # Decompose into parts (background)
 keep analyze ID -t topic -t type     # With guidance tags
 keep analyze ID --fg                 # Wait for completion
+keep analyze ID --force              # Re-analyze even if current
 
 # Maintenance
 keep reindex                         # Rebuild search index

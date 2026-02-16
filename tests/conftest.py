@@ -469,9 +469,9 @@ class MockPendingSummaryQueue:
     def __init__(self, db_path: Path):
         self._queue = []
 
-    def enqueue(self, id: str, collection: str, content: str) -> None:
+    def enqueue(self, id: str, collection: str, content: str, **kwargs) -> None:
         """Add item to pending queue."""
-        self._queue.append({"id": id, "collection": collection, "content": content})
+        self._queue.append({"id": id, "collection": collection, "content": content, **kwargs})
 
     def dequeue(self, limit: int = 10) -> list:
         """Get items from queue."""

@@ -26,7 +26,7 @@ Skips hidden files, symlinks, and subdirectories.
 | `-i`, `--id ID` | Custom document ID (auto-generated for text/stdin) |
 | `--summary TEXT` | User-provided summary (skips auto-summarization) |
 | `--suggest-tags` | Show tag suggestions from similar items |
-| `--analyze` | Queue background analysis after put (decompose into parts) |
+| `--analyze` | Queue background analysis after put (skips if parts are already current) |
 | `-s`, `--store PATH` | Override store directory |
 
 ## Text mode and content-addressed IDs
