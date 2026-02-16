@@ -429,7 +429,8 @@ class DocumentStoreProtocol(Protocol):
     ) -> list[str]: ...
 
     def query_by_tag_key(
-        self, collection: str, key: str
+        self, collection: str, key: str,
+        limit: int = 100, since_date: Optional[str] = None,
     ) -> list[DocumentRecord]: ...
 
     # -- Version extraction (for move) --
