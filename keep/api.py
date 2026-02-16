@@ -1620,6 +1620,15 @@ class Keeper:
                  if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
             )
 
+        # Enforce required tags (skip for system docs with dot-prefix IDs)
+        effective_id = id or uri or ""
+        if self._config.required_tags and not effective_id.startswith("."):
+            user_tags = {k: v for k, v in (tags or {}).items()
+                         if not k.startswith(SYSTEM_TAG_PREFIX)} if tags else {}
+            missing = [t for t in self._config.required_tags if t not in user_tags]
+            if missing:
+                raise ValueError(f"Required tags missing: {', '.join(missing)}")
+
         if uri is not None:
             # URI mode: fetch document, extract content, store
             validate_id(uri)
@@ -1760,6 +1769,7 @@ class Keeper:
         self,
         query: Optional[str] = None,
         *,
+        tags: Optional[dict[str, str]] = None,
         similar_to: Optional[str] = None,
         fulltext: bool = False,
         limit: int = 10,
@@ -1774,6 +1784,7 @@ class Keeper:
 
         Args:
             query: Search query text (semantic by default, fulltext if fulltext=True)
+            tags: Optional tag filter — only return items matching all specified tags
             similar_to: Find items similar to this note ID
             fulltext: Use full-text search instead of semantic similarity (only with query)
             limit: Maximum results to return
@@ -1791,6 +1802,13 @@ class Keeper:
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
 
+        # Build where clause from tags filter
+        where = None
+        if tags:
+            casefolded = {k.casefold(): v.casefold() for k, v in tags.items()}
+            conditions = [{k: v} for k, v in casefolded.items()]
+            where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
+
         if similar_to:
             # Similar-to mode: use stored embedding from existing item
             item = self._store.get(chroma_coll, similar_to)
@@ -1801,7 +1819,7 @@ class Keeper:
             if embedding is None:
                 embedding = self._get_embedding_provider().embed(item.summary)
             actual_limit = (limit + 1 if not include_self else limit) * 3
-            results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit)
+            results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit, where=where)
 
             if not include_self:
                 results = [r for r in results if r.id != similar_to]
@@ -1812,14 +1830,14 @@ class Keeper:
         elif fulltext:
             # Full-text mode: text matching
             fetch_limit = limit * 3
-            results = self._store.query_fulltext(chroma_coll, query, limit=fetch_limit)
+            results = self._store.query_fulltext(chroma_coll, query, limit=fetch_limit, where=where)
             items = [r.to_item() for r in results]
 
         else:
             # Semantic mode (default): embed query, search by similarity
             embedding = self._get_embedding_provider().embed(query)
             fetch_limit = limit * 3 if self._decay_half_life_days > 0 else limit * 2
-            results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit)
+            results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit, where=where)
 
             items = [r.to_item() for r in results]
             items = self._apply_recency_decay(items)
@@ -2450,7 +2468,7 @@ class Keeper:
     # Current Working Context (Now)
     # -------------------------------------------------------------------------
 
-    def get_now(self) -> Item:
+    def get_now(self, *, scope: Optional[str] = None) -> Item:
         """
         Get the current working intentions.
 
@@ -2458,25 +2476,34 @@ class Keeper:
         If it doesn't exist, creates one with default content and tags from
         the bundled system now.md file.
 
+        Args:
+            scope: Optional scope for multi-user isolation (e.g. user ID).
+                   When set, uses ``now:{scope}`` instead of the singleton ``now``.
+
         Returns:
             The current intentions Item (never None - auto-creates if missing)
         """
-        item = self.get(NOWDOC_ID)
+        doc_id = f"now:{scope}" if scope else NOWDOC_ID
+        item = self.get(doc_id)
         if item is None:
-            # First-time initialization with default content and tags
-            try:
-                default_content, default_tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
-            except FileNotFoundError:
-                # Fallback if system file is missing
-                default_content = "# Now\n\nYour working context."
-                default_tags = {}
-            item = self.set_now(default_content, tags=default_tags)
+            if scope:
+                # Scoped now: initialize with minimal content
+                item = self.set_now(f"# Now ({scope})\n\nWorking context.", scope=scope)
+            else:
+                # Singleton now: use bundled system doc
+                try:
+                    default_content, default_tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
+                except FileNotFoundError:
+                    default_content = "# Now\n\nYour working context."
+                    default_tags = {}
+                item = self.set_now(default_content, tags=default_tags)
         return item
 
     def set_now(
         self,
         content: str,
         *,
+        scope: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
     ) -> Item:
         """
@@ -2487,12 +2514,18 @@ class Keeper:
 
         Args:
             content: New content for the current intentions
+            scope: Optional scope for multi-user isolation (e.g. user ID).
+                   When set, uses ``now:{scope}`` and auto-tags with ``user={scope}``.
             tags: Optional additional tags to apply
 
         Returns:
             The updated context Item
         """
-        return self.put(content, id=NOWDOC_ID, tags=tags)
+        doc_id = f"now:{scope}" if scope else NOWDOC_ID
+        merged_tags = dict(tags or {})
+        if scope:
+            merged_tags.setdefault("user", scope)
+        return self.put(content, id=doc_id, tags=merged_tags or None)
 
     def move(
         self,

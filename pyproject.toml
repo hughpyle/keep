@@ -63,6 +63,11 @@ media = [
     "mlx-vlm>=0.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
     "mlx-whisper>=0.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
 ]
+# LangChain integration (LangGraph BaseStore, Retriever, Tools, Middleware)
+langchain = [
+    "langchain-core>=1.0.0,<2.0.0",
+    "langgraph-checkpoint>=2.1.0,<5.0.0",
+]
 # Development
 dev = [
     "pytest>=7.0",

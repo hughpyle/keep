@@ -106,36 +106,43 @@ class MockChromaStore:
             return True
         return False
 
-    def query_embedding(self, collection: str, embedding: list[float],
-                       limit: int = 10, where: dict = None) -> list:
-        from keep.store import StoreResult
-        if collection not in self._data:
-            return []
-        results = []
-        for id, rec in list(self._data[collection].items())[:limit]:
-            results.append(StoreResult(
-                id=id, summary=rec["summary"], tags=rec["tags"], distance=0.1
-            ))
-        return results
-
-    def query_metadata(self, collection: str, where: dict, limit: int = 100) -> list:
-        from keep.store import StoreResult
-        if collection not in self._data:
-            return []
-
-        # Flatten ChromaDB $and clauses into simple key=value pairs
+    def _match_where(self, tags: dict, where: dict | None) -> bool:
+        """Check if tags match a ChromaDB where clause."""
+        if not where:
+            return True
         conditions = {}
         if "$and" in where:
             for clause in where["$and"]:
                 conditions.update(clause)
         else:
             conditions = where
+        return all(tags.get(k) == v for k, v in conditions.items())
 
+    def query_embedding(self, collection: str, embedding: list[float],
+                       limit: int = 10, where: dict = None) -> list:
+        from keep.store import StoreResult
+        if collection not in self._data:
+            return []
         results = []
-        for id, rec in list(self._data[collection].items())[:limit]:
-            match = all(rec["tags"].get(k) == v for k, v in conditions.items())
-            if match:
+        for id, rec in list(self._data[collection].items()):
+            if self._match_where(rec["tags"], where):
+                results.append(StoreResult(
+                    id=id, summary=rec["summary"], tags=rec["tags"], distance=0.1
+                ))
+            if len(results) >= limit:
+                break
+        return results
+
+    def query_metadata(self, collection: str, where: dict, limit: int = 100) -> list:
+        from keep.store import StoreResult
+        if collection not in self._data:
+            return []
+        results = []
+        for id, rec in list(self._data[collection].items()):
+            if self._match_where(rec["tags"], where):
                 results.append(StoreResult(id=id, summary=rec["summary"], tags=rec["tags"]))
+            if len(results) >= limit:
+                break
         return results
 
     def query_fulltext(self, collection: str, query: str, limit: int = 10,
@@ -145,7 +152,7 @@ class MockChromaStore:
             return []
         results = []
         for id, rec in self._data[collection].items():
-            if query.lower() in rec["summary"].lower():
+            if query.lower() in rec["summary"].lower() and self._match_where(rec["tags"], where):
                 results.append(StoreResult(id=id, summary=rec["summary"], tags=rec["tags"]))
         return results[:limit]
 

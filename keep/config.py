@@ -136,6 +136,15 @@ class StoreConfig:
     # Remote backend (if set, Keeper delegates to keepnotes.ai API)
     remote: Optional[RemoteConfig] = None
 
+    # Required tags — put() raises ValueError if any of these keys are missing.
+    # System notes (dot-prefix IDs like .meta/*, .tag/*) are exempt.
+    required_tags: list[str] = field(default_factory=list)
+
+    # Namespace keys — positional mapping from namespace components to tag names.
+    # Used by KeepStore (LangGraph BaseStore) to map namespace tuples to Keep tags.
+    # Example: ["category", "user"] means position 0 → category, position 1 → user.
+    namespace_keys: list[str] = field(default_factory=list)
+
     # Pluggable backend ("local" = default, or entry-point name)
     backend: str = "local"
     backend_params: dict[str, Any] = field(default_factory=dict)
@@ -483,8 +492,14 @@ def load_config(config_dir: Path) -> StoreConfig:
             params={k: v for k, v in section.items() if k != "name"},
         )
 
-    # Parse default tags (filter out system tags)
+    # Parse default tags, required tags, and namespace keys from [tags] section
     raw_tags = data.get("tags", {})
+    required_tags = raw_tags.pop("required", [])
+    if isinstance(required_tags, str):
+        required_tags = [required_tags]
+    namespace_keys = raw_tags.pop("namespace_keys", [])
+    if isinstance(namespace_keys, str):
+        namespace_keys = [namespace_keys]
     default_tags = {k: str(v) for k, v in raw_tags.items()
                     if not k.startswith("_")}
 
@@ -530,6 +545,8 @@ def load_config(config_dir: Path) -> StoreConfig:
         media=media_config,
         embedding_identity=parse_embedding_identity(data.get("embedding_identity")),
         default_tags=default_tags,
+        required_tags=required_tags,
+        namespace_keys=namespace_keys,
         max_summary_length=max_summary_length,
         max_file_size=max_file_size,
         system_docs_version=system_docs_version,
@@ -612,9 +629,14 @@ def save_config(config: StoreConfig) -> None:
             "dimension": config.embedding_identity.dimension,
         }
 
-    # Add default tags if set
-    if config.default_tags:
-        data["tags"] = config.default_tags
+    # Add tags section (default tags + required + namespace_keys)
+    if config.default_tags or config.required_tags or config.namespace_keys:
+        tags_section = dict(config.default_tags)
+        if config.required_tags:
+            tags_section["required"] = config.required_tags
+        if config.namespace_keys:
+            tags_section["namespace_keys"] = config.namespace_keys
+        data["tags"] = tags_section
 
     # Add integrations tracking if set
     if config.integrations:
