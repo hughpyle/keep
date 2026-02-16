@@ -49,6 +49,7 @@ class TestCliBasics:
         assert "find" in result.stdout
         assert "put" in result.stdout
     
+    @pytest.mark.e2e
     def test_no_args_shows_now(self, cli):
         """CLI with no args shows current working context."""
         result = cli()

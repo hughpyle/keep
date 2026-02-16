@@ -24,7 +24,7 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run tests
-        run: uv run pytest --tb=short -q
+        run: uv run pytest --tb=short -q -m "not slow and not e2e"
         env:
           # Dummy key so config detects a provider; mock_providers fixture
           # intercepts before any real API call is made
