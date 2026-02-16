@@ -8,6 +8,11 @@ The CLI (`keep put`, `keep find`, etc.) is the primary interface. The Python API
 pip install keep-skill
 ```
 
+For LangChain/LangGraph integration:
+```bash
+pip install keep-skill[langchain]
+```
+
 See [QUICKSTART.md](QUICKSTART.md) for provider configuration (API keys or local models).
 
 ## Quick Start
@@ -77,6 +82,9 @@ kp.put(content, tags={}, summary=None) → Item
 # Semantic search (default)
 kp.find("auth", limit=10) → list[Item]
 
+# With tag pre-filtering
+kp.find("auth", tags={"user": "alice"}, limit=10) → list[Item]
+
 # Full-text search
 kp.find("auth", fulltext=True) → list[Item]
 
@@ -143,8 +151,14 @@ kp.get_version_nav(id) → dict
 # Get current intentions (auto-creates if missing)
 kp.get_now() → Item
 
+# Per-user scoped intentions
+kp.get_now(scope="alice") → Item
+
 # Set current intentions
 kp.set_now(content, tags={}) → Item
+
+# Per-user scoped update (auto-tags user=alice)
+kp.set_now(content, scope="alice") → Item
 ```
 
 #### Deletion
@@ -212,7 +226,12 @@ Add to `keep.toml`:
 [tags]
 project = "my-project"
 owner = "alice"
+required = ["user"]                    # Enforce required tags on put()
+namespace_keys = ["category", "user"]  # LangGraph namespace mapping
 ```
+
+- **`required`** — List of tag keys that must be present on every `put()`. System docs (dot-prefix IDs) are exempt. Scoped `set_now(scope=...)` auto-tags `user`, satisfying a `user` requirement.
+- **`namespace_keys`** — Positional mapping from LangGraph namespace tuples to Keep tag names. See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md).
 
 ### Recommended Tags
 
@@ -292,9 +311,14 @@ Common errors:
 - Invalid URI format
 - Embedding provider changes (auto-migrated, use `kp.reindex()` if needed)
 
+## LangChain / LangGraph
+
+For LangChain and LangGraph integration (BaseStore, retriever, tools, middleware), see [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md).
+
 ## See Also
 
 - [QUICKSTART.md](QUICKSTART.md) — Installation and setup
 - [REFERENCE.md](REFERENCE.md) — CLI reference
+- [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) — LangChain/LangGraph integration
 - [AGENT-GUIDE.md](AGENT-GUIDE.md) — Working session patterns
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System internals
