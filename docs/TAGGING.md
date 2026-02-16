@@ -41,7 +41,11 @@ Add a `[tags]` section to `keep.toml`:
 [tags]
 project = "my-project"
 owner = "alice"
+required = ["user"]                    # Enforce required tags on put()
+namespace_keys = ["category", "user"]  # LangGraph namespace mapping
 ```
+
+The `required` list enforces that specified tag keys must be present on every `put()` call. The `namespace_keys` list configures how LangGraph namespace components map to tag names — see [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md).
 
 ## Tag filtering
 
@@ -160,4 +164,5 @@ See [PYTHON-API.md](PYTHON-API.md) for complete Python API reference.
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags
 - [KEEP-LIST.md](KEEP-LIST.md) — List and filter by tags
 - [KEEP-FIND.md](KEEP-FIND.md) — Search with tag filters
+- [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) — LangChain/LangGraph namespace-to-tag mapping
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

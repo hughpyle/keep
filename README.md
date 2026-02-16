@@ -58,6 +58,7 @@ The skill instructions and hooks install into your agent's configuration automat
 |-------|-------------|
 | **Skill prompt** | Always in system prompt — guides reflection, breakdown capture, document indexing |
 | **Hooks** | Inject `keep now -n 10` context at session start, prompt submit, and session end |
+| **LangChain** | [LangGraph BaseStore](docs/LANGCHAIN-INTEGRATION.md), retriever, tools, and middleware |
 | **Daily cron** | Scheduled deep reflection in an isolated session ([OpenClaw cron](SKILL.md#openclaw-integration)) |
 
 The CLI alone is enough to start. The hooks make it automatic.
@@ -85,6 +86,8 @@ export OPENAI_API_KEY=...      # Simplest (handles both embeddings + summarizati
 ```
 
 **Local** (offline, no API keys): If [Ollama](https://ollama.com/) is running, keep auto-detects it. Or on macOS Apple Silicon: `uv tool install 'keep-skill[local]'`
+
+**LangChain/LangGraph** integration: `pip install keep-skill[langchain]` or `pip install langchain-keep`
 
 See [docs/QUICKSTART.md](docs/QUICKSTART.md) for all provider options.
 
@@ -151,6 +154,7 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples
 - **[docs/VERSIONING.md](docs/VERSIONING.md)** — Document versioning and history
 - **[docs/META-DOCS.md](docs/META-DOCS.md)** — How meta-docs surface contextual feedback
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Working session patterns
+- **[docs/LANGCHAIN-INTEGRATION.md](docs/LANGCHAIN-INTEGRATION.md)** — LangChain/LangGraph integration
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — How it works under the hood
 - **[SKILL.md](SKILL.md)** — The reflective practice (for AI agents)
 

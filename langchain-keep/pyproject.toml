@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-keep"
+version = "0.1.0"
+description = "LangChain integration for keep — reflective memory for AI agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "Hugh Pyle"}]
+keywords = ["langchain", "langgraph", "memory", "semantic-search", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = ["keep-skill[langchain]>=0.44.0"]
+
+[project.urls]
+Homepage = "https://keepnotes.ai"
+Repository = "https://github.com/hughpyle/keep"
+Documentation = "https://docs.keepnotes.ai"

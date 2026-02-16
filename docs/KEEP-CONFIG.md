@@ -67,7 +67,15 @@ name = "composite"
 [tags]
 project = "my-project"                 # Default tags applied to all new items
 owner = "alice"
+required = ["user"]                    # Tags that must be present on every put()
+namespace_keys = ["category", "user"]  # LangGraph namespace-to-tag mapping
 ```
+
+### Tags section details
+
+- **Default tags** (key = "value") — Applied to all new items. Overridden by user tags.
+- **`required`** — List of tag keys that must be present on every `put()` call. Raises `ValueError` if missing. System docs (dot-prefix IDs like `.meta/`) are exempt.
+- **`namespace_keys`** — Positional mapping for [LangChain integration](LANGCHAIN-INTEGRATION.md). Maps LangGraph namespace tuple components to Keep tag names.
 
 ## Environment variables
 
@@ -112,3 +120,4 @@ keep config --reset-system-docs       # Reload all from bundled content
 
 - [QUICKSTART.md](QUICKSTART.md) — Installation and provider setup
 - [REFERENCE.md](REFERENCE.md) — Quick reference index
+- [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) — LangChain/LangGraph integration

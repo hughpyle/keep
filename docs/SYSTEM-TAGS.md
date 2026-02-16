@@ -97,6 +97,7 @@ These tags are actively set and maintained by the system.
 **Values:**
 - `"uri"` - Content fetched from a URI (CLI: `keep put <uri>`, API: `kp.put(uri=...)`)
 - `"inline"` - Inline content (CLI: `keep put "text"`, API: `kp.put("text")`)
+- `"langchain"` - Created by KeepStore (LangChain/LangGraph integration)
 
 **Usage:** Query with `kp.query_tag("_source", "inline")` to find remembered content.
 
