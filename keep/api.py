@@ -133,7 +133,7 @@ def _truncate_ts(ts: str) -> str:
     return ts
 
 
-def _record_to_item(rec, score: float = None) -> "Item":
+def _record_to_item(rec, score: float = None, changed: bool = None) -> "Item":
     """
     Convert a DocumentRecord to an Item with timestamp tags.
 
@@ -152,7 +152,7 @@ def _record_to_item(rec, score: float = None) -> "Item":
         "_accessed": accessed,
         "_accessed_date": accessed[:10],
     }
-    return Item(id=rec.id, summary=rec.summary, tags=tags, score=score)
+    return Item(id=rec.id, summary=rec.summary, tags=tags, score=score, changed=changed)
 
 
 import os
@@ -1485,7 +1485,7 @@ class Keeper:
         # Early return: nothing to do
         if content_unchanged and not tags_changed and summary is None:
             logger.debug("Content and tags unchanged, skipping for %s", id)
-            return _record_to_item(existing_doc)
+            return _record_to_item(existing_doc, changed=False)
 
         # Get embedding: reuse stored if content unchanged, compute if new/changed
         if content_unchanged:
@@ -1559,7 +1559,7 @@ class Keeper:
         if self._is_local and summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
             self._spawn_processor()
 
-        return _record_to_item(result)
+        return _record_to_item(result, changed=not content_unchanged)
 
     def put(
         self,
