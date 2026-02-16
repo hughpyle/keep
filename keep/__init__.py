@@ -37,7 +37,11 @@ from .protocol import (
 )
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, INTERNAL_TAGS
 
-__version__ = "0.44.2"
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("keep-skill")
+except Exception:
+    __version__ = "0.0.0"  # fallback for editable installs without metadata
 __all__ = [
     "Keeper",
     "Item",
