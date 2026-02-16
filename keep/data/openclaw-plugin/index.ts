@@ -5,6 +5,10 @@
  *   before_agent_start  → inject `keep now` context
  *   after_agent_stop    → update intentions
  *   after_compaction    → index workspace memory files into keep
+ *
+ * The after_compaction hook uses `keep put` with file-stat fast-path:
+ * unchanged files (same mtime+size) are skipped without reading.
+ * This makes it safe to run on every compaction even with many files.
  */
 
 import { execSync } from "child_process";
@@ -73,9 +77,11 @@ export default function register(api: any) {
     { priority: 10 },
   );
 
-  // After compaction: index memory files into keep
+  // After compaction: index workspace memory files into keep.
   // Memory flush writes files right before compaction, so they're fresh here.
-  // Uses `keep put` with file stat fast-path — unchanged files are no-ops.
+  // Uses `keep put` with file-stat fast-path (mtime+size check) — unchanged
+  // files skip without even reading the file. Safe to run on every compaction.
+  // Also indexes MEMORY.md if it exists at the workspace root.
   api.on(
     "after_compaction",
     async (_event: any, ctx: any) => {
@@ -83,16 +89,28 @@ export default function register(api: any) {
       if (!workspaceDir) return;
 
       const memoryDir = path.join(workspaceDir, "memory");
-      if (!fs.existsSync(memoryDir)) return;
+      const memoryMd = path.join(workspaceDir, "MEMORY.md");
+      const targets: string[] = [];
+
+      if (fs.existsSync(memoryDir)) {
+        targets.push(`"${memoryDir}/"`);
+      }
+      if (fs.existsSync(memoryMd)) {
+        targets.push(`"${memoryMd}"`);
+      }
+
+      if (targets.length === 0) return;
 
       api.logger?.debug("[keep] Indexing memory files after compaction");
-      const result = runKeepLong(`put "${memoryDir}/"`, 30000);
+      const result = runKeepLong(`put ${targets.join(" ")}`, 30000);
       if (result) {
-        api.logger?.info("[keep] Post-compaction memory sync complete");
+        api.logger?.info(`[keep] Post-compaction memory sync: ${result}`);
       }
     },
     { priority: 20 },
   );
 
-  api.logger?.info("[keep] Registered hooks: before_agent_start, after_agent_stop, after_compaction");
+  api.logger?.info(
+    "[keep] Registered hooks: before_agent_start, after_agent_stop, after_compaction",
+  );
 }
