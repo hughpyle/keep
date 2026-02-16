@@ -1080,12 +1080,16 @@ def _put_store(
         if results:
             typer.echo(_format_items(results, as_json=_get_json_output()))
         if do_analyze and results:
-            for r in results:
+            changed_results = [r for r in results if r.changed]
+            for r in changed_results:
                 try:
                     kp.enqueue_analyze(r.id)
                 except ValueError:
                     pass
-            typer.echo(f"Queued {len(results)} items for background analysis.", err=True)
+            if changed_results:
+                typer.echo(f"Queued {len(changed_results)} changed items for analysis.", err=True)
+            else:
+                typer.echo("All files unchanged, skipping analysis.", err=True)
         return None
     elif resolved_path is not None and resolved_path.is_file():
         # File mode: bare file path → normalize to file:// URI
@@ -1207,11 +1211,14 @@ def put(
             typer.echo(f"\napply with: keep tag-update {_shell_quote_id(item.id)} -t TAG")
 
     if do_analyze:
-        try:
-            kp.enqueue_analyze(item.id)
-            typer.echo(f"Queued {item.id} for background analysis.", err=True)
-        except ValueError:
-            pass
+        if item.changed:
+            try:
+                kp.enqueue_analyze(item.id)
+                typer.echo(f"Queued {item.id} for background analysis.", err=True)
+            except ValueError:
+                pass
+        else:
+            typer.echo(f"Content unchanged, skipping analysis for {item.id}.", err=True)
 
 
 @app.command("update", hidden=True)
