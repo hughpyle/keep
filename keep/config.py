@@ -95,6 +95,7 @@ class RemoteConfig:
     """Configuration for remote keepnotes.ai backend."""
     api_url: str  # e.g., "https://api.keepnotes.ai"
     api_key: str  # e.g., "kn_live_..."
+    project: Optional[str] = None  # project slug for X-Project header
 
 
 @dataclass
@@ -507,8 +508,9 @@ def load_config(config_dir: Path) -> StoreConfig:
     remote_data = data.get("remote", {})
     api_url = os.environ.get("KEEPNOTES_API_URL") or remote_data.get("api_url", "https://api.keepnotes.ai")
     api_key = os.environ.get("KEEPNOTES_API_KEY") or remote_data.get("api_key")
+    project = os.environ.get("KEEPNOTES_PROJECT") or remote_data.get("project")
     if api_url and api_key:
-        remote = RemoteConfig(api_url=api_url, api_key=api_key)
+        remote = RemoteConfig(api_url=api_url, api_key=api_key, project=project or None)
 
     # Parse pluggable backend config
     backend = data.get("store", {}).get("backend", "local")
@@ -622,10 +624,13 @@ def save_config(config: StoreConfig) -> None:
     if config.remote and not (
         os.environ.get("KEEPNOTES_API_URL") or os.environ.get("KEEPNOTES_API_KEY")
     ):
-        data["remote"] = {
+        remote_data = {
             "api_url": config.remote.api_url,
             "api_key": config.remote.api_key,
         }
+        if config.remote.project:
+            remote_data["project"] = config.remote.project
+        data["remote"] = remote_data
 
     with open(config.config_path, "wb") as f:
         tomli_w.dump(data, f)

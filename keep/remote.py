@@ -7,6 +7,7 @@ KEEPNOTES_API_URL and KEEPNOTES_API_KEY environment variables are set.
 """
 
 import logging
+import os
 from typing import Any, Optional
 
 import httpx
@@ -29,10 +30,18 @@ class RemoteKeeper:
     the local Keeper class.
     """
 
-    def __init__(self, api_url: str, api_key: str, config: StoreConfig):
+    def __init__(self, api_url: str, api_key: str, config: StoreConfig, *, project: Optional[str] = None):
         self.api_url = api_url.rstrip("/")
         self.api_key = api_key
         self._config = config
+
+        # Project selection: explicit param > config > env var
+        self.project = (
+            project
+            or (config.remote.project if config.remote else None)
+            or os.environ.get("KEEPNOTES_PROJECT")
+            or None
+        )
 
         # Refuse non-HTTPS for remote APIs (bearer token would be sent in cleartext)
         if not self.api_url.startswith("https://") and "localhost" not in self.api_url and "127.0.0.1" not in self.api_url:
@@ -41,12 +50,16 @@ class RemoteKeeper:
                 "Use HTTPS to protect API credentials, or use localhost for local development."
             )
 
+        headers: dict[str, str] = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if self.project:
+            headers["X-Project"] = self.project
+
         self._client = httpx.Client(
             base_url=self.api_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             timeout=DEFAULT_TIMEOUT,
         )
 
