@@ -142,8 +142,10 @@ class GeminiEmbedding:
     """
     Embedding provider using Google's Gemini API.
 
-    Requires: GEMINI_API_KEY or GOOGLE_API_KEY environment variable.
-    Requires: pip install google-genai
+    Authentication (checked in priority order):
+    1. api_key parameter (if provided, uses Google AI Studio)
+    2. GOOGLE_CLOUD_PROJECT env var (uses Vertex AI with ADC)
+    3. GEMINI_API_KEY or GOOGLE_API_KEY (uses Google AI Studio)
     """
 
     # Model dimensions (as of 2025)
@@ -163,26 +165,12 @@ class GeminiEmbedding:
             model: Gemini embedding model name
             api_key: API key (defaults to environment variable)
         """
-        try:
-            from google import genai
-        except ImportError:
-            raise RuntimeError(
-                "GeminiEmbedding requires 'google-genai' library. "
-                "Install with: pip install google-genai"
-            )
+        from .gemini_client import create_gemini_client
 
         self.model_name = model
         # Use lookup table if available, otherwise detect lazily from first embedding
         self._dimension = self.MODEL_DIMENSIONS.get(model)
-
-        # Resolve API key
-        key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if not key:
-            raise ValueError(
-                "Gemini API key required. Set GEMINI_API_KEY or GOOGLE_API_KEY"
-            )
-
-        self._client = genai.Client(api_key=key)
+        self._client = create_gemini_client(api_key)
 
     @property
     def dimension(self) -> int:
