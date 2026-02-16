@@ -8,9 +8,13 @@ KEEPNOTES_API_URL and KEEPNOTES_API_KEY environment variables are set.
 
 import logging
 import os
+import re
 from typing import Any, Optional
 
 import httpx
+
+# Project slug: must start with a letter, 2-63 chars, lowercase letters/numbers/hyphens
+_SLUG_RE = re.compile(r'^[a-z][a-z0-9-]{0,61}[a-z0-9]$')
 
 from .config import StoreConfig
 from .document_store import VersionInfo
@@ -42,6 +46,13 @@ class RemoteKeeper:
             or os.environ.get("KEEPNOTES_PROJECT")
             or None
         )
+
+        # Validate project slug format
+        if self.project and not _SLUG_RE.match(self.project):
+            raise ValueError(
+                f"Invalid project slug '{self.project}'. "
+                "Must start with a letter, 2-63 chars, lowercase letters/numbers/hyphens."
+            )
 
         # Refuse non-HTTPS for remote APIs (bearer token would be sent in cleartext)
         if not self.api_url.startswith("https://") and "localhost" not in self.api_url and "127.0.0.1" not in self.api_url:
