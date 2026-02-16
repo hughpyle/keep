@@ -127,6 +127,7 @@ class Item:
     summary: str
     tags: dict[str, str] = field(default_factory=dict)
     score: Optional[float] = None
+    changed: Optional[bool] = None  # True if content changed on put(), None for queries
     
     @property
     def created(self) -> str | None:

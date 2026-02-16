@@ -174,3 +174,26 @@ class TestKeeperUpdate:
         assert item.tags["a"] == "1"  # preserved
         assert item.tags["b"] == "updated"  # updated
         assert item.tags["c"] == "3"  # added
+
+    def test_put_changed_flag_new_content(self, keeper: Keeper) -> None:
+        """put() sets changed=True for new content."""
+        item = keeper.put("Brand new content.", id="test:changed-new")
+        assert item.changed is True
+
+    def test_put_changed_flag_updated_content(self, keeper: Keeper) -> None:
+        """put() sets changed=True when content changes."""
+        keeper.put("Original.", id="test:changed-update")
+        item = keeper.put("Different content.", id="test:changed-update")
+        assert item.changed is True
+
+    def test_put_changed_flag_unchanged(self, keeper: Keeper) -> None:
+        """put() sets changed=False when content is identical."""
+        keeper.put("Same content.", id="test:changed-same")
+        item = keeper.put("Same content.", id="test:changed-same")
+        assert item.changed is False
+
+    def test_put_changed_flag_tags_only(self, keeper: Keeper) -> None:
+        """put() sets changed=False when only tags change (content unchanged)."""
+        keeper.put("Stable content.", id="test:changed-tags")
+        item = keeper.put("Stable content.", id="test:changed-tags", tags={"new": "tag"})
+        assert item.changed is False
