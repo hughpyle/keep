@@ -456,16 +456,19 @@ class DocumentStoreProtocol(Protocol):
 @runtime_checkable
 class PendingQueueProtocol(Protocol):
     """
-    Abstract pending summary queue.
+    Abstract pending work queue.
 
-    Manages background summarization of large content.
+    Manages background tasks: summarization, embedding, and analysis.
     """
 
-    def enqueue(self, id: str, collection: str, content: str) -> None: ...
+    def enqueue(
+        self, id: str, collection: str, content: str,
+        *, task_type: str = "summarize", metadata: Optional[dict] = None,
+    ) -> None: ...
 
     def dequeue(self, limit: int = 10) -> list[PendingSummary]: ...
 
-    def complete(self, id: str, collection: str) -> None: ...
+    def complete(self, id: str, collection: str, task_type: str = "summarize") -> None: ...
 
     def count(self) -> int: ...
 
