@@ -90,21 +90,22 @@ export default function register(api: any) {
 
       const memoryDir = path.join(workspaceDir, "memory");
       const memoryMd = path.join(workspaceDir, "MEMORY.md");
-      const targets: string[] = [];
+      let indexed = 0;
 
+      // Index memory/ directory (all files, directory mode)
       if (fs.existsSync(memoryDir)) {
-        targets.push(`"${memoryDir}/"`);
+        api.logger?.debug("[keep] Indexing memory/ after compaction");
+        if (runKeepLong(`put "${memoryDir}/"`, 30000)) indexed++;
       }
+
+      // Index MEMORY.md (single file)
       if (fs.existsSync(memoryMd)) {
-        targets.push(`"${memoryMd}"`);
+        api.logger?.debug("[keep] Indexing MEMORY.md after compaction");
+        if (runKeepLong(`put "${memoryMd}"`, 10000)) indexed++;
       }
 
-      if (targets.length === 0) return;
-
-      api.logger?.debug("[keep] Indexing memory files after compaction");
-      const result = runKeepLong(`put ${targets.join(" ")}`, 30000);
-      if (result) {
-        api.logger?.info(`[keep] Post-compaction memory sync: ${result}`);
+      if (indexed > 0) {
+        api.logger?.info("[keep] Post-compaction memory sync complete");
       }
     },
     { priority: 20 },
