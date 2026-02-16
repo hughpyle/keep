@@ -3284,10 +3284,15 @@ class Keeper:
                 result["processed"] += 1
 
             except Exception as e:
-                # Leave in queue for retry (attempt counter already incremented)
+                # Mark as failed so it resets to pending for retry.
+                # (attempt counter already incremented by dequeue)
+                error_msg = f"{type(e).__name__}: {e}"
+                self._pending_queue.fail(
+                    item.id, item.collection, item.task_type,
+                    error=error_msg,
+                )
                 result["failed"] += 1
-                error_msg = f"{item.id}: {type(e).__name__}: {e}"
-                result["errors"].append(error_msg)
+                result["errors"].append(f"{item.id}: {error_msg}")
                 logger.warning("Failed to %s %s (attempt %d): %s",
                              item.task_type, item.id, item.attempts, e)
 

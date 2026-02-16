@@ -199,6 +199,19 @@ class PendingSummaryQueue:
             """, (id, collection, task_type))
             self._conn.commit()
 
+    def fail(
+        self, id: str, collection: str, task_type: str = "summarize",
+        error: str | None = None,
+    ) -> None:
+        """Record failure but leave in queue for retry.
+
+        The item stays in the queue with its bumped attempts counter.
+        Next dequeue will pick it up again (unless attempts >= MAX).
+        For SQLite (local mode) this is a no-op — items are already
+        retryable since dequeue doesn't change their status.
+        """
+        pass  # SQLite queue has no status column; retry is automatic
+
     def count(self) -> int:
         """Get count of pending items."""
         cursor = self._conn.execute("SELECT COUNT(*) FROM pending_summaries")

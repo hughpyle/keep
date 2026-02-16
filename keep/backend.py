@@ -45,6 +45,12 @@ class NullPendingQueue:
     def complete(self, id: str, collection: str, task_type: str = "summarize") -> None:
         pass
 
+    def fail(
+        self, id: str, collection: str, task_type: str = "summarize",
+        error: str | None = None,
+    ) -> None:
+        pass
+
     def count(self) -> int:
         return 0
 
