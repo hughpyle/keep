@@ -58,12 +58,14 @@ class TestCliBasics:
         assert "---" in result.stdout  # YAML frontmatter
         assert "id:" in result.stdout
 
+    @pytest.mark.e2e
     def test_meta_docs_loaded(self, cli):
         """Meta-doc system docs are loaded and accessible."""
         result = cli("get", ".meta/todo")
         assert result.returncode == 0
         assert ".meta/todo" in result.stdout
 
+    @pytest.mark.e2e
     def test_tag_type_doc_loaded(self, cli):
         """Tag description doc .tag/type is loaded and has full content."""
         result = cli("get", ".tag/type")
@@ -73,6 +75,7 @@ class TestCliBasics:
         assert "learning" in result.stdout
         assert "breakdown" in result.stdout
 
+    @pytest.mark.e2e
     def test_meta_sections_use_namespace_prefix(self, cli):
         """Meta sections in frontmatter use meta/ prefix to avoid key conflicts."""
         result = cli("get", ".meta/todo")
@@ -347,6 +350,7 @@ class TestUnixComposability:
         ids = [item["id"] for item in parsed]
         assert ids == ["file:///a.md", "file:///b.md"]
 
+    @pytest.mark.e2e
     def test_get_multiple_ids_separated_by_yaml_separator(self, cli):
         """Multiple IDs in get produce YAML-document-separated output."""
         # Get two system docs that always exist
@@ -359,6 +363,7 @@ class TestUnixComposability:
         assert ".conversations" in result.stdout
         assert ".domains" in result.stdout
 
+    @pytest.mark.e2e
     def test_get_single_id_no_extra_separator(self, cli):
         """Single ID in get produces normal output (no extra separators)."""
         result = cli("get", ".conversations")
