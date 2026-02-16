@@ -3087,6 +3087,11 @@ class Keeper:
             return doc_count
         return self._store.count(chroma_coll)
 
+    def count_versions(self) -> int:
+        """Count archived versions in the collection."""
+        doc_coll = self._resolve_doc_collection()
+        return self._document_store.count_versions(doc_coll)
+
     def list_recent(
         self,
         limit: int = 10,

@@ -1316,6 +1316,14 @@ class DocumentStore:
         cursor = self._conn.execute("SELECT COUNT(*) FROM documents")
         return cursor.fetchone()[0]
 
+    def count_versions(self, collection: str) -> int:
+        """Count archived versions in a collection."""
+        cursor = self._conn.execute("""
+            SELECT COUNT(*) FROM document_versions
+            WHERE collection = ?
+        """, (collection,))
+        return cursor.fetchone()[0]
+
     def query_by_id_prefix(
         self,
         collection: str,
