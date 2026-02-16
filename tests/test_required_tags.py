@@ -57,3 +57,23 @@ class TestRequiredTags:
     def test_required_tags_default_empty(self, kp_no_required):
         """required_tags defaults to empty list."""
         assert kp_no_required._config.required_tags == []
+
+    def test_set_now_without_scope_fails_with_required(self, kp_with_required):
+        """set_now() without scope fails when user tag is required."""
+        with pytest.raises(ValueError, match="Required tags missing: user"):
+            kp_with_required.set_now("some context")
+
+    def test_set_now_with_scope_passes_required(self, kp_with_required):
+        """set_now(scope=) auto-tags user, satisfying required_tags."""
+        item = kp_with_required.set_now("alice context", scope="alice")
+        assert item.tags.get("user") == "alice"
+
+    def test_get_now_without_scope_fails_with_required(self, kp_with_required):
+        """get_now() without scope fails when required_tags blocks initial set_now."""
+        with pytest.raises(ValueError, match="Required tags missing: user"):
+            kp_with_required.get_now()
+
+    def test_get_now_with_scope_passes_required(self, kp_with_required):
+        """get_now(scope=) works because internal set_now uses scope."""
+        item = kp_with_required.get_now(scope="alice")
+        assert "now:alice" in item.id

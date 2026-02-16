@@ -100,6 +100,18 @@ class TestHelpers:
         assert ns == ("ns", "sub")
         assert key == "part-a/part-b"
 
+    def test_id_to_namespace_key_depth_exceeds_parts(self):
+        """When depth >= len(parts), falls back to last-segment-is-key."""
+        ns, key = _id_to_namespace_key("alice/fact-1", depth=5)
+        assert ns == ("alice",)
+        assert key == "fact-1"
+
+    def test_id_to_namespace_key_single_part_with_depth(self):
+        """Single-part ID with depth > 0 returns empty namespace."""
+        ns, key = _id_to_namespace_key("orphan", depth=1)
+        assert ns == ()
+        assert key == "orphan"
+
     def test_namespace_to_tags(self):
         tags = _namespace_to_tags(("memories", "alice"), ["category", "user"])
         assert tags == {"category": "memories", "user": "alice"}

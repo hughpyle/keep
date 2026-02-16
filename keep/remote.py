@@ -191,9 +191,13 @@ class RemoteKeeper:
         self,
         content: str,
         *,
+        scope: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
     ) -> Item:
-        resp = self._put("/v1/now", json={
+        path = "/v1/now"
+        if scope:
+            path = f"/v1/now?scope={scope}"
+        resp = self._put(path, json={
             "content": content,
             "tags": tags,
         })
@@ -249,6 +253,7 @@ class RemoteKeeper:
         self,
         query: Optional[str] = None,
         *,
+        tags: Optional[dict[str, str]] = None,
         similar_to: Optional[str] = None,
         fulltext: bool = False,
         limit: int = 10,
@@ -259,6 +264,7 @@ class RemoteKeeper:
         resp = self._post("/v1/search", json={
             "query": query,
             "similar_to": similar_to,
+            "tags": tags,
             "fulltext": fulltext or None,
             "limit": limit,
             "since": since,
@@ -367,8 +373,11 @@ class RemoteKeeper:
                 return None
             raise
 
-    def get_now(self) -> Item:
-        resp = self._get("/v1/now")
+    def get_now(self, *, scope: Optional[str] = None) -> Item:
+        if scope:
+            resp = self._get("/v1/now", scope=scope)
+        else:
+            resp = self._get("/v1/now")
         return self._to_item(resp)
 
     def get_version(
