@@ -34,6 +34,7 @@ What makes this more than a vector store: when you view your current context (`k
 - **Contextual feedback** — Open commitments and past learnings surface automatically
 - **Semantic search** — Find by meaning, not keywords
 - **Tag organization** — Speech acts, status, project, topic, type — structured and queryable
+- **Parts** — `analyze` decomposes documents into searchable sections, each with its own embedding and tags
 - **Strings** — Every note is a string of versions; reorganize history by meaning with `keep move`
 - **Works offline** — Local models (MLX, Ollama), or API providers (OpenAI, Gemini, Voyage, Anthropic)
 
