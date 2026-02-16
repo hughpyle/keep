@@ -12,7 +12,7 @@ Requires: pip install keep-skill[langchain]
 KeepStore also requires: pip install langgraph
 """
 
-# Lazy imports — each module guards its own optional dependency
+# Each module guards its own optional dependency (ImportError on missing packages)
 from keep.langchain.middleware import KeepNotesMiddleware
 from keep.langchain.retriever import KeepNotesRetriever
 from keep.langchain.store import KeepStore

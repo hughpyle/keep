@@ -194,14 +194,11 @@ class RemoteKeeper:
         scope: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
     ) -> Item:
-        path = "/v1/now"
-        if scope:
-            path = f"/v1/now?scope={scope}"
-        resp = self._put(path, json={
-            "content": content,
-            "tags": tags,
-        })
-        return self._to_item(resp)
+        params = {"scope": scope} if scope else {}
+        filtered = {k: v for k, v in {"content": content, "tags": tags}.items() if v is not None}
+        resp = self._client.put("/v1/now", params=params, json=filtered)
+        resp.raise_for_status()
+        return self._to_item(resp.json())
 
     def tag(
         self,
