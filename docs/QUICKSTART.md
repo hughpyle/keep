@@ -40,6 +40,7 @@ Set environment variables for your preferred providers:
 | **Anthropic** | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`* | [console.anthropic.com](https://console.anthropic.com/) | - | ✓ |
 | **OpenAI** | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/) | ✓ | ✓ |
 | **Google Gemini** | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com/) | ✓ | ✓ |
+| **Vertex AI** | `GOOGLE_CLOUD_PROJECT` | GCP Workload Identity / ADC | ✓ | ✓ |
 
 \* **Anthropic Authentication Methods:**
 - **API Key** (`ANTHROPIC_API_KEY`): Recommended. Get from [console.anthropic.com](https://console.anthropic.com/). Format: `sk-ant-api03-...`
@@ -233,7 +234,7 @@ Auto-detected if `mlx-vlm` or `mlx-whisper` is installed, or if Ollama has a vis
 | **OpenAI** | Embeddings | `text-embedding-3-small` (default), `text-embedding-3-large` |
 | **OpenAI** | Summarization | `gpt-4o-mini` (default), `gpt-4o` |
 | **Gemini** | Embeddings | `text-embedding-004` (default) |
-| **Gemini** | Summarization | `gemini-3-flash-preview` (default), `gemini-3-pro-preview` |
+| **Gemini** | Summarization | `gemini-2.5-flash` (default), `gemini-2.5-pro` |
 | **Ollama** | Embeddings | Any model; prefer `nomic-embed-text`, `mxbai-embed-large` |
 | **Ollama** | Summarization | Any generative model (e.g. `llama3.2`, `mistral`, `phi3`) |
 | **Ollama** | Media | Vision models: `llava`, `moondream`, `bakllava` (images only) |
@@ -265,6 +266,8 @@ KEEP_NO_SETUP=1                      # Skip auto-install of tool integrations
 OLLAMA_HOST=http://localhost:11434   # Ollama server URL (auto-detected)
 OPENAI_API_KEY=sk-...                # For OpenAI (embeddings + summarization)
 GEMINI_API_KEY=...                   # For Gemini (embeddings + summarization)
+GOOGLE_CLOUD_PROJECT=my-project      # Vertex AI via Workload Identity / ADC
+GOOGLE_CLOUD_LOCATION=us-east1       # Vertex AI region (default: us-east1)
 VOYAGE_API_KEY=pa-...                # For Voyage embeddings only
 ANTHROPIC_API_KEY=sk-ant-...         # For Anthropic summarization only
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # OAuth token alternative

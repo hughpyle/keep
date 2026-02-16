@@ -249,7 +249,7 @@ Generate vector representations for semantic search.
 
 - **voyage**: API-based, Anthropic's recommended partner (VOYAGE_API_KEY)
 - **openai**: API-based, high quality (OPENAI_API_KEY)
-- **gemini**: API-based, Google (GEMINI_API_KEY)
+- **gemini**: API-based, Google (GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT for Vertex AI)
 - **ollama**: Local server, auto-detected, any model (OLLAMA_HOST)
 - **sentence-transformers**: Local, CPU/GPU, no API key
 - **MLX**: Apple Silicon optimized, local, no API key
@@ -261,7 +261,7 @@ Generate human-readable summaries from content.
 
 - **anthropic**: LLM-based, cost-effective option (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)
 - **openai**: LLM-based, high quality (OPENAI_API_KEY)
-- **gemini**: LLM-based, Google (GEMINI_API_KEY)
+- **gemini**: LLM-based, Google (GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT for Vertex AI)
 - **ollama**: LLM-based, local server, auto-detected (OLLAMA_HOST)
 - **MLX**: LLM-based, local, no API key
 - **truncate**: Simple text truncation (fallback)
