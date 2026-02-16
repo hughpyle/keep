@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "keep-skill"
-version = "0.43.5"
+version = "0.44.0"
 description = "Reflective memory - remember and search documents by meaning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "MIT"}
 authors = [{name = "Hugh Pyle"}]
-keywords = ["semantic-memory", "vector-search", "embeddings", "chromadb", "agents"]
+keywords = ["semantic-memory", "vector-search", "embeddings", "chromadb", "agents", "langchain", "langgraph"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -62,6 +62,11 @@ local = [
 media = [
     "mlx-vlm>=0.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
     "mlx-whisper>=0.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
+]
+# LangChain integration (LangGraph BaseStore, Retriever, Tools, Middleware)
+langchain = [
+    "langchain-core>=1.0.0,<2.0.0",
+    "langgraph-checkpoint>=2.1.0,<5.0.0",
 ]
 # Development
 dev = [

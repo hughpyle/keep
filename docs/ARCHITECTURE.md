@@ -40,7 +40,7 @@ The original document content is **not stored** — only the summary and embeddi
         ▼          ▼          ▼          ▼          ▼           ▼
    ┌────────┐ ┌─────────┐ ┌────────┐ ┌────────┐ ┌─────────┐ ┌─────────┐
    │Document│ │Embedding│ │Summary │ │Media   │ │Vector   │ │Document │
-   │Provider│ │Provider │ │Provider│ │Descr.* │ │Store    │ │Store    │
+   │Provider│ │Provider │ │Provider│ │Descr.  │ │Store    │ │Store    │
    └────────┘ └─────────┘ └────────┘ └────────┘ └─────────┘ └─────────┘
        │          │           │          │             │           │
    fetch()    embed()    summarize()  describe()  vectors/    summaries/
@@ -324,6 +324,28 @@ Design points:
 
 ---
 
+## LangChain / LangGraph Integration
+
+The `keep.langchain` module provides framework adapters on top of the API layer:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  LangChain Layer (keep/langchain/)                          │
+│  - KeepStore         LangGraph BaseStore adapter            │
+│  - KeepNotesToolkit  4 LangChain tools                     │
+│  - KeepNotesRetriever  BaseRetriever with now-context       │
+│  - KeepNotesMiddleware  LCEL runnable for auto-injection    │
+└──────────────────┬──────────────────────────────────────────┘
+                   │ uses Keeper API
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│  API Layer (api.py)                                         │
+```
+
+KeepStore maps LangGraph's namespace/key model to Keep's tag system via configurable `namespace_keys`. Namespace components become regular Keep tags, visible to CLI and all query methods. See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md).
+
+---
+
 ## Extension Points
 
 **New Provider**
@@ -335,6 +357,11 @@ Design points:
 - Current: ChromaDB
 - Future: Could extract Protocol from `ChromaStore`
 - Candidates: PostgreSQL+pgvector, SQLite+faiss
+
+**Framework Integration**
+- Implement adapters on top of the Keeper API layer
+- Current: LangChain/LangGraph ([keep/langchain/](keep/langchain/))
+- Pattern: map framework concepts to Keep tags + search
 
 **New Query Types**
 - Add methods to `Keeper`

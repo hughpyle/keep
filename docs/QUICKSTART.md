@@ -14,6 +14,11 @@ For all others:
 uv tool install keep-skill
 ```
 
+For LangChain/LangGraph integration:
+```bash
+pip install keep-skill[langchain]    # or: pip install langchain-keep
+```
+
 That's it! API providers for Voyage, OpenAI, Anthropic, and Gemini are included.
 
 
@@ -305,6 +310,7 @@ This is the recommended approach because it transparently covers both SQLite and
 
 - [REFERENCE.md](REFERENCE.md) — Complete CLI reference
 - [PYTHON-API.md](PYTHON-API.md) — Python API for embedding keep in applications
+- [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) — LangChain/LangGraph integration
 - [AGENT-GUIDE.md](AGENT-GUIDE.md) — Working session patterns
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System internals
 - [OPENCLAW-INTEGRATION.md](OPENCLAW-INTEGRATION.md) — OpenClaw plugin setup

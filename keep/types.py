@@ -59,6 +59,11 @@ MAX_ID_LENGTH = 1024
 MAX_TAG_KEY_LENGTH = 128
 MAX_TAG_VALUE_LENGTH = 4096
 
+# IDs: printable ASCII minus control chars and characters dangerous in paths/logs/SQL
+# Allowed: alphanumeric, dot, hyphen, underscore, colon, slash, @, space, parens, brackets, +, =, #, %, comma
+# Blocked: null bytes, newlines, tabs, backslash, backtick, angle brackets, pipes, semicolons, quotes
+_ID_SAFE_RE = re.compile(r'^[a-zA-Z0-9._\-:/@ ()[\]+=#%,]+$')
+
 
 def validate_tag_key(key: str) -> None:
     """Validate a tag key is safe for JSON path queries."""
@@ -69,9 +74,11 @@ def validate_tag_key(key: str) -> None:
 
 
 def validate_id(id: str) -> None:
-    """Validate a document ID length."""
+    """Validate a document ID — length and safe characters."""
     if not id or len(id) > MAX_ID_LENGTH:
         raise ValueError(f"ID must be 1-{MAX_ID_LENGTH} characters")
+    if not _ID_SAFE_RE.match(id):
+        raise ValueError(f"ID contains invalid characters: {id!r}")
 
 
 def casefold_tags(tags: dict[str, str]) -> dict[str, str]:

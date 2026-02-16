@@ -40,6 +40,7 @@ class KeeperProtocol(Protocol):
         self,
         content: str,
         *,
+        scope: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
     ) -> Item: ...
 
@@ -73,6 +74,7 @@ class KeeperProtocol(Protocol):
         self,
         query: Optional[str] = None,
         *,
+        tags: Optional[dict[str, str]] = None,
         similar_to: Optional[str] = None,
         fulltext: bool = False,
         limit: int = 10,
@@ -134,7 +136,7 @@ class KeeperProtocol(Protocol):
 
     def get(self, id: str) -> Optional[Item]: ...
 
-    def get_now(self) -> Item: ...
+    def get_now(self, *, scope: Optional[str] = None) -> Item: ...
 
     def get_version(
         self,
