@@ -489,11 +489,11 @@ class TestContentKey:
 class TestIndex:
 
     def test_index_false_stores_but_minimal_embedding(self, store):
-        """index=False stores the item with minimal content."""
+        """index=False stores the item with content preserved (no embedding)."""
         store.put(("ns",), "k", {"content": "secret"}, index=False)
         item = store.get(("ns",), "k")
         assert item is not None
-        assert item.value["content"] == "k"  # summary is the key name
+        assert item.value["content"] == "secret"  # content preserved as summary
 
     def test_index_specific_fields(self, store):
         """index=['content'] embeds only the content field."""

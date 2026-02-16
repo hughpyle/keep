@@ -312,7 +312,10 @@ class KeepStore(BaseStore):
         else:
             # No query — tag-based retrieval
             if tags:
-                items = self._keeper.query_tag(limit=op.limit, **tags)
+                # Filter out keys that collide with query_tag() named params
+                _reserved = {"key", "value", "limit", "since", "include_hidden"}
+                safe_tags = {k: v for k, v in tags.items() if k not in _reserved}
+                items = self._keeper.query_tag(limit=op.limit, **safe_tags)
             else:
                 items = self._keeper.list_recent(limit=op.limit)
 
@@ -351,6 +354,16 @@ class KeepStore(BaseStore):
         if self._user_id and "user" not in user_tags:
             user_tags["user"] = self._user_id
 
+        # Enforce required_tags (mirrors Keeper.put() check).
+        # System docs (dot-prefix IDs) are exempt.
+        required = self._keeper._config.required_tags
+        if required and not doc_id.startswith("."):
+            non_system = {k: v for k, v in user_tags.items()
+                         if not k.startswith("_")}
+            missing = [t for t in required if t not in non_system]
+            if missing:
+                raise ValueError(f"Required tags missing: {', '.join(missing)}")
+
         # System tags (minimal: source marker + non-string overflow)
         system_tags: dict[str, str] = {_SOURCE_TAG: _SOURCE_VALUE}
         if non_string_data:
@@ -361,12 +374,13 @@ class KeepStore(BaseStore):
         # Determine content text for embedding
         index = op.index if isinstance(op.index, list) else None
         if op.index is False:
-            # Not indexed — store with key as minimal summary
+            # Not indexed — store content as summary (no embedding generated)
+            summary_text = content or _extract_text(op.value, None) or op.key
             self._keeper._upsert(
                 doc_id,
                 op.key,
                 tags=user_tags,
-                summary=op.key,
+                summary=summary_text,
                 system_tags=system_tags,
             )
         else:

@@ -93,13 +93,13 @@ from keep import Keeper
 
 toolkit = KeepNotesToolkit(keeper=Keeper())
 tools = toolkit.get_tools()
-# → [remember_note, recall_notes, get_context, update_context]
+# → [remember, recall, get_context, update_context]
 ```
 
 | Tool | Description |
 |------|-------------|
-| `remember_note` | Store a note with tags |
-| `recall_notes` | Semantic search |
+| `remember` | Store a note with tags |
+| `recall` | Semantic search |
 | `get_context` | Get current intentions (`keep now`) |
 | `update_context` | Update current intentions |
 
