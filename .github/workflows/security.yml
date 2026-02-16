@@ -27,4 +27,4 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
       - name: Audit dependencies
-        run: uv export --frozen --no-hashes > /tmp/requirements.txt && pip-audit -r /tmp/requirements.txt --desc
+        run: uv export --frozen --no-hashes --no-emit-project > /tmp/requirements.txt && pip-audit -r /tmp/requirements.txt --desc
