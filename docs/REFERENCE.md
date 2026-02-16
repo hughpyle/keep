@@ -155,6 +155,14 @@ kp.put("note", tags={"project": "myapp"})
 results = kp.find("authentication", limit=5)
 ```
 
+### LangChain / LangGraph
+
+```python
+from keep.langchain import KeepStore, KeepNotesToolkit, KeepNotesRetriever
+```
+
+See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) for full details.
+
 ## When to Use
 - `put` / `put(uri=...)` — when referencing any file/URL worth remembering
 - `put` / `put("text")` — capture conversation insights, decisions, notes
@@ -174,6 +182,7 @@ results = kp.find("authentication", limit=5)
 - [AGENT-GUIDE.md](AGENT-GUIDE.md) — Working session patterns
 - [QUICKSTART.md](QUICKSTART.md) — Installation and setup
 - [PYTHON-API.md](PYTHON-API.md) — Python API reference
+- [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) — LangChain/LangGraph integration
 - [ARCHITECTURE.md](ARCHITECTURE.md) — How it works under the hood
 - `.domains` — Domain organization patterns (`keep get .domains`)
 - `.conversations` — Conversation framework (`keep get .conversations`)
