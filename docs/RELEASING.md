@@ -12,12 +12,12 @@
    - All command examples in docs actually work
    - Help text uses consistent terminology
 
-3. **Version bump** (all 5 locations + shim)
-   - `pyproject.toml`: `version = "X.Y.Z"`
-   - `keep/__init__.py`: `__version__ = "X.Y.Z"`
-   - `SKILL.md` frontmatter: `version: X.Y.Z`
-   - `keep/data/openclaw-plugin/openclaw.plugin.json`: `"version": "X.Y.Z"`
-   - `keep/data/openclaw-plugin/package.json`: `"version": "X.Y.Z"`
+3. **Version bump**
+   ```bash
+   python scripts/bump_version.py X.Y.Z
+   ```
+   This updates `pyproject.toml`, `SKILL.md`, and the openclaw plugin manifests.
+   `keep/__init__.py` reads the version from package metadata automatically.
    - `langchain-keep/pyproject.toml`: update `keep-skill[langchain]>=` pin if needed
 
 4. **Tests**
