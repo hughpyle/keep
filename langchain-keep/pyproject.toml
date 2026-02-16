@@ -12,5 +12,5 @@ dependencies = ["keep-skill[langchain]>=0.43.4"]
 
 [project.urls]
 Homepage = "https://keepnotes.ai"
-Repository = "https://github.com/nicobailon/keep"
+Repository = "https://github.com/hughpyle/keep"
 Documentation = "https://docs.keepnotes.ai"

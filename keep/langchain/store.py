@@ -387,7 +387,10 @@ class KeepStore(BaseStore):
         self,
         op: ListNamespacesOp,
     ) -> list[tuple[str, ...]]:
-        # Find all KeepStore-managed items
+        # Find all KeepStore-managed items via _source=langchain tag.
+        # Note: this is a full scan, capped at 10K items. Acceptable for
+        # stores with <10K KeepStore items. For scale, a _namespaces index
+        # table maintained on write would replace this scan.
         items = self._keeper.query_tag(
             _SOURCE_TAG, _SOURCE_VALUE, limit=10000,
         )
