@@ -25,3 +25,7 @@ jobs:
 
       - name: Run tests
         run: uv run pytest --tb=short -q
+        env:
+          # Dummy key so config detects a provider; mock_providers fixture
+          # intercepts before any real API call is made
+          OPENAI_API_KEY: sk-test-ci-dummy-key
