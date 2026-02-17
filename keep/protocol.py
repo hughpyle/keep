@@ -79,6 +79,7 @@ class KeeperProtocol(Protocol):
         fulltext: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
+        until: Optional[str] = None,
         include_self: bool = False,
         include_hidden: bool = False,
     ) -> list[Item]: ...
@@ -97,6 +98,7 @@ class KeeperProtocol(Protocol):
         *,
         limit: int = 100,
         since: Optional[str] = None,
+        until: Optional[str] = None,
         include_hidden: bool = False,
     ) -> list[Item]: ...
 
@@ -127,6 +129,7 @@ class KeeperProtocol(Protocol):
         limit: int = 10,
         *,
         since: Optional[str] = None,
+        until: Optional[str] = None,
         order_by: str = "updated",
         include_history: bool = False,
         include_hidden: bool = False,
@@ -436,6 +439,7 @@ class DocumentStoreProtocol(Protocol):
     def query_by_tag_key(
         self, collection: str, key: str,
         limit: int = 100, since_date: Optional[str] = None,
+        until_date: Optional[str] = None,
     ) -> list[DocumentRecord]: ...
 
     # -- Version extraction (for move) --

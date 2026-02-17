@@ -255,6 +255,7 @@ class RemoteKeeper:
         fulltext: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
+        until: Optional[str] = None,
         include_self: bool = False,
         include_hidden: bool = False,
     ) -> list[Item]:
@@ -265,6 +266,7 @@ class RemoteKeeper:
             "fulltext": fulltext or None,
             "limit": limit,
             "since": since,
+            "until": until,
             "include_self": include_self or None,
             "include_hidden": include_hidden or None,
         })
@@ -286,11 +288,14 @@ class RemoteKeeper:
         *,
         limit: int = 100,
         since: Optional[str] = None,
+        until: Optional[str] = None,
         include_hidden: bool = False,
     ) -> list[Item]:
         params: dict[str, Any] = {"limit": limit}
         if since:
             params["since"] = since
+        if until:
+            params["until"] = until
         if include_hidden:
             params["include_hidden"] = True
         if key and value:
@@ -345,6 +350,7 @@ class RemoteKeeper:
         limit: int = 10,
         *,
         since: Optional[str] = None,
+        until: Optional[str] = None,
         order_by: str = "updated",
         include_history: bool = False,
         include_hidden: bool = False,
@@ -353,6 +359,7 @@ class RemoteKeeper:
             "/v1/notes",
             limit=limit,
             since=since,
+            until=until,
             order_by=order_by,
             include_history=include_history,
             include_hidden=include_hidden or None,

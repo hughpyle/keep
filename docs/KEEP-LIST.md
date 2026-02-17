@@ -20,6 +20,7 @@ keep list --sort accessed             # Sort by last access time
 | `-T`, `--tags=KEY` | List values for a specific tag key |
 | `--sort ORDER` | Sort by `updated` (default) or `accessed` |
 | `--since DURATION` | Only items updated since (ISO duration or date) |
+| `--until DURATION` | Only items updated before (ISO duration or date) |
 | `-H`, `--history` | Include archived versions |
 | `-P`, `--parts` | Include structural parts (from `analyze`) |
 | `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
@@ -50,6 +51,8 @@ keep list --since P3D                 # Last 3 days
 keep list --since P1W                 # Last week
 keep list --since PT1H               # Last hour
 keep list --since 2026-01-15         # Since specific date
+keep list --until 2026-02-01         # Before specific date
+keep list --since P30D --until P7D   # Between 30 and 7 days ago
 ```
 
 ## Including versions and parts

@@ -19,9 +19,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-def _parse_since(since: str) -> str:
+def _parse_date_param(value: str) -> str:
     """
-    Parse a 'since' string and return a YYYY-MM-DD cutoff date.
+    Parse a date/duration parameter and return a YYYY-MM-DD date.
 
     Accepts:
     - ISO 8601 duration: P3D (3 days), P1W (1 week), PT1H (1 hour), P1DT12H, etc.
@@ -29,9 +29,9 @@ def _parse_since(since: str) -> str:
     - Date with slashes: 2026/01/15
 
     Returns:
-        YYYY-MM-DD string for the cutoff date
+        YYYY-MM-DD string
     """
-    since = since.strip()
+    since = value.strip()
 
     # ISO 8601 duration: P[n]Y[n]M[n]W[n]DT[n]H[n]M[n]S
     if since.upper().startswith("P"):
@@ -88,18 +88,28 @@ def _parse_since(since: str) -> str:
         pass
 
     raise ValueError(
-        f"Invalid 'since' format: {since}. "
+        f"Invalid date/duration format: {value}. "
         "Use ISO duration (P3D, PT1H, P1W) or date (2026-01-15)"
     )
 
 
-def _filter_by_date(items: list, since: str) -> list:
-    """Filter items to only those updated since the given date/duration."""
-    cutoff = _parse_since(since)
-    return [
-        item for item in items
-        if item.tags.get("_updated_date", "0000-00-00") >= cutoff
-    ]
+def _filter_by_date(
+    items: list,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> list:
+    """Filter items by date range (since <= date, date < until)."""
+    since_cutoff = _parse_date_param(since) if since else None
+    until_cutoff = _parse_date_param(until) if until else None
+    result = []
+    for item in items:
+        d = item.tags.get("_updated_date", "0000-00-00")
+        if since_cutoff and d < since_cutoff:
+            continue
+        if until_cutoff and d >= until_cutoff:
+            continue
+        result.append(item)
+    return result
 
 
 def _is_hidden(item) -> bool:
@@ -1857,6 +1867,7 @@ class Keeper:
         fulltext: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
+        until: Optional[str] = None,
         include_self: bool = False,
         include_hidden: bool = False,
     ) -> list[Item]:
@@ -1872,6 +1883,7 @@ class Keeper:
             fulltext: Use full-text search instead of semantic similarity (only with query)
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
+            until: Only include items updated before (ISO duration like P3D, or date)
             include_self: Include the queried item in results (only with similar_to)
             include_hidden: Include system notes (dot-prefix IDs)
         """
@@ -1926,8 +1938,8 @@ class Keeper:
             items = self._apply_recency_decay(items)
 
         # Apply common filters
-        if since is not None:
-            items = _filter_by_date(items, since)
+        if since is not None or until is not None:
+            items = _filter_by_date(items, since=since, until=until)
         if not include_hidden:
             items = [i for i in items if not _is_hidden(i)]
 
@@ -2232,6 +2244,7 @@ class Keeper:
         *,
         limit: int = 100,
         since: Optional[str] = None,
+        until: Optional[str] = None,
         include_hidden: bool = False,
         **tags: str
     ) -> list[Item]:
@@ -2253,6 +2266,7 @@ class Keeper:
             value: Tag value (optional, any value if not provided)
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
+            until: Only include items updated before (ISO duration like P3D, or date)
             **tags: Additional tag filters as keyword arguments
         """
         # Casefold query keys/values to match casefolded storage
@@ -2274,10 +2288,12 @@ class Keeper:
         # Key-only query: find docs that have this tag key (any value)
         # Uses DocumentStore which supports efficient SQL date filtering
         if key is not None and value is None and not tags:
-            # Convert since to cutoff date for SQL query
-            since_date = _parse_since(since) if since else None
+            # Convert since/until to cutoff dates for SQL query
+            since_date = _parse_date_param(since) if since else None
+            until_date = _parse_date_param(until) if until else None
             docs = self._document_store.query_by_tag_key(
-                doc_coll, key, limit=limit * 3 if not include_hidden else limit, since_date=since_date
+                doc_coll, key, limit=limit * 3 if not include_hidden else limit,
+                since_date=since_date, until_date=until_date,
             )
             items = [_record_to_item(d) for d in docs]
             if not include_hidden:
@@ -2312,8 +2328,8 @@ class Keeper:
         items = [r.to_item() for r in results]
 
         # Apply filters
-        if since is not None:
-            items = _filter_by_date(items, since)
+        if since is not None or until is not None:
+            items = _filter_by_date(items, since=since, until=until)
         if not include_hidden:
             items = [i for i in items if not _is_hidden(i)]
 
@@ -3180,6 +3196,7 @@ class Keeper:
         limit: int = 10,
         *,
         since: Optional[str] = None,
+        until: Optional[str] = None,
         order_by: str = "updated",
         include_history: bool = False,
         include_hidden: bool = False,
@@ -3190,6 +3207,7 @@ class Keeper:
         Args:
             limit: Maximum number to return (default 10)
             since: Only include items updated since (ISO duration like P3D, or date)
+            until: Only include items updated before (ISO duration like P3D, or date)
             order_by: Sort order - "updated" (default) or "accessed"
             include_history: Include previous versions alongside current items
             include_hidden: Include system notes (dot-prefix IDs)
@@ -3208,8 +3226,8 @@ class Keeper:
         items = [_record_to_item(rec) for rec in records]
 
         # Apply filters
-        if since is not None:
-            items = _filter_by_date(items, since)
+        if since is not None or until is not None:
+            items = _filter_by_date(items, since=since, until=until)
         if not include_hidden:
             items = [i for i in items if not _is_hidden(i)]
 

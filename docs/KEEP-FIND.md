@@ -20,6 +20,7 @@ keep find --id ID                     # Find items similar to an existing item
 | `-t`, `--tag KEY=VALUE` | Filter by tag (repeatable, AND logic) |
 | `-n`, `--limit N` | Maximum results (default 10) |
 | `--since DURATION` | Only items updated since (see time filtering below) |
+| `--until DURATION` | Only items updated before (see time filtering below) |
 | `-H`, `--history` | Include archived versions of matching items |
 | `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
 | `-s`, `--store PATH` | Override store directory |
@@ -53,7 +54,7 @@ Tag filters are applied as **pre-filters on the vector search** — results are 
 
 ## Time filtering
 
-The `--since` option accepts ISO 8601 durations or dates:
+The `--since` and `--until` options accept ISO 8601 durations or dates:
 
 ```bash
 keep find "auth" --since P7D           # Last 7 days
@@ -61,6 +62,8 @@ keep find "auth" --since P1W           # Last week
 keep find "auth" --since PT1H          # Last hour
 keep find "auth" --since P1DT12H       # 1 day 12 hours
 keep find "auth" --since 2026-01-15    # Since specific date
+keep find "auth" --until 2026-02-01    # Before specific date
+keep find "auth" --since P30D --until P7D  # Between 30 and 7 days ago
 ```
 
 ## Including archived versions
