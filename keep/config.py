@@ -73,7 +73,8 @@ class EmbeddingIdentity:
         e.g., "st_MiniLM_L6_v2", "openai_3_small"
         """
         # Simplify model name for use in collection names
-        model_slug = self.model.replace("-", "_").replace(".", "_")
+        # ChromaDB collection names only allow [a-zA-Z0-9_-]
+        model_slug = self.model.replace("/", "_").replace("-", "_").replace(".", "_")
         # Remove common prefixes
         for prefix in ["all_", "text_embedding_"]:
             if model_slug.lower().startswith(prefix):
