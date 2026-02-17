@@ -1502,6 +1502,7 @@ class Keeper:
         tags: Optional[dict[str, str]] = None,
         summary: Optional[str] = None,
         system_tags: dict[str, str],
+        created_at: Optional[str] = None,
     ) -> Item:
         """Core upsert logic used by put()."""
         # Wait for background reconciliation to finish before writing.
@@ -1597,6 +1598,7 @@ class Keeper:
                 tags=merged_tags,
                 content_hash=new_hash,
                 content_hash_full=_content_hash_full(content),
+                created_at=created_at,
             )
             # Try embedding dedup before enqueueing (saves network round-trip)
             if not content_unchanged:
@@ -1649,6 +1651,7 @@ class Keeper:
             tags=merged_tags,
             content_hash=new_hash,
             content_hash_full=_content_hash_full(content),
+            created_at=created_at,
         )
 
         self._store.upsert(
@@ -1688,6 +1691,7 @@ class Keeper:
         id: Optional[str] = None,
         summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
+        created_at: Optional[str] = None,
     ) -> Item:
         """
         Store content in the memory.
@@ -1715,6 +1719,9 @@ class Keeper:
             id: Custom ID (auto-generated for inline content if None)
             summary: User-provided summary (skips auto-summarization)
             tags: User-provided tags to merge with existing tags
+            created_at: Override creation timestamp (ISO 8601) for new items.
+                        For importing historical data via the Python API.
+                        Ignored if the item already exists (preserves original).
 
         Returns:
             The stored Item with merged tags and summary
@@ -1820,6 +1827,7 @@ class Keeper:
                 uri, doc.content,
                 tags=merged_tags, summary=summary,
                 system_tags=system_tags,
+                created_at=created_at,
             )
         else:
             # Inline mode: store content directly
@@ -1831,6 +1839,7 @@ class Keeper:
                 id, content,
                 tags=tags, summary=summary,
                 system_tags={"_source": "inline"},
+                created_at=created_at,
             )
 
     # -------------------------------------------------------------------------
