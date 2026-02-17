@@ -116,6 +116,9 @@ class StoreConfig:
     # Media description provider (optional - if None, media indexing is metadata-only)
     media: Optional[ProviderConfig] = None
 
+    # Analyzer provider (optional - if None, uses DefaultAnalyzer wrapping summarization)
+    analyzer: Optional[ProviderConfig] = None
+
     # Embedding identity (set after first use, used for validation)
     embedding_identity: Optional[EmbeddingIdentity] = None
 
@@ -519,6 +522,9 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse optional media section
     media_config = parse_provider(data["media"]) if "media" in data else None
 
+    # Parse optional analyzer section
+    analyzer_config = parse_provider(data["analyzer"]) if "analyzer" in data else None
+
     # Parse remote backend config (env vars override TOML)
     remote = None
     remote_data = data.get("remote", {})
@@ -544,6 +550,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         summarization=parse_provider(data.get("summarization", {"name": "truncate"})),
         document=parse_provider(data.get("document", {"name": "composite"})),
         media=media_config,
+        analyzer=analyzer_config,
         embedding_identity=parse_embedding_identity(data.get("embedding_identity")),
         default_tags=default_tags,
         required_tags=required_tags,
@@ -621,6 +628,8 @@ def save_config(config: StoreConfig) -> None:
         data["document"] = provider_to_dict(config.document)
     if config.media:
         data["media"] = provider_to_dict(config.media)
+    if config.analyzer:
+        data["analyzer"] = provider_to_dict(config.analyzer)
 
     # Add embedding identity if set
     if config.embedding_identity:

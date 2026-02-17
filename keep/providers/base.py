@@ -6,6 +6,7 @@ Using Protocol for structural subtyping - no explicit inheritance required.
 """
 
 from dataclasses import dataclass
+from collections.abc import Iterable
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -324,6 +325,59 @@ class MediaDescriber(Protocol):
 
 
 # -----------------------------------------------------------------------------
+# Analysis (Document Decomposition)
+# -----------------------------------------------------------------------------
+
+@dataclass
+class AnalysisChunk:
+    """
+    A chunk of content for analysis.
+
+    Analyzers receive a sequence of chunks — for version-strings these are
+    the individual versions, for monolithic documents a single chunk.
+    The analyzer decides its own windowing strategy internally.
+    """
+    content: str
+    tags: dict[str, str]
+    index: int  # position in sequence
+
+
+@runtime_checkable
+class AnalyzerProvider(Protocol):
+    """
+    Decomposes content into meaningful parts with summaries and tags.
+
+    The default implementation sends all content to an LLM in a single pass.
+    Alternative implementations can use sliding windows, speech-act
+    recognition, or other strategies suited to smaller models.
+
+    Receives chunks (versions of a string, or a single document chunk)
+    and returns raw part dicts. Keeper.analyze() handles wrapping these
+    into PartInfo, storage, and embedding.
+    """
+
+    def analyze(
+        self,
+        chunks: Iterable[AnalysisChunk],
+        guide_context: str = "",
+    ) -> list[dict]:
+        """
+        Decompose content chunks into parts.
+
+        Args:
+            chunks: Content chunks to analyze (versions, sections, or
+                    a single chunk for monolithic documents).
+                    Iterable to support streaming over large datasets.
+            guide_context: Optional tag descriptions for guided decomposition
+
+        Returns:
+            List of dicts with "summary", "content", and optionally "tags" keys.
+            Empty list on failure.
+        """
+        ...
+
+
+# -----------------------------------------------------------------------------
 # Tagging
 # -----------------------------------------------------------------------------
 
@@ -395,6 +449,7 @@ class ProviderRegistry:
         self._tagging_providers: dict[str, type] = {}
         self._document_providers: dict[str, type] = {}
         self._media_providers: dict[str, type] = {}
+        self._analyzer_providers: dict[str, type] = {}
         self._lazy_loaded = False
     
     def _ensure_providers_loaded(self) -> None:
@@ -431,6 +486,11 @@ class ProviderRegistry:
         except ImportError:
             pass  # MLX providers might not be available
 
+        try:
+            from .. import analyzers
+        except ImportError:
+            pass  # Analyzer module might not be available
+
     # Registration methods
 
     def register_embedding(self, name: str, provider_class: type) -> None:
@@ -452,6 +512,10 @@ class ProviderRegistry:
     def register_media(self, name: str, provider_class: type) -> None:
         """Register a media describer class."""
         self._media_providers[name] = provider_class
+
+    def register_analyzer(self, name: str, provider_class: type) -> None:
+        """Register an analyzer provider class."""
+        self._analyzer_providers[name] = provider_class
     
     # Factory methods
 
@@ -524,6 +588,24 @@ class ProviderRegistry:
         except Exception as e:
             raise RuntimeError(
                 f"Failed to create media describer '{name}': {e}\n"
+                f"Make sure required dependencies are installed."
+            ) from e
+
+    def create_analyzer(self, name: str, params: dict | None = None) -> AnalyzerProvider:
+        """Create an analyzer provider instance."""
+        self._ensure_providers_loaded()
+        if name not in self._analyzer_providers:
+            available = ", ".join(self._analyzer_providers.keys()) or "none"
+            raise ValueError(
+                f"Unknown analyzer provider: '{name}'. "
+                f"Available providers: {available}. "
+                f"Install missing dependencies or check provider name."
+            )
+        try:
+            return self._analyzer_providers[name](**(params or {}))
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create analyzer provider '{name}': {e}\n"
                 f"Make sure required dependencies are installed."
             ) from e
 

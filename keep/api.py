@@ -438,197 +438,6 @@ def _text_content_id(content: str) -> str:
 # Decomposition helpers (module-level, used by Keeper.analyze)
 # -------------------------------------------------------------------------
 
-DECOMPOSITION_SYSTEM_PROMPT = """You are a document analysis assistant. Your task is to decompose a document into its meaningful structural sections.
-
-For each section, provide:
-- "summary": A concise summary of the section (1-3 sentences)
-- "content": The exact text of the section
-- "tags": A dict of relevant tags for this section (optional)
-
-Return a JSON array of section objects. Example:
-```json
-[
-  {"summary": "Introduction and overview of the topic", "content": "The text of section 1...", "tags": {"topic": "overview"}},
-  {"summary": "Detailed analysis of the main argument", "content": "The text of section 2...", "tags": {"topic": "analysis"}}
-]
-```
-
-Guidelines:
-- Identify natural section boundaries (headings, topic shifts, structural breaks)
-- Each section should be a coherent unit of meaning
-- Preserve the original text exactly in the "content" field
-- Keep summaries concise but descriptive
-- Tags should capture the essence of each section's subject matter
-- Return valid JSON only, no commentary outside the JSON array"""
-
-
-def _call_decomposition_llm(
-    provider: "SummarizationProvider",
-    content: str,
-    guide_context: str = "",
-) -> list[dict]:
-    """
-    Call an LLM to decompose content into sections.
-
-    Uses the provider's generate() method to send the decomposition prompt.
-
-    Args:
-        provider: A summarization provider with generate() support
-        content: Document content to decompose
-        guide_context: Optional tag descriptions for guided decomposition
-
-    Returns:
-        List of dicts with "summary", "content", and optionally "tags" keys.
-        Empty list on failure.
-    """
-    # Unwrap lock wrapper to access underlying provider
-    if hasattr(provider, '_provider') and provider._provider is not None:
-        provider = provider._provider
-
-    # Truncate content for decomposition
-    truncated = content[:80000] if len(content) > 80000 else content
-
-    # Build user prompt
-    user_prompt = truncated
-    if guide_context:
-        user_prompt = (
-            f"Decompose this document into meaningful sections.\n\n"
-            f"Use these tag definitions to guide your tagging:\n\n"
-            f"{guide_context}\n\n"
-            f"---\n\n"
-            f"Document to analyze:\n\n{truncated}"
-        )
-
-    try:
-        result = provider.generate(
-            DECOMPOSITION_SYSTEM_PROMPT,
-            user_prompt,
-            max_tokens=4096,
-        )
-        if result:
-            return _parse_decomposition_json(result, content)
-
-        logger.warning(
-            "Provider %s returned no result for decomposition, "
-            "falling back to simple chunking",
-            type(provider).__name__,
-        )
-        return []
-
-    except Exception as e:
-        logger.warning("LLM decomposition failed: %s", e)
-        return []
-
-
-def _parse_decomposition_json(text: str, content: str) -> list[dict]:
-    """
-    Parse JSON from LLM decomposition output.
-
-    Handles:
-    - Code fences (```json ... ```)
-    - Wrapper objects ({"sections": [...]})
-    - Direct JSON arrays
-
-    Args:
-        text: Raw LLM output
-        content: Original content (for fallback)
-
-    Returns:
-        List of section dicts
-    """
-    if not text:
-        return []
-
-    # Strip markdown code fences
-    text = text.strip()
-    if text.startswith("```"):
-        # Remove first line (```json or ```) and last line (```)
-        lines = text.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse decomposition JSON")
-        return []
-
-    # Handle wrapper objects like {"sections": [...]}
-    if isinstance(data, dict):
-        for key in ("sections", "parts", "chunks", "result", "data"):
-            if key in data and isinstance(data[key], list):
-                data = data[key]
-                break
-        else:
-            return []
-
-    if not isinstance(data, list):
-        return []
-
-    # Validate and normalize entries
-    result = []
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        # Must have at least summary or content
-        if not entry.get("summary") and not entry.get("content"):
-            continue
-        section = {
-            "summary": str(entry.get("summary", "")),
-            "content": str(entry.get("content", "")),
-        }
-        if entry.get("tags") and isinstance(entry["tags"], dict):
-            section["tags"] = {str(k): str(v) for k, v in entry["tags"].items()}
-        result.append(section)
-
-    return result
-
-
-def _simple_chunk_decomposition(content: str) -> list[dict]:
-    """
-    Paragraph-based fallback when no LLM is available.
-
-    Splits content on double-newlines, groups small paragraphs together.
-    Each chunk gets a truncated summary.
-    """
-    paragraphs = re.split(r'\n\s*\n', content.strip())
-    if not paragraphs:
-        return []
-
-    # Group small paragraphs together (min ~200 chars per chunk)
-    chunks = []
-    current = []
-    current_len = 0
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-        current.append(para)
-        current_len += len(para)
-        if current_len >= 500:
-            chunks.append("\n\n".join(current))
-            current = []
-            current_len = 0
-    if current:
-        chunks.append("\n\n".join(current))
-
-    # If we ended up with just 1 chunk that is the whole content, not useful
-    if len(chunks) <= 1:
-        return []
-
-    result = []
-    for chunk in chunks:
-        summary = chunk[:200].rsplit(" ", 1)[0] + "..." if len(chunk) > 200 else chunk
-        result.append({
-            "summary": summary,
-            "content": chunk,
-        })
-    return result
-
-
 class Keeper:
     """
     Reflective memory keeper - persistent storage with similarity search.
@@ -695,6 +504,7 @@ class Keeper:
         self._embedding_provider: Optional[EmbeddingProvider] = None
         self._summarization_provider: Optional[SummarizationProvider] = None
         self._media_describer: Optional[MediaDescriber] = None
+        self._analyzer = None  # AnalyzerProvider, lazy-loaded
 
         # Cache env tags once per Keeper instance (stable within a process)
         self._env_tags = casefold_tags(_get_env_tags())
@@ -1173,6 +983,21 @@ class Keeper:
                 )
             self._media_describer = provider
         return self._media_describer
+
+    def _get_analyzer(self):
+        """Get analyzer provider, creating it lazily on first use."""
+        if self._analyzer is None:
+            if self._config.analyzer:
+                registry = get_registry()
+                self._analyzer = registry.create_analyzer(
+                    self._config.analyzer.name,
+                    self._config.analyzer.params,
+                )
+            else:
+                # Default: wrap the summarization provider (current behavior)
+                from .analyzers import DefaultAnalyzer
+                self._analyzer = DefaultAnalyzer(self._get_summarization_provider())
+        return self._analyzer
 
     def _gather_context(
         self,
@@ -2980,7 +2805,7 @@ class Keeper:
         self,
         id: str,
         *,
-        provider: Optional["SummarizationProvider"] = None,
+        analyzer=None,
         tags: Optional[list[str]] = None,
         force: bool = False,
     ) -> list[PartInfo]:
@@ -2991,8 +2816,8 @@ class Keeper:
         For inline notes (strings): assembles the version history and decomposes
         the temporal sequence into episodic parts.
 
-        Uses an LLM to identify sections with summaries and tags.
-        Re-analysis replaces all previous parts atomically.
+        Uses a pluggable AnalyzerProvider to identify sections with summaries
+        and tags. Re-analysis replaces all previous parts atomically.
 
         Skips analysis if the document's content_hash matches the stored
         _analyzed_hash tag (parts are already current). Use force=True
@@ -3000,8 +2825,8 @@ class Keeper:
 
         Args:
             id: Document or string to analyze
-            provider: Override LLM provider for decomposition
-                (default: use configured summarization provider)
+            analyzer: Override AnalyzerProvider for decomposition
+                (default: use configured analyzer or DefaultAnalyzer)
             tags: Guidance tag keys (e.g., ["topic", "type"]) —
                 fetches .tag/xxx descriptions as decomposition context
             force: Skip the _analyzed_hash check and re-analyze regardless
@@ -3009,6 +2834,8 @@ class Keeper:
         Returns:
             List of PartInfo for the created parts (empty list if skipped)
         """
+        from .providers.base import AnalysisChunk
+
         validate_id(id)
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
@@ -3025,35 +2852,55 @@ class Keeper:
                 logger.info("Skipping analysis for %s: parts already current", id)
                 return self.list_parts(id)
 
-        # Get content to analyze.
-        # For URI sources: re-fetch the document content.
-        # For inline sources (strings): concatenate the version history,
-        # giving the LLM the full temporal sequence to decompose.
-        content = None
+        # Build AnalysisChunks from content.
+        # For URI sources: re-fetch → single chunk.
+        # For inline sources (strings): version history → one chunk per version.
+        chunks: list[AnalysisChunk] = []
         source = doc_record.tags.get("_source")
+        parent_user_tags = {
+            k: v for k, v in doc_record.tags.items()
+            if not k.startswith(SYSTEM_TAG_PREFIX)
+        }
+
         if source == "uri":
             try:
                 doc = self._document_provider.fetch(id)
-                content = doc.content
+                chunks = [AnalysisChunk(
+                    content=doc.content,
+                    tags=parent_user_tags,
+                    index=0,
+                )]
             except Exception as e:
                 logger.warning("Could not re-fetch %s: %s, using summary", id, e)
 
-        if not content:
-            # For inline notes, assemble the version string (history + current)
+        if not chunks:
+            # For inline notes, build chunks from version history
             versions = self._document_store.list_versions(doc_coll, id, limit=100)
             if versions:
-                # Build chronological sequence (oldest first)
-                sections = []
-                for v in reversed(versions):
+                # Chronological order (oldest first)
+                for i, v in enumerate(reversed(versions)):
                     date_str = v.created_at[:10] if v.created_at else ""
-                    sections.append(f"[{date_str}]\n{v.summary}")
-                # Add current as newest
-                sections.append(f"[current]\n{doc_record.summary}")
-                content = "\n\n---\n\n".join(sections)
+                    chunks.append(AnalysisChunk(
+                        content=f"[{date_str}]\n{v.summary}",
+                        tags=parent_user_tags,
+                        index=i,
+                    ))
+                # Current version as newest
+                chunks.append(AnalysisChunk(
+                    content=f"[current]\n{doc_record.summary}",
+                    tags=parent_user_tags,
+                    index=len(chunks),
+                ))
             else:
-                content = doc_record.summary
+                chunks = [AnalysisChunk(
+                    content=doc_record.summary,
+                    tags=parent_user_tags,
+                    index=0,
+                )]
 
-        if not content or len(content.strip()) < 50:
+        # Validate minimum content
+        total_content = "".join(c.content for c in chunks)
+        if len(total_content.strip()) < 50:
             raise ValueError(f"Document content too short to analyze: {id}")
 
         # Build guide context from tag descriptions
@@ -3070,21 +2917,17 @@ class Keeper:
             if guide_parts:
                 guide_context = "\n\n".join(guide_parts)
 
-        # Get the provider for decomposition.
+        # Get the analyzer.
         # Wait for any background reconciliation to finish first — both
         # sentence-transformers (embedding) and mlx-lm (summarization)
         # import the `transformers` package, and concurrent imports
         # corrupt module state (Python import lock is per-module).
-        if provider is None:
+        if analyzer is None:
             self._reconcile_done.wait(timeout=30)
-            provider = self._get_summarization_provider()
+            analyzer = self._get_analyzer()
 
-        # Call LLM decomposition
-        raw_parts = _call_decomposition_llm(provider, content, guide_context)
-
-        if not raw_parts:
-            # Fallback to simple chunking
-            raw_parts = _simple_chunk_decomposition(content)
+        # Delegate to the analyzer
+        raw_parts = analyzer.analyze(chunks, guide_context)
 
         # Content not decomposable — single section is redundant with the note
         if len(raw_parts) <= 1:
@@ -3095,15 +2938,9 @@ class Keeper:
         from .types import utc_now
         now = utc_now()
 
-        # Inherit parent's non-system tags
-        parent_tags = {
-            k: v for k, v in doc_record.tags.items()
-            if not k.startswith(SYSTEM_TAG_PREFIX)
-        }
-
         parts: list[PartInfo] = []
         for i, raw in enumerate(raw_parts, 1):
-            part_tags = dict(parent_tags)
+            part_tags = dict(parent_user_tags)
             # Merge part-specific tags from LLM
             if raw.get("tags"):
                 part_tags.update(raw["tags"])
