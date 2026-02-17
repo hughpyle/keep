@@ -1274,6 +1274,10 @@ def now(
         "--history", "-H",
         help="List all versions"
     )] = False,
+    scope: Annotated[Optional[str], typer.Option(
+        "--scope",
+        help="Scope for multi-user isolation (e.g. user ID)"
+    )] = None,
     store: StoreOption = None,
     tags: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
@@ -1309,12 +1313,13 @@ def now(
     from .api import NOWDOC_ID
 
     kp = _get_keeper(store)
+    doc_id = f"now:{scope}" if scope else NOWDOC_ID
 
     # Handle history listing
     if history:
-        versions = kp.list_versions(NOWDOC_ID, limit=limit)
-        current = kp.get(NOWDOC_ID)
-        items = _versions_to_items(NOWDOC_ID, current, versions)
+        versions = kp.list_versions(doc_id, limit=limit)
+        current = kp.get(doc_id)
+        items = _versions_to_items(doc_id, current, versions)
         typer.echo(_format_items(items, as_json=_get_json_output()))
         return
 
@@ -1322,12 +1327,12 @@ def now(
     if version is not None:
         offset = version
         if offset == 0:
-            item = kp.get_now()
+            item = kp.get_now(scope=scope)
             internal_version = None
         else:
-            item = kp.get_version(NOWDOC_ID, offset)
+            item = kp.get_version(doc_id, offset)
             # Get internal version number for API call
-            versions = kp.list_versions(NOWDOC_ID, limit=1)
+            versions = kp.list_versions(doc_id, limit=1)
             if versions:
                 internal_version = versions[0].version - (offset - 1)
             else:
@@ -1337,7 +1342,7 @@ def now(
             typer.echo(f"Version not found (offset {offset})", err=True)
             raise typer.Exit(1)
 
-        version_nav = kp.get_version_nav(NOWDOC_ID, internal_version)
+        version_nav = kp.get_version_nav(doc_id, internal_version)
         typer.echo(_format_item(
             item,
             as_json=_get_json_output(),
@@ -1361,7 +1366,7 @@ def now(
         if reset:
             # Reset to default from system (delete first to clear old tags)
             from .api import _load_frontmatter, SYSTEM_DOC_DIR
-            kp.delete(NOWDOC_ID)
+            kp.delete(doc_id)
             try:
                 new_content, default_tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
                 parsed_tags = default_tags
@@ -1375,7 +1380,7 @@ def now(
         # Parse user-provided tags (merge with default if reset)
         parsed_tags.update(_parse_tags(tags))
 
-        item = kp.set_now(new_content, tags=parsed_tags or None)
+        item = kp.set_now(new_content, scope=scope, tags=parsed_tags or None)
 
         # Surface similar items and meta sections (occasion for reflection)
         similar_items = kp.get_similar_for_display(item.id, limit=limit)
@@ -1393,7 +1398,7 @@ def now(
         # Get current intentions (or search version history if tags specified)
         if tags:
             # Search version history for most recent version with matching tags
-            item = _find_now_version_by_tags(kp, tags)
+            item = _find_now_version_by_tags(kp, tags, scope=scope)
             if item is None:
                 typer.echo("No version found matching tags", err=True)
                 raise typer.Exit(1)
@@ -1401,11 +1406,11 @@ def now(
             typer.echo(_format_item(item, as_json=_get_json_output()))
         else:
             # Standard: get current with version navigation and similar items
-            item = kp.get_now()
-            version_nav = kp.get_version_nav(NOWDOC_ID, None)
-            similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=limit)
+            item = kp.get_now(scope=scope)
+            version_nav = kp.get_version_nav(doc_id, None)
+            similar_items = kp.get_similar_for_display(doc_id, limit=limit)
             similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-            meta_sections = kp.resolve_meta(NOWDOC_ID, limit_per_doc=limit)
+            meta_sections = kp.resolve_meta(doc_id, limit_per_doc=limit)
             typer.echo(_format_item(
                 item,
                 as_json=_get_json_output(),
@@ -1416,13 +1421,14 @@ def now(
             ))
 
 
-def _find_now_version_by_tags(kp, tags: list[str]):
+def _find_now_version_by_tags(kp, tags: list[str], *, scope: Optional[str] = None):
     """
     Search nowdoc version history for most recent version matching all tags.
 
     Checks current version first, then scans previous versions.
     """
     from .api import NOWDOC_ID
+    doc_id = f"now:{scope}" if scope else NOWDOC_ID
 
     # Parse tag filters
     tag_filters = []
@@ -1444,16 +1450,16 @@ def _find_now_version_by_tags(kp, tags: list[str]):
         return True
 
     # Check current version first
-    current = kp.get_now()
+    current = kp.get_now(scope=scope)
     if current and matches_tags(current.tags):
         return current
 
     # Scan previous versions (newest first)
-    versions = kp.list_versions(NOWDOC_ID, limit=100)
+    versions = kp.list_versions(doc_id, limit=100)
     for i, v in enumerate(versions):
         if matches_tags(v.tags):
             # Found match - get full item at this version offset
-            return kp.get_version(NOWDOC_ID, i + 1)
+            return kp.get_version(doc_id, i + 1)
 
     return None
 
