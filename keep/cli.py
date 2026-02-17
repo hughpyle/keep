@@ -458,6 +458,14 @@ SinceOption = Annotated[
     )
 ]
 
+UntilOption = Annotated[
+    Optional[str],
+    typer.Option(
+        "--until",
+        help="Only notes updated before (ISO duration: P3D, P1W, PT1H; or date: 2026-01-15)"
+    )
+]
+
 
 def _format_item(
     item: Item,
@@ -779,6 +787,7 @@ def find(
     store: StoreOption = None,
     limit: LimitOption = 10,
     since: SinceOption = None,
+    until: UntilOption = None,
     history: Annotated[bool, typer.Option(
         "--history", "-H",
         help="Include versions of matching notes"
@@ -815,9 +824,9 @@ def find(
     search_limit = limit * 5 if tag else limit
 
     if id:
-        results = kp.find(similar_to=id, limit=search_limit, since=since, include_self=include_self, include_hidden=show_all)
+        results = kp.find(similar_to=id, limit=search_limit, since=since, until=until, include_self=include_self, include_hidden=show_all)
     else:
-        results = kp.find(query, fulltext=text, limit=search_limit, since=since, include_hidden=show_all)
+        results = kp.find(query, fulltext=text, limit=search_limit, since=since, until=until, include_hidden=show_all)
 
     # Post-filter by tags if specified
     if tag:
@@ -842,12 +851,13 @@ def search(
     store: StoreOption = None,
     limit: LimitOption = 10,
     since: SinceOption = None,
+    until: UntilOption = None,
 ):
     """
     Search note summaries using full-text search (alias for find --text).
     """
     kp = _get_keeper(store)
-    results = kp.find(query, fulltext=True, limit=limit, since=since)
+    results = kp.find(query, fulltext=True, limit=limit, since=since, until=until)
     typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
@@ -868,6 +878,7 @@ def list_recent(
         help="Sort order: 'updated' (default) or 'accessed'"
     )] = "updated",
     since: SinceOption = None,
+    until: UntilOption = None,
     history: Annotated[bool, typer.Option(
         "--history", "-H",
         help="Include versions in output"
@@ -894,6 +905,7 @@ def list_recent(
         keep list --tags=              # List all tag keys
         keep list --tags=foo           # List values for tag 'foo'
         keep list --since P3D          # Notes updated in last 3 days
+        keep list --until 2026-01-15   # Notes updated before date
         keep list --history            # Include versions
         keep list --parts              # Include analyzed parts
     """
@@ -925,10 +937,10 @@ def list_recent(
         for t in tag:
             if "=" in t:
                 key, value = t.split("=", 1)
-                matches = kp.query_tag(key, value, limit=limit, since=since, include_hidden=show_all)
+                matches = kp.query_tag(key, value, limit=limit, since=since, until=until, include_hidden=show_all)
             else:
                 # Key only - find items with this tag key (any value)
-                matches = kp.query_tag(t, limit=limit, since=since, include_hidden=show_all)
+                matches = kp.query_tag(t, limit=limit, since=since, until=until, include_hidden=show_all)
 
             if results is None:
                 results = {item.id: item for item in matches}
@@ -942,7 +954,7 @@ def list_recent(
         return
 
     # Default: recent items
-    results = kp.list_recent(limit=limit, since=since, order_by=sort, include_history=history, include_hidden=show_all)
+    results = kp.list_recent(limit=limit, since=since, until=until, order_by=sort, include_history=history, include_hidden=show_all)
 
     # Expand with parts if requested
     if parts:

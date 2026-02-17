@@ -344,13 +344,19 @@ class MockDocumentStore:
         return records
 
     def query_by_tag_key(self, collection: str, key: str, limit: int = 100,
-                         since_date: str = None) -> list:
+                         since_date: str = None, until_date: str = None) -> list:
         if collection not in self._data:
             return []
         results = []
         for id, rec in self._data[collection].items():
-            if key in rec["tags"]:
-                results.append(self._make_record(collection, id, rec))
+            if key not in rec["tags"]:
+                continue
+            updated = rec.get("updated_at", "")
+            if since_date and updated < since_date:
+                continue
+            if until_date and updated >= until_date:
+                continue
+            results.append(self._make_record(collection, id, rec))
         return results[:limit]
 
     def list_distinct_tag_keys(self, collection: str) -> list[str]:

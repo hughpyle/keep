@@ -1629,6 +1629,7 @@ class DocumentStore:
         key: str,
         limit: int = 100,
         since_date: Optional[str] = None,
+        until_date: Optional[str] = None,
     ) -> list[DocumentRecord]:
         """
         Find documents that have a specific tag key (any value).
@@ -1638,6 +1639,7 @@ class DocumentStore:
             key: Tag key to search for
             limit: Maximum results
             since_date: Only include items updated on or after this date (YYYY-MM-DD)
+            until_date: Only include items updated before this date (YYYY-MM-DD)
 
         Returns:
             List of matching DocumentRecords
@@ -1647,7 +1649,8 @@ class DocumentStore:
         params: list[Any] = [collection, f"$.{key}"]
 
         sql = """
-            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
+            SELECT id, collection, summary, tags_json, created_at, updated_at,
+                   content_hash, content_hash_full, accessed_at
             FROM documents
             WHERE collection = ?
               AND json_extract(tags_json, ?) IS NOT NULL
@@ -1657,6 +1660,10 @@ class DocumentStore:
             # Compare against the date portion of updated_at
             sql += "  AND updated_at >= ?\n"
             params.append(since_date)
+
+        if until_date is not None:
+            sql += "  AND updated_at < ?\n"
+            params.append(until_date)
 
         sql += "ORDER BY updated_at DESC\nLIMIT ?"
         params.append(limit)
@@ -1673,6 +1680,7 @@ class DocumentStore:
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
+                content_hash_full=row["content_hash_full"],
                 accessed_at=row["accessed_at"],
             ))
 
