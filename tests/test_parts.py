@@ -19,11 +19,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from keep.api import (
-    Keeper,
-    _parse_decomposition_json,
-    _simple_chunk_decomposition,
-)
+from keep.api import Keeper
+from keep.analyzers import _parse_decomposition_json, _simple_chunk_decomposition
 from keep.document_store import DocumentStore, PartInfo
 from keep.types import utc_now
 
@@ -176,14 +173,14 @@ class TestDecompositionParsing:
             {"summary": "Intro", "content": "The intro text"},
             {"summary": "Body", "content": "The body text", "tags": {"topic": "main"}},
         ])
-        result = _parse_decomposition_json(text, "")
+        result = _parse_decomposition_json(text)
         assert len(result) == 2
         assert result[0]["summary"] == "Intro"
         assert result[1]["tags"] == {"topic": "main"}
 
     def test_parse_code_fenced(self):
         text = '```json\n[{"summary": "Test", "content": "Content"}]\n```'
-        result = _parse_decomposition_json(text, "")
+        result = _parse_decomposition_json(text)
         assert len(result) == 1
         assert result[0]["summary"] == "Test"
 
@@ -191,16 +188,16 @@ class TestDecompositionParsing:
         text = json.dumps({"sections": [
             {"summary": "Part 1", "content": "Text 1"},
         ]})
-        result = _parse_decomposition_json(text, "")
+        result = _parse_decomposition_json(text)
         assert len(result) == 1
         assert result[0]["summary"] == "Part 1"
 
     def test_parse_empty_text(self):
-        assert _parse_decomposition_json("", "") == []
-        assert _parse_decomposition_json(None, "") == []
+        assert _parse_decomposition_json("") == []
+        assert _parse_decomposition_json(None) == []
 
     def test_parse_invalid_json(self):
-        assert _parse_decomposition_json("not json at all", "") == []
+        assert _parse_decomposition_json("not json at all") == []
 
     def test_parse_skips_empty_entries(self):
         text = json.dumps([
@@ -208,7 +205,7 @@ class TestDecompositionParsing:
             {},  # No summary or content
             {"summary": "", "content": ""},  # Empty strings
         ])
-        result = _parse_decomposition_json(text, "")
+        result = _parse_decomposition_json(text)
         assert len(result) == 1
 
 
@@ -273,7 +270,7 @@ class TestKeeperAnalyze:
              "tags": {"topic": "analysis"}},
         ])
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
                 {"summary": "Introduction", "content": "First section text",
                  "tags": {"topic": "intro"}},
@@ -294,7 +291,7 @@ class TestKeeperAnalyze:
         kp = Keeper(store_path=tmp_path)
         kp.put("Content " * 50, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             # First analysis
             mock_llm.return_value = [
                 {"summary": "Part A", "content": "A text"},
@@ -322,7 +319,7 @@ class TestKeeperAnalyze:
         kp = Keeper(store_path=tmp_path)
         kp.put("Content " * 50, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
                 {"summary": "Part 1", "content": "Text 1"},
                 {"summary": "Part 2", "content": "Text 2"},
@@ -344,7 +341,7 @@ class TestKeeperAnalyze:
         kp = Keeper(store_path=tmp_path)
         kp.put("Content " * 50, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
                 {"summary": f"Part {i}", "content": f"Text {i}"}
                 for i in range(1, 4)
@@ -369,8 +366,8 @@ class TestKeeperAnalyze:
         content = "\n\n".join(paragraphs)
         kp.put(content, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
-            mock_llm.return_value = []  # LLM fails
+        with patch("keep.analyzers.DefaultAnalyzer._call_llm") as mock_llm:
+            mock_llm.return_value = []  # LLM fails, triggers simple chunk fallback
             parts = kp.analyze("test-doc")
 
         assert len(parts) >= 2  # Fallback produces chunks
@@ -394,7 +391,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -410,7 +407,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             parts1 = kp.analyze("test-doc")
             assert len(parts1) == 2
@@ -426,7 +423,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Original content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -448,7 +445,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -463,7 +460,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -476,7 +473,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -492,7 +489,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.api._call_decomposition_llm") as mock_llm:
+        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
