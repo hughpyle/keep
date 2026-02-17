@@ -2,9 +2,9 @@
 
 ## What is keep?
 
-**keep** is a reflective memory system providing persistent storage with vector similarity search. It's designed as an agent skill for OpenClaw and other agentic environments, enabling agents to remember information across sessions over time.
+**keep** is a reflective memory system providing persistent storage with vector similarity search. It's designed as an agent skill for Claude Code, OpenClaw, LangChain/LangGraph, and other agentic environments, enabling agents to remember information across sessions over time.
 
-Think of it as: **ChromaDB + embeddings + summarization + tagging** wrapped in a simple API.
+Think of it as: **vector search + embeddings + summarization + tagging** wrapped in a simple API.
 
 Published by Hugh Pyle, "inguz ᛜ outcomes", under the MIT license.
 Contributions are welcome; code is conversation, "right speech" is encouraged.
@@ -18,8 +18,9 @@ Every stored item has:
 - **Summary**: Human-readable text (stored, searchable)
 - **Embedding**: Vector representation (for semantic search)
 - **Tags**: Key-value metadata (for filtering)
-- **Timestamps**: Created/updated (auto-managed)
+- **Timestamps**: Created/updated/accessed (auto-managed)
 - **Version History**: Previous versions archived automatically on update
+- **Parts**: Optional structural decomposition (from `analyze`)
 
 The original document content is **not stored** — only the summary and embedding.
 
@@ -33,6 +34,7 @@ The original document content is **not stored** — only the summary and embeddi
 │  - Keeper class                                             │
 │  - High-level operations: put(), find(), get()              │
 │  - Version management: get_version(), list_versions()       │
+│  - Structural analysis: analyze()                           │
 └──────────────────┬──────────────────────────────────────────┘
                    │
         ┌──────────┼──────────┬──────────┬──────────┬───────────┐
@@ -51,29 +53,43 @@ The original document content is **not stored** — only the summary and embeddi
 
 **[api.py](keep/api.py)** — Main facade
 - `Keeper` class
-- Coordinates providers and store
+- Coordinates providers and stores
 - Implements query operations with recency decay
+- Content-based embedding dedup (skips re-embedding when content matches an existing document)
 
-**[store.py](keep/store.py)** — Vector persistence
+**[protocol.py](keep/protocol.py)** — Abstract interfaces
+- `KeeperProtocol`, `VectorStoreProtocol`, `DocumentStoreProtocol`, `PendingQueueProtocol`
+- Enables pluggable backends (local SQLite/ChromaDB or remote PostgreSQL/pgvector)
+
+**[store.py](keep/store.py)** — Vector persistence (local)
 - `ChromaStore` wraps ChromaDB
 - Handles vector storage, similarity search, metadata queries
-- Versioned embeddings: `{id}@v{version}` for history
+- Versioned embeddings: `{id}@v{N}` for history
+- Part embeddings: `{id}@p{N}` for structural decomposition
 
-**[document_store.py](keep/document_store.py)** — Document persistence
+**[document_store.py](keep/document_store.py)** — Document persistence (local)
 - `DocumentStore` wraps SQLite
-- Stores summaries, tags, timestamps
+- Stores summaries, tags, timestamps, content hashes
 - Version history: archives previous versions on update
+- Parts table: structural decomposition from `analyze`
 
-**[providers/](keep/providers/)** — Pluggable services
-- **Document**: Fetch content from URIs (file://, https://)
-- **Embedding**: Generate vectors (sentence-transformers, OpenAI, Ollama, MLX)
-- **Summarization**: Generate summaries (truncate, LLM-based)
-- **Registry**: Factory for lazy-loading providers
+**[backend.py](keep/backend.py)** — Pluggable storage factory
+- Creates store backends based on configuration
+- External backends register via `keep.backends` entry point
+- Returns `StoreBundle` (doc store, vector store, pending queue)
+
+**[remote.py](keep/remote.py)** — Remote client
+- HTTP client implementing `KeeperProtocol`
+- Connects to the hosted REST API (keepmem)
 
 **[config.py](keep/config.py)** — Configuration
 - Detects available providers (platform, API keys, Ollama)
 - Persists choices in `keep.toml`
 - Auto-creates on first use
+
+**[pending_summaries.py](keep/pending_summaries.py)** — Deferred processing
+- Queue for background summarization and embedding
+- Used in cloud mode where embedding happens server-side
 
 **[types.py](keep/types.py)** — Data model
 - `Item`: Immutable result type
@@ -116,19 +132,25 @@ URI or content
     │                     │
     ▼                     ▼
 ┌─────────────────┐  ┌─────────────────┐
-│ DocumentStore   │  │ ChromaStore     │
+│ DocumentStore   │  │ VectorStore     │
 │ upsert()        │  │ upsert()        │
 │ - summary       │  │ - embedding     │
 │ - tags          │  │ - summary       │
 │ - timestamps    │  │ - tags          │
-│ - archive prev  │  │ - version embed │
+│ - content hash  │  │ - version embed │
+│ - archive prev  │  │                 │
 └─────────────────┘  └─────────────────┘
 ```
 
 **Versioning on update:**
 - DocumentStore archives current version before updating
-- ChromaStore adds versioned embedding (`{id}@v{N}`) if content changed
+- VectorStore adds versioned embedding (`{id}@v{N}`) if content changed
 - Same content (hash match) skips duplicate embedding
+
+**Embedding dedup:**
+- Before computing an embedding, checks if another document has the same content hash
+- If a donor exists with a compatible embedding, copies it instead of re-embedding
+- Safety: dimension check prevents cross-model contamination
 
 ### Retrieval: find(query)
 
@@ -141,7 +163,7 @@ query text
     │ query vector
     ▼
 ┌───────────────────┐
-│ ChromaStore       │
+│ VectorStore       │
 │ query_embedding() │ ← L2 distance search
 └─────────┬─────────┘
           │
@@ -149,6 +171,11 @@ query text
     ┌──────────────┐
     │ Apply decay  │ ← Recency weighting (ACT-R style)
     │ score × 0.5^(days/half_life)
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────┐
+    │ Date filter  │ ← Optional --since / --until
     └──────┬───────┘
            │
            ▼
@@ -167,11 +194,11 @@ delete(id)
     │
     └── N versions → revert to previous
             │
-            ├─ get archived embedding from ChromaDB (id@vN)
+            ├─ get archived embedding from VectorStore (id@vN)
             ├─ restore_latest_version() in DocumentStore
             │    (promote latest version row to current, delete version row)
-            ├─ upsert restored embedding as current in ChromaDB
-            └─ delete versioned entry (id@vN) from ChromaDB
+            ├─ upsert restored embedding as current in VectorStore
+            └─ delete versioned entry (id@vN) from VectorStore
 ```
 
 ---
@@ -179,9 +206,9 @@ delete(id)
 ## Key Design Decisions
 
 **1. Schema as Data**
-- System configuration stored as documents in the store
-- Enables agents to query and update behavior
-- (Not yet implemented: routing, guidance documents)
+- System configuration stored as documents in the store (e.g. `.now`, `.tag/*`)
+- Enables agents to query and update behavior through the same API
+- Meta-documents resolve related context at retrieval time
 
 **2. Lazy Provider Loading**
 - Providers registered at first use, not import time
@@ -191,7 +218,7 @@ delete(id)
 **3. Separation of Concerns**
 - Store is provider-agnostic (only knows about vectors/metadata)
 - Providers are store-agnostic (only know about text→vectors)
-- Easy to swap implementations
+- Protocols define the boundary; implementations are pluggable
 
 **4. No Original Content Storage**
 - Reduces storage size
@@ -234,9 +261,10 @@ store_path/
 │       ├── embeddings
 │       ├── metadata
 │       └── documents
-├── document_store.db       # SQLite store (summaries, tags, versions)
+├── document_store.db       # SQLite store (summaries, tags, versions, parts)
 │   ├── documents           # Current version of each document
-│   └── document_versions   # Archived previous versions
+│   ├── document_versions   # Archived previous versions
+│   └── parts               # Structural decomposition (from analyze)
 └── embedding_cache.db      # SQLite cache for embeddings
 ```
 
@@ -247,9 +275,9 @@ store_path/
 ### Embedding Providers
 Generate vector representations for semantic search.
 
+- **gemini**: API-based, Google (GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT for Vertex AI)
 - **voyage**: API-based, Anthropic's recommended partner (VOYAGE_API_KEY)
 - **openai**: API-based, high quality (OPENAI_API_KEY)
-- **gemini**: API-based, Google (GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT for Vertex AI)
 - **ollama**: Local server, auto-detected, any model (OLLAMA_HOST)
 - **sentence-transformers**: Local, CPU/GPU, no API key
 - **MLX**: Apple Silicon optimized, local, no API key
@@ -342,117 +370,24 @@ The `keep.langchain` module provides framework adapters on top of the API layer:
 │  API Layer (api.py)                                         │
 ```
 
-KeepStore maps LangGraph's namespace/key model to Keep's tag system via configurable `namespace_keys`. Namespace components become regular Keep tags, visible to CLI and all query methods. See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md).
+KeepStore maps LangGraph's namespace/key model to Keep's tag system via configurable `namespace_keys`. Namespace components become regular Keep tags, visible to CLI and all query methods. Tag filtering is a **pre-filter on the vector search**, making tags suitable for data isolation (per-user, per-project). See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md).
 
 ---
 
 ## Extension Points
 
-**New Provider**
-1. Implement Protocol from [providers/base.py](keep/providers/base.py)
-2. Register with `get_registry().register_X("name", YourClass)`
-3. Reference by name in config
+**New Embedding or Summarization Provider**
+1. Implement the provider protocol (EmbeddingProvider or SummarizationProvider)
+2. Register in the config registry
+3. Reference by name in `keep.toml`
 
 **New Store Backend**
-- Current: ChromaDB
-- Future: Could extract Protocol from `ChromaStore`
-- Candidates: PostgreSQL+pgvector, SQLite+faiss
+- Protocols defined in [protocol.py](keep/protocol.py): `VectorStoreProtocol`, `DocumentStoreProtocol`, `PendingQueueProtocol`
+- Local: ChromaDB + SQLite (built-in)
+- Remote: PostgreSQL + pgvector (keepmem package, registered via `keep.backends` entry point)
+- Register new backends via `keep.backends` entry point in pyproject.toml
 
 **Framework Integration**
 - Implement adapters on top of the Keeper API layer
 - Current: LangChain/LangGraph ([keep/langchain/](keep/langchain/))
 - Pattern: map framework concepts to Keep tags + search
-
-**New Query Types**
-- Add methods to `Keeper`
-- Delegate to `ChromaStore` or implement in API layer
-
----
-
-## Performance Characteristics
-
-**Indexing**
-- Embedding: ~50-200ms per item (local models)
-- Summarization: ~100ms-2s per item (depends on provider)
-- Storage: ~10ms per item
-
-**Querying**
-- Semantic search: ~10-50ms for 10k items
-- Tag queries: ~1-10ms
-- Full-text search: ~10-100ms
-
-**Caching**
-- Embedding cache avoids re-computing for repeated queries
-- Persists across sessions in SQLite
-
-**Scaling**
-- ChromaDB handles ~100k items comfortably
-- Larger datasets may benefit from PostgreSQL backend
-- Embedding dimension affects memory (384d vs 1536d)
-
----
-
-## Failure Modes
-
-**Missing Dependencies**
-- Registry provides clear error about which provider failed
-- Lists available alternatives
-- Lazy loading prevents import-time crashes
-
-**URI Fetch Failures**
-- `put()` raises `IOError` for unreachable URIs
-- Original error preserved in exception chain
-
-**Invalid Config**
-- Config auto-created with detected defaults
-- Validation on load with clear error messages
-
-**Store Inconsistency**
-- On startup, a background thread checks for mismatches between ChromaDB and SQLite
-- Missing search index entries or orphaned vectors are reconciled automatically
-- This runs as a daemon thread and does not block normal operation
-
-**Store Corruption**
-- ChromaDB is resilient (SQLite-backed)
-- Embedding cache can be deleted and rebuilt
-- No critical data loss if store is backed up
-
----
-
-## Testing Strategy
-
-**Unit Tests**: [tests/test_core.py](tests/test_core.py)
-- Data types (Item, filtering)
-- Context dataclasses
-- No external dependencies
-
-**Document Store Tests**: [tests/test_document_store.py](tests/test_document_store.py)
-- SQLite persistence
-- Version history (archive, retrieval, navigation)
-- Schema migration
-
-**Integration Tests**: [tests/test_integration.py](tests/test_integration.py)
-- End-to-end: remember → find
-- Multiple collections
-- Recency decay
-- Embedding cache
-
-**Provider Tests**: (TODO)
-- Each provider independently
-- Graceful degradation when unavailable
-
----
-
-## Future Work
-
-### Planned (in [later/](later/))
-- **Relationships**: Link items with typed edges
-- **Advanced Tagging**: LLM-based tag generation
-- **Hierarchical Context**: Topic summaries, working context
-
-### Under Consideration
-- Multi-store facade (private/shared routing)
-- Batch operations for performance
-- Incremental indexing (track changes)
-- Export/import for backup
-- Web UI for exploration
