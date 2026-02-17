@@ -1,3 +1,6 @@
+
+* Content-based dedup, for summarization?
+
 * URIs: What's safe to normalize?
   RFC 3986 §6.2.2 defines "syntax-based normalization" that's always safe:
     - Scheme/host case — always case-insensitive (HTTPS://EXAMPLE.COM → https://example.com)
@@ -79,8 +82,6 @@
         - update with all relevant URLs as you research
         - more tags?  update with descriptions-of-tags?  auto-summarize to make descriptions-of-tags?
 
-* re-test the gemini path
-
 * dynamically detect available models using the provider's API?
     - we could do this, but when?
     - no capability for "model migration and re-embedding" yet
@@ -97,10 +98,6 @@
 
 * Other auto-taggers:
     - geolocation-tagger to extract location stuff from latlong
-
-* check for compatibility with linux (so far I've exclusively been running on macOS)
-    can deploy on rpi at home
-    also think about what would differ if we wanted to run this within docker, or in a k8s cluster
 
 * check for compatibility with windows
     not sure we need to support powershell, only WSL? but paths etc. will vary
