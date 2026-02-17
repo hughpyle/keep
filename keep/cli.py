@@ -2469,6 +2469,150 @@ def process_pending(
 # Entry point
 # -----------------------------------------------------------------------------
 
+
+@app.command(hidden=True)
+def doctor(
+    store: StoreOption = None,
+    use_faulthandler: Annotated[bool, typer.Option(
+        "--faulthandler", help="Enable faulthandler for native crash traces"
+    )] = False,
+):
+    """Diagnostic checks for debugging setup and crash issues."""
+    import platform
+    import time
+
+    if use_faulthandler:
+        import faulthandler
+        faulthandler.enable()
+        typer.echo("faulthandler enabled (native crash traces will print to stderr)\n")
+
+    def ok(msg):
+        typer.echo(f"  [ok]   {msg}")
+
+    def fail(msg):
+        typer.echo(f"  [FAIL] {msg}")
+
+    # 1. Environment
+    from importlib.metadata import version as pkg_version
+    try:
+        kv = pkg_version("keep-skill")
+    except Exception:
+        kv = "?"
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    plat = f"{platform.system()} {platform.release()} ({platform.machine()})"
+    ok(f"Environment: Python {py_ver}, {plat}, keep-skill {kv}")
+
+    # 2. Key packages
+    pkg_names = ["chromadb", "sentence_transformers", "torch", "pydantic", "sqlite3"]
+    pkg_versions = {}
+    for pkg in pkg_names:
+        try:
+            mod = __import__(pkg)
+            pkg_versions[pkg] = getattr(mod, "__version__", getattr(mod, "version", "imported"))
+        except ImportError:
+            pkg_versions[pkg] = "not installed"
+    pkg_str = ", ".join(f"{k} {v}" for k, v in pkg_versions.items())
+    ok(f"Packages: {pkg_str}")
+
+    # 3. Store config
+    from .config import load_or_create_config
+    from .paths import get_config_dir, get_default_store_path
+    try:
+        actual_store = store if store is not None else _get_store_override()
+        config_dir = Path(actual_store).resolve() if actual_store else get_config_dir()
+        cfg = load_or_create_config(config_dir)
+        store_path = Path(get_default_store_path(cfg) if actual_store is None else actual_store)
+        emb_name = cfg.embedding.name if cfg and cfg.embedding else "none"
+        sum_name = cfg.summarization.name if cfg and cfg.summarization else "none"
+        ok(f"Store config: {store_path} (embedding: {emb_name}, summarization: {sum_name})")
+    except Exception as e:
+        fail(f"Store config: {e}")
+        store_path = None
+
+    # 4. SQLite (DocumentStore)
+    db_path = store_path / "documents.db" if store_path else None
+    if db_path and db_path.exists():
+        try:
+            from .document_store import DocumentStore
+            ds = DocumentStore(db_path)
+            doc_count = ds.count("default")
+            ver_count = ds.count_versions("default")
+            ok(f"SQLite: {doc_count} documents, {ver_count} versions")
+            ds.close()
+        except Exception as e:
+            fail(f"SQLite: {e}")
+    elif store_path:
+        ok("SQLite: no documents.db yet (new store)")
+    else:
+        fail("SQLite: skipped (no store path)")
+
+    # 5. Embedding provider
+    if cfg and cfg.embedding:
+        try:
+            from .providers.base import get_registry
+            registry = get_registry()
+            provider = registry.create_embedding(cfg.embedding.name, cfg.embedding.params)
+            t0 = time.perf_counter()
+            vec = provider.embed("keep doctor test")
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            dim = len(vec)
+            model = getattr(provider, "model_name", "?")
+            ok(f"Embedding: {model}, dim={dim}, {elapsed_ms:.0f}ms")
+        except Exception as e:
+            fail(f"Embedding: {e}")
+    else:
+        ok("Embedding: no provider configured")
+
+    # 6. ChromaDB
+    if store_path and (store_path / "chroma").exists():
+        try:
+            from .store import ChromaStore
+            cs = ChromaStore(store_path)
+            collections = cs.list_collections()
+            counts = {c: cs.count(c) for c in collections}
+            parts = [f"{c} ({n})" for c, n in counts.items()]
+            ok(f"ChromaDB: {', '.join(parts) if parts else 'no collections'}")
+        except Exception as e:
+            fail(f"ChromaDB: {e}")
+    elif store_path:
+        ok("ChromaDB: no chroma/ yet (new store)")
+    else:
+        fail("ChromaDB: skipped (no store path)")
+
+    # 7. Round-trip (temp store, isolates stack from store data)
+    import tempfile
+    import shutil
+    from .config import StoreConfig, ProviderConfig
+    tmp_dir = None
+    try:
+        tmp_dir = tempfile.mkdtemp(prefix="keep_doctor_")
+        tmp_path = Path(tmp_dir)
+        # Minimal config: passthrough summarization (no LLM)
+        test_config = StoreConfig(
+            path=tmp_path,
+            summarization=ProviderConfig("passthrough", {"max_chars": 10000}),
+            max_summary_length=10000,
+        )
+        t0 = time.perf_counter()
+        kp = Keeper(tmp_dir, config=test_config)
+        kp.put("The quick brown fox jumps over the lazy dog", id="doctor_test")
+        item = kp.get("doctor_test")
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        if item and "fox" in item.summary:
+            ok(f"Round-trip: put + get in {elapsed_ms:.0f}ms")
+        else:
+            fail("Round-trip: put succeeded but get returned unexpected result")
+    except Exception as e:
+        fail(f"Round-trip: {e}")
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    typer.echo()
+
+
+# -----------------------------------------------------------------------------
+
 def main():
     try:
         app()
