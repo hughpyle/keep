@@ -2,7 +2,7 @@
   "id": "keep",
   "name": "keep",
   "description": "Reflective memory — injects context at agent start, syncs memory after compaction",
-  "version": "0.45.0",
+  "version": "0.45.1",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
