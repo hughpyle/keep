@@ -62,10 +62,21 @@ class ChromaStore:
 
         self._store_path = store_path
         self._embedding_dimension = embedding_dimension
-        
+
         # Ensure store directory exists
         store_path.mkdir(parents=True, exist_ok=True)
-        
+
+        # Disable Posthog telemetry completely.  ChromaDB sets posthog.disabled
+        # but the default client is created with send=posthog.send (default True),
+        # which starts a background consumer thread and registers an atexit handler.
+        # That consumer can deadlock on shutdown in lock.acquire().
+        try:
+            import posthog
+            posthog.send = False
+            posthog.disabled = True
+        except ImportError:
+            pass
+
         # Initialize persistent client
         self._client = chromadb.PersistentClient(
             path=str(store_path / "chroma"),

@@ -2563,7 +2563,23 @@ def doctor(
     else:
         ok("Embedding: no provider configured")
 
-    # 6. ChromaDB
+    # 6. Summarization provider
+    if cfg and cfg.summarization and cfg.summarization.name != "passthrough":
+        try:
+            from .providers.base import get_registry
+            registry = get_registry()
+            provider = registry.create_summarization(cfg.summarization.name, cfg.summarization.params)
+            t0 = time.perf_counter()
+            result = provider.summarize("The quick brown fox jumps over the lazy dog.")
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            model = getattr(provider, "model_name", cfg.summarization.name)
+            ok(f"Summarization: {model}, {elapsed_ms:.0f}ms")
+        except Exception as e:
+            fail(f"Summarization: {e}")
+    else:
+        ok(f"Summarization: {'passthrough' if cfg and cfg.summarization else 'none'}")
+
+    # 7. ChromaDB
     if store_path and (store_path / "chroma").exists():
         try:
             from .store import ChromaStore
@@ -2579,7 +2595,7 @@ def doctor(
     else:
         fail("ChromaDB: skipped (no store path)")
 
-    # 7. Round-trip (temp store, isolates stack from store data)
+    # 8. Round-trip (temp store, isolates stack from store data)
     import tempfile
     import shutil
     from .config import StoreConfig, ProviderConfig
