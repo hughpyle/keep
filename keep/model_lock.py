@@ -12,6 +12,7 @@ import gc
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -39,16 +40,22 @@ class ModelLock:
         self._lock_path = lock_path
         self._fd: Optional[int] = None
 
-    def acquire(self, blocking: bool = True) -> bool:
+    def acquire(self, blocking: bool = True, timeout: float = 30) -> bool:
         """
         Acquire the lock.
 
         Args:
-            blocking: If True, wait until lock is available.
+            blocking: If True, wait until lock is available (up to timeout).
                       If False, return False immediately if lock is held.
+            timeout: Maximum seconds to wait when blocking (default 30).
+                     Prevents deadlock when another process is stuck holding
+                     the lock.
 
         Returns:
             True if lock was acquired, False if non-blocking and lock is held.
+
+        Raises:
+            TimeoutError: If blocking and lock not acquired within timeout.
         """
         if not _has_fcntl:
             return True
@@ -56,18 +63,36 @@ class ModelLock:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         self._fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR)
 
-        flags = fcntl.LOCK_EX
         if not blocking:
-            flags |= fcntl.LOCK_NB
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                logger.debug("Acquired model lock: %s", self._lock_path.name)
+                return True
+            except (OSError, BlockingIOError):
+                os.close(self._fd)
+                self._fd = None
+                return False
 
-        try:
-            fcntl.flock(self._fd, flags)
-            logger.debug("Acquired model lock: %s", self._lock_path.name)
-            return True
-        except (OSError, BlockingIOError):
-            os.close(self._fd)
-            self._fd = None
-            return False
+        # Blocking with timeout: poll with non-blocking flock
+        deadline = time.monotonic() + timeout
+        interval = 0.1
+        while True:
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                logger.debug("Acquired model lock: %s", self._lock_path.name)
+                return True
+            except (OSError, BlockingIOError):
+                if time.monotonic() >= deadline:
+                    os.close(self._fd)
+                    self._fd = None
+                    raise TimeoutError(
+                        f"Timed out waiting for model lock ({self._lock_path.name}). "
+                        f"Another keep process may be stuck — check with: "
+                        f"lsof {self._lock_path}"
+                    )
+                time.sleep(interval)
+                # Back off: 0.1, 0.2, 0.4, 0.5, 0.5, ...
+                interval = min(interval * 2, 0.5)
 
     def release(self) -> None:
         """Release the lock."""
