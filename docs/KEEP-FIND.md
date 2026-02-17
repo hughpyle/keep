@@ -49,6 +49,8 @@ keep find "auth" -t project=myapp               # Search within a project
 keep find "auth" -t project -t topic=security    # Multiple tags (AND)
 ```
 
+Tag filters are applied as **pre-filters on the vector search** — results are the best matches *within* the filtered set, not global results filtered afterward. This makes tags suitable for data isolation (per-user, per-project, etc.). See [TAGGING.md](TAGGING.md#tag-based-isolation).
+
 ## Time filtering
 
 The `--since` option accepts ISO 8601 durations or dates:
