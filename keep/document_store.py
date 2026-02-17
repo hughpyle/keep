@@ -414,6 +414,7 @@ class DocumentStore:
         tags: dict[str, str],
         content_hash: Optional[str] = None,
         content_hash_full: Optional[str] = None,
+        created_at: Optional[str] = None,
     ) -> tuple[DocumentRecord, bool]:
         """
         Insert or update a document record.
@@ -428,6 +429,8 @@ class DocumentStore:
             tags: All tags (source + system)
             content_hash: Short SHA256 hash of content (for change detection)
             content_hash_full: Full SHA256 hash (for dedup verification)
+            created_at: Optional override for created_at on new documents
+                        (for importing historical data with original timestamps)
 
         Returns:
             Tuple of (stored DocumentRecord, content_changed bool).
@@ -444,7 +447,7 @@ class DocumentStore:
             try:
                 # Check if exists to preserve created_at and archive
                 existing = self._get_unlocked(collection, id)
-                created_at = existing.created_at if existing else now
+                created_at = existing.created_at if existing else (created_at or now)
                 content_changed = False
 
                 if existing:

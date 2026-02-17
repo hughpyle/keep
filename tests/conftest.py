@@ -262,7 +262,8 @@ class MockDocumentStore:
 
     def upsert(self, collection: str, id: str, summary: str, tags: dict,
                content_hash: str = None,
-               content_hash_full: str = None) -> tuple["DocumentRecord", bool]:
+               content_hash_full: str = None,
+               created_at: str = None) -> tuple["DocumentRecord", bool]:
         if collection not in self._data:
             self._data[collection] = {}
         existed = id in self._data[collection]
@@ -273,7 +274,8 @@ class MockDocumentStore:
         )
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
-        created_at = self._data[collection].get(id, {}).get("created_at", now)
+        existing_created = self._data[collection].get(id, {}).get("created_at")
+        created_at = existing_created or created_at or now
         self._data[collection][id] = {
             "summary": summary,
             "tags": tags,
