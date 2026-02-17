@@ -761,9 +761,14 @@ class Keeper:
             doc_ids = self._document_store.list_ids(doc_coll)
             missing = self._store.find_missing_ids(chroma_coll, doc_ids)
             # Check for orphaned ChromaDB entries
+            # Skip versioned (@v{N}) and part (@p{N}) IDs — they are stored
+            # alongside main entries in ChromaDB but tracked in separate tables
             chroma_ids = self._store.list_ids(chroma_coll)
             doc_id_set = set(doc_ids)
-            orphaned = [cid for cid in chroma_ids if cid not in doc_id_set]
+            orphaned = [
+                cid for cid in chroma_ids
+                if cid not in doc_id_set and "@v" not in cid and "@p" not in cid
+            ]
             if missing or orphaned:
                 logger.info(
                     "Store inconsistency: %d missing from search index, %d orphaned (will auto-reconcile)",
@@ -826,10 +831,11 @@ class Keeper:
                 logger.warning("Failed to reconcile %s: %s", doc_id, e)
 
         # Items in ChromaDB but not in DocumentStore — remove orphaned embeddings
+        # Skip versioned (@v{N}) and part (@p{N}) IDs — tracked in separate tables
         chroma_ids = self._store.list_ids(chroma_coll)
         doc_id_set = set(doc_ids)
         for orphan_id in chroma_ids:
-            if orphan_id not in doc_id_set:
+            if orphan_id not in doc_id_set and "@v" not in orphan_id and "@p" not in orphan_id:
                 try:
                     self._store.delete(chroma_coll, orphan_id)
                     logger.info("Removed orphaned embedding: %s", orphan_id)
@@ -3568,9 +3574,13 @@ class Keeper:
         doc_ids = self._document_store.list_ids(doc_coll)
         missing_from_chroma = self._store.find_missing_ids(chroma_coll, doc_ids)
 
+        # Skip versioned (@v{N}) and part (@p{N}) IDs — tracked in separate tables
         chroma_ids = self._store.list_ids(chroma_coll)
         doc_id_set = set(doc_ids)
-        orphaned_in_chroma = {cid for cid in chroma_ids if cid not in doc_id_set}
+        orphaned_in_chroma = {
+            cid for cid in chroma_ids
+            if cid not in doc_id_set and "@v" not in cid and "@p" not in cid
+        }
 
         fixed = 0
         removed = 0
