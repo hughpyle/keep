@@ -719,6 +719,7 @@ class Keeper:
         import threading
         self._reconcile_lock = threading.Lock()
         self._reconcile_done = threading.Event()
+        self._provider_init_lock = threading.Lock()
 
         # Check store consistency and reconcile in background if needed
         # (safe for all backends — uses abstract store interface)
@@ -1016,10 +1017,20 @@ class Keeper:
         """
         Get embedding provider, creating it lazily on first use.
 
+        Thread-safe: uses a lock to prevent concurrent model loading
+        when the reconcile thread and main thread both need embeddings.
+
         This allows read-only operations to work without loading
         the embedding model upfront.
         """
-        if self._embedding_provider is None:
+        if self._embedding_provider is not None:
+            return self._embedding_provider
+
+        with self._provider_init_lock:
+            # Double-check after acquiring lock (another thread may have created it)
+            if self._embedding_provider is not None:
+                return self._embedding_provider
+
             if self._config.embedding is None:
                 raise RuntimeError(
                     "No embedding provider configured.\n"
@@ -1492,6 +1503,12 @@ class Keeper:
         system_tags: dict[str, str],
     ) -> Item:
         """Core upsert logic used by put()."""
+        # Wait for background reconciliation to finish before writing.
+        # The reconcile thread and main thread both access the embedding
+        # provider, ChromaDB, and SQLite — concurrent access causes hangs
+        # with ChromaDB's Rust bindings and double model loading.
+        self._reconcile_done.wait(timeout=120)
+
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
