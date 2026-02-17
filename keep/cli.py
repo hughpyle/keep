@@ -2595,7 +2595,23 @@ def doctor(
     else:
         fail("ChromaDB: skipped (no store path)")
 
-    # 8. Round-trip (temp store, isolates stack from store data)
+    # 8. Model locks
+    if store_path:
+        from .model_lock import ModelLock
+        for lock_name in [".embedding.lock", ".summarization.lock"]:
+            lock_file = store_path / lock_name
+            if lock_file.exists():
+                probe = ModelLock(lock_file)
+                if probe.is_locked():
+                    fail(f"Lock: {lock_name} is held by another process (lsof {lock_file})")
+                else:
+                    ok(f"Lock: {lock_name} available")
+            else:
+                ok(f"Lock: {lock_name} (not yet created)")
+    else:
+        ok("Lock: skipped (no store path)")
+
+    # 9. Round-trip (temp store, isolates stack from store data)
     import tempfile
     import shutil
     from .config import StoreConfig, ProviderConfig

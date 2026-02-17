@@ -12,6 +12,7 @@ import importlib.resources
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -3380,6 +3381,11 @@ class Keeper:
                     item.id, item.collection, item.task_type
                 )
                 result["processed"] += 1
+
+                # Brief yield between items so interactive processes
+                # (keep now, keep find) can acquire the model lock
+                # without waiting for the entire batch to finish.
+                time.sleep(0.1)
 
             except Exception as e:
                 # Mark as failed so it resets to pending for retry.
