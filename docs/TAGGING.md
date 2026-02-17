@@ -93,6 +93,34 @@ keep find "authentication" -t topic=auth
 For more on these conventions: `keep get .tag/project` and `keep get .tag/topic`.
 For domain-specific organization patterns: `keep get .domains`.
 
+## Tag-based isolation
+
+Tags on `find` are **pre-filters on the vector search**, not post-filters. When you search with `-t user=alice`, the similarity search only considers notes tagged `user=alice` — you get the best matches *within that scope*, not global results filtered afterward. This makes tags suitable for data isolation.
+
+**Pattern: scoped search with `required_tags`**
+
+```toml
+# keep.toml
+[tags]
+required = ["user"]
+```
+
+With this config, every `put()` must include a `user` tag (or it raises `ValueError`). Pair it with tag filters on every search to get per-user isolation:
+
+```python
+kp.put("my note", tags={"user": "alice"})         # enforced by required_tags
+kp.find("auth", tags={"user": "alice"})            # only searches alice's notes
+```
+
+```bash
+keep put "my note" -t user=alice
+keep find "auth" -t user=alice           # scoped to alice
+```
+
+**Note:** `required_tags` enforces tags on writes only. The caller is responsible for passing the same tag filter on reads. Without the filter, `find` searches across all notes.
+
+This pattern works for any isolation key — `user`, `project`, `tenant`, `session`, etc. The [LangChain integration](LANGCHAIN-INTEGRATION.md) automates this: namespace components become tags on both writes and searches.
+
 ## Speech-act tags
 
 Two tags make the commitment structure of work visible:
