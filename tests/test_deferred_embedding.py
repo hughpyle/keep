@@ -276,6 +276,211 @@ class TestLocalModeUnchanged:
         assert vec is not None
 
 
+class TestEmbeddingDedup:
+    """Content-hash dedup: reuse embeddings from docs with identical content."""
+
+    def test_dedup_reuses_embedding_for_same_content(self, mock_providers, tmp_path):
+        """Second put with same content but different ID should skip embed()."""
+        kp = Keeper(store_path=tmp_path)
+        embed = mock_providers["embedding"]
+
+        # Warmup (system doc migration)
+        kp.put("warmup", id="_warmup")
+        kp.delete("_warmup")
+        embed.embed_calls = 0
+
+        # First put — must embed
+        kp.put("identical content", id="file-a")
+        assert embed.embed_calls == 1
+
+        # Second put — same content, different ID → should reuse
+        kp.put("identical content", id="file-b")
+        assert embed.embed_calls == 1  # No additional embed call
+
+        # Both have embeddings in vector store
+        chroma_coll = kp._resolve_chroma_collection()
+        assert kp._store.get_embedding(chroma_coll, "file-a") is not None
+        assert kp._store.get_embedding(chroma_coll, "file-b") is not None
+
+    def test_dedup_skips_when_donor_has_no_embedding(self, mock_providers, tmp_path):
+        """If donor exists in doc store but not vector store, fall through to embed."""
+        from tests.conftest import MockChromaStore, MockDocumentStore
+
+        doc_store = MockDocumentStore(tmp_path / "docs.db")
+        vector_store = MockChromaStore(tmp_path)
+        queue = TrackingPendingQueue()
+
+        kp = Keeper(
+            store_path=tmp_path,
+            doc_store=doc_store,
+            vector_store=vector_store,
+            pending_queue=queue,
+        )
+        embed = mock_providers["embedding"]
+        kp._embedding_provider = embed
+        kp._embedding_provider_loaded = True
+        embed.embed_calls = 0
+
+        # First put defers embedding (cloud mode) — donor in doc store but no vector entry
+        kp.put("shared content", id="file-a")
+        assert embed.embed_calls == 0
+
+        # Second put also defers — donor has no embedding yet
+        kp.put("shared content", id="file-b")
+        assert embed.embed_calls == 0
+
+        # Process first embed task — no donor embedding available, must compute
+        kp.process_pending(limit=1)
+        assert embed.embed_calls == 1
+
+        # Process second embed task — now donor has embedding, should dedup
+        kp.process_pending(limit=1)
+        assert embed.embed_calls == 1  # No additional call
+
+    def test_dedup_dimension_mismatch_falls_through(self, mock_providers, tmp_path):
+        """If donor embedding has wrong dimension, fall through to embed()."""
+        kp = Keeper(store_path=tmp_path)
+        embed = mock_providers["embedding"]
+
+        kp.put("warmup", id="_warmup")
+        kp.delete("_warmup")
+        embed.embed_calls = 0
+
+        # First put embeds normally
+        kp.put("some content", id="file-a")
+        assert embed.embed_calls == 1
+
+        # Tamper: change the stored embedding dimension
+        chroma_coll = kp._resolve_chroma_collection()
+        old_emb = kp._store.get_embedding(chroma_coll, "file-a")
+        # Store a wrong-dimension embedding
+        kp._store.upsert(
+            collection=chroma_coll,
+            id="file-a",
+            embedding=old_emb[:2],  # truncate to 2 dims
+            summary="some content",
+            tags={},
+        )
+
+        # Second put — donor has wrong dimension, must embed fresh
+        kp.put("some content", id="file-b")
+        assert embed.embed_calls == 2  # Had to call embed()
+
+    def test_dedup_does_not_affect_different_content(self, mock_providers, tmp_path):
+        """Different content should always embed independently."""
+        kp = Keeper(store_path=tmp_path)
+        embed = mock_providers["embedding"]
+
+        kp.put("warmup", id="_warmup")
+        kp.delete("_warmup")
+        embed.embed_calls = 0
+
+        kp.put("content A", id="file-a")
+        kp.put("content B", id="file-b")
+        assert embed.embed_calls == 2
+
+
+    def test_cloud_dedup_skips_embed_enqueue(self, mock_providers, tmp_path):
+        """Cloud mode: if donor has embedding, copy it and skip enqueue."""
+        from tests.conftest import MockChromaStore, MockDocumentStore
+
+        doc_store = MockDocumentStore(tmp_path / "docs.db")
+        vector_store = MockChromaStore(tmp_path)
+        queue = TrackingPendingQueue()
+
+        kp = Keeper(
+            store_path=tmp_path,
+            doc_store=doc_store,
+            vector_store=vector_store,
+            pending_queue=queue,
+        )
+        embed = mock_providers["embedding"]
+        kp._embedding_provider = embed
+        kp._embedding_provider_loaded = True
+        embed.embed_calls = 0
+
+        # First put + process: donor gets an embedding
+        kp.put("shared content", id="file-a")
+        kp.process_pending(limit=10)
+        assert embed.embed_calls == 1
+
+        # Re-inject mock provider (process_pending releases it)
+        kp._embedding_provider = embed
+        embed.embed_calls = 0
+        queue.clear()
+
+        # Second put: same content, different ID — should dedup and skip enqueue
+        kp.put("shared content", id="file-b")
+        embed_tasks = [i for i in queue._items if i["task_type"] == "embed"]
+        assert len(embed_tasks) == 0  # No embed enqueued
+        assert embed.embed_calls == 0  # No embed call needed
+
+        # Vector store has the entry immediately (copied from donor)
+        # Use "default" — the collection used before embedding identity was resolved
+        assert vector_store.get_embedding("default", "file-b") is not None
+
+    def test_full_hash_mismatch_rejects_dedup(self, mock_providers, tmp_path):
+        """Short hash collision: if full hashes differ, dedup should not match."""
+        kp = Keeper(store_path=tmp_path)
+        embed = mock_providers["embedding"]
+
+        kp.put("warmup", id="_warmup")
+        kp.delete("_warmup")
+        embed.embed_calls = 0
+
+        # First put
+        kp.put("content alpha", id="file-a")
+        assert embed.embed_calls == 1
+
+        # Tamper: set the same short hash but different full hash on the donor
+        doc_coll = "default"
+        donor = kp._document_store.get(doc_coll, "file-a")
+        # Overwrite with a fake full hash that won't match
+        import hashlib
+        kp._document_store.upsert(
+            doc_coll, "file-a", donor.summary, donor.tags,
+            content_hash=donor.content_hash,
+            content_hash_full="fake_full_hash_that_does_not_match",
+        )
+
+        # Second put with same short hash but different actual content
+        # (simulate a collision — same _content_hash but different _content_hash_full)
+        from keep.api import _content_hash
+        # Create content that happens to have the same short hash... hard to do.
+        # Instead, directly manipulate: set file-b's content_hash = file-a's content_hash
+        # by using the same content (same short hash), but the donor's full hash is wrong.
+        kp.put("content alpha", id="file-b")
+        # The donor's full hash was tampered to "fake_full_hash_that_does_not_match",
+        # but file-b's actual full hash is SHA256("content alpha").
+        # find_by_content_hash should reject the donor → must embed fresh.
+        assert embed.embed_calls == 2
+
+    def test_content_unchanged_missing_embedding_tries_dedup(self, mock_providers, tmp_path):
+        """When re-putting same content but embedding is missing, try dedup before embed."""
+        kp = Keeper(store_path=tmp_path)
+        embed = mock_providers["embedding"]
+
+        kp.put("warmup", id="_warmup")
+        kp.delete("_warmup")
+        embed.embed_calls = 0
+
+        # Create two docs with same content
+        kp.put("shared content", id="file-a")
+        kp.put("shared content", id="file-b")
+        assert embed.embed_calls == 1  # file-b deduped from file-a
+
+        # Delete file-b's embedding from vector store (simulating a gap)
+        chroma_coll = kp._resolve_chroma_collection()
+        kp._store.delete(chroma_coll, "file-b")
+
+        embed.embed_calls = 0
+
+        # Re-put file-b with same content → content_unchanged=True, but no embedding.
+        # Should dedup from file-a instead of calling embed().
+        kp.put("shared content", id="file-b")
+        assert embed.embed_calls == 0  # Deduped from file-a, no embed needed
+
+
 class TestNullPendingQueueSignature:
     """NullPendingQueue should accept task_type and metadata kwargs."""
 

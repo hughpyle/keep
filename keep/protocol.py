@@ -381,6 +381,11 @@ class DocumentStoreProtocol(Protocol):
 
     def exists(self, collection: str, id: str) -> bool: ...
 
+    def find_by_content_hash(
+        self, collection: str, content_hash: str, *,
+        content_hash_full: str = "", exclude_id: str = "",
+    ) -> Optional[DocumentRecord]: ...
+
     def get_version(
         self, collection: str, id: str, offset: int = 0
     ) -> Optional[VersionInfo]: ...

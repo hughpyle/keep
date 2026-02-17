@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 
 @dataclass
@@ -74,6 +74,7 @@ class DocumentRecord:
     created_at: str
     updated_at: str
     content_hash: Optional[str] = None
+    content_hash_full: Optional[str] = None
     accessed_at: Optional[str] = None
 
 
@@ -124,6 +125,7 @@ class DocumentStore:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 content_hash TEXT,
+                content_hash_full TEXT,
                 PRIMARY KEY (id, collection)
             )
         """)
@@ -266,6 +268,27 @@ class DocumentStore:
                     ON document_parts(id, collection, part_num)
                 """)
 
+            if current_version < 5:
+                # Index for content-hash dedup lookups
+                self._conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_documents_content_hash
+                    ON documents(collection, content_hash)
+                    WHERE content_hash IS NOT NULL
+                """)
+
+            if current_version < 6:
+                # Full SHA256 hash for dedup content verification
+                columns = {
+                    row[1]
+                    for row in self._conn.execute(
+                        "PRAGMA table_info(documents)"
+                    ).fetchall()
+                }
+                if "content_hash_full" not in columns:
+                    self._conn.execute(
+                        "ALTER TABLE documents ADD COLUMN content_hash_full TEXT"
+                    )
+
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
         except Exception:
@@ -357,7 +380,8 @@ class DocumentStore:
     def _get_unlocked(self, collection: str, id: str) -> Optional[DocumentRecord]:
         """Get a document by ID without acquiring the lock (for use within locked contexts)."""
         cursor = self._conn.execute("""
-            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
+            SELECT id, collection, summary, tags_json, created_at, updated_at,
+                   content_hash, content_hash_full, accessed_at
             FROM documents
             WHERE id = ? AND collection = ?
         """, (id, collection))
@@ -374,6 +398,7 @@ class DocumentStore:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             content_hash=row["content_hash"],
+            content_hash_full=row["content_hash_full"],
             accessed_at=row["accessed_at"],
         )
 
@@ -388,6 +413,7 @@ class DocumentStore:
         summary: str,
         tags: dict[str, str],
         content_hash: Optional[str] = None,
+        content_hash_full: Optional[str] = None,
     ) -> tuple[DocumentRecord, bool]:
         """
         Insert or update a document record.
@@ -400,7 +426,8 @@ class DocumentStore:
             id: Document identifier (URI or custom)
             summary: Document summary text
             tags: All tags (source + system)
-            content_hash: SHA256 hash of content (for change detection)
+            content_hash: Short SHA256 hash of content (for change detection)
+            content_hash_full: Full SHA256 hash (for dedup verification)
 
         Returns:
             Tuple of (stored DocumentRecord, content_changed bool).
@@ -431,9 +458,11 @@ class DocumentStore:
 
                 self._conn.execute("""
                     INSERT OR REPLACE INTO documents
-                    (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (id, collection, summary, tags_json, created_at, now, content_hash, now))
+                    (id, collection, summary, tags_json, created_at, updated_at,
+                     content_hash, content_hash_full, accessed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (id, collection, summary, tags_json, created_at, now,
+                      content_hash, content_hash_full, now))
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
@@ -447,6 +476,7 @@ class DocumentStore:
             created_at=created_at,
             updated_at=now,
             content_hash=content_hash,
+            content_hash_full=content_hash_full,
             accessed_at=now,
         ), content_changed
 
@@ -890,7 +920,8 @@ class DocumentStore:
             DocumentRecord if found, None otherwise
         """
         cursor = self._conn.execute("""
-            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
+            SELECT id, collection, summary, tags_json, created_at, updated_at,
+                   content_hash, content_hash_full, accessed_at
             FROM documents
             WHERE id = ? AND collection = ?
         """, (id, collection))
@@ -907,6 +938,7 @@ class DocumentStore:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             content_hash=row["content_hash"],
+            content_hash_full=row["content_hash_full"],
             accessed_at=row["accessed_at"],
         )
 
@@ -1173,7 +1205,46 @@ class DocumentStore:
             WHERE id = ? AND collection = ?
         """, (id, collection))
         return cursor.fetchone() is not None
-    
+
+    def find_by_content_hash(
+        self,
+        collection: str,
+        content_hash: str,
+        *,
+        content_hash_full: str = "",
+        exclude_id: str = "",
+    ) -> Optional[DocumentRecord]:
+        """Find a document with matching content hash (for embedding dedup).
+
+        Uses short hash for indexed lookup, then verifies via full hash
+        to avoid 40-bit collision false positives.
+        """
+        cursor = self._conn.execute("""
+            SELECT id, collection, summary, tags_json, created_at,
+                   updated_at, content_hash, content_hash_full, accessed_at
+            FROM documents
+            WHERE collection = ? AND content_hash = ? AND id != ?
+            LIMIT 1
+        """, (collection, content_hash, exclude_id))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        # Verify full hash if both sides have one (guards against 40-bit collisions)
+        if content_hash_full and row["content_hash_full"]:
+            if content_hash_full != row["content_hash_full"]:
+                return None
+        return DocumentRecord(
+            id=row["id"],
+            collection=row["collection"],
+            summary=row["summary"],
+            tags=json.loads(row["tags_json"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            content_hash=row["content_hash"],
+            content_hash_full=row["content_hash_full"],
+            accessed_at=row["accessed_at"],
+        )
+
     def list_ids(
         self,
         collection: str,

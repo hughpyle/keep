@@ -380,6 +380,11 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[-10:]
 
 
+def _content_hash_full(content: str) -> str:
+    """Full SHA256 hash of content for dedup verification."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 def _user_tags_changed(old_tags: dict, new_tags: dict) -> bool:
     """
     Check if non-system tags differ between old and new.
@@ -1037,6 +1042,37 @@ class Keeper:
                 self._store.reset_embedding_dimension(self._embedding_provider.dimension)
         return self._embedding_provider
 
+    def _try_dedup_embedding(
+        self,
+        doc_coll: str,
+        chroma_coll: str,
+        content_hash: Optional[str],
+        exclude_id: str,
+        content: str = "",
+    ) -> Optional[list[float]]:
+        """Look up an existing embedding from a donor doc with the same content hash.
+
+        Returns the embedding if found and dimension-validated, None otherwise.
+        Passes the full SHA256 for collision-safe verification.
+        """
+        if not content_hash:
+            return None
+        full_hash = _content_hash_full(content) if content else ""
+        donor = self._document_store.find_by_content_hash(
+            doc_coll, content_hash,
+            content_hash_full=full_hash,
+            exclude_id=exclude_id,
+        )
+        if donor is None:
+            return None
+        donor_embedding = self._store.get_embedding(chroma_coll, donor.id)
+        if donor_embedding is None:
+            return None
+        if len(donor_embedding) != self._get_embedding_provider().dimension:
+            return None
+        logger.debug("Dedup: reusing embedding from %s for %s", donor.id, exclude_id)
+        return donor_embedding
+
     def _get_summarization_provider(self) -> SummarizationProvider:
         """Get summarization provider, creating it lazily on first use."""
         if self._summarization_provider is None:
@@ -1526,7 +1562,21 @@ class Keeper:
                 summary=final_summary,
                 tags=merged_tags,
                 content_hash=new_hash,
+                content_hash_full=_content_hash_full(content),
             )
+            # Try embedding dedup before enqueueing (saves network round-trip)
+            if not content_unchanged:
+                donor_embedding = self._try_dedup_embedding(
+                    doc_coll, chroma_coll, new_hash, id, content,
+                )
+                if donor_embedding is not None:
+                    self._store.upsert(
+                        collection=chroma_coll, id=id,
+                        embedding=donor_embedding,
+                        summary=final_summary,
+                        tags=merged_tags,
+                    )
+                    return _record_to_item(result, changed=True)
             # Enqueue embedding task (content needed for embedding computation)
             embed_meta = {}
             if existing_doc is not None and not content_unchanged:
@@ -1542,9 +1592,15 @@ class Keeper:
         if content_unchanged:
             embedding = self._store.get_embedding(chroma_coll, id)
             if embedding is None:
+                embedding = self._try_dedup_embedding(
+                    doc_coll, chroma_coll, new_hash, id, content,
+                )
+            if embedding is None:
                 embedding = self._get_embedding_provider().embed(content)
         else:
-            embedding = self._get_embedding_provider().embed(content)
+            embedding = self._try_dedup_embedding(doc_coll, chroma_coll, new_hash, id, content)
+            if embedding is None:
+                embedding = self._get_embedding_provider().embed(content)
 
         # Save old embedding before ChromaDB upsert overwrites it (for version archival)
         old_embedding = None
@@ -1558,6 +1614,7 @@ class Keeper:
             summary=final_summary,
             tags=merged_tags,
             content_hash=new_hash,
+            content_hash_full=_content_hash_full(content),
         )
 
         self._store.upsert(
@@ -3356,8 +3413,12 @@ class Keeper:
                         tags=archived.tags,
                     )
 
-        # Compute embedding
-        embedding = self._get_embedding_provider().embed(item.content)
+        # Compute embedding (try dedup first)
+        embedding = self._try_dedup_embedding(
+            doc_coll, chroma_coll, doc.content_hash, item.id, item.content,
+        )
+        if embedding is None:
+            embedding = self._get_embedding_provider().embed(item.content)
 
         # Write to vector store
         self._store.upsert(

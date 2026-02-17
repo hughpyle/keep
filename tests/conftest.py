@@ -246,8 +246,23 @@ class MockDocumentStore:
         self._data: dict[str, dict] = {}  # collection -> {id -> record}
         self._parts: dict[str, list] = {}  # _parts:{collection}:{id} -> [PartInfo]
 
+    def _make_record(self, collection: str, id: str, rec: dict) -> "DocumentRecord":
+        from keep.document_store import DocumentRecord
+        return DocumentRecord(
+            id=id,
+            collection=collection,
+            summary=rec["summary"],
+            tags=rec["tags"],
+            created_at=rec["created_at"],
+            updated_at=rec["updated_at"],
+            content_hash=rec.get("content_hash"),
+            content_hash_full=rec.get("content_hash_full"),
+            accessed_at=rec.get("accessed_at", rec["updated_at"]),
+        )
+
     def upsert(self, collection: str, id: str, summary: str, tags: dict,
-               content_hash: str = None) -> tuple["DocumentRecord", bool]:
+               content_hash: str = None,
+               content_hash_full: str = None) -> tuple["DocumentRecord", bool]:
         if collection not in self._data:
             self._data[collection] = {}
         existed = id in self._data[collection]
@@ -263,42 +278,32 @@ class MockDocumentStore:
             "summary": summary,
             "tags": tags,
             "content_hash": content_hash,
+            "content_hash_full": content_hash_full,
             "created_at": created_at,
             "updated_at": now,
         }
-        # Return a record-like object matching DocumentStore.upsert() signature
-        class Record:
-            pass
-        r = Record()
-        r.id = id
-        r.collection = collection
-        r.summary = summary
-        r.tags = tags
-        r.content_hash = content_hash
-        r.created_at = created_at
-        r.updated_at = now
-        r.accessed_at = now
-        return (r, content_changed)
+        return (self._make_record(collection, id, self._data[collection][id]), content_changed)
 
     def get(self, collection: str, id: str):
         if collection not in self._data or id not in self._data[collection]:
             return None
-        rec = self._data[collection][id]
-        # Return a simple object with the expected attributes
-        class Record:
-            pass
-        r = Record()
-        r.id = id
-        r.summary = rec["summary"]
-        r.tags = rec["tags"]
-        r.content_hash = rec.get("content_hash")
-        r.created_at = rec["created_at"]
-        r.updated_at = rec["updated_at"]
-        r.accessed_at = rec.get("accessed_at", rec["updated_at"])
-        return r
+        return self._make_record(collection, id, self._data[collection][id])
 
     def exists(self, collection: str, id: str) -> bool:
         return collection in self._data and id in self._data[collection]
+
+    def find_by_content_hash(self, collection: str, content_hash: str, *,
+                             content_hash_full: str = "", exclude_id: str = ""):
+        if collection not in self._data or not content_hash:
+            return None
+        for doc_id, rec in self._data[collection].items():
+            if doc_id != exclude_id and rec.get("content_hash") == content_hash:
+                # Verify full hash if both sides have one
+                if content_hash_full and rec.get("content_hash_full"):
+                    if content_hash_full != rec["content_hash_full"]:
+                        continue
+                return self._make_record(collection, doc_id, rec)
+        return None
 
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         if collection in self._data and id in self._data[collection]:
@@ -335,18 +340,7 @@ class MockDocumentStore:
             return []
         records = []
         for id, rec in list(self._data[collection].items())[:limit]:
-            class Record:
-                pass
-            r = Record()
-            r.id = id
-            r.collection = collection
-            r.summary = rec["summary"]
-            r.tags = rec["tags"]
-            r.content_hash = rec.get("content_hash")
-            r.created_at = rec["created_at"]
-            r.updated_at = rec["updated_at"]
-            r.accessed_at = rec.get("accessed_at", rec["updated_at"])
-            records.append(r)
+            records.append(self._make_record(collection, id, rec))
         return records
 
     def query_by_tag_key(self, collection: str, key: str, limit: int = 100,
@@ -356,18 +350,7 @@ class MockDocumentStore:
         results = []
         for id, rec in self._data[collection].items():
             if key in rec["tags"]:
-                class Record:
-                    pass
-                r = Record()
-                r.id = id
-                r.collection = collection
-                r.summary = rec["summary"]
-                r.tags = rec["tags"]
-                r.content_hash = rec.get("content_hash")
-                r.created_at = rec["created_at"]
-                r.updated_at = rec["updated_at"]
-                r.accessed_at = rec.get("accessed_at", rec["updated_at"])
-                results.append(r)
+                results.append(self._make_record(collection, id, rec))
         return results[:limit]
 
     def list_distinct_tag_keys(self, collection: str) -> list[str]:
@@ -421,18 +404,7 @@ class MockDocumentStore:
         results = []
         for id, rec in self._data[collection].items():
             if id.startswith(prefix):
-                class Record:
-                    pass
-                r = Record()
-                r.id = id
-                r.collection = collection
-                r.summary = rec["summary"]
-                r.tags = rec["tags"]
-                r.content_hash = rec.get("content_hash")
-                r.created_at = rec["created_at"]
-                r.updated_at = rec["updated_at"]
-                r.accessed_at = rec.get("accessed_at", rec["updated_at"])
-                results.append(r)
+                results.append(self._make_record(collection, id, rec))
         return results
 
     def touch_many(self, collection: str, ids: list[str]) -> None:
