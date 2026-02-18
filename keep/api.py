@@ -3058,9 +3058,14 @@ class Keeper:
         # Store parts in document store
         self._document_store.upsert_parts(doc_coll, id, parts)
 
-        # Release summarization model before loading embedding model.
-        # Both MLX models resident simultaneously can exhaust unified memory.
-        self._release_summarization_provider()
+        # NOTE: Previously released summarization model here to avoid both
+        # MLX + embedding models being resident simultaneously. However,
+        # releasing causes MLX to leak ~40MB per reload cycle (Metal allocator
+        # doesn't return pages to OS). Keeping the model resident is better —
+        # total footprint is ~3GB (MLX 1.8GB + ST 0.5GB + overhead) which
+        # fits on 16GB+ machines. On low-memory systems, consider subprocess
+        # isolation instead.
+        # self._release_summarization_provider()
 
         # Generate embeddings and store in vector store
         embed = self._get_embedding_provider()
