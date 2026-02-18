@@ -722,7 +722,7 @@ def _parse_tags(tags: Optional[list[str]]) -> dict[str, str]:
             typer.echo(f"Error: Invalid tag format '{tag}'. Use key=value", err=True)
             raise typer.Exit(1)
         k, v = tag.split("=", 1)
-        parsed[k.casefold()] = v.casefold()
+        parsed[k.casefold()] = v
     return parsed
 
 
@@ -741,8 +741,10 @@ def _filter_by_tags(items: list, tags: list[str]) -> list:
     for t in tags:
         if "=" in t:
             key, value = t.split("=", 1)
-            key, value = key.casefold(), value.casefold()
-            result = [item for item in result if item.tags.get(key) == value]
+            key = key.casefold()
+            # Case-insensitive value comparison
+            result = [item for item in result
+                      if (item.tags.get(key) or "").casefold() == value.casefold()]
         else:
             # Key only - check if key exists
             result = [item for item in result if t.casefold() in item.tags]
