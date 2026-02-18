@@ -49,7 +49,7 @@ keep put "learning"          # Capture insight
 """
 
 # Bump this when hook definitions change — triggers re-install for existing users
-HOOKS_VERSION = 7
+HOOKS_VERSION = 8
 
 # Hook definitions for Claude Code
 CLAUDE_CODE_HOOKS = {
@@ -82,26 +82,6 @@ CLAUDE_CODE_HOOKS = {
                     "type": "command",
                     "command": "keep get now </dev/null 2>/dev/null || true",
                     "statusMessage": "Loading context...",
-                }
-            ],
-        }
-    ],
-    "SessionEnd": [
-        {
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": "keep now 'Session ended' 2>/dev/null || true",
-                }
-            ],
-        }
-    ],
-    "Stop": [
-        {
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": "keep now 'Session ended' 2>/dev/null || true",
                 }
             ],
         }
