@@ -135,30 +135,36 @@ class FileDocumentProvider:
         suffix = path.suffix.lower()
         content_type = self.EXTENSION_TYPES.get(suffix, "text/plain")
 
-        # Extract text based on file type
+        # Extract text based on file type.
+        # Extraction failures are non-fatal: fall back to filename-only content
+        # so that directory puts don't fail on one bad file.
         extracted_tags: dict[str, str] | None = None
-        if suffix == ".pdf":
-            content = self._extract_pdf_text(path)
-        elif suffix in (".html", ".htm"):
-            content = self._extract_html_text(path)
-        elif suffix in (".docx",):
-            content, extracted_tags = self._extract_docx(path)
-        elif suffix in (".pptx",):
-            content, extracted_tags = self._extract_pptx(path)
-        elif content_type and content_type.startswith("application/vnd.apple."):
-            content, extracted_tags = self._extract_iwork_metadata(path, content_type)
-        elif suffix == ".svg":
-            content, extracted_tags = self._extract_svg_text(path)
-        elif content_type and content_type.startswith("audio/"):
-            content, extracted_tags = self._extract_audio_metadata(path)
-        elif content_type and content_type.startswith("image/"):
-            content, extracted_tags = self._extract_image_metadata(path)
-        else:
-            # Read as plain text
-            try:
+        try:
+            if suffix == ".pdf":
+                content = self._extract_pdf_text(path)
+            elif suffix in (".html", ".htm"):
+                content = self._extract_html_text(path)
+            elif suffix in (".docx",):
+                content, extracted_tags = self._extract_docx(path)
+            elif suffix in (".pptx",):
+                content, extracted_tags = self._extract_pptx(path)
+            elif content_type and content_type.startswith("application/vnd.apple."):
+                content, extracted_tags = self._extract_iwork_metadata(path, content_type)
+            elif suffix == ".svg":
+                content, extracted_tags = self._extract_svg_text(path)
+            elif content_type and content_type.startswith("audio/"):
+                content, extracted_tags = self._extract_audio_metadata(path)
+            elif content_type and content_type.startswith("image/"):
+                content, extracted_tags = self._extract_image_metadata(path)
+            else:
+                # Read as plain text
                 content = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                raise IOError(f"Cannot read file as text: {path}")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Text extraction failed for %s: %s", path.name, e
+            )
+            content = f"[{path.name}]"
 
         # Gather metadata
         stat = path.stat()
