@@ -254,6 +254,7 @@ On first use, `keep` detects coding tools and installs a protocol block and hook
 | Tool | Protocol Block | Hooks |
 |------|---------------|-------|
 | Claude Code (`~/.claude/`) | `CLAUDE.md` — reflective practice prompt | `settings.json` — session start, prompt submit, subagent, session end |
+| VS Code Copilot | (via Claude Code config) | Reads Claude Code hooks from `~/.claude/settings.json` automatically |
 | Kiro (`~/.kiro/`) | `steering/keep.md` — reflective practice prompt | `hooks/*.kiro.hook` — agent spawn, prompt submit, agent stop |
 | OpenAI Codex (`~/.codex/`) | `AGENTS.md` — reflective practice prompt | — |
 | OpenClaw (cwd) | `AGENTS.md` — reflective practice prompt (if found in cwd) | [Plugin](OPENCLAW-INTEGRATION.md) — agent start, agent stop |
