@@ -59,10 +59,11 @@ MAX_ID_LENGTH = 1024
 MAX_TAG_KEY_LENGTH = 128
 MAX_TAG_VALUE_LENGTH = 4096
 
-# IDs: printable ASCII minus control chars and characters dangerous in paths/logs/SQL
-# Allowed: alphanumeric, dot, hyphen, underscore, colon, slash, @, space, parens, brackets, +, =, #, %, comma
-# Blocked: null bytes, newlines, tabs, backslash, backtick, angle brackets, pipes, semicolons, quotes
-_ID_SAFE_RE = re.compile(r'^[a-zA-Z0-9._\-:/@ ()[\]+=#%,]+$')
+# IDs: printable characters minus control chars and a small blocklist.
+# Blocked: null bytes (\x00), control chars (\x01-\x1f), DEL (\x7f),
+#   backslash (path confusion), backtick (shell), angle brackets (HTML/XML),
+#   pipe (shell), semicolon (shell/SQL), double quote, single quote
+_ID_BLOCKED_RE = re.compile(r'[\x00-\x1f\x7f\\`<>|;"\']')
 
 # Part ID suffix: @p or @P followed by optional braces and digits
 _PART_ID_RE = re.compile(r'@[pP]\{?\d+\}?$')
@@ -82,10 +83,10 @@ def validate_tag_key(key: str) -> None:
 
 
 def validate_id(id: str) -> None:
-    """Validate a document ID — length and safe characters."""
+    """Validate a document ID — length and no dangerous characters."""
     if not id or len(id) > MAX_ID_LENGTH:
         raise ValueError(f"ID must be 1-{MAX_ID_LENGTH} characters")
-    if not _ID_SAFE_RE.match(id):
+    if _ID_BLOCKED_RE.search(id):
         raise ValueError(f"ID contains invalid characters: {id!r}")
 
 
