@@ -80,6 +80,10 @@ class MockChromaStore:
         self.embedding_dimension = self._embedding_dimension
         self._data: dict[str, dict] = {}  # collection -> {id -> record}
 
+    def reset_embedding_dimension(self, dimension: int) -> None:
+        self._embedding_dimension = dimension
+        self.embedding_dimension = dimension
+
     def upsert(self, collection: str, id: str, embedding: list[float],
                summary: str, tags: dict[str, str]) -> None:
         if collection not in self._data:
@@ -445,6 +449,22 @@ class MockDocumentStore:
         key = f"_parts:{collection}:{id}"
         parts = self._parts.pop(key, [])
         return len(parts)
+
+    def update_part_tags(self, collection: str, id: str, part_num: int, tags: dict) -> bool:
+        key = f"_parts:{collection}:{id}"
+        parts = self._parts.get(key, [])
+        for i, p in enumerate(parts):
+            if p.part_num == part_num:
+                from keep.document_store import PartInfo
+                parts[i] = PartInfo(
+                    part_num=p.part_num,
+                    summary=p.summary,
+                    tags=tags,
+                    content=p.content,
+                    created_at=p.created_at,
+                )
+                return True
+        return False
 
     def close(self) -> None:
         self._data.clear()

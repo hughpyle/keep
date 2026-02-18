@@ -129,6 +129,7 @@ keep list --tags=                    # List all tag keys
 # Modify
 keep tag-update ID --tag key=value   # Add/update tag
 keep tag-update ID --remove key      # Remove tag
+keep tag-update "ID@P{1}" -t topic=x # Edit tags on a part
 keep del ID                          # Remove item or revert to previous version
 
 # Analyze (skips if parts are already current)

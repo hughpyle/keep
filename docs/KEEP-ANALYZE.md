@@ -123,6 +123,29 @@ Use `--force` to override the skip:
 keep analyze doc:1 --force            # Re-analyze regardless
 ```
 
+## Part immutability
+
+Parts are machine-generated analysis results, not human observations.
+They are treated as derived data — immutable except for tag corrections.
+
+**Allowed:**
+- Read, search, list — parts appear in `get`, `find`, `list` normally
+- Tag editing — correct or override analyzer tagging decisions:
+  ```bash
+  keep tag-update "doc:1@P{2}" -t topic=oauth2    # Fix a tag
+  keep tag-update "doc:1@P{2}" -r topic            # Remove a tag
+  ```
+- Re-analyze — `analyze` replaces all parts atomically
+- Delete parent — removing the parent document removes its parts
+
+**Blocked:**
+- `put` with a part ID — parts cannot be created or overwritten directly
+- `del` on individual parts — use re-analyze or delete the parent
+- `move` to a part ID — parts belong to their parent
+
+If a part's summary or content is wrong, re-analyze (with `--force` or better
+guidance tags). The right fix is a better prompt, not manual editing.
+
 ## Re-analysis
 
 Running `analyze` on changed content (or with `--force`) replaces all
@@ -161,6 +184,10 @@ enqueued = kp.enqueue_analyze("doc:1", force=True)
 # Access parts
 part = kp.get_part("doc:1", 1)        # Returns Item
 parts = kp.list_parts("doc:1")        # Returns list[PartInfo]
+
+# Edit tags on a part (the only allowed mutation)
+kp.tag_part("doc:1", 1, tags={"topic": "oauth2"})  # Update tag
+kp.tag_part("doc:1", 1, tags={"topic": ""})         # Remove tag
 ```
 
 ## See Also

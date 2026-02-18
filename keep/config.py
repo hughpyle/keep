@@ -664,15 +664,19 @@ def save_config(config: StoreConfig) -> None:
             remote_data["project"] = config.remote.project
         data["remote"] = remote_data
 
-    with open(config.config_path, "wb") as f:
-        tomli_w.dump(data, f)
-
-    # Restrict file permissions when config contains secrets
-    if config.remote or config.backend_params:
-        try:
-            config.config_path.chmod(0o600)
-        except OSError:
-            pass  # Best-effort (may not work on all platforms)
+    has_secrets = bool(config.remote or config.backend_params)
+    if has_secrets:
+        # Atomic creation with restricted permissions to prevent race condition
+        fd = os.open(
+            str(config.config_path),
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        with os.fdopen(fd, "wb") as f:
+            tomli_w.dump(data, f)
+    else:
+        with open(config.config_path, "wb") as f:
+            tomli_w.dump(data, f)
 
 
 def load_or_create_config(config_dir: Path, store_path: Optional[Path] = None) -> StoreConfig:

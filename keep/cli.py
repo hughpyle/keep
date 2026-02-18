@@ -1009,20 +1009,31 @@ def tag_update(
         typer.echo("Error: Specify at least one --tag or --remove", err=True)
         raise typer.Exit(1)
 
-    # Process each document
+    # Process each document (route parts to tag_part)
     results = []
     for doc_id in ids:
+        match = PART_SUFFIX_PATTERN.search(doc_id)
         try:
-            item = kp.tag(doc_id, tags=tag_changes)
+            if match:
+                part_num = int(match.group(1))
+                base_id = doc_id[:match.start()]
+                part = kp.tag_part(base_id, part_num, tags=tag_changes)
+                if part is None:
+                    typer.echo(f"Part not found: {doc_id}", err=True)
+                else:
+                    typer.echo(f"Updated {doc_id}")
+            else:
+                item = kp.tag(doc_id, tags=tag_changes)
+                if item is None:
+                    typer.echo(f"Not found: {doc_id}", err=True)
+                else:
+                    results.append(item)
         except ValueError as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(1)
-        if item is None:
-            typer.echo(f"Not found: {doc_id}", err=True)
-        else:
-            results.append(item)
 
-    typer.echo(_format_items(results, as_json=_get_json_output()))
+    if results:
+        typer.echo(_format_items(results, as_json=_get_json_output()))
 
 
 def _put_store(
@@ -1917,6 +1928,12 @@ def del_cmd(
     had_errors = False
 
     for one_id in id:
+        # Parts cannot be individually deleted
+        if PART_SUFFIX_PATTERN.search(one_id):
+            typer.echo(f"Error: cannot delete individual parts. Re-analyze or delete the parent.", err=True)
+            had_errors = True
+            continue
+
         item = kp.get(one_id)
         if item is None:
             typer.echo(f"Not found: {one_id}", err=True)

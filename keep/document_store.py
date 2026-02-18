@@ -1584,6 +1584,34 @@ class DocumentStore:
             self._conn.commit()
         return cursor.rowcount
 
+    def update_part_tags(
+        self,
+        collection: str,
+        id: str,
+        part_num: int,
+        tags: dict[str, str],
+    ) -> bool:
+        """
+        Update tags on a single part.
+
+        Args:
+            collection: Collection name
+            id: Parent document identifier
+            part_num: Part number (1-indexed)
+            tags: Complete merged tag dict to store
+
+        Returns:
+            True if the part was found and updated
+        """
+        with self._lock:
+            cursor = self._conn.execute("""
+                UPDATE document_parts
+                SET tags_json = ?
+                WHERE id = ? AND collection = ? AND part_num = ?
+            """, (json.dumps(tags, ensure_ascii=False), id, collection, part_num))
+            self._conn.commit()
+        return cursor.rowcount > 0
+
     # -------------------------------------------------------------------------
     # Tag Queries
     # -------------------------------------------------------------------------
