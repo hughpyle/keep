@@ -34,6 +34,7 @@ class KeeperProtocol(Protocol):
         id: Optional[str] = None,
         summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
+        created_at: Optional[str] = None,
     ) -> Item: ...
 
     def set_now(
@@ -100,6 +101,7 @@ class KeeperProtocol(Protocol):
         since: Optional[str] = None,
         until: Optional[str] = None,
         include_hidden: bool = False,
+        **tags: str,
     ) -> list[Item]: ...
 
     def list_tags(
@@ -320,6 +322,8 @@ class DocumentStoreProtocol(Protocol):
         summary: str,
         tags: dict[str, str],
         content_hash: Optional[str] = None,
+        content_hash_full: Optional[str] = None,
+        created_at: Optional[str] = None,
     ) -> tuple[DocumentRecord, bool]: ...
 
     def update_summary(
@@ -374,6 +378,11 @@ class DocumentStoreProtocol(Protocol):
 
     def delete_parts(self, collection: str, id: str) -> int: ...
 
+    def update_part_tags(
+        self, collection: str, id: str, part_num: int,
+        tags: dict[str, str],
+    ) -> bool: ...
+
     # -- Read --
 
     def get(self, collection: str, id: str) -> Optional[DocumentRecord]: ...
@@ -398,12 +407,16 @@ class DocumentStoreProtocol(Protocol):
     ) -> list[VersionInfo]: ...
 
     def get_version_nav(
-        self, collection: str, id: str, offset: int = 1
+        self, collection: str, id: str,
+        current_version: Optional[int] = None,
+        limit: int = 3,
     ) -> dict: ...
 
     def version_count(self, collection: str, id: str) -> int: ...
 
     def max_version(self, collection: str, id: str) -> int: ...
+
+    def count_versions(self, collection: str) -> int: ...
 
     # -- Query --
 
@@ -419,7 +432,8 @@ class DocumentStoreProtocol(Protocol):
     ) -> list[DocumentRecord]: ...
 
     def list_recent_with_history(
-        self, collection: str, limit: int = 10
+        self, collection: str, limit: int = 10,
+        order_by: str = "updated",
     ) -> list[DocumentRecord]: ...
 
     def count(self, collection: str) -> int: ...

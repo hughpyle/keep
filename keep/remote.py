@@ -10,6 +10,7 @@ import logging
 import os
 import re
 from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -73,6 +74,11 @@ class RemoteKeeper:
             headers=headers,
             timeout=DEFAULT_TIMEOUT,
         )
+
+    @staticmethod
+    def _q(id: str) -> str:
+        """URL-encode an ID for safe use in URL path segments."""
+        return quote(id, safe="")
 
     # -- HTTP helpers --
 
@@ -177,6 +183,7 @@ class RemoteKeeper:
         id: Optional[str] = None,
         summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
+        created_at: Optional[str] = None,
     ) -> Item:
         resp = self._post("/v1/notes", json={
             "content": content,
@@ -184,6 +191,7 @@ class RemoteKeeper:
             "id": id,
             "tags": tags,
             "summary": summary,
+            "created_at": created_at,
         })
         return self._to_item(resp)
 
@@ -207,7 +215,7 @@ class RemoteKeeper:
     ) -> Optional[Item]:
         if tags is None:
             return self.get(id)
-        resp = self._patch(f"/v1/notes/{id}/tags", json={
+        resp = self._patch(f"/v1/notes/{self._q(id)}/tags", json={
             "set": {k: v for k, v in tags.items() if v},
             "remove": [k for k, v in tags.items() if not v],
         })
@@ -219,11 +227,11 @@ class RemoteKeeper:
         *,
         delete_versions: bool = True,
     ) -> bool:
-        resp = self._delete(f"/v1/notes/{id}")
+        resp = self._delete(f"/v1/notes/{self._q(id)}")
         return resp.get("deleted", False)
 
     def revert(self, id: str) -> Optional[Item]:
-        resp = self._post(f"/v1/notes/{id}/revert", json={})
+        resp = self._post(f"/v1/notes/{self._q(id)}/revert", json={})
         if resp.get("deleted"):
             return None
         return self._to_item(resp)
@@ -278,7 +286,7 @@ class RemoteKeeper:
         *,
         limit: int = 3,
     ) -> list[Item]:
-        resp = self._get(f"/v1/notes/{id}/similar", limit=limit)
+        resp = self._get(f"/v1/notes/{self._q(id)}/similar", limit=limit)
         return self._to_items(resp)
 
     def query_tag(
@@ -299,9 +307,9 @@ class RemoteKeeper:
         if include_hidden:
             params["include_hidden"] = True
         if key and value:
-            resp = self._get(f"/v1/tags/{key}/{value}", **params)
+            resp = self._get(f"/v1/tags/{self._q(key)}/{self._q(value)}", **params)
         elif key:
-            resp = self._get(f"/v1/tags/{key}", **params)
+            resp = self._get(f"/v1/tags/{self._q(key)}", **params)
         else:
             resp = self._get("/v1/notes", **params)
         return self._to_items(resp)
@@ -311,7 +319,7 @@ class RemoteKeeper:
         key: Optional[str] = None,
     ) -> list[str]:
         if key:
-            resp = self._get(f"/v1/tags/{key}")
+            resp = self._get(f"/v1/tags/{self._q(key)}")
         else:
             resp = self._get("/v1/tags")
         return resp.get("values", [])
@@ -322,7 +330,7 @@ class RemoteKeeper:
         *,
         limit_per_doc: int = 3,
     ) -> dict[str, list[Item]]:
-        resp = self._get(f"/v1/notes/{item_id}/meta", limit=limit_per_doc)
+        resp = self._get(f"/v1/notes/{self._q(item_id)}/meta", limit=limit_per_doc)
         result: dict[str, list[Item]] = {}
         for name, items_data in resp.get("sections", {}).items():
             result[name] = [self._to_item(i) for i in items_data]
@@ -337,7 +345,7 @@ class RemoteKeeper:
         *,
         limit: int = 3,
     ) -> list[Item]:
-        resp = self._post(f"/v1/notes/{item_id}/resolve", json={
+        resp = self._post(f"/v1/notes/{self._q(item_id)}/resolve", json={
             "queries": queries,
             "context_keys": context_keys,
             "prerequisites": prereq_keys,
@@ -370,7 +378,7 @@ class RemoteKeeper:
 
     def get(self, id: str) -> Optional[Item]:
         try:
-            resp = self._get(f"/v1/notes/{id}")
+            resp = self._get(f"/v1/notes/{self._q(id)}")
             return self._to_item(resp)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -390,7 +398,7 @@ class RemoteKeeper:
         offset: int = 0,
     ) -> Optional[Item]:
         try:
-            resp = self._get(f"/v1/notes/{id}/versions/{offset}")
+            resp = self._get(f"/v1/notes/{self._q(id)}/versions/{offset}")
             return self._to_item(resp)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -402,7 +410,7 @@ class RemoteKeeper:
         id: str,
         limit: int = 10,
     ) -> list[VersionInfo]:
-        resp = self._get(f"/v1/notes/{id}/versions", limit=limit)
+        resp = self._get(f"/v1/notes/{self._q(id)}/versions", limit=limit)
         return [self._to_version_info(v) for v in resp.get("versions", [])]
 
     def get_version_nav(
@@ -412,7 +420,7 @@ class RemoteKeeper:
         limit: int = 3,
     ) -> dict:
         resp = self._get(
-            f"/v1/notes/{id}/versions/nav",
+            f"/v1/notes/{self._q(id)}/versions/nav",
             current_version=current_version,
             limit=limit,
         )
@@ -423,12 +431,12 @@ class RemoteKeeper:
         return result
 
     def get_version_offset(self, item: Item) -> int:
-        resp = self._get(f"/v1/notes/{item.id}/version-offset")
+        resp = self._get(f"/v1/notes/{self._q(item.id)}/version-offset")
         return resp.get("offset", 0)
 
     def exists(self, id: str) -> bool:
         try:
-            self._get(f"/v1/notes/{id}")
+            self._get(f"/v1/notes/{self._q(id)}")
             return True
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

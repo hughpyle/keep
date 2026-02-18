@@ -124,6 +124,10 @@ kp.tag(id, tags={}) → Item | None
 # Delete tag by setting empty value
 kp.tag("doc:1", {"obsolete": ""})  # Removes 'obsolete' tag
 
+# Edit tags on a part (parts are otherwise immutable)
+kp.tag_part("doc:1", 1, tags={"topic": "oauth2"}) → PartInfo | None
+kp.tag_part("doc:1", 1, tags={"topic": ""})  # Remove tag
+
 # List tag keys or values
 kp.list_tags(key=None) → list[str]
 kp.list_tags()          # All tag keys

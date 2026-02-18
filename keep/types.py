@@ -64,6 +64,14 @@ MAX_TAG_VALUE_LENGTH = 4096
 # Blocked: null bytes, newlines, tabs, backslash, backtick, angle brackets, pipes, semicolons, quotes
 _ID_SAFE_RE = re.compile(r'^[a-zA-Z0-9._\-:/@ ()[\]+=#%,]+$')
 
+# Part ID suffix: @p or @P followed by optional braces and digits
+_PART_ID_RE = re.compile(r'@[pP]\{?\d+\}?$')
+
+
+def is_part_id(id: str) -> bool:
+    """Check if an ID looks like a part reference (e.g. 'doc@p3' or 'doc@P{3}')."""
+    return bool(_PART_ID_RE.search(id))
+
 
 def validate_tag_key(key: str) -> None:
     """Validate a tag key is safe for JSON path queries."""

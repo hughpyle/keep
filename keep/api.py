@@ -185,7 +185,8 @@ from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, casefold_tags, filter_non_system_tags, SYSTEM_TAG_PREFIX,
-    parse_utc_timestamp, validate_tag_key, validate_id, MAX_TAG_VALUE_LENGTH,
+    parse_utc_timestamp, validate_tag_key, validate_id, is_part_id,
+    MAX_TAG_VALUE_LENGTH,
 )
 
 
@@ -1569,8 +1570,15 @@ class Keeper:
                  if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
             )
 
-        # Enforce required tags (skip for system docs with dot-prefix IDs)
+        # Parts are immutable — block put() with part-like IDs
         effective_id = id or uri or ""
+        if is_part_id(effective_id):
+            raise ValueError(
+                f"Cannot modify part directly: {effective_id!r}. "
+                "Parts are managed by analyze()."
+            )
+
+        # Enforce required tags (skip for system docs with dot-prefix IDs)
         if self._config.required_tags and not effective_id.startswith("."):
             user_tags = {k: v for k, v in (tags or {}).items()
                          if not k.startswith(SYSTEM_TAG_PREFIX)} if tags else {}
@@ -1667,6 +1675,8 @@ class Keeper:
             if id is None:
                 timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
                 id = f"mem:{timestamp}"
+            else:
+                validate_id(id)
 
             return self._upsert(
                 id, content,
@@ -2373,6 +2383,11 @@ class Keeper:
             True if item existed and was deleted.
         """
         validate_id(id)
+        if is_part_id(id):
+            raise ValueError(
+                f"Cannot delete part directly: {id!r}. "
+                "Use analyze() to replace parts, or delete the parent document."
+            )
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
         # Delete from both stores (including versions)
@@ -2387,6 +2402,11 @@ class Keeper:
         Returns the restored item, or None if the item was fully deleted.
         """
         validate_id(id)
+        if is_part_id(id):
+            raise ValueError(
+                f"Cannot revert part directly: {id!r}. "
+                "Use analyze() to replace parts, or delete the parent document."
+            )
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
@@ -2525,6 +2545,17 @@ class Keeper:
         """
         if not name:
             raise ValueError("Name cannot be empty")
+        validate_id(name)
+        validate_id(source_id)
+        if is_part_id(name):
+            raise ValueError(
+                f"Cannot move to a part ID: {name!r}. "
+                "Parts are managed by analyze()."
+            )
+
+        # Casefold tag filters so they match casefolded storage
+        if tags:
+            tags = casefold_tags(tags)
 
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
@@ -2804,6 +2835,62 @@ class Keeper:
 
         # Return updated item
         return self.get(id)
+
+    def tag_part(
+        self,
+        id: str,
+        part_num: int,
+        tags: Optional[dict[str, str]] = None,
+    ) -> Optional[PartInfo]:
+        """
+        Update user tags on a part without re-analyzing.
+
+        Parts are machine-generated, so summaries and content are immutable.
+        Tags can be edited to correct or override analyzer tagging decisions.
+
+        System tags (_prefixed) cannot be modified. Empty string deletes a tag.
+
+        Args:
+            id: Parent document ID (not the part ID)
+            part_num: Part number (1-indexed)
+            tags: Tags to add/update/delete (empty string = delete)
+
+        Returns:
+            Updated PartInfo if found, None if part doesn't exist
+        """
+        validate_id(id)
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
+
+        part = self._document_store.get_part(doc_coll, id, part_num)
+        if part is None:
+            return None
+
+        # Merge: existing tags + new tags, empty string = delete
+        merged = dict(part.tags)
+        if tags:
+            tags = casefold_tags(tags)
+            for key, value in tags.items():
+                if key.startswith(SYSTEM_TAG_PREFIX):
+                    continue  # skip system tags
+                validate_tag_key(key)
+                if len(value) > MAX_TAG_VALUE_LENGTH:
+                    raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
+                if value == "":
+                    merged.pop(key, None)
+                else:
+                    merged[key] = value
+            self._validate_constrained_tags(
+                {k: v for k, v in tags.items()
+                 if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
+            )
+
+        # Update SQLite
+        self._document_store.update_part_tags(doc_coll, id, part_num, merged)
+        # Update ChromaDB
+        self._store.update_tags(chroma_coll, f"{id}@p{part_num}", merged)
+
+        return self._document_store.get_part(doc_coll, id, part_num)
 
     # -------------------------------------------------------------------------
     # Parts (structural decomposition)
