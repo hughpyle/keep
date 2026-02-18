@@ -94,6 +94,7 @@ class FileDocumentProvider:
         ".tiff": "image/tiff",
         ".tif": "image/tiff",
         ".webp": "image/webp",
+        ".svg": "image/svg+xml",
     }
     
     def supports(self, uri: str) -> bool:
@@ -146,6 +147,8 @@ class FileDocumentProvider:
             content, extracted_tags = self._extract_pptx(path)
         elif content_type and content_type.startswith("application/vnd.apple."):
             content, extracted_tags = self._extract_iwork_metadata(path, content_type)
+        elif suffix == ".svg":
+            content, extracted_tags = self._extract_svg_text(path)
         elif content_type and content_type.startswith("audio/"):
             content, extracted_tags = self._extract_audio_metadata(path)
         elif content_type and content_type.startswith("image/"):
@@ -311,6 +314,68 @@ class FileDocumentProvider:
             pass  # ZIP inspection is best-effort
 
         return "\n".join(parts), tags
+
+    def _extract_svg_text(self, path: Path) -> tuple[str, dict[str, str]]:
+        """Extract meaningful text from SVG files.
+
+        Pulls <title>, <desc>, and <text> elements from the XML,
+        ignoring the visual markup (paths, shapes, transforms).
+        """
+        import xml.etree.ElementTree as ET
+
+        try:
+            tree = ET.parse(path)
+        except ET.ParseError as e:
+            raise IOError(f"Failed to parse SVG {path}: {e}")
+
+        root = tree.getroot()
+        # SVG namespace
+        ns = {"svg": "http://www.w3.org/2000/svg"}
+
+        parts = []
+        tags: dict[str, str] = {}
+
+        # Extract <title>
+        for title in root.iter("{http://www.w3.org/2000/svg}title"):
+            text = (title.text or "").strip()
+            if text:
+                parts.append(text)
+                tags.setdefault("title", text)
+        # Also check for non-namespaced title
+        for title in root.iter("title"):
+            text = (title.text or "").strip()
+            if text and text not in parts:
+                parts.append(text)
+                tags.setdefault("title", text)
+
+        # Extract <desc>
+        for desc in root.iter("{http://www.w3.org/2000/svg}desc"):
+            text = (desc.text or "").strip()
+            if text:
+                parts.append(text)
+        for desc in root.iter("desc"):
+            text = (desc.text or "").strip()
+            if text and text not in parts:
+                parts.append(text)
+
+        # Extract <text> elements (visible text in the graphic)
+        text_parts = []
+        for elem in root.iter("{http://www.w3.org/2000/svg}text"):
+            text = "".join(elem.itertext()).strip()
+            if text:
+                text_parts.append(text)
+        for elem in root.iter("text"):
+            text = "".join(elem.itertext()).strip()
+            if text and text not in text_parts:
+                text_parts.append(text)
+
+        if text_parts:
+            parts.append("\n".join(text_parts))
+
+        if not parts:
+            parts.append(f"SVG image: {path.name}")
+
+        return "\n\n".join(parts), tags or None
 
     def _extract_audio_metadata(self, path: Path) -> tuple[str, dict[str, str]]:
         """Extract metadata from audio file as structured text."""
