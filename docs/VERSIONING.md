@@ -100,7 +100,7 @@ diff <(keep get doc:1) <(keep get "doc:1@V{1}")       # Diff current vs previous
 ```python
 kp.get_version(id, offset=1)    # Previous version
 kp.get_version(id, offset=2)    # Two versions ago
-kp.list_versions(id)            # All archived versions (newest first)
+kp.list_versions(id, limit=10)  # Archived versions (newest first)
 ```
 
 See [PYTHON-API.md](PYTHON-API.md) for complete Python API reference.

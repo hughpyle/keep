@@ -44,7 +44,7 @@ print(item.tags)
 
 ```python
 from keep import Keeper, Item
-from keep.document_store import VersionInfo  # for version history
+from keep.document_store import VersionInfo, PartInfo  # for version/part history
 ```
 
 ### Initialization
@@ -69,11 +69,17 @@ kp.put(uri=uri, tags={}, summary=None) → Item
 # Index inline content
 kp.put(content, tags={}, summary=None) → Item
 
+# Full signature:
+# kp.put(content=None, *, uri=None, id=None, summary=None,
+#        tags=None, created_at=None) → Item
+
 # Notes:
 # - Exactly one of content or uri must be provided
 # - If summary provided, skips auto-summarization
 # - Inline content used verbatim if short (≤max_summary_length)
 # - User tags (domain, topic, etc.) provide context for summarization
+# - id: override auto-generated ID (for managed imports)
+# - created_at: ISO timestamp override (for historical imports)
 ```
 
 #### Search
@@ -111,8 +117,9 @@ kp.get(id) → Item | None
 kp.exists(id) → bool
 
 # List recent items
-kp.list_recent(limit=10, sort="updated") → list[Item]
-# sort options: "updated" (default), "created", "accessed"
+kp.list_recent(limit=10, order_by="updated") → list[Item]
+# order_by options: "updated" (default), "accessed"
+# Additional kwargs: since, until, include_history, include_hidden
 ```
 
 #### Tags
@@ -145,8 +152,8 @@ kp.get_version(id, offset=1) → Item | None
 kp.list_versions(id, limit=10) → list[VersionInfo]
 
 # Get navigation metadata
-kp.get_version_nav(id) → dict
-# Returns: {"prev": [...], "next": [...]}
+kp.get_version_nav(id, current_version=None, limit=3) → dict
+# Returns: {"prev": [VersionInfo, ...], "next": [VersionInfo, ...]}
 ```
 
 #### Current Intentions (Now)
@@ -168,11 +175,12 @@ kp.set_now(content, scope="alice") → Item
 #### Deletion
 
 ```python
-# Delete item (reverts to previous version if history exists)
-kp.delete(id) → Item | None
+# Delete item and its versions
+kp.delete(id) → bool
+kp.delete(id, delete_versions=False) → bool  # Keep version history
 
-# Complete removal (if no history)
-# If history exists, archives current version and restores previous
+# Revert to previous version (if history exists)
+kp.revert(id) → Item | None
 ```
 
 ## Data Types
@@ -195,7 +203,18 @@ Properties (from tags):
 Fields for version history listings:
 - `version` (int) — Version offset (0=current, 1=previous, etc.)
 - `summary` (str) — Summary of this version
-- `updated` (datetime | None) — When this version was created
+- `tags` (dict[str, str]) — Tags at this version
+- `created_at` (str) — ISO timestamp when this version was created
+- `content_hash` (str | None) — Content hash for deduplication
+
+### PartInfo
+
+Fields for structural parts (from `analyze()`):
+- `part_num` (int) — Part number (1-indexed)
+- `summary` (str) — Summary of this part
+- `tags` (dict[str, str]) — Tags on this part
+- `content` (str) — Full text of this part
+- `created_at` (str) — ISO timestamp when this part was created
 
 ## Tags
 
