@@ -158,6 +158,11 @@ class FileDocumentProvider:
             "modified": stat.st_mtime,
             "name": path.name,
         }
+        # File creation time (birthtime on macOS, may exist on Linux 3.12+)
+        try:
+            metadata["birthtime"] = stat.st_birthtime
+        except AttributeError:
+            pass
 
         return Document(
             uri=f"file://{path.resolve()}",  # Normalize to absolute
