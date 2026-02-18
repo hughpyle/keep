@@ -4,7 +4,7 @@
 
 OpenClaw writes memory files (markdown) which are a solid foundation for long-term memory. But flat files aren't enough to reliably recall what's happening, what needs follow-up, or to build a continuous improvement loop.
 
-Keep adds three things on top:
+[Keep](https://github.com/hughpyle/keep) adds three things on top:
 
 1. **Context injection** (`before_agent_start`) — at the start of every agent turn, keep injects current intentions, similar notes, and open commitments. The agent starts each turn knowing what matters.
 
