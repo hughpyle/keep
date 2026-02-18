@@ -165,6 +165,8 @@ class FileDocumentProvider:
                 "Text extraction failed for %s: %s", path.name, e
             )
             content = f"[{path.name}]"
+            # Still try to get metadata tags from the file
+            extracted_tags = self._extract_metadata_only(path, suffix)
 
         # Gather metadata
         stat = path.stat()
@@ -186,6 +188,43 @@ class FileDocumentProvider:
             metadata=metadata,
             tags=extracted_tags,
         )
+
+    def _extract_metadata_only(self, path: Path, suffix: str) -> dict[str, str] | None:
+        """Best-effort metadata extraction when content extraction fails.
+
+        Tries to pull author/title from document properties without
+        reading the full content. Returns None if nothing found.
+        """
+        tags: dict[str, str] = {}
+        try:
+            if suffix == ".pdf":
+                from pypdf import PdfReader
+                reader = PdfReader(path)
+                info = reader.metadata
+                if info:
+                    if info.author:
+                        tags["author"] = info.author
+                    if info.title:
+                        tags["title"] = info.title
+            elif suffix == ".docx":
+                from docx import Document as DocxDocument
+                doc = DocxDocument(path)
+                props = doc.core_properties
+                if props.author:
+                    tags["author"] = props.author
+                if props.title:
+                    tags["title"] = props.title
+            elif suffix == ".pptx":
+                from pptx import Presentation
+                prs = Presentation(path)
+                props = prs.core_properties
+                if props.author:
+                    tags["author"] = props.author
+                if props.title:
+                    tags["title"] = props.title
+        except Exception:
+            pass  # Metadata extraction is best-effort
+        return tags or None
 
     def _extract_docx(self, path: Path) -> tuple[str, dict[str, str]]:
         """Extract text and metadata from DOCX file."""
