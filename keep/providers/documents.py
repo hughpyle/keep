@@ -73,6 +73,10 @@ class FileDocumentProvider:
         # Office documents
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        # Apple iWork
+        ".pages": "application/vnd.apple.pages",
+        ".key": "application/vnd.apple.keynote",
+        ".numbers": "application/vnd.apple.numbers",
         # Audio
         ".mp3": "audio/mpeg",
         ".flac": "audio/flac",
@@ -140,6 +144,8 @@ class FileDocumentProvider:
             content, extracted_tags = self._extract_docx(path)
         elif suffix in (".pptx",):
             content, extracted_tags = self._extract_pptx(path)
+        elif content_type and content_type.startswith("application/vnd.apple."):
+            content, extracted_tags = self._extract_iwork_metadata(path, content_type)
         elif content_type and content_type.startswith("audio/"):
             content, extracted_tags = self._extract_audio_metadata(path)
         elif content_type and content_type.startswith("image/"):
@@ -273,6 +279,38 @@ class FileDocumentProvider:
             raise
         except Exception as e:
             raise IOError(f"Failed to extract text from PPTX {path}: {e}")
+
+    def _extract_iwork_metadata(self, path: Path, content_type: str) -> tuple[str, dict[str, str]]:
+        """Extract basic metadata from Apple iWork files (.pages, .key, .numbers).
+
+        iWork files use a proprietary protobuf format (IWA) inside a ZIP archive.
+        No production Python parser exists, so we extract what we can from the
+        ZIP structure and return a non-text content type for media description.
+        """
+        import zipfile
+
+        format_names = {
+            "application/vnd.apple.pages": "Pages",
+            "application/vnd.apple.keynote": "Keynote",
+            "application/vnd.apple.numbers": "Numbers",
+        }
+        fmt = format_names.get(content_type, "iWork")
+        tags: dict[str, str] = {"format": fmt.lower()}
+
+        parts = [f"Apple {fmt} document: {path.name}"]
+
+        try:
+            if zipfile.is_zipfile(path):
+                with zipfile.ZipFile(path, "r") as zf:
+                    names = zf.namelist()
+                    # Count embedded images
+                    images = [n for n in names if n.startswith("Data/") and not n.endswith("/")]
+                    if images:
+                        parts.append(f"Contains {len(images)} embedded resource(s)")
+        except Exception:
+            pass  # ZIP inspection is best-effort
+
+        return "\n".join(parts), tags
 
     def _extract_audio_metadata(self, path: Path) -> tuple[str, dict[str, str]]:
         """Extract metadata from audio file as structured text."""
