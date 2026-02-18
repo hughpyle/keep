@@ -20,15 +20,15 @@
 | `keep del` | Remove item or revert to previous version | — |
 | `keep tag-update` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
 | `keep reindex` | Rebuild search index | — |
-| `keep process-pending` | Process pending summaries from lazy indexing | — |
+| `keep process-pending` | Process pending summaries | — |
 
 ## Global Flags
 
 ```bash
-keep --json <cmd>   # Output as JSON
-keep --ids <cmd>    # Output only versioned IDs (for piping)
-keep --full <cmd>   # Output full YAML frontmatter
-keep -v <cmd>       # Enable debug logging to stderr
+keep --json  (-j) <cmd>  # Output as JSON
+keep --ids   (-I) <cmd>  # Output only versioned IDs (for piping)
+keep --full  (-F) <cmd>  # Output full YAML frontmatter
+keep -v <cmd>            # Enable debug logging to stderr
 ```
 
 ## Output Formats

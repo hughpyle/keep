@@ -22,6 +22,7 @@ echo "piped content" | keep now       # Set from stdin
 | `-H`, `--history` | List all versions |
 | `-t`, `--tag KEY=VALUE` | Set tag (with content) or filter (without content) |
 | `-n`, `--limit N` | Max similar/meta items to show (default 3) |
+| `--scope SCOPE` | Scope for multi-user isolation (e.g. user ID) |
 | `-s`, `--store PATH` | Override store directory |
 
 ## Tag behavior

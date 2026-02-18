@@ -2360,10 +2360,10 @@ def process_pending(
     )] = False,
 ):
     """
-    Process pending summaries from lazy indexing.
+    Process pending summaries.
 
-    Items indexed with --lazy use a truncated placeholder summary.
-    This command generates real summaries for those items.
+    Items with placeholder summaries (e.g. from bulk imports or
+    deferred processing) get real summaries generated.
     """
     kp = _get_keeper(store)
 
