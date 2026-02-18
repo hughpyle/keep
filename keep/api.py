@@ -184,7 +184,8 @@ from .providers.base import (
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import PartInfo, VersionInfo
 from .types import (
-    Item, casefold_tags, filter_non_system_tags, SYSTEM_TAG_PREFIX,
+    Item, casefold_tags, casefold_tags_for_index, filter_non_system_tags,
+    SYSTEM_TAG_PREFIX,
     parse_utc_timestamp, validate_tag_key, validate_id, is_part_id,
     MAX_TAG_VALUE_LENGTH,
 )
@@ -637,7 +638,8 @@ class Keeper:
                     if self._document_store.get(doc_coll, doc_id) is not None:
                         self._store.upsert(
                             collection=chroma_coll, id=doc_id,
-                            embedding=embedding, summary=record.summary, tags=record.tags,
+                            embedding=embedding, summary=record.summary,
+                            tags=casefold_tags_for_index(record.tags),
                         )
                         logger.info("Reconciled missing item: %s", doc_id)
             except Exception as e:
@@ -739,7 +741,7 @@ class Keeper:
                                 [new_id],
                                 [entry["embedding"]],
                                 [entry["summary"] or rec.summary],
-                                [entry["tags"]],
+                                [casefold_tags_for_index(entry["tags"])],
                             )
                     except (ValueError, KeyError) as e:
                         logger.debug("ChromaDB transfer skipped for %s: %s", rec.id, e)
@@ -803,7 +805,8 @@ class Keeper:
                         embedding = self._get_embedding_provider().embed(content)
                         self._store.upsert(
                             collection=chroma_coll_name, id=new_id,
-                            embedding=embedding, summary=content, tags=tags,
+                            embedding=embedding, summary=content,
+                            tags=casefold_tags_for_index(tags),
                         )
                     except (RuntimeError, Exception) as e:
                         # No embedding provider or embedding failed — that's fine,
@@ -1159,7 +1162,8 @@ class Keeper:
                 for (doc_id, rec), embedding in zip(batch, embeddings):
                     self._store.upsert(
                         collection=chroma_coll, id=doc_id,
-                        embedding=embedding, summary=rec.summary, tags=rec.tags,
+                        embedding=embedding, summary=rec.summary,
+                        tags=casefold_tags_for_index(rec.tags),
                     )
                     indexed += 1
             except Exception:
@@ -1169,7 +1173,8 @@ class Keeper:
                         embedding = provider.embed(rec.summary)
                         self._store.upsert(
                             collection=chroma_coll, id=doc_id,
-                            embedding=embedding, summary=rec.summary, tags=rec.tags,
+                            embedding=embedding, summary=rec.summary,
+                            tags=casefold_tags_for_index(rec.tags),
                         )
                         indexed += 1
                     except Exception as e:
@@ -1184,7 +1189,8 @@ class Keeper:
                     self._store.upsert_version(
                         collection=chroma_coll, id=doc_id,
                         version=vi.version, embedding=emb,
-                        summary=vi.summary, tags=vi.tags,
+                        summary=vi.summary,
+                        tags=casefold_tags_for_index(dict(vi.tags)),
                     )
                 except Exception:
                     pass  # Version embedding failure is non-critical
@@ -1229,7 +1235,8 @@ class Keeper:
                 for (doc_id, rec), embedding in zip(batch, embeddings):
                     self._store.upsert(
                         collection=chroma_coll, id=doc_id,
-                        embedding=embedding, summary=rec.summary, tags=rec.tags,
+                        embedding=embedding, summary=rec.summary,
+                        tags=casefold_tags_for_index(rec.tags),
                     )
                     indexed += 1
             except Exception:
@@ -1238,7 +1245,8 @@ class Keeper:
                         embedding = provider.embed(rec.summary)
                         self._store.upsert(
                             collection=chroma_coll, id=doc_id,
-                            embedding=embedding, summary=rec.summary, tags=rec.tags,
+                            embedding=embedding, summary=rec.summary,
+                            tags=casefold_tags_for_index(rec.tags),
                         )
                         indexed += 1
                     except Exception as e:
@@ -1254,7 +1262,8 @@ class Keeper:
                     self._store.upsert_version(
                         collection=chroma_coll, id=doc_id,
                         version=vi.version, embedding=emb,
-                        summary=vi.summary, tags=vi.tags,
+                        summary=vi.summary,
+                        tags=casefold_tags_for_index(dict(vi.tags)),
                     )
                     version_count += 1
                 except Exception:
@@ -1436,7 +1445,7 @@ class Keeper:
                         collection=chroma_coll, id=id,
                         embedding=donor_embedding,
                         summary=final_summary,
-                        tags=merged_tags,
+                        tags=casefold_tags_for_index(merged_tags),
                     )
                     return _record_to_item(result, changed=True)
             # Enqueue embedding task (content needed for embedding computation)
@@ -1485,7 +1494,7 @@ class Keeper:
             id=id,
             embedding=embedding,
             summary=final_summary,
-            tags=merged_tags,
+            tags=casefold_tags_for_index(merged_tags),
         )
 
         # If content changed and we archived a version, also store versioned embedding
@@ -1500,7 +1509,7 @@ class Keeper:
                     version=max_ver,
                     embedding=old_embedding,
                     summary=existing_doc.summary,
-                    tags=existing_doc.tags,
+                    tags=casefold_tags_for_index(existing_doc.tags),
                 )
 
         # Spawn background processor if needed (local only — uses filesystem locks)
@@ -1820,9 +1829,21 @@ class Keeper:
             items = [i for i in items if not _is_hidden(i)]
 
         final = items[:limit]
-        # Touch accessed_at for returned items
+        # Enrich tags from SQLite (ChromaDB stores casefolded values;
+        # SQLite has the canonical original-case values for display)
         if final:
             self._document_store.touch_many(doc_coll, [i.id for i in final])
+            enriched = []
+            for item in final:
+                doc = self._document_store.get(doc_coll, item.id)
+                if doc:
+                    enriched.append(Item(
+                        id=item.id, summary=item.summary,
+                        tags=doc.tags, score=item.score,
+                    ))
+                else:
+                    enriched.append(item)
+            final = enriched
         return final
 
     def get_similar_for_display(
@@ -2201,7 +2222,14 @@ class Keeper:
         # Fetch extra when filtering
         fetch_limit = limit * 3
         results = self._store.query_metadata(chroma_coll, where, limit=fetch_limit)
-        items = [r.to_item() for r in results]
+        # Enrich from SQLite for original-case tag values
+        items = []
+        for r in results:
+            doc = self._document_store.get(doc_coll, r.id)
+            if doc:
+                items.append(_record_to_item(doc))
+            else:
+                items.append(r.to_item())
 
         # Apply filters
         if since is not None or until is not None:
@@ -2437,7 +2465,7 @@ class Keeper:
                 collection=chroma_coll, id=id,
                 embedding=archived_embedding,
                 summary=restored.summary,
-                tags=restored.tags,
+                tags=casefold_tags_for_index(restored.tags),
             )
 
         # Delete the versioned entry from ChromaDB
@@ -2571,7 +2599,11 @@ class Keeper:
 
         # Identify which versions will be extracted (for ChromaDB cleanup)
         def _tags_match(item_tags: dict, filt: dict) -> bool:
-            return all(item_tags.get(k) == v for k, v in filt.items())
+            for k, v in filt.items():
+                stored = item_tags.get(k)
+                if stored is None or stored.casefold() != v.casefold():
+                    return False
+            return True
 
         if only_current:
             # Only extract the tip — no archived versions
@@ -2619,7 +2651,7 @@ class Keeper:
                     [archived_vid],
                     [entry["embedding"]],
                     [entry["summary"] or ""],
-                    [archived_tags],
+                    [casefold_tags_for_index(archived_tags)],
                 )
 
         # 3. Batch-get embeddings from source
@@ -2679,7 +2711,7 @@ class Keeper:
                 target_ids,
                 target_embeddings,
                 target_summaries,
-                target_tags,
+                [casefold_tags_for_index(t) for t in target_tags],
             )
 
         # Add system tags to the saved document in DocumentStore too
@@ -2829,9 +2861,9 @@ class Keeper:
         # Merge back: user tags + system tags
         final_tags = {**user_tags, **system_tags}
 
-        # Dual-write to both stores
+        # Dual-write: SQLite gets original values, ChromaDB gets casefolded
         self._document_store.update_tags(doc_coll, id, final_tags)
-        self._store.update_tags(chroma_coll, id, final_tags)
+        self._store.update_tags(chroma_coll, id, casefold_tags_for_index(final_tags))
 
         # Return updated item
         return self.get(id)
@@ -2885,10 +2917,10 @@ class Keeper:
                  if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
             )
 
-        # Update SQLite
+        # Dual-write: SQLite gets original values, ChromaDB gets casefolded
         self._document_store.update_part_tags(doc_coll, id, part_num, merged)
-        # Update ChromaDB
-        self._store.update_tags(chroma_coll, f"{id}@p{part_num}", merged)
+        self._store.update_tags(chroma_coll, f"{id}@p{part_num}",
+                                casefold_tags_for_index(merged))
 
         return self._document_store.get_part(doc_coll, id, part_num)
 
@@ -3073,7 +3105,7 @@ class Keeper:
             embedding = embed.embed(part.summary)
             self._store.upsert_part(
                 chroma_coll, id, part.part_num,
-                embedding, part.summary, part.tags,
+                embedding, part.summary, casefold_tags_for_index(part.tags),
             )
 
         # Record the content hash at which analysis was performed,
@@ -3082,7 +3114,8 @@ class Keeper:
             updated_tags = dict(doc_record.tags)
             updated_tags["_analyzed_hash"] = doc_record.content_hash
             self._document_store.update_tags(doc_coll, id, updated_tags)
-            self._store.update_tags(chroma_coll, id, updated_tags)
+            self._store.update_tags(chroma_coll, id,
+                                    casefold_tags_for_index(updated_tags))
 
         return parts
 
@@ -3403,7 +3436,7 @@ class Keeper:
                         version=max_ver,
                         embedding=old_embedding,
                         summary=archived.summary,
-                        tags=archived.tags,
+                        tags=casefold_tags_for_index(archived.tags),
                     )
 
         # Compute embedding (try dedup first)
@@ -3419,7 +3452,7 @@ class Keeper:
             id=item.id,
             embedding=embedding,
             summary=doc.summary,
-            tags=doc.tags,
+            tags=casefold_tags_for_index(doc.tags),
         )
 
     def _process_pending_analyze(self, item) -> None:
@@ -3565,7 +3598,7 @@ class Keeper:
                             id=doc_id,
                             embedding=embedding,
                             summary=doc_record.summary,
-                            tags=doc_record.tags,
+                            tags=casefold_tags_for_index(doc_record.tags),
                         )
                         fixed += 1
                         logger.info("Reconciled: %s", doc_id)

@@ -91,9 +91,23 @@ def validate_id(id: str) -> None:
 
 
 def casefold_tags(tags: dict[str, str]) -> dict[str, str]:
-    """Casefold tag keys and values for case-insensitive storage.
+    """Casefold tag keys for case-insensitive lookup, preserving values.
 
     System tags (prefixed with '_') are left untouched.
+    Tag values retain their original case for display fidelity
+    (e.g. artist=AC/DC, album=Bashed Out).
+    """
+    return {
+        (k.casefold() if not k.startswith(SYSTEM_TAG_PREFIX) else k): v
+        for k, v in tags.items()
+    }
+
+
+def casefold_tags_for_index(tags: dict[str, str]) -> dict[str, str]:
+    """Casefold both tag keys and values for index storage (ChromaDB).
+
+    Used for the search index where case-insensitive where-clause
+    matching is needed.  The canonical (display) tags live in SQLite.
     """
     return {
         (k.casefold() if not k.startswith(SYSTEM_TAG_PREFIX) else k):
