@@ -4,7 +4,7 @@
 
 Use [uv](https://docs.astral.sh/uv/) (recommended) or pip.
 
-To use local MLX models on macOS Apple Silicon (no API keys needed):
+To use local MLX models on macOS Apple Silicon (no API keys needed; 16 GB memory or more recommended):
 ```bash
 uv tool install 'keep-skill[local]'
 ```
@@ -81,7 +81,7 @@ Keep picks the best available model: dedicated embedding models (e.g. `nomic-emb
 
 ### Local Providers (Apple Silicon)
 
-For offline operation on macOS Apple Silicon without Ollama:
+For offline operation on macOS Apple Silicon without Ollama (16 GB memory or more recommended):
 ```bash
 uv tool install 'keep-skill[local]'
 keep put "test"             # No API key needed
