@@ -1648,6 +1648,14 @@ class Keeper:
                 except OSError:
                     pass
 
+            # Use file birthtime as created_at for new items
+            if created_at is None and is_file_uri and doc.metadata:
+                birthtime = doc.metadata.get("birthtime")
+                if birthtime is not None:
+                    created_at = datetime.fromtimestamp(
+                        birthtime, tz=timezone.utc
+                    ).isoformat()
+
             return self._upsert(
                 uri, doc.content,
                 tags=merged_tags, summary=summary,

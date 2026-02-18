@@ -2,7 +2,9 @@
 Tests for code review fixes: tag queries, SSRF protection, missing embedding provider.
 """
 
+import os
 import pytest
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch, MagicMock
@@ -265,3 +267,76 @@ class TestEmbeddingProviderAbsent:
         assert config_file.exists()
         content = config_file.read_text()
         assert "embedding" not in content or "# embedding" in content
+
+
+# ---------------------------------------------------------------------------
+# File birthtime as created_at
+# ---------------------------------------------------------------------------
+
+
+class TestFileBirthtime:
+    """File creation time should be used as created_at for file:// URIs."""
+
+    @pytest.fixture
+    def home_tmp(self):
+        """Temp dir under home so FileDocumentProvider's safety check passes."""
+        d = Path.home() / ".keep-test-birthtime"
+        d.mkdir(exist_ok=True)
+        yield d
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+
+    def test_file_provider_includes_birthtime(self, home_tmp):
+        """FileDocumentProvider.fetch() includes birthtime in metadata."""
+        from keep.providers.documents import FileDocumentProvider
+
+        f = home_tmp / "note.md"
+        f.write_text("hello")
+        provider = FileDocumentProvider()
+        doc = provider.fetch(str(f))
+        # macOS always has st_birthtime; skip on platforms that don't
+        if hasattr(os.stat_result, "st_birthtime"):
+            assert "birthtime" in doc.metadata
+            assert isinstance(doc.metadata["birthtime"], float)
+        else:
+            # On platforms without birthtime, key should be absent
+            assert "birthtime" not in doc.metadata
+
+    def test_put_file_uses_birthtime_as_created(self, mock_providers, home_tmp):
+        """put() with a file:// URI sets _created from file birthtime."""
+        from keep.api import Keeper
+        from keep.providers.documents import FileDocumentProvider
+
+        f = home_tmp / "old-note.md"
+        f.write_text("historical content")
+
+        kp = Keeper(store_path=home_tmp / "store")
+        kp._document_provider = FileDocumentProvider()
+
+        before = datetime.now(timezone.utc)
+        item = kp.put(uri=f"file://{f}")
+
+        if hasattr(os.stat_result, "st_birthtime"):
+            created_str = item.tags["_created"]
+            created = datetime.fromisoformat(created_str)
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            # File was just created, so birthtime should be before 'now'
+            # and close to it (within a few seconds)
+            assert created < before or (created - before).total_seconds() < 2
+        # Without birthtime, _created falls back to current time (existing behavior)
+
+    def test_put_file_explicit_created_at_wins(self, mock_providers, home_tmp):
+        """Explicit created_at overrides file birthtime."""
+        from keep.api import Keeper
+        from keep.providers.documents import FileDocumentProvider
+
+        f = home_tmp / "note.md"
+        f.write_text("content")
+
+        kp = Keeper(store_path=home_tmp / "store")
+        kp._document_provider = FileDocumentProvider()
+
+        explicit = "2020-01-01T00:00:00+00:00"
+        item = kp.put(uri=f"file://{f}", created_at=explicit)
+        assert item.tags["_created"].startswith("2020-01-01")
