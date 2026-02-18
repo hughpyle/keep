@@ -272,26 +272,6 @@ item = kp.get("doc:1@V{1}")  # Get previous version
 versions = kp.list_versions("doc:1")
 ```
 
-## Collections
-
-Separate stores for different contexts:
-
-```python
-import os
-
-# Work context
-os.environ["KEEP_COLLECTION"] = "work"
-kp_work = Keeper()
-kp_work.set_now("Working on auth")
-
-# Personal context
-os.environ["KEEP_COLLECTION"] = "personal"
-kp_personal = Keeper()
-kp_personal.set_now("Personal notes")
-```
-
-Collections are completely separate. For overlays within a single store, use tags instead.
-
 ## Error Handling
 
 ```python
