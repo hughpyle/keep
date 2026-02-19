@@ -74,7 +74,7 @@ class TestMediaRegistry:
     def test_create_unknown_raises(self):
         """Creating unknown media provider raises ValueError."""
         registry = get_registry()
-        with pytest.raises(ValueError, match="Unknown media describer"):
+        with pytest.raises(ValueError, match="Unknown media provider"):
             registry.create_media("nonexistent-provider")
 
 

@@ -519,113 +519,57 @@ class ProviderRegistry:
     
     # Factory methods
 
+    @staticmethod
+    def _create_provider(kind: str, name: str, providers: dict, params: dict | None):
+        """Shared factory logic for all provider types."""
+        if name not in providers:
+            available = ", ".join(providers.keys()) or "none"
+            raise ValueError(
+                f"Unknown {kind} provider: '{name}'. "
+                f"Available providers: {available}. "
+                f"Install missing dependencies or check provider name."
+            )
+        try:
+            return providers[name](**(params or {}))
+        except ImportError as e:
+            raise RuntimeError(
+                f"Failed to create {kind} provider '{name}': {e}\n"
+                f"Install required dependencies."
+            ) from e
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create {kind} provider '{name}': {e}"
+            ) from e
+
     def create_embedding(self, name: str, params: dict | None = None) -> EmbeddingProvider:
         """Create an embedding provider instance."""
         self._ensure_providers_loaded()
-        if name not in self._embedding_providers:
-            available = ", ".join(self._embedding_providers.keys()) or "none"
-            raise ValueError(
-                f"Unknown embedding provider: '{name}'. "
-                f"Available providers: {available}. "
-                f"Install missing dependencies or check provider name."
-            )
-        try:
-            return self._embedding_providers[name](**(params or {}))
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to create embedding provider '{name}': {e}\n"
-                f"Make sure required dependencies are installed."
-            ) from e
-    
+        return self._create_provider("embedding", name, self._embedding_providers, params)
+
     def create_summarization(self, name: str, params: dict | None = None) -> SummarizationProvider:
         """Create a summarization provider instance."""
         self._ensure_providers_loaded()
-        if name not in self._summarization_providers:
-            available = ", ".join(self._summarization_providers.keys()) or "none"
-            raise ValueError(
-                f"Unknown summarization provider: '{name}'. "
-                f"Available providers: {available}. "
-                f"Install missing dependencies or check provider name."
-            )
-        try:
-            return self._summarization_providers[name](**(params or {}))
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to create summarization provider '{name}': {e}\n"
-                f"Make sure required dependencies are installed."
-            ) from e
-    
+        return self._create_provider("summarization", name, self._summarization_providers, params)
+
     def create_tagging(self, name: str, params: dict | None = None) -> TaggingProvider:
         """Create a tagging provider instance."""
         self._ensure_providers_loaded()
-        if name not in self._tagging_providers:
-            available = ", ".join(self._tagging_providers.keys()) or "none"
-            raise ValueError(
-                f"Unknown tagging provider: '{name}'. "
-                f"Available providers: {available}. "
-                f"Install missing dependencies or check provider name."
-            )
-        try:
-            return self._tagging_providers[name](**(params or {}))
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to create tagging provider '{name}': {e}\n"
-                f"Make sure required dependencies are installed."
-            ) from e
-    
+        return self._create_provider("tagging", name, self._tagging_providers, params)
+
     def create_media(self, name: str, params: dict | None = None) -> MediaDescriber:
         """Create a media describer instance."""
         self._ensure_providers_loaded()
-        if name not in self._media_providers:
-            available = ", ".join(self._media_providers.keys()) or "none"
-            raise ValueError(
-                f"Unknown media describer: '{name}'. "
-                f"Available providers: {available}. "
-                f"Install missing dependencies or check provider name."
-            )
-        try:
-            return self._media_providers[name](**(params or {}))
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to create media describer '{name}': {e}\n"
-                f"Make sure required dependencies are installed."
-            ) from e
+        return self._create_provider("media", name, self._media_providers, params)
 
     def create_analyzer(self, name: str, params: dict | None = None) -> AnalyzerProvider:
         """Create an analyzer provider instance."""
         self._ensure_providers_loaded()
-        if name not in self._analyzer_providers:
-            available = ", ".join(self._analyzer_providers.keys()) or "none"
-            raise ValueError(
-                f"Unknown analyzer provider: '{name}'. "
-                f"Available providers: {available}. "
-                f"Install missing dependencies or check provider name."
-            )
-        try:
-            return self._analyzer_providers[name](**(params or {}))
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to create analyzer provider '{name}': {e}\n"
-                f"Make sure required dependencies are installed."
-            ) from e
+        return self._create_provider("analyzer", name, self._analyzer_providers, params)
 
     def create_document(self, name: str, params: dict | None = None) -> DocumentProvider:
         """Create a document provider instance."""
         self._ensure_providers_loaded()
-        if name not in self._document_providers:
-            available = ", ".join(self._document_providers.keys()) or "none"
-            raise ValueError(
-                f"Unknown document provider: '{name}'. "
-                f"Available providers: {available}. "
-                f"Install missing dependencies or check provider name."
-            )
-        try:
-            return self._document_providers[name](**(params or {}))
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to create document provider '{name}': {e}\n"
-                f"Make sure required dependencies are installed."
-            ) from e
+        return self._create_provider("document", name, self._document_providers, params)
     
     # Introspection
     

@@ -42,6 +42,12 @@ class SentenceTransformerEmbedding:
         except ImportError:
             pass
 
+        if not local_only:
+            import logging
+            import sys
+            logging.getLogger(__name__).info("Downloading embedding model '%s' (first use)...", model)
+            print(f"Downloading embedding model '{model}' (first use)...", file=sys.stderr)
+
         self._model = SentenceTransformer(model, local_files_only=local_only)
     
     @property
@@ -241,6 +247,10 @@ class OllamaEmbedding:
             base_url = f"http://{base_url}"
         self.base_url = base_url.rstrip("/")
         self._dimension: int | None = None
+
+        # Ensure model is available (auto-pull if missing)
+        from .ollama_utils import ollama_ensure_model
+        ollama_ensure_model(self.base_url, self.model_name)
 
     @property
     def dimension(self) -> int:

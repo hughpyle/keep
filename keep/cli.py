@@ -2593,7 +2593,32 @@ def doctor(
     else:
         ok(f"Summarization: {'passthrough' if cfg and cfg.summarization else 'none'}")
 
-    # 7. ChromaDB
+    # 7. Media describer
+    if cfg and cfg.media:
+        try:
+            from .providers.base import get_registry
+            registry = get_registry()
+            provider = registry.create_media(cfg.media.name, cfg.media.params)
+            model = getattr(provider, "model", getattr(provider, "model_name", cfg.media.name))
+            ok(f"Media: {cfg.media.name} ({model})")
+        except Exception as e:
+            fail(f"Media: {e}")
+    else:
+        ok("Media: none configured (metadata-only indexing)")
+
+    # 8. Analyzer
+    if cfg and cfg.analyzer:
+        try:
+            from .providers.base import get_registry
+            registry = get_registry()
+            provider = registry.create_analyzer(cfg.analyzer.name, cfg.analyzer.params)
+            ok(f"Analyzer: {cfg.analyzer.name}")
+        except Exception as e:
+            fail(f"Analyzer: {e}")
+    else:
+        ok("Analyzer: default (uses summarization provider)")
+
+    # 9. ChromaDB
     if store_path and (store_path / "chroma").exists():
         try:
             from .store import ChromaStore
@@ -2609,7 +2634,7 @@ def doctor(
     else:
         fail("ChromaDB: skipped (no store path)")
 
-    # 8. Model locks
+    # 10. Model locks
     if store_path:
         from .model_lock import ModelLock
         for lock_name in [".embedding.lock", ".summarization.lock"]:
@@ -2625,7 +2650,7 @@ def doctor(
     else:
         ok("Lock: skipped (no store path)")
 
-    # 9. Round-trip (temp store, isolates stack from store data)
+    # 11. Round-trip (temp store, isolates stack from store data)
     import tempfile
     import shutil
     from .config import StoreConfig, ProviderConfig
