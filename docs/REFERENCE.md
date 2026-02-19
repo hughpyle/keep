@@ -19,8 +19,7 @@
 | `keep reflect` | Structured reflection practice | [KEEP-NOW.md](KEEP-NOW.md#keep-reflect) |
 | `keep del` | Remove item or revert to previous version | — |
 | `keep tag-update` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
-| `keep reindex` | Rebuild search index | — |
-| `keep process-pending` | Process pending summaries | — |
+| `keep pending` | Process pending tasks (summarize, embed, reindex) | — |
 
 ## Global Flags
 
@@ -139,10 +138,9 @@ keep analyze ID --fg                 # Wait for completion
 keep analyze ID --force              # Re-analyze even if current
 
 # Maintenance
-keep reindex                         # Rebuild search index
-keep reindex -y                      # Skip confirmation
-keep process-pending                 # Process pending summaries
-keep process-pending --all           # Process all pending
+keep pending                         # Process pending tasks, tail progress
+keep pending --reindex               # Re-embed all items + process
+keep pending --stop                  # Stop background processor
 ```
 
 ## Python API

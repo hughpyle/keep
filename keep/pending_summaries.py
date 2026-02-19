@@ -33,7 +33,7 @@ class PendingSummaryQueue:
     SQLite-backed queue for pending background work.
 
     Items are added during fast indexing (with truncated placeholder summary)
-    or by enqueue_analyze, and processed later by `keep process-pending`
+    or by enqueue_analyze, and processed later by `keep pending`
     or programmatically. All work is serialized to prevent concurrent
     ML model loading.
     """
@@ -234,7 +234,18 @@ class PendingSummaryQueue:
             "max_attempts": row[2] or 0,
             "oldest": row[3],
             "queue_path": str(self._queue_path),
+            "by_type": self.stats_by_type(),
         }
+
+    def stats_by_type(self) -> dict[str, int]:
+        """Get count of pending items grouped by task type."""
+        cursor = self._conn.execute("""
+            SELECT task_type, COUNT(*) as cnt
+            FROM pending_summaries
+            GROUP BY task_type
+            ORDER BY cnt DESC
+        """)
+        return {row[0]: row[1] for row in cursor.fetchall()}
 
     def get_status(self, id: str) -> dict | None:
         """Get pending task status for a specific note.

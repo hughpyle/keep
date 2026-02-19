@@ -2072,39 +2072,6 @@ def analyze(
 
 
 
-@app.command("reindex")
-def reindex(
-    store: StoreOption = None,
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation")] = False,
-):
-    """
-    Rebuild search index with current embedding provider.
-
-    Re-embeds all items from the document store into the search index.
-    Use when changing embedding providers or to repair search.
-    """
-    kp = _get_keeper(store)
-    count = kp.count()
-
-    if count == 0:
-        typer.echo("No notes to reindex.")
-        raise typer.Exit(0)
-
-    if not yes:
-        typer.confirm(f"Reindex {count} notes with current embedding provider?", abort=True)
-
-    typer.echo(f"Reindexing {count} notes...")
-    stats = kp.reindex()
-
-    if _get_json_output():
-        typer.echo(json.dumps(stats))
-    else:
-        typer.echo(
-            f"Done: {stats['indexed']} indexed, {stats['failed']} failed, "
-            f"{stats['versions']} versions"
-        )
-
-
 def _get_config_value(cfg, store_path: Path, path: str):
     """
     Get config value by dotted path.
@@ -2344,16 +2311,16 @@ def config(
         typer.echo(_format_config_with_defaults(cfg, store_path))
 
 
-@app.command("process-pending")
-def process_pending(
+@app.command("pending")
+def pending_cmd(
     store: StoreOption = None,
-    limit: Annotated[int, typer.Option(
-        "--limit", "-n",
-        help="Maximum notes to process in this batch"
-    )] = 10,
-    all_items: Annotated[bool, typer.Option(
-        "--all", "-a",
-        help="Process all pending notes (ignores --limit)"
+    reindex: Annotated[bool, typer.Option(
+        "--reindex",
+        help="Enqueue all items for re-embedding, then process"
+    )] = False,
+    stop: Annotated[bool, typer.Option(
+        "--stop",
+        help="Stop the background processor"
     )] = False,
     daemon: Annotated[bool, typer.Option(
         "--daemon",
@@ -2362,126 +2329,154 @@ def process_pending(
     )] = False,
 ):
     """
-    Process pending summaries.
+    Process pending background tasks.
 
-    Items with placeholder summaries (e.g. from bulk imports or
-    deferred processing) get real summaries generated.
+    Starts a background processor (if not already running) and shows
+    progress. Ctrl-C detaches without stopping the processor.
+    Use --reindex to re-embed all items with the current embedding provider.
     """
+    import signal
     kp = _get_keeper(store)
 
-    # Daemon mode: acquire singleton lock, process all, clean up
+    # --stop: send SIGTERM to the daemon
+    if stop:
+        pid_path = kp._processor_pid_path
+        if not kp._is_processor_running():
+            typer.echo("No processor running.")
+            pid_path.unlink(missing_ok=True)
+            kp.close()
+            return
+        if pid_path.exists():
+            try:
+                pid = int(pid_path.read_text().strip())
+                os.kill(pid, signal.SIGTERM)
+                typer.echo(f"Sent stop signal to processor (pid {pid}).", err=True)
+            except (ProcessLookupError, ValueError):
+                typer.echo("Processor not running (stale PID file).", err=True)
+                pid_path.unlink(missing_ok=True)
+        else:
+            typer.echo("Processor running but no PID file found.", err=True)
+        kp.close()
+        return
+
+    # --daemon: run as the actual background processor
     if daemon:
-        import signal
+        import logging
         from .model_lock import ModelLock
 
+        _daemon_logger = logging.getLogger("keep.cli.daemon")
         pid_path = kp._processor_pid_path
         processor_lock = ModelLock(kp._store_path / ".processor.lock")
         shutdown_requested = False
 
-        # Acquire exclusive lock (non-blocking) — ensures true singleton
         if not processor_lock.acquire(blocking=False):
-            # Another daemon is already running
+            _daemon_logger.info("Daemon: another processor already running, exiting")
             kp.close()
             return
+
+        _daemon_logger.info("Daemon started (pid=%d)", os.getpid())
 
         def handle_signal(signum, frame):
             nonlocal shutdown_requested
             shutdown_requested = True
 
-        # Handle common termination signals gracefully
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
 
         try:
-            # Write PID file (informational, lock is authoritative)
             pid_path.write_text(str(os.getpid()))
-
-            # Process all items until queue empty or shutdown requested
             while not shutdown_requested:
                 result = kp.process_pending(limit=50)
+                _daemon_logger.info(
+                    "Daemon batch: processed=%d failed=%d",
+                    result["processed"], result["failed"],
+                )
                 if result["processed"] == 0 and result["failed"] == 0:
                     break
-
         finally:
-            # Clean up PID file
+            _daemon_logger.info("Daemon shutting down")
             try:
                 pid_path.unlink()
             except OSError:
                 pass
-            # Close resources (releases model locks via provider release())
             kp.close()
-            # Release processor singleton lock
             processor_lock.release()
         return
 
-    # Interactive mode
-    pending_before = kp.pending_count()
+    # --reindex: enqueue all items for re-embedding
+    if reindex:
+        count = kp.count()
+        if count == 0:
+            typer.echo("No notes to reindex.")
+            kp.close()
+            raise typer.Exit(0)
+        typer.echo(f"Enqueuing {count} notes for reindex...", err=True)
+        stats = kp.enqueue_reindex()
+        typer.echo(
+            f"Enqueued {stats['enqueued']} items + {stats['versions']} versions",
+            err=True,
+        )
 
-    if pending_before == 0:
-        if _get_json_output():
-            typer.echo(json.dumps({"processed": 0, "remaining": 0}))
-        else:
-            typer.echo("No pending summaries.")
+    # Interactive mode: show status, ensure daemon running, tail log
+    pending_count = kp.pending_count()
+
+    if pending_count == 0:
+        typer.echo("Nothing pending.")
+        kp.close()
         return
 
-    if all_items:
-        # Process all items in batches
-        totals = {"processed": 0, "failed": 0, "abandoned": 0, "errors": []}
-        while True:
-            result = kp.process_pending(limit=50)
-            totals["processed"] += result["processed"]
-            totals["failed"] += result["failed"]
-            totals["abandoned"] += result["abandoned"]
-            totals["errors"].extend(result["errors"])
-            if result["processed"] == 0 and result["failed"] == 0:
-                break
-            if not _get_json_output():
-                typer.echo(f"  Processed {totals['processed']}...")
+    by_type = kp.pending_stats_by_type()
+    parts = [f"{count} {ttype}" for ttype, count in sorted(by_type.items())]
+    typer.echo(f"Queue: {pending_count} items ({', '.join(parts)})", err=True)
 
-        remaining = kp.pending_count()
-        if _get_json_output():
-            typer.echo(json.dumps({
-                "processed": totals["processed"],
-                "failed": totals["failed"],
-                "abandoned": totals["abandoned"],
-                "remaining": remaining,
-                "errors": totals["errors"][:10],  # Limit error output
-            }))
-        else:
-            msg = f"✓ Processed {totals['processed']} notes"
-            if totals["failed"]:
-                msg += f", {totals['failed']} failed"
-            if totals["abandoned"]:
-                msg += f", {totals['abandoned']} abandoned"
-            msg += f", {remaining} remaining"
-            typer.echo(msg)
-            # Show first few errors
-            for err in totals["errors"][:3]:
-                typer.echo(f"  Error: {err}", err=True)
+    # Ensure daemon is running
+    if not kp._is_processor_running():
+        kp._spawn_processor()
+        typer.echo("Started background processor.", err=True)
     else:
-        # Process limited batch
-        result = kp.process_pending(limit=limit)
-        remaining = kp.pending_count()
+        typer.echo("Background processor already running.", err=True)
 
-        if _get_json_output():
-            typer.echo(json.dumps({
-                "processed": result["processed"],
-                "failed": result["failed"],
-                "abandoned": result["abandoned"],
-                "remaining": remaining,
-                "errors": result["errors"][:10],
-            }))
-        else:
-            msg = f"✓ Processed {result['processed']} notes"
-            if result["failed"]:
-                msg += f", {result['failed']} failed"
-            if result["abandoned"]:
-                msg += f", {result['abandoned']} abandoned"
-            msg += f", {remaining} remaining"
-            typer.echo(msg)
-            # Show first few errors
-            for err in result["errors"][:3]:
-                typer.echo(f"  Error: {err}", err=True)
+    # Tail the ops log until daemon finishes or user Ctrl-C's
+    log_path = kp._store_path / "keep-ops.log"
+    _tail_ops_log(log_path, kp)
+    kp.close()
+
+
+def _tail_ops_log(log_path: Path, kp) -> None:
+    """Tail the ops log, showing new lines until daemon finishes or Ctrl-C."""
+    import time
+
+    # Grace period for daemon startup (takes a moment to acquire lock)
+    time.sleep(1.0)
+
+    try:
+        # Ensure log file exists (may not on fresh stores)
+        log_path.touch(exist_ok=True)
+        with open(log_path) as f:
+            f.seek(0, 2)  # Seek to end
+            idle_checks = 0
+            while True:
+                line = f.readline()
+                if line:
+                    typer.echo(line.rstrip(), err=True)
+                    idle_checks = 0
+                else:
+                    # No new line — check if daemon is still running
+                    idle_checks += 1
+                    if idle_checks >= 5 and not kp._is_processor_running():
+                        remaining = kp.pending_count()
+                        if remaining == 0:
+                            typer.echo("Done.", err=True)
+                        else:
+                            typer.echo(f"{remaining} items remaining.", err=True)
+                        break
+                    time.sleep(0.5)
+    except (KeyboardInterrupt, EOFError):
+        remaining = kp.pending_count()
+        typer.echo(
+            f"\nDetached. Daemon still running. {remaining} remaining.",
+            err=True,
+        )
 
 
 # -----------------------------------------------------------------------------

@@ -24,11 +24,11 @@ class StoreResult:
     
     def to_item(self) -> Item:
         """Convert to Item, transforming distance to similarity score."""
-        # Chroma uses L2 distance by default; convert to 0-1 similarity
-        # score = 1 / (1 + distance) gives us 1.0 for identical, approaching 0 for distant
+        # Chroma cosine distance is in [0, 2]; convert to 0-1 similarity
+        # score = 1 - distance/2 gives 1.0 for identical, 0.0 for orthogonal
         score = None
         if self.distance is not None:
-            score = 1.0 / (1.0 + self.distance)
+            score = 1.0 - self.distance / 2.0
         return Item(id=self.id, summary=self.summary, tags=self.tags, score=score)
 
 
@@ -88,6 +88,8 @@ class ChromaStore:
         
         # Cache of collection handles
         self._collections: dict[str, Any] = {}
+        # Set during L2→cosine migration so caller can trigger reindex
+        self.migrated_to_cosine = False
     
     @property
     def embedding_dimension(self) -> Optional[int]:
@@ -99,13 +101,27 @@ class ChromaStore:
         self._embedding_dimension = dimension
 
     def _get_collection(self, name: str) -> Any:
-        """Get or create a collection by name."""
+        """Get or create a collection by name, migrating L2→cosine if needed."""
         if name not in self._collections:
-            # get_or_create handles both cases
-            self._collections[name] = self._client.get_or_create_collection(
+            coll = self._client.get_or_create_collection(
                 name=name,
-                metadata={"hnsw:space": "l2"},  # L2 distance for similarity
+                metadata={"hnsw:space": "cosine"},
             )
+            # Migrate: if existing collection uses L2, recreate with cosine
+            if coll.metadata.get("hnsw:space") != "cosine":
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(
+                    "Migrating collection %s from %s to cosine (requires reindex)",
+                    name, coll.metadata.get("hnsw:space"),
+                )
+                self._client.delete_collection(name)
+                coll = self._client.create_collection(
+                    name=name,
+                    metadata={"hnsw:space": "cosine"},
+                )
+                self.migrated_to_cosine = True
+            self._collections[name] = coll
         return self._collections[name]
     
     def _tags_to_metadata(self, tags: dict[str, str]) -> dict[str, Any]:

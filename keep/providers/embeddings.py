@@ -251,23 +251,55 @@ class OllamaEmbedding:
             self._dimension = len(test_embedding)
         return self._dimension
 
+    @staticmethod
+    def _truncate_at_word(text: str, max_chars: int) -> str:
+        """Truncate text to max_chars, breaking at a word boundary."""
+        if len(text) <= max_chars:
+            return text
+        truncated = text[:max_chars]
+        last_space = truncated.rfind(" ")
+        if last_space > max_chars // 2:
+            return truncated[:last_space]
+        return truncated
+
     def embed(self, text: str) -> list[float]:
-        """Generate embedding for a single text."""
+        """Generate embedding, auto-truncating if the model rejects the input.
+
+        Tries the full text first. If the model returns a context-length
+        error (instant 500), trims ~10% and retries. Only the final
+        successful call does real compute; rejections are near-free.
+        """
         import requests
 
-        response = requests.post(
-            f"{self.base_url}/api/embeddings",
-            json={"model": self.model_name, "prompt": text},
-            timeout=60,
+        attempt = text
+        for _ in range(30):  # 0.9^30 ≈ 4% — covers even extreme cases
+            response = requests.post(
+                f"{self.base_url}/api/embeddings",
+                json={"model": self.model_name, "prompt": attempt},
+                timeout=60,
+            )
+            if response.ok:
+                embedding = response.json()["embedding"]
+                if self._dimension is None:
+                    self._dimension = len(embedding)
+                return embedding
+
+            # Context-length error: trim 10% and retry (rejection is instant)
+            if response.status_code == 500 and "context length" in response.text:
+                new_len = int(len(attempt) * 0.9)
+                if new_len < 50:
+                    break
+                attempt = self._truncate_at_word(text, new_len)
+                continue
+
+            # Non-retryable error — break immediately
+            break
+
+        detail = response.text[:200] if response.text else ""
+        raise RuntimeError(
+            f"Ollama embedding failed (model={self.model_name}): "
+            f"HTTP {response.status_code} from {self.base_url}. {detail}"
         )
-        response.raise_for_status()
-
-        embedding = response.json()["embedding"]
-
-        if self._dimension is None:
-            self._dimension = len(embedding)
-
-        return embedding
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts (sequential for Ollama)."""

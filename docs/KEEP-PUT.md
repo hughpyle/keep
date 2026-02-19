@@ -44,7 +44,7 @@ Same content = same ID = enables versioning through tag changes.
 ## Smart summary behavior
 
 - **Short content** (under `max_summary_length`, default 1000 chars): stored verbatim as its own summary
-- **Long content**: truncated placeholder stored immediately, real summary generated in background by `process-pending`
+- **Long content**: truncated placeholder stored immediately, real summary generated in background by `keep pending`
 - **`--summary` provided**: used as-is, skips auto-summarization
 
 ## Tag suggestions
