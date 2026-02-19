@@ -2,14 +2,8 @@
 
 ## Installation
 
-Use [uv](https://docs.astral.sh/uv/) (recommended) or pip.
+Use [uv](https://docs.astral.sh/uv/) (recommended) or pip:
 
-To use local MLX models on macOS Apple Silicon (no API keys needed; 16 GB memory or more recommended):
-```bash
-uv tool install 'keep-skill[local]'
-```
-
-For all others:
 ```bash
 uv tool install keep-skill
 ```
@@ -19,7 +13,7 @@ For LangChain/LangGraph integration:
 pip install keep-skill[langchain]    # or: pip install langchain-keep
 ```
 
-That's it! API providers for Voyage, OpenAI, Anthropic, and Gemini are included.
+API providers for Voyage, OpenAI, Anthropic, and Gemini are included.
 
 
 ## Provider Configuration
@@ -69,19 +63,34 @@ export ANTHROPIC_API_KEY=...   # Summarization (cost-effective: claude-3-haiku)
 keep put "test"
 ```
 
-### Ollama (Local LLM Server)
+### Ollama (Recommended Local Option)
 
-If [Ollama](https://ollama.com/) is running locally with models pulled, keep auto-detects it — no configuration needed:
+[Ollama](https://ollama.com/) is the easiest way to run keep locally with no API keys.
+Install Ollama, pull two models, and you're done:
+
 ```bash
-ollama pull llama3.2:3b             # Any model works
+# 1. Install Ollama from https://ollama.com/
+# 2. Pull models:
+ollama pull nomic-embed-text        # Embeddings (768d, 8K context)
+ollama pull gemma3:1b               # Summarization (fast, good quality)
+# 3. That's it:
 keep put "test"                     # Auto-detected on first run
 ```
 
-Keep picks the best available model: dedicated embedding models (e.g. `nomic-embed-text`) for embeddings, generative models (e.g. `llama3.2`) for summarization. Respects `OLLAMA_HOST` if set.
+Keep auto-detects Ollama — no configuration needed. It picks the best available
+model for each task: dedicated embedding models for embeddings, generative
+models for summarization. Respects `OLLAMA_HOST` if set.
 
-### Local Providers (Apple Silicon)
+Ollama runs models in a separate server process, so keep itself stays lightweight
+(~36 MB RSS) regardless of model size. This also means a crash in the model
+server won't take down your machine.
 
-For offline operation on macOS Apple Silicon without Ollama (16 GB memory or more recommended):
+### Local MLX Providers (Apple Silicon)
+
+For offline operation without Ollama on macOS Apple Silicon. Models run
+in-process using Metal acceleration — faster cold-start but higher memory
+usage (~1 GB+). Ollama is recommended instead for background processing.
+
 ```bash
 uv tool install 'keep-skill[local]'
 keep put "test"             # No API key needed
@@ -240,12 +249,12 @@ Auto-detected if `mlx-vlm` or `mlx-whisper` is installed, or if Ollama has a vis
 | **OpenAI** | Summarization | `gpt-4o-mini` (default), `gpt-4o` |
 | **Gemini** | Embeddings | `text-embedding-004` (default) |
 | **Gemini** | Summarization | `gemini-2.5-flash` (default), `gemini-2.5-pro` |
-| **Ollama** | Embeddings | Any model; prefer `nomic-embed-text`, `mxbai-embed-large` |
-| **Ollama** | Summarization | Any generative model (e.g. `llama3.2`, `mistral`, `phi3`) |
+| **Ollama** | Embeddings | `nomic-embed-text` (recommended), `mxbai-embed-large` |
+| **Ollama** | Summarization | `gemma3:1b` (fast), `llama3.2:3b`, `mistral`, `phi3` |
 | **Ollama** | Media | Vision models: `llava`, `moondream`, `bakllava` (images only) |
-| **Local** | Embeddings | `all-MiniLM-L6-v2` (sentence-transformers) |
-| **Local** | Summarization | MLX models (Apple Silicon only) |
-| **Local** | Media | `mlx-vlm` for images, `mlx-whisper` for audio (Apple Silicon only) |
+| **MLX** | Embeddings | `all-MiniLM-L6-v2` (sentence-transformers, Apple Silicon only) |
+| **MLX** | Summarization | MLX models, e.g. `Llama-3.2-3B-Instruct-4bit` (Apple Silicon only) |
+| **MLX** | Media | `mlx-vlm` for images, `mlx-whisper` for audio (Apple Silicon only) |
 
 ## Tool Integrations
 
@@ -297,13 +306,13 @@ This is the recommended approach because it transparently covers both SQLite and
 
 ## Troubleshooting
 
-**No embedding provider configured:** Set an API key (e.g., `VOYAGE_API_KEY`) or install `keep-skill[local]`.
+**No embedding provider configured:** Set an API key (e.g., `VOYAGE_API_KEY`), install Ollama with models, or install `keep-skill[local]`.
 
 **Model download hangs:** First use of local models downloads weights (~minutes). Cached in `~/.cache/`.
 
 **ChromaDB errors:** Delete `~/.keep/chroma/` to reset.
 
-**Slow local summarization:** Large content is summarized in the background automatically.
+**Slow local summarization:** Large content is summarized in the background automatically. Use `keep pending` to monitor progress.
 
 **Claude Code hooks need `jq`:** The prompt-submit hook uses `jq` to extract context. Install with your package manager (e.g., `brew install jq`). Hooks are fail-safe without it, but prompt context won't be captured.
 

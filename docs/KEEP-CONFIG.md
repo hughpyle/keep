@@ -49,17 +49,16 @@ version = 2
 max_summary_length = 1000
 
 [embedding]
-name = "mlx"                           # or "voyage", "openai", "ollama", "sentence_transformers"
-model = "all-MiniLM-L6-v2"
+name = "ollama"                        # or "voyage", "openai", "mlx", "sentence_transformers"
+model = "nomic-embed-text"
 
 [summarization]
-name = "mlx"                           # or "anthropic", "openai", "ollama"
-model = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+name = "ollama"                        # or "anthropic", "openai", "mlx"
+model = "gemma3:1b"
 
 [media]
-name = "mlx"                           # or "ollama" (auto-detected)
-vision_model = "mlx-community/Qwen2-VL-2B-Instruct-4bit"
-whisper_model = "mlx-community/whisper-large-v3-turbo"
+name = "ollama"                        # or "mlx" (auto-detected)
+# vision_model = "llava"              # Ollama vision model for image description
 
 [document]
 name = "composite"
