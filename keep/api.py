@@ -546,7 +546,14 @@ class Keeper:
         if getattr(self._store, "migrated_to_cosine", False):
             logger.info("Cosine migration detected — enqueuing reindex")
             try:
-                self.enqueue_reindex()
+                stats = self.enqueue_reindex()
+                import sys
+                print(
+                    f"Search index migrated to cosine similarity.\n"
+                    f"Search is unavailable until reindex completes.\n"
+                    f"Run: keep pending",
+                    file=sys.stderr,
+                )
             except Exception as e:
                 logger.warning("Failed to enqueue reindex after cosine migration: %s", e)
             needs_reconcile = False  # reindex will handle everything
