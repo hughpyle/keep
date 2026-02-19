@@ -2279,101 +2279,38 @@ class Keeper:
         since: Optional[str] = None,
         until: Optional[str] = None,
         include_hidden: bool = False,
-        **tags: str
+        **extra_tags: str
     ) -> list[Item]:
         """
-        Find items by tag(s).
+        Find items by tag(s). Convenience wrapper for :meth:`list`.
 
         Usage:
-            # Key only: find all docs with this tag key (any value)
-            query_tag("project")
-
-            # Key with value: find docs with specific tag value
-            query_tag("project", "myapp")
-
-            # Multiple tags via kwargs
-            query_tag(tradition="buddhist", source="mn22")
-
-        Args:
-            key: Tag key to search for
-            value: Tag value (optional, any value if not provided)
-            limit: Maximum results to return
-            since: Only include items updated since (ISO duration like P3D, or date)
-            until: Only include items updated before (ISO duration like P3D, or date)
-            **tags: Additional tag filters as keyword arguments
+            query_tag("project")                    # key only (any value)
+            query_tag("project", "myapp")            # key=value
+            query_tag(tradition="buddhist", source="mn22")  # kwargs
         """
-        # Casefold query keys/values to match casefolded storage
-        if key is not None:
-            key = key.casefold()
-        if value is not None:
-            value = value.casefold()
-        tags = {k.casefold(): v.casefold() for k, v in tags.items()}
-
-        # Validate tag keys
-        if key is not None:
-            validate_tag_key(key)
-        for k in tags:
-            validate_tag_key(k)
-
-        doc_coll = self._resolve_doc_collection()
-        chroma_coll = self._resolve_chroma_collection()
-
-        # Key-only query: find docs that have this tag key (any value)
-        # Uses DocumentStore which supports efficient SQL date filtering
-        if key is not None and value is None and not tags:
-            # Convert since/until to cutoff dates for SQL query
-            since_date = _parse_date_param(since) if since else None
-            until_date = _parse_date_param(until) if until else None
-            docs = self._document_store.query_by_tag_key(
-                doc_coll, key, limit=limit * 3 if not include_hidden else limit,
-                since_date=since_date, until_date=until_date,
-            )
-            items = [_record_to_item(d) for d in docs]
-            if not include_hidden:
-                items = [i for i in items if not _is_hidden(i)]
-            return items[:limit]
-
-        # Build tag filter from positional or keyword args
-        tag_filter = {}
+        # Build tags dict and tag_keys list from positional + kwargs
+        tags_dict: dict[str, str] = {}
+        tag_key_list: list[str] = []
 
         if key is not None and value is not None:
-            tag_filter[key] = value
+            tags_dict[key] = value
+        elif key is not None:
+            tag_key_list.append(key)
 
-        if tags:
-            tag_filter.update(tags)
+        if extra_tags:
+            tags_dict.update(extra_tags)
 
-        if not tag_filter:
+        if not tags_dict and not tag_key_list:
             raise ValueError("At least one tag must be specified")
 
-        # Build where clause for tag filters only
-        # (ChromaDB $gte doesn't support string dates, so date filtering is done post-query)
-        where_conditions = [{k: v} for k, v in tag_filter.items()]
-
-        # Use $and if multiple conditions, otherwise single condition
-        if len(where_conditions) == 1:
-            where = where_conditions[0]
-        else:
-            where = {"$and": where_conditions}
-
-        # Fetch extra when filtering
-        fetch_limit = limit * 3
-        results = self._store.query_metadata(chroma_coll, where, limit=fetch_limit)
-        # Enrich from SQLite for original-case tag values
-        items = []
-        for r in results:
-            doc = self._document_store.get(doc_coll, r.id)
-            if doc:
-                items.append(_record_to_item(doc))
-            else:
-                items.append(r.to_item())
-
-        # Apply filters
-        if since is not None or until is not None:
-            items = _filter_by_date(items, since=since, until=until)
-        if not include_hidden:
-            items = [i for i in items if not _is_hidden(i)]
-
-        return items[:limit]
+        return self.list_items(
+            tags=tags_dict or None,
+            tag_keys=tag_key_list or None,
+            since=since, until=until,
+            include_hidden=include_hidden,
+            limit=limit,
+        )
 
     def list_tags(
         self,
@@ -3330,6 +3267,137 @@ class Keeper:
         doc_coll = self._resolve_doc_collection()
         return self._document_store.count_versions(doc_coll)
 
+    def list_items(
+        self,
+        *,
+        prefix: Optional[str] = None,
+        tags: Optional[dict[str, str]] = None,
+        tag_keys: Optional[list[str]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        order_by: str = "updated",
+        include_hidden: bool = False,
+        include_history: bool = False,
+        limit: int = 10,
+    ) -> list[Item]:
+        """
+        List items with composable filters.
+
+        All filters are AND'd together. Prefix narrows by ID, tags narrow
+        by metadata, date narrows by time.
+
+        Args:
+            prefix: ID prefix filter (e.g. ".tag/act").
+            tags: Tag key=value filters (all must match).
+            tag_keys: Tag key-only filters (item must have key, any value).
+            since: Only items updated since (ISO duration like P3D, or date).
+            until: Only items updated before (ISO duration or date).
+            order_by: Sort order - "updated" (default) or "accessed".
+            include_hidden: Include system notes (dot-prefix IDs).
+            include_history: Include previous versions alongside current items.
+            limit: Maximum results to return.
+
+        Returns:
+            List of Items, most recent first.
+        """
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
+
+        # Casefold tag filters to match casefolded storage
+        if tags:
+            tags = {k.casefold(): v.casefold() for k, v in tags.items()}
+            for k in tags:
+                validate_tag_key(k)
+        if tag_keys:
+            tag_keys = [k.casefold() for k in tag_keys]
+            for k in tag_keys:
+                validate_tag_key(k)
+
+        # Fetch extra to allow room for post-filtering
+        fetch_limit = limit * 3
+
+        # ------------------------------------------------------------------
+        # Primary data source: pick the most selective query
+        # ------------------------------------------------------------------
+        if tags:
+            # Key=value tags: use ChromaDB metadata query
+            where_conditions = [{k: v} for k, v in tags.items()]
+            if len(where_conditions) == 1:
+                where = where_conditions[0]
+            else:
+                where = {"$and": where_conditions}
+            results = self._store.query_metadata(chroma_coll, where, limit=fetch_limit)
+            # Enrich from SQLite for original-case tag values
+            items = []
+            for r in results:
+                doc = self._document_store.get(doc_coll, r.id)
+                if doc:
+                    items.append(_record_to_item(doc))
+                else:
+                    items.append(r.to_item())
+
+        elif tag_keys:
+            # Key-only: use SQLite tag key query (first key as primary,
+            # additional keys as post-filter)
+            since_date = _parse_date_param(since) if since else None
+            until_date = _parse_date_param(until) if until else None
+            docs = self._document_store.query_by_tag_key(
+                doc_coll, tag_keys[0], limit=fetch_limit,
+                since_date=since_date, until_date=until_date,
+            )
+            items = [_record_to_item(d) for d in docs]
+            # Post-filter additional key-only tags
+            for extra_key in tag_keys[1:]:
+                items = [i for i in items if extra_key in i.tags]
+
+        elif prefix is not None:
+            # ID prefix query
+            pfx = prefix.rstrip("/") + "/"
+            records = self._document_store.query_by_id_prefix(doc_coll, pfx)
+            items = [_record_to_item(rec) for rec in records]
+            # Also include the parent doc itself
+            parent = self._document_store.get(doc_coll, prefix)
+            if parent and not any(i.id == prefix for i in items):
+                items.insert(0, _record_to_item(parent))
+
+        else:
+            # Default: recent items
+            if include_history:
+                records = self._document_store.list_recent_with_history(
+                    doc_coll, fetch_limit, order_by=order_by,
+                )
+            else:
+                records = self._document_store.list_recent(
+                    doc_coll, fetch_limit, order_by=order_by,
+                )
+            items = [_record_to_item(rec) for rec in records]
+
+        # ------------------------------------------------------------------
+        # Post-filters (apply remaining predicates)
+        # ------------------------------------------------------------------
+
+        # Prefix filter (if primary query wasn't prefix-based)
+        if prefix is not None and tags:
+            pfx = prefix.rstrip("/") + "/"
+            items = [i for i in items if i.id.startswith(pfx) or i.id == prefix]
+
+        # Tag-key filter (if primary query was something else)
+        if tag_keys and tags:
+            for k in tag_keys:
+                items = [i for i in items if k in i.tags]
+
+        # Date filter (skip if already applied in SQL via tag_keys path)
+        if (since is not None or until is not None) and not tag_keys:
+            items = _filter_by_date(items, since=since, until=until)
+
+        # Hidden filter (prefix queries always include hidden)
+        if not include_hidden and prefix is None:
+            items = [i for i in items if not _is_hidden(i)]
+
+        return items[:limit]
+
+    # -- Convenience wrappers (backwards compat) --
+
     def list_recent(
         self,
         limit: int = 10,
@@ -3340,37 +3408,12 @@ class Keeper:
         include_history: bool = False,
         include_hidden: bool = False,
     ) -> list[Item]:
-        """
-        List recent items ordered by timestamp.
-
-        Args:
-            limit: Maximum number to return (default 10)
-            since: Only include items updated since (ISO duration like P3D, or date)
-            until: Only include items updated before (ISO duration like P3D, or date)
-            order_by: Sort order - "updated" (default) or "accessed"
-            include_history: Include previous versions alongside current items
-            include_hidden: Include system notes (dot-prefix IDs)
-
-        Returns:
-            List of Items, most recent first
-        """
-        doc_coll = self._resolve_doc_collection()
-
-        # Fetch extra when filtering
-        fetch_limit = limit * 3
-        if include_history:
-            records = self._document_store.list_recent_with_history(doc_coll, fetch_limit, order_by=order_by)
-        else:
-            records = self._document_store.list_recent(doc_coll, fetch_limit, order_by=order_by)
-        items = [_record_to_item(rec) for rec in records]
-
-        # Apply filters
-        if since is not None or until is not None:
-            items = _filter_by_date(items, since=since, until=until)
-        if not include_hidden:
-            items = [i for i in items if not _is_hidden(i)]
-
-        return items[:limit]
+        """List recent items. Convenience wrapper for :meth:`list`."""
+        return self.list_items(
+            since=since, until=until, order_by=order_by,
+            include_history=include_history, include_hidden=include_hidden,
+            limit=limit,
+        )
 
     def embedding_cache_stats(self) -> dict:
         """

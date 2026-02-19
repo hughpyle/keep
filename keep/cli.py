@@ -867,6 +867,9 @@ def search(
 def list_recent(
     store: StoreOption = None,
     limit: LimitOption = 10,
+    prefix: Annotated[Optional[str], typer.Argument(
+        help="ID prefix filter (e.g. '.tag' or '.meta')"
+    )] = None,
     tag: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Filter by tag (key or key=value, repeatable)"
@@ -900,6 +903,8 @@ def list_recent(
     \b
     Examples:
         keep list                      # Recent notes (by update time)
+        keep list .tag                 # All .tag/* system docs
+        keep list .meta                # All .meta/* system docs
         keep list --sort accessed      # Recent notes (by access time)
         keep list --tag foo            # Notes with tag 'foo' (any value)
         keep list --tag foo=bar        # Notes with tag foo=bar
@@ -931,32 +936,32 @@ def list_recent(
                     typer.echo(v)
         return
 
-    # --tag mode: filter items by tag(s)
+    # Build unified filter kwargs
+    kwargs: dict = {
+        "limit": limit, "order_by": sort,
+        "since": since, "until": until,
+        "include_hidden": show_all, "include_history": history,
+    }
+
+    if prefix is not None:
+        kwargs["prefix"] = prefix
+        kwargs["include_hidden"] = True  # prefix queries always include hidden
+
     if tag:
-        # Parse each tag as key or key=value
-        # Multiple tags require all to match (AND)
-        results = None
+        tag_dict: dict[str, str] = {}
+        tag_key_list: list[str] = []
         for t in tag:
             if "=" in t:
-                key, value = t.split("=", 1)
-                matches = kp.query_tag(key, value, limit=limit, since=since, until=until, include_hidden=show_all)
+                k, v = t.split("=", 1)
+                tag_dict[k] = v
             else:
-                # Key only - find items with this tag key (any value)
-                matches = kp.query_tag(t, limit=limit, since=since, until=until, include_hidden=show_all)
+                tag_key_list.append(t)
+        if tag_dict:
+            kwargs["tags"] = tag_dict
+        if tag_key_list:
+            kwargs["tag_keys"] = tag_key_list
 
-            if results is None:
-                results = {item.id: item for item in matches}
-            else:
-                # Intersect with previous results
-                match_ids = {item.id for item in matches}
-                results = {id: item for id, item in results.items() if id in match_ids}
-
-        items = list(results.values()) if results else []
-        typer.echo(_format_items(items[:limit], as_json=_get_json_output()))
-        return
-
-    # Default: recent items
-    results = kp.list_recent(limit=limit, since=since, until=until, order_by=sort, include_history=history, include_hidden=show_all)
+    results = kp.list_items(**kwargs)
 
     # Expand with parts if requested
     if parts:

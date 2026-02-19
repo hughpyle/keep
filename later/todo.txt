@@ -1,15 +1,9 @@
 
-* `keep data export` and `keep data import`
-
-* test the window analysis prompt on a big model
-
-* ship the sliding window analysis
-
 * CLAP / LAION-AI for audio similarity (512d vec)
 
 * ids for the OpenAPI and MCP don't really match the CLI (better match with keeper)
 
-* get in the habit of: write a file with your findings; then store it.
+* strengthen the practice: write a file with your findings; then store it.
 
 * Content-based dedup, for summarization?
 
@@ -23,11 +17,6 @@
 
 * Maybe the metadoc should say how many results to produce by default?
     (e.g. closures: 10, learnings: 3)
-
-* VS Code hooks 
-    https://docs.github.com/en/copilot/reference/hooks-configuration
-    Session Start - output is ignored!
-    User Prompt Submitted
 
 * Codex hooks
     https://developers.openai.com/codex/config-advanced/#notifications
@@ -69,10 +58,6 @@
     (etc)...
     - want URLs for each of these so that we can represent them in our database with summaries and tags
 
-* Some tools (e.g. VS Code) don't really have a global config.
-  But if keep is running within a git project, in one of these tools,
-  and there's no keep "hook" within the project itself, should we prompt to install it?
-
 * USECASES.md "what is this great at"
     lesson zero: the context window doesn't really matter if you have exponentially-good navigation
         (tiny chunks loosely joined)
@@ -104,6 +89,8 @@
     - Revisit in 3-6 months. Abstract vector store interface so we can swap.
     - https://github.com/alibaba/zvec
 
+* Benchmark results
+
 * Measure some outcomes.  Describe behavior in openclaw, in claude code, etc.  Show where it works.
 
 * tag-by-model ("auto-tag")?
@@ -123,11 +110,6 @@
 
 * Other auto-taggers:
     - geolocation-tagger to extract location stuff from latlong
-
-* check for compatibility with windows
-    not sure we need to support powershell, only WSL? but paths etc. will vary
-    and I don't know if windows has local models available through system services yet (would be nice)
-    - this is all investigation work, not implementation  (I don't have a test environment)
 
 * add support for the kimi/moonshot models, etc - what are we missing? compare claude code, openclaw
  
@@ -274,3 +256,7 @@ x `context` text alongside summaries? (no, summary is good now)
 . security: error log 0o600 permissions via os.open(), binary stdin handling in put/now, tag validation on all put() paths
 . REST API: unified POST /search endpoint, ValueError→400 handler, include_hidden passthrough fixes
 . protocol consistency: KeeperProtocol fully aligned with Keeper and RemoteKeeper (resolve_inline_meta, include_hidden, move default)
+. VSCode hooks
+. `keep data export` and `keep data import`
+. sliding-window analysis
+x check for CLI compatibility with windows (WLS should work but no plan to validate at this stage)

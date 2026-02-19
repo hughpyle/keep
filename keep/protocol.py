@@ -126,6 +126,20 @@ class KeeperProtocol(Protocol):
         limit: int = 3,
     ) -> list[Item]: ...
 
+    def list_items(
+        self,
+        *,
+        prefix: Optional[str] = None,
+        tags: Optional[dict[str, str]] = None,
+        tag_keys: Optional[list[str]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        order_by: str = "updated",
+        include_hidden: bool = False,
+        include_history: bool = False,
+        limit: int = 10,
+    ) -> list[Item]: ...
+
     def list_recent(
         self,
         limit: int = 10,

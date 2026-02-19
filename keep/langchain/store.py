@@ -310,14 +310,7 @@ class KeepStore(BaseStore):
         if op.query:
             items = self._keeper.find(op.query, tags=tags, limit=op.limit)
         else:
-            # No query — tag-based retrieval
-            if tags:
-                # Filter out keys that collide with query_tag() named params
-                _reserved = {"key", "value", "limit", "since", "include_hidden"}
-                safe_tags = {k: v for k, v in tags.items() if k not in _reserved}
-                items = self._keeper.query_tag(limit=op.limit, **safe_tags)
-            else:
-                items = self._keeper.list_recent(limit=op.limit)
+            items = self._keeper.list_items(tags=tags, limit=op.limit)
 
         # Convert to SearchItems
         results: list[SearchItem] = []
@@ -405,8 +398,8 @@ class KeepStore(BaseStore):
         # Note: this is a full scan, capped at 10K items. Acceptable for
         # stores with <10K KeepStore items. For scale, a _namespaces index
         # table maintained on write would replace this scan.
-        items = self._keeper.query_tag(
-            _SOURCE_TAG, _SOURCE_VALUE, limit=10000,
+        items = self._keeper.list_items(
+            tags={_SOURCE_TAG: _SOURCE_VALUE}, limit=10000,
         )
 
         # Extract unique namespaces from tag values

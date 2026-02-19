@@ -97,14 +97,26 @@ kp.find("auth", fulltext=True) → list[Item]
 # Find similar to an existing note
 kp.find(similar_to="note-id", limit=10) → list[Item]
 
-# Tag-based query
-kp.query_tag(key, value=None, since=None) → list[Item]
-
 # Time filtering (all search methods support since)
 kp.find("auth", since="P7D")      # Last 7 days
 kp.find("auth", since="P1W")      # Last week
 kp.find("auth", since="PT1H")     # Last hour
 kp.find("auth", since="2026-01-15")  # Since date
+```
+
+#### Listing and Filtering
+
+```python
+# Unified listing with composable filters (all optional, AND'd together)
+kp.list_items(limit=10) → list[Item]
+kp.list_items(tags={"project": "myapp"}, since="P7D")
+kp.list_items(tag_keys=["act"], since="P3D")      # Key-only: any value
+kp.list_items(prefix=".tag/act")                   # ID prefix
+kp.list_items(order_by="accessed", limit=20)       # Sort by access time
+
+# Convenience wrappers
+kp.list_recent(limit=10, order_by="updated") → list[Item]
+kp.query_tag(key, value=None, since=None) → list[Item]
 ```
 
 #### Item Access
@@ -115,11 +127,6 @@ kp.get(id) → Item | None
 
 # Check existence
 kp.exists(id) → bool
-
-# List recent items
-kp.list_recent(limit=10, order_by="updated") → list[Item]
-# order_by options: "updated" (default), "accessed"
-# Additional kwargs: since, until, include_history, include_hidden
 ```
 
 #### Tags
