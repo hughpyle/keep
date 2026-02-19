@@ -1395,7 +1395,8 @@ def now(
 
         item = kp.set_now(new_content, scope=scope, tags=parsed_tags or None)
 
-        # Surface similar items and meta sections (occasion for reflection)
+        # Surface version nav, similar items and meta sections (occasion for reflection)
+        version_nav = kp.get_version_nav(doc_id, None)
         similar_items = kp.get_similar_for_display(item.id, limit=limit)
         similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
         meta_sections = kp.resolve_meta(item.id, limit_per_doc=limit)
@@ -1403,6 +1404,7 @@ def now(
         typer.echo(_format_item(
             item,
             as_json=_get_json_output(),
+            version_nav=version_nav,
             similar_items=similar_items if similar_items else None,
             similar_offsets=similar_offsets if similar_items else None,
             meta_sections=meta_sections if meta_sections else None,
