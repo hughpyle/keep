@@ -1,19 +1,428 @@
 """
-Default analyzer — single-pass LLM decomposition.
+Analyzer implementations for document decomposition.
 
-Moves the decomposition logic that was previously inline in api.py
-into a pluggable AnalyzerProvider implementation.
+Two implementations:
+- SlidingWindowAnalyzer (default): Token-budgeted sliding windows with
+  XML-style target marking. Works well with small local models.
+- SinglePassAnalyzer: Single-pass LLM decomposition with JSON output.
+  Better for large-context models.
 """
 
+import hashlib
 import json
 import logging
 import re
 from collections.abc import Iterable
 
-from .providers.base import AnalysisChunk, AnalyzerProvider, get_registry
+from .providers.base import AnalysisChunk, AnalyzerProvider, get_registry, strip_summary_preamble
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Token estimation
+# ---------------------------------------------------------------------------
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate — chars / 4 for English text."""
+    return len(text) // 4
+
+
+# ---------------------------------------------------------------------------
+# Sliding-window output parser
+# ---------------------------------------------------------------------------
+
+# Preamble patterns that small models emit despite instructions
+_PREAMBLE_RE = re.compile(
+    r"^here are the (?:significant )?(?:developments|observations|summaries)[^:]*:\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_parts(text: str) -> list[dict]:
+    """
+    Parse one-summary-per-line output from LLM.
+
+    Handles common LLM quirks: preamble lines, leaked XML tags,
+    EMPTY sentinel, and very short lines.
+    """
+    if not text:
+        return []
+
+    results = []
+    for line in text.strip().splitlines():
+        line = strip_summary_preamble(line.strip())
+        # Strip leaked XML tags
+        line = re.sub(r"</?(?:analyze|content)>", "", line).strip()
+        if not line or line == "EMPTY" or len(line) < 20:
+            continue
+        if _PREAMBLE_RE.match(line):
+            continue
+        results.append({"summary": line})
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Prompt registry — available for development/evals, not exposed in config
+# ---------------------------------------------------------------------------
+
+PROMPTS = {
+    "structural": """You are a document analysis assistant. You will receive a conversation thread wrapped in <content> tags. A portion is marked with <analyze> tags — decompose ONLY that portion into meaningful parts.
+
+Write one summary per line. Each summary should be 1-2 sentences capturing a coherent unit of meaning (a topic, decision, or exchange).
+
+Rules:
+- Only summarize content inside <analyze> tags
+- One summary per line, no numbering, no bullet points
+- If nothing is noteworthy, write: EMPTY""",
+
+    "temporal": """You are analyzing the evolution of a conversation over time. You will receive dated entries wrapped in <content> tags. A portion is marked with <analyze> tags — analyze ONLY that portion.
+
+For each significant development, write one line capturing WHAT CHANGED and WHY IT MATTERS. Focus on:
+- Decisions made or reversed ("Chose X over Y because...")
+- Commitments given or fulfilled ("Committed to X" / "Delivered X")
+- Breakdowns — where assumptions were revealed ("Expected X but found Y")
+- Themes that persist across entries ("Authentication remains the focus")
+- Turning points where direction shifted
+
+Write one observation per line. Each should name the change and its significance.
+
+Rules:
+- Only analyze content inside <analyze> tags
+- Use surrounding content for context but don't summarize it
+- One observation per line, no numbering, no bullet points
+- Prefer "X changed to Y" over "X was discussed"
+- If nothing is noteworthy, write: EMPTY""",
+
+    "temporal-v2": """Analyze the evolution of a conversation. Entries are dated and wrapped in <content> tags. Only analyze content inside <analyze> tags.
+
+Write ONE LINE per significant development. DO NOT repeat or echo the original text. Synthesize.
+
+Good: "Decision reversed: mtime dropped in favor of birthtime for created_at"
+Bad: "User prompt: Actually no. We updated the interface..."
+
+Focus on: decisions, reversals, commitments fulfilled, breakdowns, persistent themes, turning points.
+
+Rules:
+- One observation per line, no numbering, no bullets
+- Never copy input text — always synthesize in your own words
+- Skip routine exchanges (greetings, task notifications)
+- If nothing noteworthy: EMPTY""",
+
+    "temporal-v3": """Analyze the evolution of a conversation. Entries are dated and wrapped in <content> tags. Only analyze content inside <analyze> tags.
+
+Write ONE LINE per significant development. Synthesize — do not echo or quote the original text.
+
+Good: "Decision reversed: mtime dropped in favor of birthtime for created_at"
+Good: "Commitment fulfilled: reindex merged into pending queue as planned"
+Bad: "User prompt: Actually no. We updated the interface..."
+Bad: "Here are the summaries:"
+
+Focus on: decisions made, decisions reversed, commitments given or fulfilled, breakdowns (expected X but found Y), persistent themes, turning points.
+
+Rules:
+- One observation per line, no numbering, no bullets, no preamble
+- Never copy input text — always synthesize in your own words
+- Never include XML tags (<analyze>, </analyze>, <content>, etc.) in your output
+- Skip routine exchanges (greetings, acknowledgments, "ok great")
+- Be specific: name the actual thing, not abstract categories
+- If nothing noteworthy: EMPTY""",
+
+    "temporal-v4": """Analyze the evolution of a conversation. Entries are dated and wrapped in <content> tags. Only analyze content inside <analyze> tags.
+
+Write ONE LINE per significant development. Each line should describe what specifically changed or was decided, in plain language.
+
+Rules:
+- One observation per line, no numbering, no bullets, no preamble
+- Synthesize in your own words — never copy or quote the original text
+- Be specific: name the actual thing that changed, not abstract categories
+- Do not start lines with category labels like "Decision:", "Theme:", "Turning point:"
+- Do not include XML tags in your output
+- Skip greetings, acknowledgments, and routine exchanges
+- If nothing noteworthy: EMPTY""",
+
+    "commitments": """You are analyzing a conversation for speech acts and commitments. You will receive dated entries wrapped in <content> tags. A portion is marked with <analyze> tags — analyze ONLY that portion.
+
+Identify each speech act — requests, promises, assertions, declarations — and track their lifecycle:
+- OPEN: commitment made but not yet fulfilled
+- FULFILLED: promise kept, request satisfied
+- WITHDRAWN: commitment explicitly abandoned
+- BROKEN: promise not kept (breakdown)
+
+Write one line per speech act found. Format: "[status] Actor committed/requested/declared: description"
+
+Rules:
+- Only analyze content inside <analyze> tags
+- One speech act per line, no numbering
+- Skip procedural exchanges (greetings, acknowledgments)
+- If no speech acts found, write: EMPTY""",
+}
+
+DEFAULT_PROMPT = "temporal-v4"
+
+
+# ---------------------------------------------------------------------------
+# Model → effective context budget mapping
+# ---------------------------------------------------------------------------
+
+# Effective analysis budget per model.  This is NOT the raw context window —
+# it's how much content the model can usefully analyze in a single window
+# while still producing quality output (synthesis, not paraphrase).
+# Small models degrade fast; cloud models can handle much more.
+MODEL_BUDGETS: dict[str, int] = {
+    # Ollama / local (free)
+    "llama3.2:1b":       1500,
+    "llama3.2:3b":       3000,
+    "llama3.2":          3000,
+    "llama3.1:8b":       6000,
+    "llama3.1":          6000,
+    "qwen2.5:3b":        3000,
+    "qwen2.5:7b":        6000,
+    "qwen2.5:14b":       8000,
+    "mistral:7b":        6000,
+    "gemma2:9b":         6000,
+    # OpenAI
+    "gpt-5-nano":        4000,
+    "gpt-4o-mini":       6000,
+    "gpt-5-mini":       12000,
+    "gpt-4.1-mini":     12000,
+    "gpt-4.1":          16000,
+    "gpt-4o":           16000,
+    "gpt-5":            16000,
+    # Anthropic
+    "claude-3-haiku-20240307":    8000,
+    "claude-3-5-haiku-20241022": 12000,
+    "claude-haiku-4-5-20251001": 12000,
+    "claude-sonnet-4-6":         16000,
+    "claude-opus-4-6":           16000,
+    # Google Gemini
+    "gemini-2.0-flash":          8000,
+    "gemini-2.5-flash-lite":     8000,
+    "gemini-2.5-flash":         12000,
+    "gemini-2.5-pro":           16000,
+}
+
+# Fallback budgets by provider name (when model isn't in the table)
+_PROVIDER_BUDGET_FALLBACK: dict[str, int] = {
+    "ollama": 3000,
+    "mlx": 3000,
+    "anthropic": 12000,
+    "openai": 12000,
+    "gemini": 10000,
+    "truncate": 6000,
+}
+
+# Default when nothing matches
+_DEFAULT_BUDGET = 6000
+
+
+def get_budget_for_model(model: str, provider: str = "") -> int:
+    """Look up effective analysis budget for a model, with fallback."""
+    if model in MODEL_BUDGETS:
+        return MODEL_BUDGETS[model]
+    # Prefix match (e.g. "llama3.2:3b-q4_0" → "llama3.2:3b")
+    for known, budget in MODEL_BUDGETS.items():
+        if model.startswith(known):
+            return budget
+    budget = _PROVIDER_BUDGET_FALLBACK.get(provider, _DEFAULT_BUDGET)
+    if model:
+        logger.info(
+            "Unknown model %r for analyzer budget; using %d (provider=%s). "
+            "Override with [analyzer] context_budget in keep.toml.",
+            model, budget, provider or "unknown",
+        )
+    return budget
+
+
+# ---------------------------------------------------------------------------
+# SlidingWindowAnalyzer — default
+# ---------------------------------------------------------------------------
+
+class SlidingWindowAnalyzer:
+    """
+    Token-budgeted sliding-window decomposition.
+
+    Processes chunks in windows sized to the model's context budget.
+    Each window uses XML-style tags to mark which chunks are analysis
+    targets vs. context-only. Deduplicates by content hash across windows.
+
+    Works well with small local models (Ollama, MLX) that have limited
+    context windows.
+    """
+
+    def __init__(
+        self,
+        provider=None,
+        context_budget: int = 12000,
+        target_ratio: float = 0.6,
+        prompt: str = DEFAULT_PROMPT,
+    ):
+        """
+        Args:
+            provider: A SummarizationProvider with generate() support.
+            context_budget: Total token budget per window.
+            target_ratio: Fraction of budget allocated to target chunks (vs context).
+            prompt: Prompt key from PROMPTS registry (default: temporal-v2).
+        """
+        self._provider = provider
+        self._context_budget = context_budget
+        self._target_ratio = target_ratio
+        if prompt not in PROMPTS:
+            raise ValueError(f"Unknown prompt: {prompt!r}. Choose from: {list(PROMPTS.keys())}")
+        self._system_prompt = PROMPTS[prompt]
+        self._prompt_name = prompt
+
+    def analyze(
+        self,
+        chunks: Iterable[AnalysisChunk],
+        guide_context: str = "",
+    ) -> list[dict]:
+        """Decompose content chunks into parts using sliding windows."""
+        chunk_list = list(chunks)
+        if not chunk_list:
+            return []
+
+        total_tokens = sum(_estimate_tokens(c.content) for c in chunk_list)
+
+        # Fits in one window — single-pass
+        if total_tokens <= self._context_budget:
+            return self._single_pass(chunk_list, guide_context)
+
+        target_budget = int(self._context_budget * self._target_ratio)
+        context_budget_per_side = (self._context_budget - target_budget) // 2
+        all_parts = []
+        seen_hashes: set[str] = set()
+        pos = 0
+
+        while pos < len(chunk_list):
+            # Collect target chunks up to target_budget
+            target_end = pos
+            target_tokens = 0
+            while target_end < len(chunk_list):
+                chunk_tokens = _estimate_tokens(chunk_list[target_end].content)
+                if target_tokens + chunk_tokens > target_budget and target_end > pos:
+                    break  # budget exceeded (but always include at least one)
+                target_tokens += chunk_tokens
+                target_end += 1
+
+            # Add context before (scan backwards from pos)
+            ctx_before = pos
+            ctx_before_tokens = 0
+            while ctx_before > 0:
+                chunk_tokens = _estimate_tokens(chunk_list[ctx_before - 1].content)
+                if ctx_before_tokens + chunk_tokens > context_budget_per_side:
+                    break
+                ctx_before -= 1
+                ctx_before_tokens += chunk_tokens
+
+            # Add context after (scan forwards from target_end)
+            ctx_after = target_end
+            ctx_after_tokens = 0
+            while ctx_after < len(chunk_list):
+                chunk_tokens = _estimate_tokens(chunk_list[ctx_after].content)
+                if ctx_after_tokens + chunk_tokens > context_budget_per_side:
+                    break
+                ctx_after += 1
+                ctx_after_tokens += chunk_tokens
+
+            # Build window and call LLM
+            window = chunk_list[ctx_before:ctx_after]
+            target_start_in_window = pos - ctx_before
+            target_end_in_window = target_end - ctx_before
+
+            raw = self._analyze_window(
+                window, target_start_in_window, target_end_in_window, guide_context,
+            )
+
+            # Dedup across windows by summary hash
+            for part in raw:
+                h = hashlib.md5(part["summary"].encode()).hexdigest()
+                if h not in seen_hashes:
+                    seen_hashes.add(h)
+                    all_parts.append(part)
+
+            pos = target_end
+
+        return all_parts
+
+    def _single_pass(self, chunks: list[AnalysisChunk], guide_context: str) -> list[dict]:
+        """Content fits in one window — send all as targets."""
+        provider = self._provider
+        if provider is None:
+            return []
+
+        if hasattr(provider, '_provider') and provider._provider is not None:
+            provider = provider._provider
+
+        content = "\n\n---\n\n".join(c.content for c in chunks)
+        truncated = content[:80000] if len(content) > 80000 else content
+
+        user_prompt = f"<content>\n<analyze>\n{truncated}\n</analyze>\n</content>"
+        if guide_context:
+            user_prompt = f"{guide_context}\n\n---\n\n{user_prompt}"
+
+        try:
+            result = provider.generate(self._system_prompt, user_prompt, max_tokens=4096)
+            if result:
+                return _parse_parts(result)
+            logger.warning("Provider returned no result for analysis")
+        except Exception as e:
+            logger.warning("Analysis failed: %s", e)
+        return []
+
+    def _analyze_window(
+        self,
+        window: list[AnalysisChunk],
+        target_start: int,
+        target_end: int,
+        guide_context: str,
+    ) -> list[dict]:
+        """Analyze a single window with XML-tagged target marking."""
+        provider = self._provider
+        if provider is None:
+            return []
+
+        if hasattr(provider, '_provider') and provider._provider is not None:
+            provider = provider._provider
+
+        prompt = self._build_window_prompt(window, target_start, target_end)
+
+        if guide_context:
+            prompt = f"{guide_context}\n\n---\n\n{prompt}"
+
+        try:
+            result = provider.generate(self._system_prompt, prompt, max_tokens=4096)
+            if result:
+                return _parse_parts(result)
+            logger.warning("Sliding window: provider returned no result")
+            return []
+        except Exception as e:
+            logger.warning("Sliding window LLM call failed: %s", e)
+            return []
+
+    @staticmethod
+    def _build_window_prompt(
+        window: list[AnalysisChunk],
+        target_start: int,
+        target_end: int,
+    ) -> str:
+        """Build XML-tagged prompt with <content> and <analyze> markers."""
+        parts = ["<content>"]
+
+        for i, chunk in enumerate(window):
+            if i == target_start:
+                parts.append("<analyze>")
+            parts.append(chunk.content)
+            if i == target_end - 1:
+                parts.append("</analyze>")
+
+        parts.append("</content>")
+        return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# SinglePassAnalyzer — legacy, available as "single-pass" in registry
+# ---------------------------------------------------------------------------
 
 DECOMPOSITION_SYSTEM_PROMPT = """You are a document analysis assistant. Your task is to decompose a document into its meaningful structural sections.
 
@@ -43,24 +452,13 @@ def _parse_decomposition_json(text: str) -> list[dict]:
     """
     Parse JSON from LLM decomposition output.
 
-    Handles:
-    - Code fences (```json ... ```)
-    - Wrapper objects ({"sections": [...]})
-    - Direct JSON arrays
-
-    Args:
-        text: Raw LLM output
-
-    Returns:
-        List of section dicts
+    Handles code fences, wrapper objects, and direct JSON arrays.
     """
     if not text:
         return []
 
-    # Strip markdown code fences
     text = text.strip()
     if text.startswith("```"):
-        # Remove first line (```json or ```) and last line (```)
         lines = text.split("\n")
         if lines[0].startswith("```"):
             lines = lines[1:]
@@ -74,7 +472,6 @@ def _parse_decomposition_json(text: str) -> list[dict]:
         logger.warning("Failed to parse decomposition JSON")
         return []
 
-    # Handle wrapper objects like {"sections": [...]}
     if isinstance(data, dict):
         for key in ("sections", "parts", "chunks", "result", "data"):
             if key in data and isinstance(data[key], list):
@@ -86,12 +483,10 @@ def _parse_decomposition_json(text: str) -> list[dict]:
     if not isinstance(data, list):
         return []
 
-    # Validate and normalize entries
     result = []
     for entry in data:
         if not isinstance(entry, dict):
             continue
-        # Must have at least summary or content
         if not entry.get("summary") and not entry.get("content"):
             continue
         section = {
@@ -105,63 +500,16 @@ def _parse_decomposition_json(text: str) -> list[dict]:
     return result
 
 
-def _simple_chunk_decomposition(content: str) -> list[dict]:
+class SinglePassAnalyzer:
     """
-    Paragraph-based fallback when no LLM is available.
-
-    Splits content on double-newlines, groups small paragraphs together.
-    Each chunk gets a truncated summary.
-    """
-    paragraphs = re.split(r'\n\s*\n', content.strip())
-    if not paragraphs:
-        return []
-
-    # Group small paragraphs together (min ~200 chars per chunk)
-    chunks = []
-    current = []
-    current_len = 0
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-        current.append(para)
-        current_len += len(para)
-        if current_len >= 500:
-            chunks.append("\n\n".join(current))
-            current = []
-            current_len = 0
-    if current:
-        chunks.append("\n\n".join(current))
-
-    # If we ended up with just 1 chunk that is the whole content, not useful
-    if len(chunks) <= 1:
-        return []
-
-    result = []
-    for chunk in chunks:
-        summary = chunk[:200].rsplit(" ", 1)[0] + "..." if len(chunk) > 200 else chunk
-        result.append({
-            "summary": summary,
-            "content": chunk,
-        })
-    return result
-
-
-class DefaultAnalyzer:
-    """
-    Single-pass LLM decomposition (current behavior).
+    Single-pass LLM decomposition with JSON output.
 
     Concatenates all chunks, sends to the configured summarization provider's
     generate() method, and parses the resulting JSON into part dicts.
-    Falls back to simple paragraph-based chunking if LLM is unavailable.
+    Better for large-context models that can handle the full document at once.
     """
 
     def __init__(self, provider=None):
-        """
-        Args:
-            provider: A SummarizationProvider with generate() support.
-                      Passed at construction, not per-call.
-        """
         self._provider = provider
 
     def analyze(
@@ -170,14 +518,9 @@ class DefaultAnalyzer:
         guide_context: str = "",
     ) -> list[dict]:
         """Decompose content chunks into parts."""
-        # Materialise chunks and concatenate content
         chunk_list = list(chunks)
         content = "\n\n---\n\n".join(c.content for c in chunk_list)
-
-        raw = self._call_llm(content, guide_context)
-        if not raw:
-            raw = _simple_chunk_decomposition(content)
-        return raw
+        return self._call_llm(content, guide_context)
 
     def _call_llm(self, content: str, guide_context: str = "") -> list[dict]:
         """Call the LLM to decompose content into sections."""
@@ -185,14 +528,11 @@ class DefaultAnalyzer:
         if provider is None:
             return []
 
-        # Unwrap lock wrapper to access underlying provider
         if hasattr(provider, '_provider') and provider._provider is not None:
             provider = provider._provider
 
-        # Truncate content for decomposition
         truncated = content[:80000] if len(content) > 80000 else content
 
-        # Build user prompt
         user_prompt = truncated
         if guide_context:
             user_prompt = (
@@ -211,18 +551,20 @@ class DefaultAnalyzer:
             )
             if result:
                 return _parse_decomposition_json(result)
-
             logger.warning(
-                "Provider %s returned no result for decomposition, "
-                "falling back to simple chunking",
+                "Provider %s returned no result for decomposition",
                 type(provider).__name__,
             )
             return []
-
         except Exception as e:
             logger.warning("LLM decomposition failed: %s", e)
             return []
 
 
-# Register with the provider registry on import
-get_registry().register_analyzer("default", DefaultAnalyzer)
+# ---------------------------------------------------------------------------
+# Register with the provider registry
+# ---------------------------------------------------------------------------
+
+get_registry().register_analyzer("default", SlidingWindowAnalyzer)
+get_registry().register_analyzer("sliding-window", SlidingWindowAnalyzer)
+get_registry().register_analyzer("single-pass", SinglePassAnalyzer)

@@ -1031,9 +1031,17 @@ class Keeper:
                     self._config.analyzer.params,
                 )
             else:
-                # Default: wrap the summarization provider (current behavior)
-                from .analyzers import DefaultAnalyzer
-                self._analyzer = DefaultAnalyzer(self._get_summarization_provider())
+                # Default: sliding-window analyzer with the summarization provider,
+                # budget auto-selected based on the model's effective context quality.
+                from .analyzers import SlidingWindowAnalyzer, get_budget_for_model
+                provider = self._get_summarization_provider()
+                model = getattr(provider, "model", "")
+                provider_name = self._config.summarization.name if self._config.summarization else ""
+                budget = get_budget_for_model(model, provider_name)
+                self._analyzer = SlidingWindowAnalyzer(
+                    provider=provider,
+                    context_budget=budget,
+                )
         return self._analyzer
 
     def _gather_context(
@@ -3081,7 +3089,7 @@ class Keeper:
         Args:
             id: Document or string to analyze
             analyzer: Override AnalyzerProvider for decomposition
-                (default: use configured analyzer or DefaultAnalyzer)
+                (default: use configured analyzer or SlidingWindowAnalyzer)
             tags: Guidance tag keys (e.g., ["topic", "type"]) —
                 fetches .tag/xxx descriptions as decomposition context
             force: Skip the _analyzed_hash check and re-analyze regardless
