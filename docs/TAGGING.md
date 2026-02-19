@@ -179,8 +179,8 @@ See [SYSTEM-TAGS.md](SYSTEM-TAGS.md) for complete reference.
 ```python
 kp.tag("doc:1", {"status": "reviewed"})      # Add/update tag
 kp.tag("doc:1", {"obsolete": ""})            # Delete tag (empty string)
-kp.query_tag("project", "myapp")             # Exact key=value match
-kp.query_tag("project")                      # Any doc with 'project' tag
+kp.list_items(tags={"project": "myapp"})      # Exact key=value match
+kp.list_items(tag_keys=["project"])           # Any doc with 'project' tag
 kp.list_tags()                               # All distinct tag keys
 kp.list_tags("project")                      # All values for 'project'
 ```

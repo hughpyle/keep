@@ -99,7 +99,7 @@ These tags are actively set and maintained by the system.
 - `"inline"` - Inline content (CLI: `keep put "text"`, API: `kp.put("text")`)
 - `"langchain"` - Created by KeepStore (LangChain/LangGraph integration)
 
-**Usage:** Query with `kp.query_tag("_source", "inline")` to find remembered content.
+**Usage:** Query with `kp.list_items(tags={"_source": "inline"})` to find remembered content.
 
 ---
 
@@ -132,14 +132,14 @@ When indexing documents, tags are merged in this order (later wins on collision)
 
 ```python
 # Find items by source
-inline_items = kp.query_tag("_source", "inline")
-uri_items = kp.query_tag("_source", "uri")
+inline_items = kp.list_items(tags={"_source": "inline"})
+uri_items = kp.list_items(tags={"_source": "uri"})
 
 # Find items by date
-today = kp.query_tag("_updated_date", "2026-02-02")
+today = kp.list_items(tags={"_updated_date": "2026-02-02"})
 
 # Find system documents
-system_docs = kp.query_tag("_system", "true")
+system_docs = kp.list_items(tags={"_system": "true"})
 ```
 
 ## Versioning and System Tags

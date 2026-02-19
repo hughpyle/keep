@@ -289,33 +289,6 @@ class RemoteKeeper:
         resp = self._get(f"/v1/notes/{self._q(id)}/similar", limit=limit)
         return self._to_items(resp)
 
-    def query_tag(
-        self,
-        key: Optional[str] = None,
-        value: Optional[str] = None,
-        *,
-        limit: int = 100,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
-        include_hidden: bool = False,
-        **extra_tags: str,
-    ) -> list[Item]:
-        """Convenience wrapper for :meth:`list_items`."""
-        tags_dict: dict[str, str] = {}
-        tag_key_list: list[str] = []
-        if key is not None and value is not None:
-            tags_dict[key] = value
-        elif key is not None:
-            tag_key_list.append(key)
-        if extra_tags:
-            tags_dict.update(extra_tags)
-        return self.list_items(
-            tags=tags_dict or None,
-            tag_keys=tag_key_list or None,
-            since=since, until=until,
-            include_hidden=include_hidden, limit=limit,
-        )
-
     def list_tags(
         self,
         key: Optional[str] = None,
@@ -390,23 +363,6 @@ class RemoteKeeper:
 
         resp = self._get("/v1/notes", **params)
         return self._to_items(resp)
-
-    def list_recent(
-        self,
-        limit: int = 10,
-        *,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
-        order_by: str = "updated",
-        include_history: bool = False,
-        include_hidden: bool = False,
-    ) -> list[Item]:
-        """Convenience wrapper for :meth:`list_items`."""
-        return self.list_items(
-            since=since, until=until, order_by=order_by,
-            include_history=include_history, include_hidden=include_hidden,
-            limit=limit,
-        )
 
     # -- Direct access --
 

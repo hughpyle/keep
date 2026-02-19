@@ -92,18 +92,6 @@ class KeeperProtocol(Protocol):
         limit: int = 3,
     ) -> list[Item]: ...
 
-    def query_tag(
-        self,
-        key: Optional[str] = None,
-        value: Optional[str] = None,
-        *,
-        limit: int = 100,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
-        include_hidden: bool = False,
-        **tags: str,
-    ) -> list[Item]: ...
-
     def list_tags(
         self,
         key: Optional[str] = None,
@@ -138,17 +126,6 @@ class KeeperProtocol(Protocol):
         include_hidden: bool = False,
         include_history: bool = False,
         limit: int = 10,
-    ) -> list[Item]: ...
-
-    def list_recent(
-        self,
-        limit: int = 10,
-        *,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
-        order_by: str = "updated",
-        include_history: bool = False,
-        include_hidden: bool = False,
     ) -> list[Item]: ...
 
     # -- Direct access --

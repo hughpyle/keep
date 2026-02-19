@@ -720,7 +720,7 @@ class Keeper:
 
         # First pass: clean up old file:// URIs with category=system tag
         try:
-            old_system_docs = self.query_tag("category", "system")
+            old_system_docs = self.list_items(tags={"category": "system"}, limit=100)
             for doc in old_system_docs:
                 if doc.id.startswith("file://") and doc.id.endswith(".md"):
                     filename = Path(doc.id.replace("file://", "")).name
@@ -2191,9 +2191,9 @@ class Keeper:
         matches: list[Item] = []
         for query in expanded:
             try:
-                items = self.query_tag(
+                items = self.list_items(
+                    tags=query,
                     limit=100,  # fetch all candidates for ranking
-                    **query,
                 )
             except (ValueError, Exception):
                 continue
@@ -2269,48 +2269,6 @@ class Keeper:
         # Sort by score descending
         candidates.sort(key=lambda x: x.score or 0.0, reverse=True)
         return candidates
-
-    def query_tag(
-        self,
-        key: Optional[str] = None,
-        value: Optional[str] = None,
-        *,
-        limit: int = 100,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
-        include_hidden: bool = False,
-        **extra_tags: str
-    ) -> list[Item]:
-        """
-        Find items by tag(s). Convenience wrapper for :meth:`list_items`.
-
-        Usage:
-            query_tag("project")                    # key only (any value)
-            query_tag("project", "myapp")            # key=value
-            query_tag(tradition="buddhist", source="mn22")  # kwargs
-        """
-        # Build tags dict and tag_keys list from positional + kwargs
-        tags_dict: dict[str, str] = {}
-        tag_key_list: list[str] = []
-
-        if key is not None and value is not None:
-            tags_dict[key] = value
-        elif key is not None:
-            tag_key_list.append(key)
-
-        if extra_tags:
-            tags_dict.update(extra_tags)
-
-        if not tags_dict and not tag_key_list:
-            raise ValueError("At least one tag must be specified")
-
-        return self.list_items(
-            tags=tags_dict or None,
-            tag_keys=tag_key_list or None,
-            since=since, until=until,
-            include_hidden=include_hidden,
-            limit=limit,
-        )
 
     def list_tags(
         self,
@@ -2819,7 +2777,7 @@ class Keeper:
         Returns:
             List of system document Items
         """
-        return self.query_tag("category", "system")
+        return self.list_items(tags={"category": "system"}, limit=100)
 
     def reset_system_documents(self) -> dict:
         """
@@ -3395,25 +3353,6 @@ class Keeper:
             items = [i for i in items if not _is_hidden(i)]
 
         return items[:limit]
-
-    # -- Convenience wrappers (backwards compat) --
-
-    def list_recent(
-        self,
-        limit: int = 10,
-        *,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
-        order_by: str = "updated",
-        include_history: bool = False,
-        include_hidden: bool = False,
-    ) -> list[Item]:
-        """List recent items. Convenience wrapper for :meth:`list_items`."""
-        return self.list_items(
-            since=since, until=until, order_by=order_by,
-            include_history=include_history, include_hidden=include_hidden,
-            limit=limit,
-        )
 
     def embedding_cache_stats(self) -> dict:
         """
