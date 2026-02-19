@@ -353,6 +353,61 @@ class RemoteKeeper:
         })
         return self._to_items(resp)
 
+    def list_items(
+        self,
+        *,
+        prefix: Optional[str] = None,
+        tags: Optional[dict[str, str]] = None,
+        tag_keys: Optional[list[str]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        order_by: str = "updated",
+        include_hidden: bool = False,
+        include_history: bool = False,
+        limit: int = 10,
+    ) -> list[Item]:
+        # Delegate to existing REST endpoints until server supports unified list
+        if tags:
+            # Use first tag pair via /v1/tags/{key}/{value}, post-filter rest
+            first_key = next(iter(tags))
+            resp = self._get(
+                f"/v1/tags/{self._q(first_key)}/{self._q(tags[first_key])}",
+                limit=limit, since=since, until=until,
+                include_hidden=include_hidden or None,
+            )
+            items = self._to_items(resp)
+            # Post-filter remaining tags
+            for k, v in tags.items():
+                if k == first_key:
+                    continue
+                items = [i for i in items if i.tags.get(k) == v]
+            return items[:limit]
+
+        if tag_keys:
+            resp = self._get(
+                f"/v1/tags/{self._q(tag_keys[0])}",
+                limit=limit, since=since, until=until,
+                include_hidden=include_hidden or None,
+            )
+            items = self._to_items(resp)
+            for k in tag_keys[1:]:
+                items = [i for i in items if k in i.tags]
+            return items[:limit]
+
+        # Default: list recent (prefix filtering done client-side)
+        resp = self._get(
+            "/v1/notes",
+            limit=limit if not prefix else limit * 3,
+            since=since, until=until, order_by=order_by,
+            include_history=include_history,
+            include_hidden=include_hidden or True if prefix else include_hidden or None,
+        )
+        items = self._to_items(resp)
+        if prefix:
+            pfx = prefix.rstrip("/") + "/"
+            items = [i for i in items if i.id.startswith(pfx) or i.id == prefix]
+        return items[:limit]
+
     def list_recent(
         self,
         limit: int = 10,
@@ -363,16 +418,12 @@ class RemoteKeeper:
         include_history: bool = False,
         include_hidden: bool = False,
     ) -> list[Item]:
-        resp = self._get(
-            "/v1/notes",
+        """Convenience wrapper for :meth:`list`."""
+        return self.list_items(
+            since=since, until=until, order_by=order_by,
+            include_history=include_history, include_hidden=include_hidden,
             limit=limit,
-            since=since,
-            until=until,
-            order_by=order_by,
-            include_history=include_history,
-            include_hidden=include_hidden or None,
         )
-        return self._to_items(resp)
 
     # -- Direct access --
 

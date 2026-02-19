@@ -415,11 +415,15 @@ class TestApiCliEquivalence:
         # Help should show variadic argument
         assert "ID..." in result.stdout
     
-    def test_list_tag_maps_to_api_query_tag(self, cli):
-        """'list --tag' command maps to Keeper.query_tag()."""
+    def test_list_tag_filter(self, cli):
+        """'list --tag' is available for tag filtering."""
         result = cli("list", "--help")
         assert "--tag" in result.stdout
-        # The CLI list --tag uses kp.query_tag(key, value, limit=limit)
+
+    def test_list_prefix_argument(self, cli):
+        """'list' accepts an optional prefix argument."""
+        result = cli("list", "--help")
+        assert "PREFIX" in result.stdout or "prefix" in result.stdout.lower()
 
 
 # -----------------------------------------------------------------------------
