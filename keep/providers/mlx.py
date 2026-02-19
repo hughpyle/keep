@@ -51,6 +51,12 @@ class MLXEmbedding:
         except ImportError:
             pass
 
+        if not local_only:
+            import logging
+            import sys
+            logging.getLogger(__name__).info("Downloading embedding model '%s' (first use)...", model)
+            print(f"Downloading embedding model '{model}' (first use)...", file=sys.stderr)
+
         # Use MPS (Metal) for GPU acceleration on Apple Silicon
         self._model = SentenceTransformer(model, device="mps", local_files_only=local_only)
 
@@ -108,10 +114,24 @@ class MLXSummarization:
         
         self.model_name = model
         self.max_tokens = max_tokens
-        
-        # Load model and tokenizer (downloads on first use)
+
+        # Check if model is already cached
+        _downloading = False
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            cached = try_to_load_from_cache(model, "config.json")
+            _downloading = cached is None
+        except ImportError:
+            pass
+
+        if _downloading:
+            import logging
+            import sys
+            logging.getLogger(__name__).info("Downloading MLX model '%s' (first use)...", model)
+            print(f"Downloading MLX model '{model}' (first use)...", file=sys.stderr)
+
         self._model, self._tokenizer = load(model)
-    
+
     def summarize(
         self,
         content: str,
@@ -233,8 +253,24 @@ Respond with ONLY a JSON object, no explanation or other text."""
         
         self.model_name = model
         self.max_tokens = max_tokens
+
+        # Check if model is already cached
+        _downloading = False
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            cached = try_to_load_from_cache(model, "config.json")
+            _downloading = cached is None
+        except ImportError:
+            pass
+
+        if _downloading:
+            import logging
+            import sys
+            logging.getLogger(__name__).info("Downloading MLX model '%s' (first use)...", model)
+            print(f"Downloading MLX model '{model}' (first use)...", file=sys.stderr)
+
         self._model, self._tokenizer = load(model)
-    
+
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using MLX-LM."""
         import json
@@ -313,6 +349,21 @@ class MLXVisionDescriber:
 
         self.model_name = model
         self.max_tokens = max_tokens
+
+        _downloading = False
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            cached = try_to_load_from_cache(model, "config.json")
+            _downloading = cached is None
+        except ImportError:
+            pass
+
+        if _downloading:
+            import logging
+            import sys
+            logging.getLogger(__name__).info("Downloading MLX vision model '%s' (first use)...", model)
+            print(f"Downloading MLX vision model '{model}' (first use)...", file=sys.stderr)
+
         self._model, self._processor = vlm_load(model)
 
     def describe(self, path: str, content_type: str) -> str | None:

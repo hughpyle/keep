@@ -146,7 +146,9 @@ class OpenAISummarization:
 
         key = api_key or os.environ.get("KEEP_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not key:
-            raise ValueError("OpenAI API key required")
+            raise ValueError(
+                "OpenAI API key required. Set KEEP_OPENAI_API_KEY or OPENAI_API_KEY"
+            )
 
         self._client = OpenAI(api_key=key)
 
@@ -222,6 +224,10 @@ class OllamaSummarization:
         if not base_url.startswith("http"):
             base_url = f"http://{base_url}"
         self.base_url = base_url.rstrip("/")
+
+        # Ensure model is available (auto-pull if missing)
+        from .ollama_utils import ollama_ensure_model
+        ollama_ensure_model(self.base_url, self.model)
 
     def summarize(
         self,
@@ -451,8 +457,9 @@ Respond with a JSON object only, no explanation."""
     
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using Anthropic Claude."""
+        import logging
         truncated = content[:20000] if len(content) > 20000 else content
-        
+
         try:
             response = self._client.messages.create(
                 model=self.model,
@@ -463,14 +470,18 @@ Respond with a JSON object only, no explanation."""
                     {"role": "user", "content": truncated}
                 ],
             )
-            
-            # Parse JSON from response
-            if response.content and len(response.content) > 0:
+        except Exception as e:
+            logging.getLogger(__name__).warning("Anthropic tagging failed: %s", e)
+            return {}
+
+        # Parse JSON from response
+        if response.content and len(response.content) > 0:
+            try:
                 tags = json.loads(response.content[0].text)
                 return {str(k): str(v) for k, v in tags.items()}
-            return {}
-        except (json.JSONDecodeError, Exception):
-            return {}
+            except json.JSONDecodeError:
+                return {}
+        return {}
 
 
 class OpenAITagging:
@@ -504,10 +515,12 @@ Respond with a JSON object only, no explanation."""
         
         key = api_key or os.environ.get("KEEP_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not key:
-            raise ValueError("OpenAI API key required")
-        
+            raise ValueError(
+                "OpenAI API key required. Set KEEP_OPENAI_API_KEY or OPENAI_API_KEY"
+            )
+
         self._client = OpenAI(api_key=key)
-    
+
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using OpenAI."""
         truncated = content[:20000] if len(content) > 20000 else content
@@ -551,7 +564,11 @@ class OllamaTagging:
         if not base_url.startswith("http"):
             base_url = f"http://{base_url}"
         self.base_url = base_url.rstrip("/")
-    
+
+        # Ensure model is available (auto-pull if missing)
+        from .ollama_utils import ollama_ensure_model
+        ollama_ensure_model(self.base_url, self.model)
+
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using Ollama."""
         import requests
@@ -609,6 +626,7 @@ class GeminiTagging:
 
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using Google Gemini."""
+        import logging
         truncated = content[:20000] if len(content) > 20000 else content
 
         try:
@@ -617,8 +635,12 @@ class GeminiTagging:
                 model=self.model,
                 contents=full_prompt,
             )
+        except Exception as e:
+            logging.getLogger(__name__).warning("Gemini tagging failed: %s", e)
+            return {}
 
-            # Parse JSON from response
+        # Parse JSON from response
+        try:
             text = response.text.strip()
             # Strip markdown code fences if present
             if text.startswith("```"):
@@ -628,7 +650,7 @@ class GeminiTagging:
 
             tags = json.loads(text)
             return {str(k): str(v) for k, v in tags.items()}
-        except (json.JSONDecodeError, Exception):
+        except json.JSONDecodeError:
             return {}
 
 
@@ -675,6 +697,10 @@ class OllamaMediaDescriber:
         if not base_url.startswith("http"):
             base_url = f"http://{base_url}"
         self.base_url = base_url.rstrip("/")
+
+        # Ensure model is available (auto-pull if missing)
+        from .ollama_utils import ollama_ensure_model
+        ollama_ensure_model(self.base_url, self.model)
 
     def describe(self, path: str, content_type: str) -> str | None:
         """Describe an image using Ollama vision model."""
