@@ -114,9 +114,6 @@ kp.list_items(tag_keys=["act"], since="P3D")      # Key-only: any value
 kp.list_items(prefix=".tag/act")                   # ID prefix
 kp.list_items(order_by="accessed", limit=20)       # Sort by access time
 
-# Convenience wrappers
-kp.list_recent(limit=10, order_by="updated") → list[Item]
-kp.query_tag(key, value=None, since=None) → list[Item]
 ```
 
 #### Item Access
@@ -284,8 +281,8 @@ Protected tags (prefix `_`) managed automatically:
 
 Query system tags:
 ```python
-kp.query_tag("_updated_date", "2026-01-30")
-kp.query_tag("_source", "inline")
+kp.list_items(tags={"_updated_date": "2026-01-30"})
+kp.list_items(tags={"_source": "inline"})
 ```
 
 See [SYSTEM-TAGS.md](SYSTEM-TAGS.md) for complete reference.
