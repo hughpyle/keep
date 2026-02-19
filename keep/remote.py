@@ -9,7 +9,7 @@ KEEPNOTES_API_URL and KEEPNOTES_API_KEY environment variables are set.
 import logging
 import os
 import re
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 from urllib.parse import quote
 
 import httpx
@@ -452,6 +452,18 @@ class RemoteKeeper:
     def count(self) -> int:
         resp = self._get("/v1/count")
         return resp.get("count", 0)
+
+    def export_iter(self, *, include_system: bool = True) -> Iterator[dict]:
+        """Stream export is not yet supported for hosted stores."""
+        raise NotImplementedError("Export/import not yet supported for hosted stores")
+
+    def export_data(self, *, include_system: bool = True) -> dict:
+        """Export is not yet supported for hosted stores."""
+        raise NotImplementedError("Export/import not yet supported for hosted stores")
+
+    def import_data(self, data: dict, *, mode: str = "merge") -> dict:
+        """Import is not yet supported for hosted stores."""
+        raise NotImplementedError("Export/import not yet supported for hosted stores")
 
     def close(self) -> None:
         self._client.close()

@@ -19,6 +19,8 @@
 | `keep reflect` | Structured reflection practice | [KEEP-NOW.md](KEEP-NOW.md#keep-reflect) |
 | `keep del` | Remove item or revert to previous version | — |
 | `keep tag-update` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
+| `keep data export` | Export store to JSON for backup or migration | [KEEP-DATA.md](KEEP-DATA.md) |
+| `keep data import` | Import documents from JSON export file | [KEEP-DATA.md](KEEP-DATA.md) |
 | `keep pending` | Process pending tasks (summarize, embed, reindex) | — |
 
 ## Global Flags
@@ -136,6 +138,12 @@ keep analyze ID                      # Decompose into parts (background)
 keep analyze ID -t topic -t type     # With guidance tags
 keep analyze ID --fg                 # Wait for completion
 keep analyze ID --force              # Re-analyze even if current
+
+# Data management
+keep data export backup.json         # Export store to JSON
+keep data export - | gzip > bk.gz    # Export to stdout, compress
+keep data import backup.json         # Import (merge, skip existing)
+keep data import backup.json -m replace  # Import (replace all)
 
 # Maintenance
 keep pending                         # Process pending tasks, tail progress
