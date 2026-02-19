@@ -347,9 +347,10 @@ class AnalyzerProvider(Protocol):
     """
     Decomposes content into meaningful parts with summaries and tags.
 
-    The default implementation sends all content to an LLM in a single pass.
-    Alternative implementations can use sliding windows, speech-act
-    recognition, or other strategies suited to smaller models.
+    The default implementation uses token-budgeted sliding windows with
+    XML-style target marking, suited to small local models. Alternative
+    implementations include single-pass JSON decomposition for large-context
+    models, or domain-specific strategies like speech-act recognition.
 
     Receives chunks (versions of a string, or a single document chunk)
     and returns raw part dicts. Keeper.analyze() handles wrapping these

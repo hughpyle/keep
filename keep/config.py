@@ -116,7 +116,7 @@ class StoreConfig:
     # Media description provider (optional - if None, media indexing is metadata-only)
     media: Optional[ProviderConfig] = None
 
-    # Analyzer provider (optional - if None, uses DefaultAnalyzer wrapping summarization)
+    # Analyzer provider (optional - if None, uses SlidingWindowAnalyzer wrapping summarization)
     analyzer: Optional[ProviderConfig] = None
 
     # Embedding identity (set after first use, used for validation)
@@ -352,7 +352,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
 
     # 1. API providers
     if has_anthropic_key:
-        summarization_provider = ProviderConfig("anthropic", {"model": "claude-3-haiku-20240307"})
+        summarization_provider = ProviderConfig("anthropic", {"model": "claude-haiku-4-5-20251001"})
     elif has_openai_key:
         summarization_provider = ProviderConfig("openai")
     elif has_gemini_key:

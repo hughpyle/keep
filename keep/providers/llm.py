@@ -29,16 +29,16 @@ class AnthropicSummarization:
     Note: OAuth tokens (sk-ant-oat01-...) are primarily for Claude Code CLI.
     For production use, prefer API keys (sk-ant-api03-...) from console.anthropic.com.
 
-    Default model is claude-3-haiku (cost-effective: $0.25/$1.25 per MTok).
+    Default model is claude-haiku-4.5 ($1.00/$5.00 per MTok).
     Configure via keep.toml [summarization] section for other models:
-    - claude-3-haiku-20240307: Cost-effective, fast, good for summaries
-    - claude-3-5-haiku-20241022: Better quality, higher cost
-    - claude-haiku-4-5-20251001: Latest, best quality, highest cost
+    - claude-haiku-4-5-20251001: Default, best quality/cost for summaries
+    - claude-3-5-haiku-20241022: Previous generation
+    - claude-3-haiku-20240307: Legacy, cheapest ($0.25/$1.25 per MTok)
     """
 
     def __init__(
         self,
-        model: str = "claude-3-haiku-20240307",
+        model: str = "claude-haiku-4-5-20251001",
         api_key: str | None = None,
         max_tokens: int = 150,
     ):
@@ -128,11 +128,14 @@ class OpenAISummarization:
     Summarization provider using OpenAI's chat API.
 
     Requires: KEEP_OPENAI_API_KEY or OPENAI_API_KEY environment variable.
+
+    Default model is gpt-4.1-mini ($0.40/$1.60 per MTok).
+    Good alternatives: gpt-4.1, gpt-5-mini.
     """
 
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-4.1-mini",
         api_key: str | None = None,
         max_tokens: int = 200,
     ):
@@ -151,6 +154,17 @@ class OpenAISummarization:
             )
 
         self._client = OpenAI(api_key=key)
+
+        # GPT-5+ and reasoning models use a different API surface:
+        # - max_completion_tokens instead of max_tokens
+        # - temperature must be omitted (only default=1 supported)
+        self._new_api = self.model.startswith(("gpt-5", "o3", "o4"))
+
+    def _completion_kwargs(self, max_tokens: int) -> dict:
+        """Return model-appropriate kwargs for token limit and temperature."""
+        if self._new_api:
+            return {"max_completion_tokens": max_tokens}
+        return {"max_tokens": max_tokens, "temperature": 0.3}
 
     def summarize(
         self,
@@ -178,8 +192,7 @@ class OpenAISummarization:
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=self.max_tokens,
-            temperature=0.3,
+            **self._completion_kwargs(self.max_tokens),
         )
 
         return strip_summary_preamble(response.choices[0].message.content.strip())
@@ -198,8 +211,7 @@ class OpenAISummarization:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=max_tokens,
-            temperature=0.3,
+            **self._completion_kwargs(max_tokens),
         )
         if response.choices:
             return response.choices[0].message.content
@@ -427,7 +439,7 @@ Respond with a JSON object only, no explanation."""
 
     def __init__(
         self,
-        model: str = "claude-3-haiku-20240307",
+        model: str = "claude-haiku-4-5-20251001",
         api_key: str | None = None,
     ):
         try:
@@ -503,7 +515,7 @@ Respond with a JSON object only, no explanation."""
     
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-4.1-mini",
         api_key: str | None = None,
     ):
         try:
@@ -520,21 +532,27 @@ Respond with a JSON object only, no explanation."""
             )
 
         self._client = OpenAI(api_key=key)
+        self._new_api = self.model.startswith(("gpt-5", "o3", "o4"))
 
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using OpenAI."""
         truncated = content[:20000] if len(content) > 20000 else content
-        
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=[
+
+        kwargs: dict = {
+            "model": self.model,
+            "messages": [
                 {"role": "system", "content": self.SYSTEM_PROMPT},
                 {"role": "user", "content": truncated},
             ],
-            response_format={"type": "json_object"},
-            max_tokens=200,
-            temperature=0.2,
-        )
+            "response_format": {"type": "json_object"},
+        }
+        if self._new_api:
+            kwargs["max_completion_tokens"] = 200
+        else:
+            kwargs["max_tokens"] = 200
+            kwargs["temperature"] = 0.2
+
+        response = self._client.chat.completions.create(**kwargs)
         
         try:
             tags = json.loads(response.choices[0].message.content)

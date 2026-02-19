@@ -10,7 +10,6 @@ Tests cover:
 - CLI @P{N} parsing
 - Parts manifest in get output
 - JSON decomposition parsing
-- Simple chunk fallback
 """
 
 import json
@@ -20,7 +19,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from keep.api import Keeper
-from keep.analyzers import _parse_decomposition_json, _simple_chunk_decomposition
+from keep.analyzers import _parse_decomposition_json
 from keep.document_store import DocumentStore, PartInfo
 from keep.types import utc_now
 
@@ -210,43 +209,6 @@ class TestDecompositionParsing:
 
 
 # ---------------------------------------------------------------------------
-# Simple chunk fallback tests
-# ---------------------------------------------------------------------------
-
-
-class TestSimpleChunkDecomposition:
-    """Test _simple_chunk_decomposition."""
-
-    def test_multiple_paragraphs(self):
-        content = "First paragraph with enough text to be meaningful.\n\n" \
-                  "Second paragraph also has content.\n\n" \
-                  "Third paragraph rounds things out with additional material " \
-                  "that makes the total long enough to form multiple chunks."
-        # This content is short, chunks may merge
-        result = _simple_chunk_decomposition(content)
-        # Should produce at least something
-        assert isinstance(result, list)
-
-    def test_single_paragraph_returns_empty(self):
-        result = _simple_chunk_decomposition("Just one paragraph.")
-        assert result == []
-
-    def test_empty_content(self):
-        result = _simple_chunk_decomposition("")
-        assert result == []
-
-    def test_long_content_produces_chunks(self):
-        # Create content with clearly separated sections
-        paragraphs = [f"Section {i}. " + "x" * 500 for i in range(5)]
-        content = "\n\n".join(paragraphs)
-        result = _simple_chunk_decomposition(content)
-        assert len(result) >= 2
-        for chunk in result:
-            assert "summary" in chunk
-            assert "content" in chunk
-
-
-# ---------------------------------------------------------------------------
 # Keeper.analyze() tests (mocked providers)
 # ---------------------------------------------------------------------------
 
@@ -270,7 +232,7 @@ class TestKeeperAnalyze:
              "tags": {"topic": "analysis"}},
         ])
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
                 {"summary": "Introduction", "content": "First section text",
                  "tags": {"topic": "intro"}},
@@ -291,7 +253,7 @@ class TestKeeperAnalyze:
         kp = Keeper(store_path=tmp_path)
         kp.put("Content " * 50, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             # First analysis
             mock_llm.return_value = [
                 {"summary": "Part A", "content": "A text"},
@@ -319,7 +281,7 @@ class TestKeeperAnalyze:
         kp = Keeper(store_path=tmp_path)
         kp.put("Content " * 50, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
                 {"summary": "Part 1", "content": "Text 1"},
                 {"summary": "Part 2", "content": "Text 2"},
@@ -341,7 +303,7 @@ class TestKeeperAnalyze:
         kp = Keeper(store_path=tmp_path)
         kp.put("Content " * 50, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
                 {"summary": f"Part {i}", "content": f"Text {i}"}
                 for i in range(1, 4)
@@ -357,20 +319,6 @@ class TestKeeperAnalyze:
         kp = Keeper(store_path=tmp_path)
         with pytest.raises(ValueError, match="not found"):
             kp.analyze("nonexistent")
-
-    def test_analyze_fallback_to_chunking(self, mock_providers, tmp_path):
-        """When LLM returns empty, falls back to simple chunking."""
-        kp = Keeper(store_path=tmp_path)
-        # Create content with clear paragraph structure
-        paragraphs = [f"Section {i}. " + "x" * 500 for i in range(5)]
-        content = "\n\n".join(paragraphs)
-        kp.put(content, id="test-doc")
-
-        with patch("keep.analyzers.DefaultAnalyzer._call_llm") as mock_llm:
-            mock_llm.return_value = []  # LLM fails, triggers simple chunk fallback
-            parts = kp.analyze("test-doc")
-
-        assert len(parts) >= 2  # Fallback produces chunks
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +339,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -407,7 +355,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             parts1 = kp.analyze("test-doc")
             assert len(parts1) == 2
@@ -423,7 +371,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Original content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -445,7 +393,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -460,7 +408,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -473,7 +421,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
@@ -489,7 +437,7 @@ class TestAnalyzeSkip:
         kp = Keeper(store_path=tmp_path)
         kp.put("Long content for analysis. " * 20, id="test-doc")
 
-        with patch("keep.analyzers.DefaultAnalyzer.analyze") as mock_llm:
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
             kp.analyze("test-doc")
 
