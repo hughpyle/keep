@@ -256,7 +256,12 @@ class OllamaSummarization:
             },
             timeout=120,
         )
-        response.raise_for_status()
+        if not response.ok:
+            detail = response.text[:200] if response.text else ""
+            raise RuntimeError(
+                f"Ollama summarization failed (model={self.model}): "
+                f"HTTP {response.status_code} from {self.base_url}. {detail}"
+            )
 
         return strip_summary_preamble(response.json()["message"]["content"].strip())
 
@@ -282,7 +287,12 @@ class OllamaSummarization:
             },
             timeout=300,
         )
-        response.raise_for_status()
+        if not response.ok:
+            detail = response.text[:200] if response.text else ""
+            raise RuntimeError(
+                f"Ollama generate failed (model={self.model}): "
+                f"HTTP {response.status_code} from {self.base_url}. {detail}"
+            )
         return response.json()["message"]["content"].strip()
 
 
@@ -561,8 +571,13 @@ class OllamaTagging:
             },
             timeout=120,
         )
-        response.raise_for_status()
-        
+        if not response.ok:
+            detail = response.text[:200] if response.text else ""
+            raise RuntimeError(
+                f"Ollama tagging failed (model={self.model}): "
+                f"HTTP {response.status_code} from {self.base_url}. {detail}"
+            )
+
         try:
             tags = json.loads(response.json()["message"]["content"])
             return {str(k): str(v) for k, v in tags.items()}
@@ -687,7 +702,12 @@ class OllamaMediaDescriber:
             },
             timeout=120,
         )
-        response.raise_for_status()
+        if not response.ok:
+            detail = response.text[:200] if response.text else ""
+            raise RuntimeError(
+                f"Ollama vision failed (model={self.model}): "
+                f"HTTP {response.status_code} from {self.base_url}. {detail}"
+            )
 
         text = response.json()["message"]["content"].strip()
         return text if text else None

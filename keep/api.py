@@ -511,6 +511,10 @@ class Keeper:
         # Cache env tags once per Keeper instance (stable within a process)
         self._env_tags = casefold_tags(_get_env_tags())
 
+        # --- Persistent operations log ---
+        from .logging_config import configure_ops_log
+        self._ops_log_handler = configure_ops_log(self._store_path)
+
         # --- Storage backends (injected or factory-created) ---
         if doc_store is not None and vector_store is not None:
             # Fully injected (tests, custom setups)
@@ -536,7 +540,18 @@ class Keeper:
 
         # Check store consistency and reconcile in background if needed
         # (safe for all backends — uses abstract store interface)
-        if self._check_store_consistency() and self._config.embedding is not None:
+        needs_reconcile = self._check_store_consistency() and self._config.embedding is not None
+
+        # If cosine migration fired (L2→cosine), auto-enqueue reindex
+        if getattr(self._store, "migrated_to_cosine", False):
+            logger.info("Cosine migration detected — enqueuing reindex")
+            try:
+                self.enqueue_reindex()
+            except Exception as e:
+                logger.warning("Failed to enqueue reindex after cosine migration: %s", e)
+            needs_reconcile = False  # reindex will handle everything
+
+        if needs_reconcile:
             chroma_coll = self._resolve_chroma_collection()
             doc_coll = self._resolve_doc_collection()
             threading.Thread(
@@ -594,14 +609,14 @@ class Keeper:
         return False
 
     def _auto_reconcile_safe(self, chroma_coll: str, doc_coll: str) -> None:
-        """Background-safe wrapper for auto-reconcile. Silently handles failures."""
+        """Background-safe wrapper for auto-reconcile. Logs failures."""
         if not self._reconcile_lock.acquire(blocking=False):
-            logger.debug("Reconciliation already in progress, skipping")
+            logger.info("Reconciliation already in progress, skipping")
             return
         try:
             self._auto_reconcile(chroma_coll, doc_coll)
         except Exception as e:
-            logger.debug("Background reconcile failed: %s", e)
+            logger.warning("Auto-reconcile failed: %s", e)
         finally:
             self._reconcile_lock.release()
             self._reconcile_done.set()
@@ -614,7 +629,7 @@ class Keeper:
         fails (avoids removing orphans without being able to re-embed).
         """
         if self._config.embedding is None:
-            logger.debug("Skipping reconciliation: no embedding provider configured")
+            logger.info("Skipping reconciliation: no embedding provider configured")
             return
 
         # Validate provider before entering loop — catches broken installs
@@ -622,11 +637,15 @@ class Keeper:
         try:
             provider = self._get_embedding_provider()
         except Exception as e:
-            logger.debug("Skipping reconciliation: provider unavailable: %s", e)
+            logger.warning("Skipping reconciliation: provider unavailable: %s", e)
             return
 
         doc_ids = self._document_store.list_ids(doc_coll)
         missing = self._store.find_missing_ids(chroma_coll, doc_ids)
+
+        logger.info("Auto-reconcile started: %d missing, collection=%s", len(missing), chroma_coll)
+        reconciled = 0
+        failed = 0
 
         # Items in DocumentStore but missing from ChromaDB — re-embed summary
         for doc_id in missing:
@@ -641,21 +660,28 @@ class Keeper:
                             embedding=embedding, summary=record.summary,
                             tags=casefold_tags_for_index(record.tags),
                         )
-                        logger.info("Reconciled missing item: %s", doc_id)
+                        reconciled += 1
             except Exception as e:
+                failed += 1
                 logger.warning("Failed to reconcile %s: %s", doc_id, e)
 
         # Items in ChromaDB but not in DocumentStore — remove orphaned embeddings
         # Skip versioned (@v{N}) and part (@p{N}) IDs — tracked in separate tables
         chroma_ids = self._store.list_ids(chroma_coll)
         doc_id_set = set(doc_ids)
+        removed = 0
         for orphan_id in chroma_ids:
             if orphan_id not in doc_id_set and "@v" not in orphan_id and "@p" not in orphan_id:
                 try:
                     self._store.delete(chroma_coll, orphan_id)
-                    logger.info("Removed orphaned embedding: %s", orphan_id)
+                    removed += 1
                 except Exception as e:
                     logger.warning("Failed to remove orphan %s: %s", orphan_id, e)
+
+        logger.info(
+            "Auto-reconcile complete: %d reconciled, %d failed, %d orphans removed",
+            reconciled, failed, removed,
+        )
 
     def _migrate_system_documents(self) -> dict:
         """
@@ -1078,7 +1104,7 @@ class Keeper:
 
         On first use, records the embedding identity to config.
         On subsequent uses, if the provider changed, silently updates config
-        and triggers background reindex into the new vector store collection.
+        and enqueues reindex tasks into the pending queue.
         """
         # Get current provider's identity
         current = EmbeddingIdentity(
@@ -1091,6 +1117,10 @@ class Keeper:
 
         if stored is None:
             # First use: record the identity
+            logger.info(
+                "Recording embedding identity: %s/%s (%dd)",
+                current.provider, current.model, current.dimension,
+            )
             self._config.embedding_identity = current
             save_config(self._config)
         else:
@@ -1107,169 +1137,62 @@ class Keeper:
                 save_config(self._config)
                 # Update store dimension for new model
                 self._store.reset_embedding_dimension(current.dimension)
-                # Trigger background reindex into new ChromaDB collection
-                self._trigger_background_reindex()
+                # Enqueue reindex tasks for pending queue
+                stats = self.enqueue_reindex()
+                logger.info(
+                    "Enqueued %d items (+%d versions) for reindex",
+                    stats["enqueued"], stats["versions"],
+                )
+                import sys
+                print(
+                    f"Embedding model changed. Enqueued {stats['enqueued']} items for reindex.\n"
+                    f"Run: keep pending",
+                    file=sys.stderr,
+                )
+            else:
+                logger.debug(
+                    "Embedding identity unchanged: %s/%s (%dd)",
+                    stored.provider, stored.model, stored.dimension,
+                )
 
-    def _trigger_background_reindex(self) -> None:
-        """Spawn background thread to populate new vector collection from document store."""
-        import threading
-        chroma_coll = self._resolve_chroma_collection()
-        doc_coll = self._resolve_doc_collection()
-        threading.Thread(
-            target=self._background_reindex_safe,
-            args=(chroma_coll, doc_coll),
-            daemon=True,
-        ).start()
-
-    def _background_reindex_safe(self, chroma_coll: str, doc_coll: str) -> None:
-        """Background-safe wrapper for reindex. Silently handles failures."""
-        try:
-            self._background_reindex(chroma_coll, doc_coll)
-        except Exception as e:
-            logger.warning("Background reindex failed: %s", e)
-
-    def _background_reindex(self, chroma_coll: str, doc_coll: str) -> None:
-        """Populate vector collection from document store summaries using batch embedding."""
-        doc_ids = self._document_store.list_ids(doc_coll)
-        if not doc_ids:
-            return
-
-        # Find which IDs are missing from ChromaDB
-        missing = self._store.find_missing_ids(chroma_coll, doc_ids)
-        if not missing:
-            logger.info("Background reindex: all %d items already indexed", len(doc_ids))
-            return
-
-        logger.info("Background reindex: %d of %d items to index", len(missing), len(doc_ids))
-
-        # Collect records to embed
-        records = []
-        for doc_id in missing:
-            record = self._document_store.get(doc_coll, doc_id)
-            if record:
-                records.append((doc_id, record))
-
-        # Batch embed and upsert
-        BATCH_SIZE = 50
-        indexed = 0
-        provider = self._get_embedding_provider()
-
-        for i in range(0, len(records), BATCH_SIZE):
-            batch = records[i:i + BATCH_SIZE]
-            try:
-                summaries = [rec.summary for _, rec in batch]
-                embeddings = provider.embed_batch(summaries)
-                for (doc_id, rec), embedding in zip(batch, embeddings):
-                    self._store.upsert(
-                        collection=chroma_coll, id=doc_id,
-                        embedding=embedding, summary=rec.summary,
-                        tags=casefold_tags_for_index(rec.tags),
-                    )
-                    indexed += 1
-            except Exception:
-                # Fall back to individual embedding on batch failure
-                for doc_id, rec in batch:
-                    try:
-                        embedding = provider.embed(rec.summary)
-                        self._store.upsert(
-                            collection=chroma_coll, id=doc_id,
-                            embedding=embedding, summary=rec.summary,
-                            tags=casefold_tags_for_index(rec.tags),
-                        )
-                        indexed += 1
-                    except Exception as e:
-                        logger.warning("Reindex failed for %s: %s", doc_id, e)
-
-        # Also handle versioned embeddings (@v{N})
-        for doc_id, record in records:
-            for vi in self._document_store.list_versions(doc_coll, doc_id, limit=100):
-                try:
-                    emb = provider.embed(vi.summary)
-                    versioned_id = f"{doc_id}@v{vi.version}"
-                    self._store.upsert_version(
-                        collection=chroma_coll, id=doc_id,
-                        version=vi.version, embedding=emb,
-                        summary=vi.summary,
-                        tags=casefold_tags_for_index(dict(vi.tags)),
-                    )
-                except Exception:
-                    pass  # Version embedding failure is non-critical
-
-        logger.info("Background reindex complete: %d items indexed", indexed)
-
-    def reindex(self) -> dict:
-        """
-        Rebuild search index with current embedding provider (foreground).
-
-        Re-embeds all items from the document store into the current vector
-        collection. Use as an explicit backstop when background reindex
-        didn't complete.
+    def enqueue_reindex(self) -> dict:
+        """Enqueue embed tasks for all docs (and their versions) into the pending queue.
 
         Returns:
-            Dict with stats: total, indexed, failed
+            Dict with stats: enqueued (int), versions (int)
         """
-        chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
-
         doc_ids = self._document_store.list_ids(doc_coll)
-        total = len(doc_ids)
-        indexed = 0
-        failed = 0
+        enqueued = 0
+        versions = 0
 
-        BATCH_SIZE = 50
-        provider = self._get_embedding_provider()
-
-        # Collect all records
-        records = []
         for doc_id in doc_ids:
             record = self._document_store.get(doc_coll, doc_id)
-            if record:
-                records.append((doc_id, record))
+            if record is None:
+                continue
+            self._pending_queue.enqueue(
+                doc_id, doc_coll, record.summary,
+                task_type="reindex",
+                metadata={"tags": dict(record.tags)},
+            )
+            enqueued += 1
 
-        # Batch embed and upsert
-        for i in range(0, len(records), BATCH_SIZE):
-            batch = records[i:i + BATCH_SIZE]
-            try:
-                summaries = [rec.summary for _, rec in batch]
-                embeddings = provider.embed_batch(summaries)
-                for (doc_id, rec), embedding in zip(batch, embeddings):
-                    self._store.upsert(
-                        collection=chroma_coll, id=doc_id,
-                        embedding=embedding, summary=rec.summary,
-                        tags=casefold_tags_for_index(rec.tags),
-                    )
-                    indexed += 1
-            except Exception:
-                for doc_id, rec in batch:
-                    try:
-                        embedding = provider.embed(rec.summary)
-                        self._store.upsert(
-                            collection=chroma_coll, id=doc_id,
-                            embedding=embedding, summary=rec.summary,
-                            tags=casefold_tags_for_index(rec.tags),
-                        )
-                        indexed += 1
-                    except Exception as e:
-                        logger.warning("Reindex failed for %s: %s", doc_id, e)
-                        failed += 1
-
-        # Also re-embed versions
-        version_count = 0
-        for doc_id, record in records:
+            # Enqueue version reindex
             for vi in self._document_store.list_versions(doc_coll, doc_id, limit=100):
-                try:
-                    emb = provider.embed(vi.summary)
-                    self._store.upsert_version(
-                        collection=chroma_coll, id=doc_id,
-                        version=vi.version, embedding=emb,
-                        summary=vi.summary,
-                        tags=casefold_tags_for_index(dict(vi.tags)),
-                    )
-                    version_count += 1
-                except Exception:
-                    pass
+                version_id = f"{doc_id}@v{vi.version}"
+                self._pending_queue.enqueue(
+                    version_id, doc_coll, vi.summary,
+                    task_type="reindex",
+                    metadata={
+                        "version": vi.version,
+                        "base_id": doc_id,
+                        "tags": dict(vi.tags),
+                    },
+                )
+                versions += 1
 
-        return {"total": total, "indexed": indexed, "failed": failed, "versions": version_count}
+        logger.info("Enqueue reindex: %d items + %d versions", enqueued, versions)
+        return {"enqueued": enqueued, "versions": versions}
 
     @property
     def embedding_identity(self) -> EmbeddingIdentity | None:
@@ -3341,6 +3264,14 @@ class Keeper:
                 continue
 
             try:
+                _task_verbs = {
+                    "analyze": "Analyzing",
+                    "embed": "Embedding",
+                    "reindex": "Re-embedding",
+                    "summarize": "Summarizing",
+                }
+                verb = _task_verbs.get(item.task_type, item.task_type)
+                logger.info("%s %s (attempt %d)", verb, item.id, item.attempts)
                 if item.task_type == "analyze":
                     self._process_pending_analyze(item)
                     # analyze releases summarization internally;
@@ -3348,6 +3279,9 @@ class Keeper:
                     self._release_embedding_provider()
                 elif item.task_type == "embed":
                     self._process_pending_embed(item)
+                    self._release_embedding_provider()
+                elif item.task_type == "reindex":
+                    self._process_pending_reindex(item)
                     self._release_embedding_provider()
                 else:
                     self._process_pending_summarize(item)
@@ -3360,6 +3294,7 @@ class Keeper:
                     item.id, item.collection, item.task_type
                 )
                 result["processed"] += 1
+                logger.info("%s %s done", verb, item.id)
 
                 # Brief yield between items so interactive processes
                 # (keep now, keep find) can acquire the model lock
@@ -3462,6 +3397,42 @@ class Keeper:
         parts = self.analyze(item.id, tags=tags, force=force)
         logger.info("Analyzed %s into %d parts", item.id, len(parts))
 
+    def _process_pending_reindex(self, item) -> None:
+        """Process a reindex task: embed summary and write to vector store.
+
+        Handles both main docs and versioned entries.
+        The item.content contains the summary text to embed.
+        """
+        chroma_coll = self._resolve_chroma_collection()
+        meta = item.metadata or {}
+        version = meta.get("version")
+        base_id = meta.get("base_id")
+
+        embedding = self._get_embedding_provider().embed(item.content)
+
+        if version is not None and base_id is not None:
+            # Versioned entry
+            self._store.upsert_version(
+                collection=chroma_coll,
+                id=base_id,
+                version=version,
+                embedding=embedding,
+                summary=item.content,
+                tags=casefold_tags_for_index(meta.get("tags", {})),
+            )
+        else:
+            # Main doc entry — use fresh tags from doc store
+            doc = self._document_store.get(item.collection, item.id)
+            if doc is None:
+                return  # deleted since enqueue
+            self._store.upsert(
+                collection=chroma_coll,
+                id=item.id,
+                embedding=embedding,
+                summary=item.content,
+                tags=casefold_tags_for_index(doc.tags),
+            )
+
     def pending_count(self) -> int:
         """Get count of pending summaries awaiting processing."""
         return self._pending_queue.count()
@@ -3470,9 +3441,13 @@ class Keeper:
         """
         Get pending summary queue statistics.
 
-        Returns dict with: pending, collections, max_attempts, oldest, queue_path
+        Returns dict with: pending, collections, max_attempts, oldest, queue_path, by_type
         """
         return self._pending_queue.stats()
+
+    def pending_stats_by_type(self) -> dict[str, int]:
+        """Get pending queue counts grouped by task type."""
+        return self._pending_queue.stats_by_type()
 
     def pending_status(self, id: str) -> Optional[dict]:
         """
@@ -3523,15 +3498,21 @@ class Keeper:
             # Use sys.executable to ensure we use the same Python
             cmd = [
                 sys.executable, "-m", "keep.cli",
-                "process-pending",
+                "pending",
                 "--daemon",
                 "--store", str(self._store_path),
             ]
 
             # Platform-specific detachment
+            # Redirect daemon stderr to ops log for crash diagnostics
+            log_path = self._store_path / "keep-ops.log"
+            try:
+                log_fd = open(log_path, "a")
+            except OSError:
+                log_fd = None
             kwargs: dict = {
                 "stdout": subprocess.DEVNULL,
-                "stderr": subprocess.DEVNULL,
+                "stderr": log_fd if log_fd else subprocess.DEVNULL,
                 "stdin": subprocess.DEVNULL,
             }
 
@@ -3543,6 +3524,7 @@ class Keeper:
                 kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
             subprocess.Popen(cmd, **kwargs)
+            logger.info("Spawned background processor")
             return True
 
         except Exception as e:
@@ -3550,6 +3532,9 @@ class Keeper:
             logger.warning("Failed to spawn background processor: %s", e)
             return False
         finally:
+            # Close parent's copy of the log fd (child inherited it)
+            if log_fd:
+                log_fd.close()
             spawn_lock.release()
 
     def reconcile(
@@ -3655,6 +3640,13 @@ class Keeper:
         # Close pending summary queue
         if hasattr(self, '_pending_queue'):
             self._pending_queue.close()
+
+        # Remove ops log handler to avoid handler accumulation
+        if hasattr(self, '_ops_log_handler') and self._ops_log_handler:
+            import logging
+            logging.getLogger("keep").removeHandler(self._ops_log_handler)
+            self._ops_log_handler.close()
+            self._ops_log_handler = None
 
     def __enter__(self):
         """Context manager entry."""

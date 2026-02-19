@@ -9,7 +9,7 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-ERROR_LOG_PATH = Path.home() / ".keep" / "errors.log"
+ERROR_LOG_PATH = Path.home() / ".keep" / "keep-errors.log"
 
 
 def log_exception(exc: Exception, context: str = "") -> Path:

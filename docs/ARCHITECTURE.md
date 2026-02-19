@@ -164,7 +164,7 @@ query text
     ▼
 ┌───────────────────┐
 │ VectorStore       │
-│ query_embedding() │ ← L2 distance search
+│ query_embedding() │ ← cosine similarity search
 └─────────┬─────────┘
           │
           ▼ results with distance scores

@@ -83,3 +83,35 @@ def enable_debug_mode():
     # Set library loggers to DEBUG
     for name in ("keep", "transformers", "sentence_transformers", "mlx", "chromadb"):
         logging.getLogger(name).setLevel(logging.DEBUG)
+
+
+def configure_ops_log(store_path):
+    """Configure a persistent operations log for a keep store.
+
+    Writes to {store_path}/keep-ops.log using a rotating file handler
+    (1MB max, 3 backups). Always active regardless of --verbose.
+    Returns the handler so it can be removed on close().
+    """
+    import logging
+    from logging.handlers import RotatingFileHandler
+    from pathlib import Path
+
+    log_path = Path(store_path) / "keep-ops.log"
+    handler = RotatingFileHandler(
+        str(log_path),
+        maxBytes=1_000_000,
+        backupCount=3,
+    )
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+
+    keep_logger = logging.getLogger("keep")
+    keep_logger.addHandler(handler)
+    # Ensure keep logger allows INFO through even in quiet mode
+    if keep_logger.level == logging.NOTSET or keep_logger.level > logging.INFO:
+        keep_logger.setLevel(logging.INFO)
+
+    return handler

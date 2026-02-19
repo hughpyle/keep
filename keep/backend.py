@@ -57,6 +57,9 @@ class NullPendingQueue:
     def stats(self) -> dict:
         return {"pending": 0, "collections": 0, "max_attempts": 0, "oldest": None}
 
+    def stats_by_type(self) -> dict[str, int]:
+        return {}
+
     def clear(self) -> int:
         return 0
 
