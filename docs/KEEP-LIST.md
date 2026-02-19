@@ -8,12 +8,15 @@ List recent items, filter by tags, or list tag keys and values.
 keep list                             # Recent items (by update time)
 keep list -n 20                       # Show 20 most recent
 keep list --sort accessed             # Sort by last access time
+keep list .tag                        # Items with ID prefix ".tag/"
+keep list .tag/act                    # Items under ".tag/act/"
 ```
 
 ## Options
 
-| Option | Description |
+| Argument / Option | Description |
 |--------|-------------|
+| `PREFIX` | Optional positional — filter items by ID prefix |
 | `-n`, `--limit N` | Maximum results (default 10) |
 | `-t`, `--tag KEY=VALUE` | Filter by tag (repeatable, AND logic) |
 | `-T`, `--tags=` | List all tag keys |
@@ -25,6 +28,16 @@ keep list --sort accessed             # Sort by last access time
 | `-P`, `--parts` | Include structural parts (from `analyze`) |
 | `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
 | `-s`, `--store PATH` | Override store directory |
+
+## Prefix filtering
+
+```bash
+keep list .tag                        # All items under ".tag/"
+keep list .tag/act                    # All items under ".tag/act/"
+keep list .meta                       # All meta-doc definitions
+```
+
+Prefix queries always include hidden (dot-prefix) items.
 
 ## Tag filtering
 
