@@ -2480,6 +2480,106 @@ def _tail_ops_log(log_path: Path, kp) -> None:
 
 
 # -----------------------------------------------------------------------------
+# Data Management
+# -----------------------------------------------------------------------------
+
+data_app = typer.Typer(
+    name="data",
+    help="Data management — export, import.",
+    rich_markup_mode=None,
+)
+app.add_typer(data_app)
+
+
+@data_app.command("export")
+def data_export(
+    output: Annotated[str, typer.Argument(
+        help="Output file path (use '-' for stdout)"
+    )],
+    exclude_system: Annotated[bool, typer.Option(
+        "--exclude-system", help="Exclude system documents (dot-prefix IDs)"
+    )] = False,
+    store: StoreOption = None,
+):
+    """Export the store to JSON for backup or migration."""
+    kp = _get_keeper(store)
+    it = kp.export_iter(include_system=not exclude_system)
+    header = next(it)
+
+    dest = sys.stdout if output == "-" else open(output, "w", encoding="utf-8")
+    try:
+        # Write streaming JSON: header fields, then documents array
+        dest.write("{\n")
+        for key in ("format", "version", "exported_at", "store_info"):
+            dest.write(f"  {json.dumps(key)}: {json.dumps(header[key], ensure_ascii=False)},\n")
+        dest.write('  "documents": [\n')
+        first = True
+        for doc in it:
+            if not first:
+                dest.write(",\n")
+            dest.write("    " + json.dumps(doc, ensure_ascii=False))
+            first = False
+        dest.write("\n  ]\n}\n")
+    finally:
+        if dest is not sys.stdout:
+            dest.close()
+    kp.close()
+
+    if output != "-":
+        info = header["store_info"]
+        typer.echo(
+            f"Exported {info['document_count']} documents "
+            f"({info['version_count']} versions, {info['part_count']} parts) "
+            f"to {output}",
+            err=True,
+        )
+
+
+@data_app.command("import")
+def data_import(
+    file: Annotated[str, typer.Argument(help="JSON export file to import")],
+    mode: Annotated[str, typer.Option(
+        "--mode", "-m", help="Import mode: merge (skip existing) or replace (clear first)"
+    )] = "merge",
+    store: StoreOption = None,
+):
+    """Import documents from a JSON export file."""
+    if mode not in ("merge", "replace"):
+        typer.echo(f"Error: --mode must be 'merge' or 'replace', got '{mode}'", err=True)
+        raise SystemExit(1)
+
+    if file == "-":
+        data = json.loads(sys.stdin.read())
+    else:
+        path = Path(file)
+        if not path.exists():
+            typer.echo(f"Error: file not found: {file}", err=True)
+            raise SystemExit(1)
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+    if mode == "replace":
+        doc_count = len(data.get("documents", []))
+        if not typer.confirm(
+            f"This will delete all existing documents and import {doc_count} from {file}. Continue?"
+        ):
+            raise SystemExit(0)
+
+    kp = _get_keeper(store)
+    stats = kp.import_data(data, mode=mode)
+    kp.close()
+
+    typer.echo(
+        f"Imported {stats['imported']} documents "
+        f"({stats['versions']} versions, {stats['parts']} parts), "
+        f"skipped {stats['skipped']}. "
+        f"Queued {stats['queued']} for embedding.",
+        err=True,
+    )
+    if stats["queued"] > 0:
+        typer.echo("Run 'keep pending' to process embeddings.", err=True)
+
+
+# -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------
 

@@ -15,7 +15,7 @@ import re
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -1200,6 +1200,204 @@ class Keeper:
 
         logger.info("Enqueue reindex: %d items + %d versions", enqueued, versions)
         return {"enqueued": enqueued, "versions": versions}
+
+    # -------------------------------------------------------------------------
+    # Data Export / Import
+    # -------------------------------------------------------------------------
+
+    def export_iter(self, *, include_system: bool = True) -> Iterator[dict]:
+        """
+        Stream-export all documents as an iterator of dicts.
+
+        Yields dicts one at a time so that arbitrarily large stores can be
+        exported without loading everything into memory.
+
+        **First yield** — header dict::
+
+            {"format": "keep-export", "version": 1, "exported_at": "...",
+             "store_info": {"document_count": N, "version_count": N,
+                            "part_count": N, "collection": "..."}}
+
+        **Subsequent yields** — one dict per document. Each document is
+        self-contained: its ``versions`` and ``parts`` lists are included
+        inline (not yielded separately)::
+
+            {"id": "...", "summary": "...", "tags": {...},
+             "created_at": "...", "updated_at": "...", "accessed_at": "...",
+             "versions": [...], "parts": [...]}
+
+        Embeddings are excluded (model-dependent; regenerated on import).
+
+        Args:
+            include_system: If False, skip system documents (dot-prefix IDs)
+        """
+        doc_coll = self._resolve_doc_collection()
+        doc_ids = self._document_store.list_ids(doc_coll)
+
+        if not include_system:
+            doc_ids = [d for d in doc_ids if not d.startswith(".")]
+
+        # Header with document count; version/part counts filled per-document
+        # as we stream (header store_info is best-effort for streaming)
+        yield {
+            "format": "keep-export",
+            "version": 1,
+            "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "store_info": {
+                "document_count": len(doc_ids),
+                "version_count": sum(
+                    self._document_store.version_count(doc_coll, d)
+                    for d in doc_ids
+                ),
+                "part_count": sum(
+                    self._document_store.part_count(doc_coll, d)
+                    for d in doc_ids
+                ),
+                "collection": doc_coll,
+            },
+        }
+
+        for doc_id in doc_ids:
+            record = self._document_store.get(doc_coll, doc_id)
+            if record is None:
+                continue
+
+            doc_dict: dict = {
+                "id": record.id,
+                "summary": record.summary,
+                "tags": dict(record.tags),
+                "content_hash": record.content_hash,
+                "content_hash_full": record.content_hash_full,
+                "created_at": record.created_at,
+                "updated_at": record.updated_at,
+                "accessed_at": record.accessed_at,
+            }
+
+            # Versions — inline within the document dict
+            versions = []
+            for vi in self._document_store.list_versions(doc_coll, doc_id, limit=10000):
+                versions.append({
+                    "version": vi.version,
+                    "summary": vi.summary,
+                    "tags": dict(vi.tags),
+                    "content_hash": vi.content_hash,
+                    "created_at": vi.created_at,
+                })
+            if versions:
+                doc_dict["versions"] = versions
+
+            # Parts — inline within the document dict
+            parts = []
+            for pi in self._document_store.list_parts(doc_coll, doc_id):
+                parts.append({
+                    "part_num": pi.part_num,
+                    "summary": pi.summary,
+                    "tags": dict(pi.tags),
+                    "content": pi.content,
+                    "created_at": pi.created_at,
+                })
+            if parts:
+                doc_dict["parts"] = parts
+
+            yield doc_dict
+
+    def export_data(self, *, include_system: bool = True) -> dict:
+        """
+        Export all documents, versions, and parts as a single dict.
+
+        Convenience wrapper around :meth:`export_iter` that collects everything
+        into memory.  Fine for small/medium stores; for large stores use
+        ``export_iter()`` directly to stream documents.
+
+        Returns:
+            Dict in keep-export format (version 1) with a ``documents`` list.
+        """
+        it = self.export_iter(include_system=include_system)
+        header = next(it)
+        header["documents"] = list(it)
+        return header
+
+    def import_data(self, data: dict, *, mode: str = "merge") -> dict:
+        """
+        Import documents from an export dict.
+
+        All SQLite writes happen in a single transaction for speed.
+        Re-embedding is queued for background processing (not done inline).
+
+        Args:
+            data: Dict in keep-export format
+            mode: "merge" (skip existing IDs) or "replace" (clear first)
+
+        Returns:
+            Dict with stats: {imported, skipped, versions, parts, queued}
+        """
+        if data.get("format") != "keep-export":
+            raise ValueError("Invalid export format (expected 'keep-export')")
+        if data.get("version", 0) > 1:
+            raise ValueError(
+                f"Export format version {data['version']} is not supported "
+                f"(this version supports up to 1)"
+            )
+
+        doc_coll = self._resolve_doc_collection()
+        documents = data.get("documents", [])
+
+        if mode == "replace":
+            self._document_store.delete_collection_all(doc_coll)
+            chroma_coll = self._resolve_chroma_collection()
+            try:
+                self._store.delete_collection(chroma_coll)
+            except Exception:
+                pass  # ChromaDB collection may not exist yet
+
+        # In merge mode, get existing IDs to skip
+        existing_ids: set[str] = set()
+        if mode == "merge":
+            existing_ids = set(self._document_store.list_ids(doc_coll))
+
+        # Filter to importable documents
+        to_import = []
+        skipped = 0
+        for doc in documents:
+            if doc["id"] in existing_ids:
+                skipped += 1
+            else:
+                to_import.append(doc)
+
+        # Batch-insert all documents, versions, parts in one transaction
+        stats = self._document_store.import_batch(doc_coll, to_import)
+
+        # Bulk-enqueue reindex tasks for all imported documents
+        queued = 0
+        for doc in to_import:
+            doc_id = doc["id"]
+            self._pending_queue.enqueue(
+                doc_id, doc_coll, doc.get("summary", ""),
+                task_type="reindex",
+                metadata={"tags": doc.get("tags", {})},
+            )
+            queued += 1
+
+            # Enqueue version reindex
+            for ver in doc.get("versions", []):
+                version_id = f"{doc_id}@v{ver['version']}"
+                self._pending_queue.enqueue(
+                    version_id, doc_coll, ver.get("summary", ""),
+                    task_type="reindex",
+                    metadata={
+                        "version": ver["version"],
+                        "base_id": doc_id,
+                        "tags": ver.get("tags", {}),
+                    },
+                )
+
+        return {
+            "imported": stats["documents"],
+            "skipped": skipped,
+            "versions": stats["versions"],
+            "parts": stats["parts"],
+            "queued": queued,
+        }
 
     @property
     def embedding_identity(self) -> EmbeddingIdentity | None:

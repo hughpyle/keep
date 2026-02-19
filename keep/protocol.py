@@ -6,7 +6,7 @@ Defines interface contracts at two levels:
 - VectorStoreProtocol / DocumentStoreProtocol: internal storage backends
 """
 
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Iterator, Optional, Protocol, runtime_checkable
 
 from .document_store import DocumentRecord, PartInfo, VersionInfo
 from .pending_summaries import PendingSummary
@@ -171,6 +171,18 @@ class KeeperProtocol(Protocol):
     def list_collections(self) -> list[str]: ...
 
     def count(self) -> int: ...
+
+    # -- Data export / import --
+
+    def export_iter(self, *, include_system: bool = True) -> Iterator[dict]:
+        """Stream-export documents. Yields header dict first, then one
+        self-contained dict per document (versions and parts inline).
+        """
+        ...
+
+    def export_data(self, *, include_system: bool = True) -> dict: ...
+
+    def import_data(self, data: dict, *, mode: str = "merge") -> dict: ...
 
     def close(self) -> None: ...
 
@@ -472,6 +484,14 @@ class DocumentStoreProtocol(Protocol):
     def list_collections(self) -> list[str]: ...
 
     def delete_collection(self, collection: str) -> int: ...
+
+    # -- Bulk import --
+
+    def delete_collection_all(self, collection: str) -> int: ...
+
+    def import_batch(
+        self, collection: str, documents: list[dict]
+    ) -> dict: ...
 
     def close(self) -> None: ...
 

@@ -1748,6 +1748,122 @@ class DocumentStore:
         return cursor.rowcount
     
     # -------------------------------------------------------------------------
+    # Bulk Import
+    # -------------------------------------------------------------------------
+
+    def delete_collection_all(self, collection: str) -> int:
+        """
+        Delete all documents, versions, and parts in a collection.
+
+        Unlike delete_collection(), this also clears version history
+        and parts tables.
+
+        Args:
+            collection: Collection name
+
+        Returns:
+            Number of documents deleted
+        """
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = self._conn.execute(
+                    "DELETE FROM documents WHERE collection = ?", (collection,))
+                doc_count = cursor.rowcount
+                self._conn.execute(
+                    "DELETE FROM document_versions WHERE collection = ?", (collection,))
+                self._conn.execute(
+                    "DELETE FROM document_parts WHERE collection = ?", (collection,))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return doc_count
+
+    def import_batch(
+        self,
+        collection: str,
+        documents: list[dict],
+    ) -> dict:
+        """
+        Bulk-insert documents with versions and parts in a single transaction.
+
+        Bypasses the normal upsert/archive logic — no auto-timestamping,
+        no version archiving. Intended for data import/restore.
+
+        Each document dict must have:
+            id, summary, tags (dict), created_at, updated_at, accessed_at,
+            content_hash (optional), content_hash_full (optional),
+            versions (list of version dicts), parts (list of part dicts).
+
+        Version dicts: version, summary, tags, content_hash, created_at.
+        Part dicts: part_num, summary, tags, content, created_at.
+
+        Args:
+            collection: Target collection name
+            documents: List of document dicts in export format
+
+        Returns:
+            Dict with stats: {documents: int, versions: int, parts: int}
+        """
+        doc_count = 0
+        ver_count = 0
+        part_count = 0
+
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                for doc in documents:
+                    tags_json = json.dumps(doc.get("tags", {}), ensure_ascii=False)
+                    self._conn.execute("""
+                        INSERT OR REPLACE INTO documents
+                        (id, collection, summary, tags_json, created_at,
+                         updated_at, content_hash, content_hash_full, accessed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        doc["id"], collection, doc.get("summary", ""),
+                        tags_json, doc["created_at"], doc["updated_at"],
+                        doc.get("content_hash"), doc.get("content_hash_full"),
+                        doc.get("accessed_at", doc["updated_at"]),
+                    ))
+                    doc_count += 1
+
+                    for ver in doc.get("versions", []):
+                        ver_tags_json = json.dumps(ver.get("tags", {}), ensure_ascii=False)
+                        self._conn.execute("""
+                            INSERT OR REPLACE INTO document_versions
+                            (id, collection, version, summary, tags_json,
+                             content_hash, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            doc["id"], collection, ver["version"],
+                            ver.get("summary", ""), ver_tags_json,
+                            ver.get("content_hash"), ver["created_at"],
+                        ))
+                        ver_count += 1
+
+                    for part in doc.get("parts", []):
+                        part_tags_json = json.dumps(part.get("tags", {}), ensure_ascii=False)
+                        self._conn.execute("""
+                            INSERT OR REPLACE INTO document_parts
+                            (id, collection, part_num, summary, tags_json,
+                             content, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            doc["id"], collection, part["part_num"],
+                            part.get("summary", ""), part_tags_json,
+                            part.get("content", ""), part["created_at"],
+                        ))
+                        part_count += 1
+
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+        return {"documents": doc_count, "versions": ver_count, "parts": part_count}
+
+    # -------------------------------------------------------------------------
     # Lifecycle
     # -------------------------------------------------------------------------
     
