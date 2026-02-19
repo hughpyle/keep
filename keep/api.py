@@ -2282,7 +2282,7 @@ class Keeper:
         **extra_tags: str
     ) -> list[Item]:
         """
-        Find items by tag(s). Convenience wrapper for :meth:`list`.
+        Find items by tag(s). Convenience wrapper for :meth:`list_items`.
 
         Usage:
             query_tag("project")                    # key only (any value)
@@ -3408,7 +3408,7 @@ class Keeper:
         include_history: bool = False,
         include_hidden: bool = False,
     ) -> list[Item]:
-        """List recent items. Convenience wrapper for :meth:`list`."""
+        """List recent items. Convenience wrapper for :meth:`list_items`."""
         return self.list_items(
             since=since, until=until, order_by=order_by,
             include_history=include_history, include_hidden=include_hidden,
