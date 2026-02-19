@@ -59,6 +59,7 @@ coverage.xml
 
 # Project specific
 .keep/
+chroma/
 test_extraction_store/
 .DS_Store
 .claude/settings.local.json
