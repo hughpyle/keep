@@ -19,7 +19,7 @@ keep get "ID@V{1}"                    # Same as -V 1 (version identifier syntax)
 | `-H`, `--history` | List all versions (default 10, use `-n` to override) |
 | `-S`, `--similar` | List similar items (default 10) |
 | `-M`, `--meta` | List meta items |
-| `-R`, `--resolve QUERY` | Inline meta query (metadoc syntax, repeatable) |
+| `-R`, `--resolve QUERY` | Inline meta query (meta-tag syntax, repeatable) |
 | `-P`, `--parts` | List structural parts (from `analyze`) |
 | `-t`, `--tag KEY=VALUE` | Require tag (error if item doesn't match) |
 | `-n`, `--limit N` | Max items for --history, --similar, --meta (default 10) |

@@ -208,7 +208,7 @@ delete(id)
 **1. Schema as Data**
 - System configuration stored as documents in the store (e.g. `.now`, `.tag/*`)
 - Enables agents to query and update behavior through the same API
-- Meta-documents resolve related context at retrieval time
+- Meta-tags resolve related context at retrieval time
 
 **2. Lazy Provider Loading**
 - Providers registered at first use, not import time
