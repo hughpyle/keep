@@ -37,20 +37,17 @@ Works across all your tools (Claude Code, Kiro, Codex) with the same API key. Pr
 ### Ollama (Recommended Local Option)
 
 [Ollama](https://ollama.com/) is the easiest way to run keep locally with no API keys.
-Install Ollama, pull two models, and you're done:
+Install Ollama and go — keep handles the rest:
 
 ```bash
 # 1. Install Ollama from https://ollama.com/
-# 2. Pull models:
-ollama pull nomic-embed-text        # Embeddings (768d, 8K context)
-ollama pull gemma3:1b               # Summarization (fast, good quality)
-# 3. That's it:
-keep put "test"                     # Auto-detected on first run
+# 2. That's it:
+keep put "test"                     # Auto-detected, models pulled automatically
 ```
 
-Keep auto-detects Ollama — no configuration needed. It picks the best available
-model for each task: dedicated embedding models for embeddings, generative
-models for summarization. Respects `OLLAMA_HOST` if set.
+Keep auto-detects Ollama and pulls the models it needs on first use. It picks
+the best available model for each task: dedicated embedding models for
+embeddings, generative models for summarization. Respects `OLLAMA_HOST` if set.
 
 Ollama runs models in a separate server process, so keep itself stays lightweight
 (~36 MB RSS) regardless of model size. This also means a crash in the model
