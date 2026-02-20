@@ -258,18 +258,17 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
                 collection=doc_coll, id=new_id, summary=content,
                 tags=tags, content_hash=bundled_hash,
             )
-            # Also embed to ChromaDB if provider is available.
-            # Cloud mode skips - embedding is deferred to background worker.
-            if keeper._is_local:
-                try:
-                    embedding = keeper._get_embedding_provider().embed(content)
-                    keeper._store.upsert(
-                        collection=chroma_coll_name, id=new_id,
-                        embedding=embedding, summary=content,
-                        tags=casefold_tags_for_index(tags),
-                    )
-                except (RuntimeError, Exception) as e:
-                    logger.debug("Skipped embedding for system doc %s: %s", new_id, e)
+            # Enqueue embedding as background work instead of blocking
+            # the first write. System docs are reference material —
+            # they don't need to be searchable immediately.
+            try:
+                keeper._pending_queue.enqueue(
+                    new_id, doc_coll, content,
+                    task_type="reindex",
+                    metadata={"tags": dict(tags)},
+                )
+            except Exception as e:
+                logger.debug("Could not enqueue system doc %s for embedding: %s", new_id, e)
             if existing_doc:
                 stats["migrated"] += 1
                 logger.info("Updated system doc: %s", new_id)
@@ -281,6 +280,14 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
 
     keeper._config.system_docs_version = SYSTEM_DOCS_VERSION
     save_config(keeper._config)
+
+    n_enqueued = stats["created"] + stats["migrated"]
+    if n_enqueued > 0:
+        logger.info(
+            "System docs migration: %d created, %d updated, %d skipped. "
+            "Enqueued %d for background embedding.",
+            stats["created"], stats["migrated"], stats["skipped"], n_enqueued,
+        )
 
     return stats
 

@@ -105,6 +105,9 @@ class TestDeferredEmbedding:
         # Injected stores → _is_local=False (cloud path)
         assert not kp._is_local
 
+        # Skip system doc migration — these tests focus on user doc embedding
+        kp._needs_sysdoc_migration = False
+
         # Wire up the mock embedding provider and reset call counters
         # (Keeper init may trigger reconciliation that calls embed)
         embed_prov = mock_providers["embedding"]
@@ -112,6 +115,9 @@ class TestDeferredEmbedding:
         kp._embedding_provider_loaded = True
         embed_prov.embed_calls = 0
         embed_prov.batch_calls = 0
+
+        # Clear any items enqueued during init
+        queue.clear()
 
         return kp, queue
 
@@ -316,10 +322,12 @@ class TestEmbeddingDedup:
             vector_store=vector_store,
             pending_queue=queue,
         )
+        kp._needs_sysdoc_migration = False
         embed = mock_providers["embedding"]
         kp._embedding_provider = embed
         kp._embedding_provider_loaded = True
         embed.embed_calls = 0
+        queue.clear()
 
         # First put defers embedding (cloud mode) — donor in doc store but no vector entry
         kp.put("shared content", id="file-a")
@@ -394,10 +402,12 @@ class TestEmbeddingDedup:
             vector_store=vector_store,
             pending_queue=queue,
         )
+        kp._needs_sysdoc_migration = False
         embed = mock_providers["embedding"]
         kp._embedding_provider = embed
         kp._embedding_provider_loaded = True
         embed.embed_calls = 0
+        queue.clear()
 
         # First put + process: donor gets an embedding
         kp.put("shared content", id="file-a")
