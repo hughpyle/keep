@@ -231,14 +231,8 @@ class OllamaSummarization:
         base_url: str | None = None,
     ):
         self.model = model
-        if base_url is None:
-            base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        if not base_url.startswith("http"):
-            base_url = f"http://{base_url}"
-        self.base_url = base_url.rstrip("/")
-
-        # Ensure model is available (auto-pull if missing)
-        from .ollama_utils import ollama_ensure_model
+        from .ollama_utils import ollama_base_url, ollama_ensure_model
+        self.base_url = ollama_base_url(base_url)
         ollama_ensure_model(self.base_url, self.model)
 
     def summarize(
@@ -501,18 +495,8 @@ class OpenAITagging:
     Tagging provider using OpenAI's chat API with JSON output.
     """
     
-    SYSTEM_PROMPT = """Analyze the document and generate relevant tags as a JSON object.
+    SYSTEM_PROMPT = AnthropicTagging.SYSTEM_PROMPT
 
-Generate tags for these categories when applicable:
-- content_type: The type of content (e.g., "documentation", "code", "article", "config")
-- language: Programming language if code (e.g., "python", "javascript")
-- domain: Subject domain (e.g., "authentication", "database", "api", "testing")
-- framework: Framework or library if relevant (e.g., "react", "django", "fastapi")
-
-Only include tags that clearly apply. Values should be lowercase.
-
-Respond with a JSON object only, no explanation."""
-    
     def __init__(
         self,
         model: str = "gpt-4.1-mini",
@@ -577,14 +561,8 @@ class OllamaTagging:
         base_url: str | None = None,
     ):
         self.model = model
-        if base_url is None:
-            base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        if not base_url.startswith("http"):
-            base_url = f"http://{base_url}"
-        self.base_url = base_url.rstrip("/")
-
-        # Ensure model is available (auto-pull if missing)
-        from .ollama_utils import ollama_ensure_model
+        from .ollama_utils import ollama_base_url, ollama_ensure_model
+        self.base_url = ollama_base_url(base_url)
         ollama_ensure_model(self.base_url, self.model)
 
     def tag(self, content: str) -> dict[str, str]:
@@ -710,14 +688,8 @@ class OllamaMediaDescriber:
         base_url: str | None = None,
     ):
         self.model = model
-        if base_url is None:
-            base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        if not base_url.startswith("http"):
-            base_url = f"http://{base_url}"
-        self.base_url = base_url.rstrip("/")
-
-        # Ensure model is available (auto-pull if missing)
-        from .ollama_utils import ollama_ensure_model
+        from .ollama_utils import ollama_base_url, ollama_ensure_model
+        self.base_url = ollama_base_url(base_url)
         ollama_ensure_model(self.base_url, self.model)
 
     def describe(self, path: str, content_type: str) -> str | None:

@@ -94,32 +94,8 @@ class FirstParagraphSummarizer:
         return truncated.strip() + self.suffix
 
 
-class PassthroughSummarizer:
-    """
-    No-op summarizer that returns content as-is (or truncated).
-    
-    Useful when you want to store the full content as the summary.
-    """
-    
-    def __init__(self, max_length: int = 10000):
-        self.max_length = max_length
-    
-    def summarize(
-        self,
-        content: str,
-        *,
-        max_length: int | None = None,
-        context: str | None = None,
-    ) -> str:
-        """Return content, possibly truncated to max length. Context is ignored."""
-        limit = max_length or self.max_length
-        if len(content) <= limit:
-            return content
-        return content[:limit]
-
-
 # Register providers
+# Note: "passthrough" is registered in providers/llm.py (PassthroughSummarization)
 _registry = get_registry()
 _registry.register_summarization("truncate", TruncationSummarizer)
 _registry.register_summarization("first_paragraph", FirstParagraphSummarizer)
-_registry.register_summarization("passthrough", PassthroughSummarizer)

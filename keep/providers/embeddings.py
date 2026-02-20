@@ -241,15 +241,9 @@ class OllamaEmbedding:
             base_url: Ollama API base URL (default: OLLAMA_HOST or http://localhost:11434)
         """
         self.model_name = model
-        if base_url is None:
-            base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        if not base_url.startswith("http"):
-            base_url = f"http://{base_url}"
-        self.base_url = base_url.rstrip("/")
+        from .ollama_utils import ollama_base_url, ollama_ensure_model
+        self.base_url = ollama_base_url(base_url)
         self._dimension: int | None = None
-
-        # Ensure model is available (auto-pull if missing)
-        from .ollama_utils import ollama_ensure_model
         ollama_ensure_model(self.base_url, self.model_name)
 
     @property
