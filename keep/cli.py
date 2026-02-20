@@ -1488,6 +1488,179 @@ def get(
         raise typer.Exit(1)
 
 
+def _get_part_direct(kp: Keeper, actual_id: str, part_num: int) -> Optional[str]:
+    """Get a single part by ID@P{N} and return formatted output."""
+    item = kp.get_part(actual_id, part_num)
+    if item is None:
+        typer.echo(f"Part not found: {actual_id}@P{{{part_num}}}", err=True)
+        return None
+
+    if _get_ids_output():
+        return f"{_shell_quote_id(actual_id)}@P{{{part_num}}}"
+    if _get_json_output():
+        return json.dumps({
+            "id": actual_id,
+            "part": part_num,
+            "total_parts": int(item.tags.get("_total_parts", 0)),
+            "summary": item.summary,
+            "tags": _filter_display_tags(item.tags),
+        }, indent=2)
+
+    total = int(item.tags.get("_total_parts", 0))
+    lines = ["---", f"id: {_shell_quote_id(actual_id)}@P{{{part_num}}}"]
+    display_tags = _filter_display_tags(item.tags)
+    if display_tags:
+        tag_items = ", ".join(f"{k}: {v}" for k, v in sorted(display_tags.items()))
+        lines.append(f"tags: {{{tag_items}}}")
+    if part_num > 1:
+        lines.append("prev:")
+        lines.append(f"  - @P{{{part_num - 1}}}")
+    if part_num < total:
+        lines.append("next:")
+        lines.append(f"  - @P{{{part_num + 1}}}")
+    lines.append("---")
+    lines.append(item.summary)
+    return "\n".join(lines)
+
+
+def _get_parts_list(kp: Keeper, actual_id: str) -> str:
+    """List all parts of a document."""
+    part_list = kp.list_parts(actual_id)
+    if _get_ids_output():
+        return "\n".join(f"{actual_id}@P{{{p.part_num}}}" for p in part_list)
+    if _get_json_output():
+        result = {
+            "id": actual_id,
+            "parts": [
+                {
+                    "part": p.part_num,
+                    "pid": f"{actual_id}@P{{{p.part_num}}}",
+                    "summary": p.summary[:100],
+                    "tags": {k: v for k, v in p.tags.items() if not k.startswith("_")},
+                }
+                for p in part_list
+            ],
+        }
+        return json.dumps(result, indent=2)
+    if not part_list:
+        return f"No parts for {actual_id}. Use 'keep analyze {actual_id}' to create parts."
+    lines = [f"Parts for {actual_id}:"]
+    for p in part_list:
+        summary_preview = p.summary[:60].replace("\n", " ")
+        if len(p.summary) > 60:
+            summary_preview += "..."
+        lines.append(f"  @P{{{p.part_num}}} {summary_preview}")
+    return "\n".join(lines)
+
+
+def _get_similar_list(kp: Keeper, actual_id: str, limit: int) -> str:
+    """List similar items for a document."""
+    similar_items = kp.get_similar_for_display(actual_id, limit=limit)
+    similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+
+    if _get_ids_output():
+        lines = []
+        for item in similar_items:
+            base_id = item.tags.get("_base_id", item.id)
+            offset = similar_offsets.get(item.id, 0)
+            lines.append(f"{base_id}@V{{{offset}}}")
+        return "\n".join(lines)
+    if _get_json_output():
+        result = {
+            "id": actual_id,
+            "similar": [
+                {
+                    "id": f"{item.tags.get('_base_id', item.id)}@V{{{similar_offsets.get(item.id, 0)}}}",
+                    "score": item.score,
+                    "date": local_date(item.tags.get("_updated") or item.tags.get("_created", "")),
+                    "summary": item.summary[:60],
+                }
+                for item in similar_items
+            ],
+        }
+        return json.dumps(result, indent=2)
+    lines = [f"Similar to {actual_id}:"]
+    if similar_items:
+        for item in similar_items:
+            base_id = item.tags.get("_base_id", item.id)
+            offset = similar_offsets.get(item.id, 0)
+            score_str = f"({item.score:.2f})" if item.score else ""
+            date_part = local_date(item.tags.get("_updated") or item.tags.get("_created", ""))
+            summary_preview = item.summary[:50].replace("\n", " ")
+            if len(item.summary) > 50:
+                summary_preview += "..."
+            lines.append(f"  {base_id}@V{{{offset}}} {score_str} {date_part} {summary_preview}")
+    else:
+        lines.append("  No similar notes found.")
+    return "\n".join(lines)
+
+
+def _get_meta_list(kp: Keeper, actual_id: str, limit: int) -> str:
+    """List meta items for a document."""
+    meta_sections = kp.resolve_meta(actual_id, limit_per_doc=limit)
+    if _get_ids_output():
+        lines = []
+        for name, items in meta_sections.items():
+            for item in items:
+                lines.append(_shell_quote_id(item.id))
+        return "\n".join(lines)
+    if _get_json_output():
+        result = {
+            "id": actual_id,
+            "meta": {
+                name: [{"id": item.id, "summary": item.summary[:60]} for item in items]
+                for name, items in meta_sections.items()
+            },
+        }
+        return json.dumps(result, indent=2)
+    lines = [f"Meta for {actual_id}:"]
+    for name, items in meta_sections.items():
+        lines.append(f"  {name}:")
+        for item in items:
+            summary_preview = item.summary[:50].replace("\n", " ")
+            if len(item.summary) > 50:
+                summary_preview += "..."
+            lines.append(f"    {_shell_quote_id(item.id)}  {summary_preview}")
+    if len(lines) == 1:
+        lines.append("  No meta notes found.")
+    return "\n".join(lines)
+
+
+def _get_resolve_list(kp: Keeper, actual_id: str, resolve: list[str], limit: int) -> str:
+    """Resolve inline meta-doc syntax strings."""
+    from .api import _parse_meta_doc
+    all_queries: list[dict[str, str]] = []
+    all_context: list[str] = []
+    all_prereqs: list[str] = []
+    for r in resolve:
+        q, c, p = _parse_meta_doc(r)
+        all_queries.extend(q)
+        all_context.extend(c)
+        all_prereqs.extend(p)
+    all_context = list(dict.fromkeys(all_context))
+    all_prereqs = list(dict.fromkeys(all_prereqs))
+    items = kp.resolve_inline_meta(
+        actual_id, all_queries, all_context, all_prereqs, limit=limit,
+    )
+    if _get_ids_output():
+        return "\n".join(_shell_quote_id(item.id) for item in items)
+    if _get_json_output():
+        result = {
+            "id": actual_id,
+            "resolve": [{"id": item.id, "summary": item.summary[:60]} for item in items],
+        }
+        return json.dumps(result, indent=2)
+    lines = [f"Resolve for {actual_id}:"]
+    for item in items:
+        summary_preview = item.summary[:50].replace("\n", " ")
+        if len(item.summary) > 50:
+            summary_preview += "..."
+        lines.append(f"  {_shell_quote_id(item.id)}  {summary_preview}")
+    if len(lines) == 1:
+        lines.append("  No matching notes found.")
+    return "\n".join(lines)
+
+
 def _get_one(
     kp: Keeper,
     one_id: str,
@@ -1509,210 +1682,39 @@ def _get_one(
     part_from_id = None
 
     if kp.exists(one_id):
-        # Literal ID exists - use it directly (prevents confusion attacks)
         actual_id = one_id
     else:
-        # Try parsing @P{N} suffix first
         match = PART_SUFFIX_PATTERN.search(one_id)
         if match:
             part_from_id = int(match.group(1))
             actual_id = one_id[:match.start()]
         else:
-            # Try parsing @V{N} suffix
             match = VERSION_SUFFIX_PATTERN.search(one_id)
             if match:
                 version_from_id = int(match.group(1))
                 actual_id = one_id[:match.start()]
 
-    # Version from ID only applies if --version not explicitly provided
     effective_version = version
     if version is None and version_from_id is not None:
         effective_version = version_from_id
 
-    # Part addressing: return part directly
+    # Dispatch to sub-mode handlers
     if part_from_id is not None:
-        item = kp.get_part(actual_id, part_from_id)
-        if item is None:
-            typer.echo(f"Part not found: {actual_id}@P{{{part_from_id}}}", err=True)
-            return None
-
-        if _get_ids_output():
-            return f"{_shell_quote_id(actual_id)}@P{{{part_from_id}}}"
-        if _get_json_output():
-            return json.dumps({
-                "id": actual_id,
-                "part": part_from_id,
-                "total_parts": int(item.tags.get("_total_parts", 0)),
-                "summary": item.summary,
-                "tags": _filter_display_tags(item.tags),
-            }, indent=2)
-
-        # Build part navigation
-        total = int(item.tags.get("_total_parts", 0))
-        lines = ["---", f"id: {_shell_quote_id(actual_id)}@P{{{part_from_id}}}"]
-        display_tags = _filter_display_tags(item.tags)
-        if display_tags:
-            tag_items = ", ".join(f"{k}: {v}" for k, v in sorted(display_tags.items()))
-            lines.append(f"tags: {{{tag_items}}}")
-        # Part navigation
-        if part_from_id > 1:
-            lines.append("prev:")
-            lines.append(f"  - @P{{{part_from_id - 1}}}")
-        if part_from_id < total:
-            lines.append("next:")
-            lines.append(f"  - @P{{{part_from_id + 1}}}")
-        lines.append("---")
-        lines.append(item.summary)
-        return "\n".join(lines)
-
+        return _get_part_direct(kp, actual_id, part_from_id)
     if history:
-        # List all versions
         versions = kp.list_versions(actual_id, limit=limit)
         current = kp.get(actual_id)
-        items = _versions_to_items(actual_id, current, versions)
-        return _format_items(items, as_json=_get_json_output())
-
+        return _format_items(_versions_to_items(actual_id, current, versions), as_json=_get_json_output())
     if show_parts:
-        # List all parts
-        part_list = kp.list_parts(actual_id)
-        if _get_ids_output():
-            return "\n".join(f"{actual_id}@P{{{p.part_num}}}" for p in part_list)
-        elif _get_json_output():
-            result = {
-                "id": actual_id,
-                "parts": [
-                    {
-                        "part": p.part_num,
-                        "pid": f"{actual_id}@P{{{p.part_num}}}",
-                        "summary": p.summary[:100],
-                        "tags": {k: v for k, v in p.tags.items() if not k.startswith("_")},
-                    }
-                    for p in part_list
-                ],
-            }
-            return json.dumps(result, indent=2)
-        else:
-            if not part_list:
-                return f"No parts for {actual_id}. Use 'keep analyze {actual_id}' to create parts."
-            lines = [f"Parts for {actual_id}:"]
-            for p in part_list:
-                summary_preview = p.summary[:60].replace("\n", " ")
-                if len(p.summary) > 60:
-                    summary_preview += "..."
-                lines.append(f"  @P{{{p.part_num}}} {summary_preview}")
-            return "\n".join(lines)
-
+        return _get_parts_list(kp, actual_id)
     if similar:
-        # List similar items
-        similar_items = kp.get_similar_for_display(actual_id, limit=limit)
-        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-
-        if _get_ids_output():
-            # Output version-scoped IDs one per line
-            lines = []
-            for item in similar_items:
-                base_id = item.tags.get("_base_id", item.id)
-                offset = similar_offsets.get(item.id, 0)
-                lines.append(f"{base_id}@V{{{offset}}}")
-            return "\n".join(lines)
-        elif _get_json_output():
-            result = {
-                "id": actual_id,
-                "similar": [
-                    {
-                        "id": f"{item.tags.get('_base_id', item.id)}@V{{{similar_offsets.get(item.id, 0)}}}",
-                        "score": item.score,
-                        "date": local_date(item.tags.get("_updated") or item.tags.get("_created", "")),
-                        "summary": item.summary[:60],
-                    }
-                    for item in similar_items
-                ],
-            }
-            return json.dumps(result, indent=2)
-        else:
-            lines = [f"Similar to {actual_id}:"]
-            if similar_items:
-                for item in similar_items:
-                    base_id = item.tags.get("_base_id", item.id)
-                    offset = similar_offsets.get(item.id, 0)
-                    score_str = f"({item.score:.2f})" if item.score else ""
-                    date_part = local_date(item.tags.get("_updated") or item.tags.get("_created", ""))
-                    summary_preview = item.summary[:50].replace("\n", " ")
-                    if len(item.summary) > 50:
-                        summary_preview += "..."
-                    lines.append(f"  {base_id}@V{{{offset}}} {score_str} {date_part} {summary_preview}")
-            else:
-                lines.append("  No similar notes found.")
-            return "\n".join(lines)
-
+        return _get_similar_list(kp, actual_id, limit)
     if meta:
-        # List meta items for this ID
-        meta_sections = kp.resolve_meta(actual_id, limit_per_doc=limit)
-        if _get_ids_output():
-            lines = []
-            for name, items in meta_sections.items():
-                for item in items:
-                    lines.append(_shell_quote_id(item.id))
-            return "\n".join(lines)
-        elif _get_json_output():
-            result = {
-                "id": actual_id,
-                "meta": {
-                    name: [{"id": item.id, "summary": item.summary[:60]} for item in items]
-                    for name, items in meta_sections.items()
-                },
-            }
-            return json.dumps(result, indent=2)
-        else:
-            lines = [f"Meta for {actual_id}:"]
-            for name, items in meta_sections.items():
-                lines.append(f"  {name}:")
-                for item in items:
-                    summary_preview = item.summary[:50].replace("\n", " ")
-                    if len(item.summary) > 50:
-                        summary_preview += "..."
-                    lines.append(f"    {_shell_quote_id(item.id)}  {summary_preview}")
-            if len(lines) == 1:
-                lines.append("  No meta notes found.")
-            return "\n".join(lines)
-
+        return _get_meta_list(kp, actual_id, limit)
     if resolve:
-        # Inline meta-resolve: parse metadoc-syntax strings, union results
-        from .api import _parse_meta_doc
-        all_queries: list[dict[str, str]] = []
-        all_context: list[str] = []
-        all_prereqs: list[str] = []
-        for r in resolve:
-            q, c, p = _parse_meta_doc(r)
-            all_queries.extend(q)
-            all_context.extend(c)
-            all_prereqs.extend(p)
-        # Deduplicate context/prereq keys
-        all_context = list(dict.fromkeys(all_context))
-        all_prereqs = list(dict.fromkeys(all_prereqs))
-        items = kp.resolve_inline_meta(
-            actual_id, all_queries, all_context, all_prereqs, limit=limit,
-        )
-        if _get_ids_output():
-            return "\n".join(_shell_quote_id(item.id) for item in items)
-        elif _get_json_output():
-            result = {
-                "id": actual_id,
-                "resolve": [{"id": item.id, "summary": item.summary[:60]} for item in items],
-            }
-            return json.dumps(result, indent=2)
-        else:
-            lines = [f"Resolve for {actual_id}:"]
-            for item in items:
-                summary_preview = item.summary[:50].replace("\n", " ")
-                if len(item.summary) > 50:
-                    summary_preview += "..."
-                lines.append(f"  {_shell_quote_id(item.id)}  {summary_preview}")
-            if len(lines) == 1:
-                lines.append("  No matching notes found.")
-            return "\n".join(lines)
+        return _get_resolve_list(kp, actual_id, resolve, limit)
 
-    # Assemble complete display context
+    # Default: full context view
     offset = effective_version if effective_version is not None else 0
     ctx = kp.get_context(actual_id, version=offset if offset > 0 else None)
     if ctx is None:
@@ -1722,7 +1724,6 @@ def _get_one(
             typer.echo(f"Not found: {actual_id}", err=True)
         return None
 
-    # Check tag filter if specified
     if tag:
         filtered = _filter_by_tags([ctx.item], tag)
         if not filtered:
