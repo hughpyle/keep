@@ -3840,6 +3840,7 @@ class Keeper:
         if not spawn_lock.acquire(blocking=False):
             return False
 
+        log_fd = None
         try:
             if self._is_processor_running():
                 return False
