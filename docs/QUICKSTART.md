@@ -8,13 +8,18 @@ Use [uv](https://docs.astral.sh/uv/) (recommended) or pip:
 uv tool install keep-skill
 ```
 
-For LangChain/LangGraph integration:
+**Local use:** If [Ollama](https://ollama.com/) is running, keep auto-detects it — no API keys needed. Otherwise set a provider API key (see below).
+
+**Apple Silicon MLX:** For in-process local models without Ollama, install the `[local]` extra:
+```bash
+uv tool install 'keep-skill[local]'
+```
+Note: Ollama generally has better stability and performance than MLX for background processing. MLX models run in-process and use ~1 GB+ of unified memory.
+
+**LangChain/LangGraph integration:**
 ```bash
 pip install keep-skill[langchain]    # or: pip install langchain-keep
 ```
-
-API providers for Voyage, OpenAI, Anthropic, and Gemini are included.
-
 
 ## Provider Configuration
 
@@ -28,6 +33,28 @@ keep put "test"                    # That's it — storage, search, and summariz
 ```
 
 Works across all your tools (Claude Code, Kiro, Codex) with the same API key. Project isolation, media pipelines, and backups are managed for you.
+
+### Ollama (Recommended Local Option)
+
+[Ollama](https://ollama.com/) is the easiest way to run keep locally with no API keys.
+Install Ollama, pull two models, and you're done:
+
+```bash
+# 1. Install Ollama from https://ollama.com/
+# 2. Pull models:
+ollama pull nomic-embed-text        # Embeddings (768d, 8K context)
+ollama pull gemma3:1b               # Summarization (fast, good quality)
+# 3. That's it:
+keep put "test"                     # Auto-detected on first run
+```
+
+Keep auto-detects Ollama — no configuration needed. It picks the best available
+model for each task: dedicated embedding models for embeddings, generative
+models for summarization. Respects `OLLAMA_HOST` if set.
+
+Ollama runs models in a separate server process, so keep itself stays lightweight
+(~36 MB RSS) regardless of model size. This also means a crash in the model
+server won't take down your machine.
 
 ### API Providers
 
@@ -63,33 +90,12 @@ export ANTHROPIC_API_KEY=...   # Summarization (cost-effective: claude-3-haiku)
 keep put "test"
 ```
 
-### Ollama (Recommended Local Option)
-
-[Ollama](https://ollama.com/) is the easiest way to run keep locally with no API keys.
-Install Ollama, pull two models, and you're done:
-
-```bash
-# 1. Install Ollama from https://ollama.com/
-# 2. Pull models:
-ollama pull nomic-embed-text        # Embeddings (768d, 8K context)
-ollama pull gemma3:1b               # Summarization (fast, good quality)
-# 3. That's it:
-keep put "test"                     # Auto-detected on first run
-```
-
-Keep auto-detects Ollama — no configuration needed. It picks the best available
-model for each task: dedicated embedding models for embeddings, generative
-models for summarization. Respects `OLLAMA_HOST` if set.
-
-Ollama runs models in a separate server process, so keep itself stays lightweight
-(~36 MB RSS) regardless of model size. This also means a crash in the model
-server won't take down your machine.
-
 ### Local MLX Providers (Apple Silicon)
 
 For offline operation without Ollama on macOS Apple Silicon. Models run
 in-process using Metal acceleration — faster cold-start but higher memory
-usage (~1 GB+). Ollama is recommended instead for background processing.
+usage (~1 GB+). Ollama is generally recommended instead for better stability
+and performance, especially for background processing.
 
 ```bash
 uv tool install 'keep-skill[local]'
