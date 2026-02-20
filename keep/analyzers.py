@@ -156,10 +156,13 @@ Rules:
 - One speech act per line, no numbering
 - Skip procedural exchanges (greetings, acknowledgments)
 - If no speech acts found, write: EMPTY""",
-    "conversation": """USER FACTS ONLY. IGNORE ALL ASSISTANT TEXT.
+    "conversation": """Extract facts about the USER from this conversation. IGNORE all assistant/bot responses.
 
-One fact per line. Dates and names exactly as stated. No preamble.
-If none: EMPTY""",
+Write one complete sentence per fact. Include dates, names, amounts, and context exactly as stated.
+Example: "User spent $15 on a car wash on February 3rd."
+Example: "User's grandmother is 75 years old and still energetic."
+
+No preamble, no numbering. If no user facts found: EMPTY""",
 }
 
 DEFAULT_PROMPT = "auto"
