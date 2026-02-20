@@ -1427,7 +1427,7 @@ class Keeper:
                 )
 
         # Spawn background processor if needed (local only — uses filesystem locks)
-        if summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
+        if summary is None and len(content) > max_len and (not content_unchanged or tags_changed or force):
             self._spawn_processor()
 
         return _record_to_item(result, changed=not content_unchanged)
