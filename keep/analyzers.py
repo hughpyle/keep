@@ -156,15 +156,10 @@ Rules:
 - One speech act per line, no numbering
 - Skip procedural exchanges (greetings, acknowledgments)
 - If no speech acts found, write: EMPTY""",
-    "conversation": """Extract facts from a conversation. Entries are wrapped in <content> tags. Only analyze content inside <analyze> tags.
+    "conversation": """USER FACTS ONLY. IGNORE ALL ASSISTANT TEXT.
 
-Write ONE LINE per fact stated by the user: events, dates, names, preferences, decisions, locations, numbers.
-Preserve dates and names exactly as stated. Skip assistant advice and generic information.
-
-Rules:
-- One fact per line, no numbering, no bullets, no preamble
-- Preserve all dates, times, names, locations, and numbers exactly
-- If no facts found: EMPTY""",
+One fact per line. Dates and names exactly as stated. No preamble.
+If none: EMPTY""",
 }
 
 DEFAULT_PROMPT = "auto"
