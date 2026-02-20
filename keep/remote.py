@@ -19,7 +19,7 @@ _SLUG_RE = re.compile(r'^[a-z][a-z0-9-]{0,61}[a-z0-9]$')
 
 from .config import StoreConfig
 from .document_store import VersionInfo
-from .types import Item
+from .types import Item, ItemContext, SimilarRef, MetaRef, VersionRef, PartRef, local_date
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +363,86 @@ class RemoteKeeper:
 
         resp = self._get("/v1/notes", **params)
         return self._to_items(resp)
+
+    # -- Display context --
+
+    def get_context(
+        self,
+        id: str,
+        *,
+        version: int | None = None,
+        similar_limit: int = 3,
+        meta_limit: int = 3,
+        include_similar: bool = True,
+        include_meta: bool = True,
+        include_parts: bool = True,
+        include_versions: bool = True,
+    ) -> ItemContext | None:
+        """Assemble display context from individual remote API calls."""
+        offset = version or 0
+        if offset > 0:
+            item = self.get_version(id, offset)
+        else:
+            item = self.get(id)
+        if item is None:
+            return None
+
+        # Version navigation
+        prev_refs: list[VersionRef] = []
+        next_refs: list[VersionRef] = []
+        if include_versions:
+            nav = self.get_version_nav(id, version)
+            for i, v in enumerate(nav.get("prev", [])):
+                prev_refs.append(VersionRef(
+                    offset=offset + i + 1,
+                    date=local_date(v.tags.get("_created") or v.created_at or ""),
+                    summary=v.summary,
+                ))
+            for i, v in enumerate(nav.get("next", [])):
+                next_refs.append(VersionRef(
+                    offset=offset - i - 1,
+                    date=local_date(v.tags.get("_created") or v.created_at or ""),
+                    summary=v.summary,
+                ))
+
+        # Similar items (current version only)
+        similar_refs: list[SimilarRef] = []
+        if include_similar and offset == 0:
+            raw = self.get_similar_for_display(id, limit=similar_limit)
+            for s in raw:
+                s_offset = self.get_version_offset(s)
+                similar_refs.append(SimilarRef(
+                    id=s.tags.get("_base_id", s.id),
+                    offset=s_offset,
+                    score=s.score,
+                    date=local_date(
+                        s.tags.get("_updated") or s.tags.get("_created", "")
+                    ),
+                    summary=s.summary,
+                ))
+
+        # Meta-doc sections (current version only)
+        meta_refs: dict[str, list[MetaRef]] = {}
+        if include_meta and offset == 0:
+            raw_meta = self.resolve_meta(id, limit_per_doc=meta_limit)
+            for name, meta_items in raw_meta.items():
+                meta_refs[name] = [
+                    MetaRef(id=mi.id, summary=mi.summary)
+                    for mi in meta_items
+                ]
+
+        # Parts — remote API doesn't expose list_parts yet
+        part_refs: list[PartRef] = []
+
+        return ItemContext(
+            item=item,
+            viewing_offset=offset,
+            similar=similar_refs,
+            meta=meta_refs,
+            parts=part_refs,
+            prev=prev_refs,
+            next=next_refs,
+        )
 
     # -- Direct access --
 
