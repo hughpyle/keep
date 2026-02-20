@@ -139,9 +139,16 @@ class FileDocumentProvider:
         # Extraction failures are non-fatal: fall back to filename-only content
         # so that directory puts don't fail on one bad file.
         extracted_tags: dict[str, str] | None = None
+        ocr_pages: list[int] | None = None
         try:
             if suffix == ".pdf":
-                content = self._extract_pdf_text(path)
+                content, ocr_pages = self._extract_pdf_text(path)
+                if not content and ocr_pages:
+                    # Fully scanned PDF — placeholder until background OCR
+                    content = (
+                        f"[Scanned document: {path.name}, "
+                        f"{len(ocr_pages)} pages pending OCR]"
+                    )
             elif suffix in (".html", ".htm"):
                 content = self._extract_html_text(path)
             elif suffix in (".docx",):
@@ -180,6 +187,10 @@ class FileDocumentProvider:
             metadata["birthtime"] = stat.st_birthtime
         except AttributeError:
             pass
+
+        # Signal pages needing OCR to the caller (for background processing)
+        if ocr_pages:
+            metadata["_ocr_pages"] = ocr_pages
 
         return Document(
             uri=f"file://{path.resolve()}",  # Normalize to absolute
@@ -563,8 +574,14 @@ class FileDocumentProvider:
         except Exception as e:
             raise IOError(f"Failed to extract image metadata from {path}: {e}")
 
-    def _extract_pdf_text(self, path: Path) -> str:
-        """Extract text from PDF file."""
+    def _extract_pdf_text(self, path: Path) -> tuple[str, list[int]]:
+        """Extract text from PDF file, reporting pages that need OCR.
+
+        Returns:
+            Tuple of (extracted_text, ocr_needed_page_indices).
+            Text is from pages with embedded text layers only.
+            OCR pages are deferred to background processing.
+        """
         try:
             from pypdf import PdfReader
         except ImportError:
@@ -576,18 +593,124 @@ class FileDocumentProvider:
 
         try:
             reader = PdfReader(path)
-            text_parts = []
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    text_parts.append(text)
+            text_parts: list[tuple[int, str]] = []
+            ocr_needed: list[int] = []
 
-            if not text_parts:
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text()
+                if text and text.strip():
+                    text_parts.append((i, text))
+                else:
+                    ocr_needed.append(i)
+
+            if text_parts:
+                text_parts.sort(key=lambda t: t[0])
+                content = "\n\n".join(text for _, text in text_parts)
+            elif ocr_needed:
+                # All pages blank — return empty with OCR page list.
+                # Caller decides whether to enqueue OCR or raise.
+                content = ""
+            else:
                 raise IOError(f"No text extracted from PDF: {path}")
 
-            return "\n\n".join(text_parts)
+            return content, ocr_needed
+        except IOError:
+            raise
         except Exception as e:
             raise IOError(f"Failed to extract text from PDF {path}: {e}")
+
+    def _ocr_pdf_pages(
+        self, path: Path, page_indices: list[int], extractor=None,
+    ) -> list[tuple[int, str]]:
+        """Render PDF pages to images and OCR them.
+
+        Args:
+            extractor: ContentExtractor to use. Falls back to
+                       self._content_extractor if not provided.
+        """
+        import logging
+        import tempfile
+        import time
+        _log = logging.getLogger(__name__)
+
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            _log.warning("pypdfium2 not installed; cannot OCR PDF pages")
+            return []
+
+        if not extractor:
+            _log.warning("No content extractor available for OCR")
+            return []
+
+        results: list[tuple[int, str]] = []
+        start = time.monotonic()
+        pdf = pdfium.PdfDocument(str(path))
+        try:
+            for i in page_indices:
+                page = pdf[i]
+                bitmap = page.render(scale=2)
+                pil_image = bitmap.to_pil()
+                with tempfile.NamedTemporaryFile(
+                    suffix=".png", delete=False
+                ) as tmp:
+                    pil_image.save(tmp, format="PNG")
+                    tmp_path = tmp.name
+                try:
+                    text = extractor.extract(
+                        tmp_path, "image/png"
+                    )
+                    if text:
+                        cleaned = self._clean_ocr_text(text)
+                        confidence = self._estimate_ocr_confidence(cleaned)
+                        if confidence >= 0.3 and len(cleaned) > 10:
+                            results.append((i, cleaned))
+                            _log.debug(
+                                "OCR page %d: %d chars, confidence=%.2f",
+                                i, len(cleaned), confidence,
+                            )
+                        else:
+                            _log.debug(
+                                "OCR page %d: rejected (confidence=%.2f, len=%d)",
+                                i, confidence, len(cleaned),
+                            )
+                except Exception as e:
+                    _log.warning("OCR failed for page %d: %s", i, e)
+                finally:
+                    Path(tmp_path).unlink(missing_ok=True)
+        finally:
+            pdf.close()
+
+        elapsed = time.monotonic() - start
+        _log.info(
+            "OCR complete: %d/%d pages extracted in %.1fs",
+            len(results), len(page_indices), elapsed,
+        )
+        return results
+
+    @staticmethod
+    def _clean_ocr_text(text: str) -> str:
+        """Clean OCR output: remove junk lines, normalize whitespace."""
+        lines = text.split("\n")
+        cleaned = []
+        for line in lines:
+            line = line.strip()
+            if len(line) < 2:
+                continue
+            if len(line) > 20 and " " not in line:
+                continue  # likely garbage
+            if not any(c.isalnum() for c in line):
+                continue
+            cleaned.append(line)
+        return "\n".join(cleaned)
+
+    @staticmethod
+    def _estimate_ocr_confidence(text: str) -> float:
+        """Estimate OCR quality: ratio of alphanumeric to total chars."""
+        if not text:
+            return 0.0
+        alnum = sum(1 for c in text if c.isalnum())
+        return min(1.0, alnum / len(text))
 
     def _extract_html_text(self, path: Path) -> str:
         """Extract text from HTML file."""

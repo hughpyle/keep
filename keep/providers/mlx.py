@@ -425,6 +425,70 @@ class MLXWhisperDescriber:
         return text if text else None
 
 
+class MLXContentExtractor:
+    """
+    OCR content extraction using MLX-VLM on Apple Silicon.
+
+    Uses GLM-OCR to extract text from document images. Unlike MLXVisionDescriber
+    which generates semantic descriptions, this recovers the actual text content.
+
+    Requires: pip install mlx-vlm
+    """
+
+    OCR_PROMPT = "Extract all text from this document image exactly as written."
+
+    def __init__(
+        self,
+        model: str = "mlx-community/GLM-OCR-bf16",
+        max_tokens: int = 2000,
+    ):
+        try:
+            from mlx_vlm import load as vlm_load
+        except ImportError:
+            raise RuntimeError(
+                "MLXContentExtractor requires 'mlx-vlm'. "
+                "Install with: pip install mlx-vlm"
+            )
+
+        self.model_name = model
+        self.max_tokens = max_tokens
+
+        _downloading = False
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            cached = try_to_load_from_cache(model, "config.json")
+            _downloading = cached is None
+        except ImportError:
+            pass
+
+        if _downloading:
+            import logging
+            import sys
+            logging.getLogger(__name__).info("Downloading MLX OCR model '%s' (first use)...", model)
+            print(f"Downloading MLX OCR model '{model}' (first use)...", file=sys.stderr)
+
+        self._model, self._processor = vlm_load(model)
+
+    def extract(self, path: str, content_type: str) -> str | None:
+        """Extract text from an image using OCR."""
+        if not content_type.startswith("image/"):
+            return None
+
+        from mlx_vlm import generate as vlm_generate
+
+        response = vlm_generate(
+            self._model,
+            self._processor,
+            prompt=self.OCR_PROMPT,
+            image=path,
+            max_tokens=self.max_tokens,
+            verbose=False,
+        )
+
+        text = response.strip() if response else ""
+        return text if len(text) > 10 else None
+
+
 class MLXMediaDescriber:
     """
     Combined media describer for Apple Silicon.
@@ -499,3 +563,4 @@ if is_apple_silicon():
     _registry.register_summarization("mlx", MLXSummarization)
     _registry.register_tagging("mlx", MLXTagging)
     _registry.register_media("mlx", MLXMediaDescriber)
+    _registry.register_content_extractor("mlx", MLXContentExtractor)

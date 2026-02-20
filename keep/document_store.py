@@ -564,7 +564,29 @@ class DocumentStore:
             self._conn.commit()
 
         return cursor.rowcount > 0
-    
+
+    def update_content_hash(
+        self,
+        collection: str,
+        id: str,
+        content_hash: str,
+        content_hash_full: str,
+    ) -> bool:
+        """Update content hashes in-place without archiving a version.
+
+        Used by background OCR to replace the placeholder hash after
+        real content has been extracted.
+        """
+        now = self._now()
+        with self._lock:
+            cursor = self._conn.execute("""
+                UPDATE documents
+                SET content_hash = ?, content_hash_full = ?, updated_at = ?
+                WHERE id = ? AND collection = ?
+            """, (content_hash, content_hash_full, now, id, collection))
+            self._conn.commit()
+        return cursor.rowcount > 0
+
     def update_tags(
         self,
         collection: str,
