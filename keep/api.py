@@ -3636,12 +3636,12 @@ class Keeper:
 
         new_hash = _content_hash(full_content)
 
-        # Update document store
-        self._document_store.upsert(
-            collection=doc_coll,
-            id=item.id,
-            summary=summary,
-            tags=existing.tags,
+        # Update document store in-place (no version archive —
+        # the placeholder "[Scanned document...]" is not a meaningful
+        # version, just a transient state before OCR completed).
+        self._document_store.update_summary(doc_coll, item.id, summary)
+        self._document_store.update_content_hash(
+            doc_coll, item.id,
             content_hash=new_hash,
             content_hash_full=_content_hash_full(full_content),
         )
