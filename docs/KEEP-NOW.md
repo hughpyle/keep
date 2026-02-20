@@ -91,5 +91,5 @@ keep reflect
 - [KEEP-MOVE.md](KEEP-MOVE.md) — Move now history into named items
 - [TAGGING.md](TAGGING.md) — Tag system and speech-act tracking
 - [VERSIONING.md](VERSIONING.md) — Version history and navigation
-- [META-DOCS.md](META-DOCS.md) — How meta sections surface contextual items
+- [META-TAGS.md](META-TAGS.md) — Tag descriptions and contextual queries
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

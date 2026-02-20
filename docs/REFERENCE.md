@@ -181,7 +181,7 @@ See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) for full details.
 - [OUTPUT.md](OUTPUT.md) — How to read the frontmatter output
 - [TAGGING.md](TAGGING.md) — Tags, speech acts, project/topic organization
 - [VERSIONING.md](VERSIONING.md) — Document versioning and history
-- [META-DOCS.md](META-DOCS.md) — Contextual feedback via meta sections
+- [META-TAGS.md](META-TAGS.md) — Tag descriptions, constrained values, and contextual queries
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags
 
 ## More
