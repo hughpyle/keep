@@ -116,20 +116,19 @@ class TestJsonOutput:
     
     def test_json_output_has_required_fields(self):
         """JSON item output includes id, summary, tags, score."""
-        # Test the format helper directly
-        from keep.cli import _format_item
+        from keep.cli import _format_items
         from keep.types import Item
-        
+
         item = Item(
             id="test:1",
             summary="Test summary",
             tags={"project": "myapp", "_created": "2026-01-30T10:00:00Z"},
             score=0.95
         )
-        
-        output = _format_item(item, as_json=True)
-        parsed = json.loads(output)
-        
+
+        output = _format_items([item], as_json=True)
+        parsed = json.loads(output)[0]
+
         assert parsed["id"] == "test:1"
         assert parsed["summary"] == "Test summary"
         assert parsed["tags"]["project"] == "myapp"
@@ -172,12 +171,12 @@ class TestHumanOutput:
     
     def test_human_item_format(self):
         """Human-readable item shows id and summary."""
-        from keep.cli import _format_item
+        from keep.cli import _format_summary_line
         from keep.types import Item
-        
+
         item = Item(id="file:///doc.md", summary="A document about testing")
-        output = _format_item(item, as_json=False)
-        
+        output = _format_summary_line(item)
+
         assert "file:///doc.md" in output
         assert "A document about testing" in output
     
@@ -525,15 +524,15 @@ class TestShellQuoteId:
 
     def test_json_output_not_quoted(self):
         """JSON output does NOT shell-quote IDs."""
-        from keep.cli import _format_item
+        from keep.cli import _format_items
         from keep.types import Item
         item = Item(
             id="file:///Application Data/doc.md",
             summary="A doc",
             tags={},
         )
-        output = _format_item(item, as_json=True)
-        parsed = json.loads(output)
+        output = _format_items([item], as_json=True)
+        parsed = json.loads(output)[0]
         assert parsed["id"] == "file:///Application Data/doc.md"  # Raw, no quoting
 
 

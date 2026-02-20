@@ -2908,18 +2908,6 @@ class Keeper:
 
         return self.get(name)
 
-    def list_system_documents(self) -> list[Item]:
-        """
-        List all system documents.
-
-        System documents are identified by the `category: system` tag.
-        These are preloaded on init and provide foundational content.
-
-        Returns:
-            List of system document Items
-        """
-        return self.list_items(tags={"category": "system"}, limit=100)
-
     def reset_system_documents(self) -> dict:
         """
         Force reload all system documents from bundled content.
@@ -3508,19 +3496,6 @@ class Keeper:
             items = [i for i in items if not _is_hidden(i)]
 
         return items[:limit]
-
-    def embedding_cache_stats(self) -> dict:
-        """
-        Get embedding cache statistics.
-
-        Returns dict with: entries, hits, misses, hit_rate, cache_path
-        Returns {"loaded": False} if embedding provider hasn't been loaded yet.
-        """
-        if self._embedding_provider is None:
-            return {"loaded": False}
-        if isinstance(self._embedding_provider, CachingEmbeddingProvider):
-            return self._embedding_provider.stats()
-        return {"enabled": False}
 
     # -------------------------------------------------------------------------
     # Pending Work Queue (summaries + analysis)
