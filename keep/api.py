@@ -3240,9 +3240,10 @@ class Keeper:
             # Skip items that have failed too many times
             # (attempts was already incremented by dequeue, so check >= MAX)
             if item.attempts >= MAX_SUMMARY_ATTEMPTS:
-                # Give up - remove from queue
-                self._pending_queue.complete(
-                    item.id, item.collection, item.task_type
+                # Move to dead letter — preserved for diagnosis
+                self._pending_queue.abandon(
+                    item.id, item.collection, item.task_type,
+                    error=f"Exhausted {item.attempts} attempts",
                 )
                 result["abandoned"] += 1
                 logger.warning(

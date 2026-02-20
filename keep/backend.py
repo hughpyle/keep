@@ -51,14 +51,27 @@ class NullPendingQueue:
     ) -> None:
         pass
 
+    def abandon(
+        self, id: str, collection: str, task_type: str = "summarize",
+        error: str | None = None,
+    ) -> None:
+        pass
+
     def count(self) -> int:
         return 0
 
     def stats(self) -> dict:
-        return {"pending": 0, "collections": 0, "max_attempts": 0, "oldest": None}
+        return {"pending": 0, "processing": 0, "failed": 0, "total": 0,
+                "collections": 0, "max_attempts": 0, "oldest": None}
 
     def stats_by_type(self) -> dict[str, int]:
         return {}
+
+    def list_failed(self) -> list[dict]:
+        return []
+
+    def retry_failed(self) -> int:
+        return 0
 
     def clear(self) -> int:
         return 0

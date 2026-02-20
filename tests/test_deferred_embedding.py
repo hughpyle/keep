@@ -74,8 +74,24 @@ class TrackingPendingQueue:
         self._items.clear()
         return n
 
+    def abandon(
+        self, id: str, collection: str, task_type: str = "summarize",
+        error: str | None = None,
+    ) -> None:
+        self._items = [
+            i for i in self._items
+            if not (i["id"] == id and i["collection"] == collection
+                    and i["task_type"] == task_type)
+        ]
+
     def get_status(self, id: str) -> dict | None:
         return None
+
+    def list_failed(self) -> list[dict]:
+        return []
+
+    def retry_failed(self) -> int:
+        return 0
 
     def close(self) -> None:
         self._items.clear()
