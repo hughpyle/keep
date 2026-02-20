@@ -177,3 +177,81 @@ class Item:
     def __str__(self) -> str:
         score_str = f" [{self.score:.3f}]" if self.score is not None else ""
         return f"{self.id}{score_str}: {self.summary[:60]}..."
+
+
+# ---------------------------------------------------------------------------
+# ItemContext — assembled display context for a single item
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SimilarRef:
+    """A similar item reference for display."""
+    id: str
+    offset: int           # version offset (0 = current)
+    score: float | None
+    date: str             # local date string
+    summary: str
+
+
+@dataclass(frozen=True)
+class MetaRef:
+    """A meta-doc reference for display."""
+    id: str
+    summary: str
+
+
+@dataclass(frozen=True)
+class VersionRef:
+    """A version reference for navigation."""
+    offset: int           # absolute offset (1 = previous, 2 = two ago)
+    date: str
+    summary: str
+
+
+@dataclass(frozen=True)
+class PartRef:
+    """A part reference for display."""
+    part_num: int
+    summary: str
+    tags: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ItemContext:
+    """Complete display context for a single item.
+
+    Assembled by Keeper.get_context(), consumed by CLI renderer and
+    REST serialization.  This is the wire format — JSON-serializable,
+    shared between local CLI, remote CLI, and REST API.
+    """
+    item: Item
+    viewing_offset: int = 0               # 0 = current version
+    similar: list[SimilarRef] = field(default_factory=list)
+    meta: dict[str, list[MetaRef]] = field(default_factory=dict)
+    parts: list[PartRef] = field(default_factory=list)
+    focus_part: int | None = None
+    prev: list[VersionRef] = field(default_factory=list)
+    next: list[VersionRef] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """Serialize to JSON-ready dict."""
+        from dataclasses import asdict
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ItemContext":
+        """Deserialize from JSON dict."""
+        item = Item(**d.pop("item"))
+        similar = [SimilarRef(**s) for s in d.pop("similar", [])]
+        meta = {
+            k: [MetaRef(**m) for m in v]
+            for k, v in d.pop("meta", {}).items()
+        }
+        parts = [PartRef(**p) for p in d.pop("parts", [])]
+        prev = [VersionRef(**v) for v in d.pop("prev", [])]
+        nxt = [VersionRef(**v) for v in d.pop("next", [])]
+        return cls(
+            item=item, similar=similar, meta=meta,
+            parts=parts, prev=prev, next=nxt, **d,
+        )

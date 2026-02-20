@@ -184,8 +184,9 @@ from .providers.base import (
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import PartInfo, VersionInfo
 from .types import (
-    Item, casefold_tags, casefold_tags_for_index, filter_non_system_tags,
-    SYSTEM_TAG_PREFIX,
+    Item, ItemContext, SimilarRef, MetaRef, VersionRef, PartRef,
+    casefold_tags, casefold_tags_for_index, filter_non_system_tags,
+    SYSTEM_TAG_PREFIX, local_date,
     parse_utc_timestamp, validate_tag_key, validate_id, is_part_id,
     MAX_TAG_VALUE_LENGTH,
 )
@@ -1981,6 +1982,106 @@ class Keeper:
                     enriched.append(item)
             final = enriched
         return final
+
+    def get_context(
+        self,
+        id: str,
+        *,
+        version: int | None = None,
+        similar_limit: int = 3,
+        meta_limit: int = 3,
+        include_similar: bool = True,
+        include_meta: bool = True,
+        include_parts: bool = True,
+        include_versions: bool = True,
+    ) -> ItemContext | None:
+        """Assemble complete display context for a single item.
+
+        Single implementation of the 5-call assembly pattern used by
+        CLI get, now, and put commands.  Returns None if the item
+        doesn't exist.
+
+        Args:
+            id: Document identifier
+            version: Version offset (0 or None = current, 1 = previous, ...)
+            similar_limit: Max similar items to include
+            meta_limit: Max items per meta-doc section
+            include_similar: Whether to resolve similar items
+            include_meta: Whether to resolve meta-doc sections
+            include_parts: Whether to include parts manifest
+            include_versions: Whether to include version navigation
+        """
+        offset = version or 0
+        if offset > 0:
+            item = self.get_version(id, offset)
+        else:
+            item = self.get(id)
+        if item is None:
+            return None
+
+        # Version navigation
+        prev_refs: list[VersionRef] = []
+        next_refs: list[VersionRef] = []
+        if include_versions:
+            nav = self.get_version_nav(id, version)
+            for i, v in enumerate(nav.get("prev", [])):
+                prev_refs.append(VersionRef(
+                    offset=offset + i + 1,
+                    date=local_date(v.tags.get("_created") or v.created_at or ""),
+                    summary=v.summary,
+                ))
+            for i, v in enumerate(nav.get("next", [])):
+                next_refs.append(VersionRef(
+                    offset=offset - i - 1,
+                    date=local_date(v.tags.get("_created") or v.created_at or ""),
+                    summary=v.summary,
+                ))
+
+        # Similar items (only for current version)
+        similar_refs: list[SimilarRef] = []
+        if include_similar and offset == 0:
+            raw = self.get_similar_for_display(id, limit=similar_limit)
+            for s in raw:
+                s_offset = self.get_version_offset(s)
+                similar_refs.append(SimilarRef(
+                    id=s.tags.get("_base_id", s.id),
+                    offset=s_offset,
+                    score=s.score,
+                    date=local_date(
+                        s.tags.get("_updated") or s.tags.get("_created", "")
+                    ),
+                    summary=s.summary,
+                ))
+
+        # Meta-doc sections (only for current version)
+        meta_refs: dict[str, list[MetaRef]] = {}
+        if include_meta and offset == 0:
+            raw_meta = self.resolve_meta(id, limit_per_doc=meta_limit)
+            for name, meta_items in raw_meta.items():
+                meta_refs[name] = [
+                    MetaRef(id=mi.id, summary=mi.summary)
+                    for mi in meta_items
+                ]
+
+        # Parts manifest (only for current version)
+        part_refs: list[PartRef] = []
+        if include_parts and offset == 0:
+            for p in self.list_parts(id):
+                part_refs.append(PartRef(
+                    part_num=p.part_num,
+                    summary=p.summary,
+                    tags=dict(p.tags),
+                ))
+
+        return ItemContext(
+            item=item,
+            viewing_offset=offset,
+            similar=similar_refs,
+            meta=meta_refs,
+            parts=part_refs,
+            prev=prev_refs,
+            next=next_refs,
+        )
 
     def get_similar_for_display(
         self,

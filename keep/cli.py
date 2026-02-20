@@ -32,7 +32,7 @@ _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 from .api import Keeper, _text_content_id
 from .config import get_tool_directory
 from .document_store import VersionInfo
-from .types import Item, local_date
+from .types import Item, ItemContext, local_date
 from .logging_config import configure_quiet_mode, enable_debug_mode
 
 # Maximum number of files to index from a directory at once
@@ -322,6 +322,112 @@ def _format_yaml_frontmatter(
     return "\n".join(lines)
 
 
+def render_context(ctx: ItemContext, as_json: bool = False) -> str:
+    """Render an ItemContext for display.
+
+    This is the single renderer — CLI local, CLI remote, and REST
+    all produce ItemContext; this function turns it into output.
+    """
+    if as_json:
+        return json.dumps(ctx.to_dict(), indent=2)
+    return _render_frontmatter(ctx)
+
+
+def _render_frontmatter(ctx: ItemContext) -> str:
+    """Render ItemContext as YAML frontmatter with summary."""
+    cols = _output_width()
+    item = ctx.item
+
+    def _truncate(summary: str, prefix_len: int) -> str:
+        max_width = max(cols - prefix_len, 20)
+        s = summary.replace("\n", " ")
+        if len(s) > max_width:
+            s = s[:max_width - 3].rsplit(" ", 1)[0] + "..."
+        return s
+
+    version_suffix = f"@V{{{ctx.viewing_offset}}}" if ctx.viewing_offset > 0 else ""
+    lines = ["---", f"id: {_shell_quote_id(item.id)}{version_suffix}"]
+
+    display_tags = _filter_display_tags(item.tags)
+    if display_tags:
+        tag_items = ", ".join(f"{k}: {v}" for k, v in sorted(display_tags.items()))
+        lines.append(f"tags: {{{tag_items}}}")
+
+    if item.score is not None:
+        lines.append(f"score: {item.score:.2f}")
+
+    # Similar items
+    if ctx.similar:
+        sim_ids = []
+        for s in ctx.similar:
+            sid = _shell_quote_id(s.id)
+            if s.offset > 0:
+                sid += f"@V{{{s.offset}}}"
+            sim_ids.append(sid)
+        id_width = min(max(len(s) for s in sim_ids), 20)
+        lines.append("similar:")
+        for s, sid in zip(ctx.similar, sim_ids):
+            score_str = f"({s.score:.2f})" if s.score else ""
+            actual_id_len = max(len(sid), id_width)
+            prefix_len = 4 + actual_id_len + 1 + len(score_str) + 1 + len(s.date) + 1
+            summary_preview = _truncate(s.summary, prefix_len)
+            lines.append(f"  - {sid.ljust(id_width)} {score_str} {s.date} {summary_preview}")
+
+    # Meta sections
+    if ctx.meta:
+        for name, refs in ctx.meta.items():
+            meta_ids = [_shell_quote_id(r.id) for r in refs]
+            id_width = min(max(len(s) for s in meta_ids), 20)
+            lines.append(f"meta/{name}:")
+            for ref, mid in zip(refs, meta_ids):
+                actual_id_len = max(len(mid), id_width)
+                prefix_len = 4 + actual_id_len + 1
+                summary_preview = _truncate(ref.summary, prefix_len)
+                lines.append(f"  - {mid.ljust(id_width)} {summary_preview}")
+
+    # Parts manifest
+    if ctx.parts:
+        if ctx.focus_part is not None:
+            visible = [p for p in ctx.parts if abs(p.part_num - ctx.focus_part) <= 1]
+        else:
+            visible = ctx.parts
+        part_ids = [f"@P{{{p.part_num}}}" for p in visible]
+        id_width = max(len(s) for s in part_ids)
+        total = len(ctx.parts)
+        label = "parts:" if ctx.focus_part is None else f"parts: # {total} total, showing around @P{{{ctx.focus_part}}}"
+        lines.append(label)
+        for part, pid in zip(visible, part_ids):
+            marker = " *" if ctx.focus_part is not None and part.part_num == ctx.focus_part else ""
+            prefix_len = 4 + id_width + 1 + len(marker)
+            summary_preview = _truncate(part.summary, prefix_len)
+            lines.append(f"  - {pid.ljust(id_width)} {summary_preview}{marker}")
+
+    # Version navigation
+    if ctx.prev:
+        prev_ids = [f"@V{{{v.offset}}}" for v in ctx.prev]
+        id_width = max(len(s) for s in prev_ids)
+        lines.append("prev:")
+        for vid, v in zip(prev_ids, ctx.prev):
+            prefix_len = 4 + id_width + 1 + len(v.date) + 1
+            summary_preview = _truncate(v.summary, prefix_len)
+            lines.append(f"  - {vid.ljust(id_width)} {v.date} {summary_preview}")
+    if ctx.next:
+        next_ids = [f"@V{{{v.offset}}}" for v in ctx.next]
+        id_width = max(len(s) for s in next_ids)
+        lines.append("next:")
+        for vid, v in zip(next_ids, ctx.next):
+            prefix_len = 4 + id_width + 1 + len(v.date) + 1
+            summary_preview = _truncate(v.summary, prefix_len)
+            lines.append(f"  - {vid.ljust(id_width)} {v.date} {summary_preview}")
+    elif ctx.viewing_offset > 0:
+        lines.append("next:")
+        lines.append(f"  - @V{{0}}")
+
+    lines.append("---")
+    lines.append(item.summary)
+    return "\n".join(lines)
+
+
 def _format_summary_line(item: Item, id_width: int = 0) -> str:
     """Format item as single summary line: id date summary (with @V{N} only for old versions)
 
@@ -412,19 +518,11 @@ def main_callback(
     if ctx.invoked_subcommand is None:
         from .api import NOWDOC_ID
         kp = _get_keeper(None)
-        item = kp.get_now()
-        version_nav = kp.get_version_nav(NOWDOC_ID, None)
-        similar_items = kp.get_similar_for_display(NOWDOC_ID, limit=3)  # bare `keep`: default 3
-        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-        meta_sections = kp.resolve_meta(NOWDOC_ID, limit_per_doc=3)
-        typer.echo(_format_item(
-            item,
-            as_json=_get_json_output(),
-            version_nav=version_nav,
-            similar_items=similar_items,
-            similar_offsets=similar_offsets,
-            meta_sections=meta_sections,
-        ))
+        ctx_item = kp.get_context(NOWDOC_ID, similar_limit=3, meta_limit=3)
+        if ctx_item is None:
+            kp.get_now()  # force-create nowdoc
+            ctx_item = kp.get_context(NOWDOC_ID, similar_limit=3, meta_limit=3)
+        typer.echo(render_context(ctx_item, as_json=_get_json_output()))
 
 
 # -----------------------------------------------------------------------------
@@ -1214,18 +1312,15 @@ def put(
 
     # Surface similar items (occasion for reflection)
     suggest_limit = 10 if suggest_tags else 3
-    similar_items = kp.get_similar_for_display(item.id, limit=suggest_limit)
-    similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
+    ctx = kp.get_context(
+        item.id, similar_limit=min(suggest_limit, 3),
+        include_meta=False, include_parts=False, include_versions=False,
+    )
+    typer.echo(render_context(ctx, as_json=_get_json_output()))
 
-    typer.echo(_format_item(
-        item,
-        as_json=_get_json_output(),
-        similar_items=similar_items[:3] if similar_items else None,
-        similar_offsets=similar_offsets if similar_items else None,
-    ))
-
-    # Show tag suggestions from similar items
-    if suggest_tags and similar_items:
+    # Show tag suggestions from similar items (needs more than 3)
+    if suggest_tags:
+        similar_items = kp.get_similar_for_display(item.id, limit=suggest_limit) if suggest_limit > 3 else []
         tag_counts: dict[str, int] = {}
         for si in similar_items:
             for k, v in si.tags.items():
@@ -1343,30 +1438,14 @@ def now(
 
     # Handle version retrieval
     if version is not None:
-        offset = version
-        if offset == 0:
-            item = kp.get_now(scope=scope)
-            internal_version = None
-        else:
-            item = kp.get_version(doc_id, offset)
-            # Get internal version number for API call
-            versions = kp.list_versions(doc_id, limit=1)
-            if versions:
-                internal_version = versions[0].version - (offset - 1)
-            else:
-                internal_version = None
-
-        if item is None:
-            typer.echo(f"Version not found (offset {offset})", err=True)
+        ctx = kp.get_context(
+            doc_id, version=version if version > 0 else None,
+            include_similar=False, include_meta=False, include_parts=False,
+        )
+        if ctx is None:
+            typer.echo(f"Version not found (offset {version})", err=True)
             raise typer.Exit(1)
-
-        version_nav = kp.get_version_nav(doc_id, internal_version)
-        typer.echo(_format_item(
-            item,
-            as_json=_get_json_output(),
-            version_nav=version_nav,
-            viewing_offset=offset if offset > 0 else None,
-        ))
+        typer.echo(render_context(ctx, as_json=_get_json_output()))
         return
 
     # Read from stdin if piped and no content argument
@@ -1398,22 +1477,11 @@ def now(
         # Parse user-provided tags (merge with default if reset)
         parsed_tags.update(_parse_tags(tags))
 
-        item = kp.set_now(new_content, scope=scope, tags=parsed_tags or None)
+        kp.set_now(new_content, scope=scope, tags=parsed_tags or None)
 
-        # Surface version nav, similar items and meta sections (occasion for reflection)
-        version_nav = kp.get_version_nav(doc_id, None)
-        similar_items = kp.get_similar_for_display(item.id, limit=limit)
-        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-        meta_sections = kp.resolve_meta(item.id, limit_per_doc=limit)
-
-        typer.echo(_format_item(
-            item,
-            as_json=_get_json_output(),
-            version_nav=version_nav,
-            similar_items=similar_items if similar_items else None,
-            similar_offsets=similar_offsets if similar_items else None,
-            meta_sections=meta_sections if meta_sections else None,
-        ))
+        # Surface context (occasion for reflection)
+        ctx = kp.get_context(doc_id, similar_limit=limit, meta_limit=limit)
+        typer.echo(render_context(ctx, as_json=_get_json_output()))
     else:
         # Get current intentions (or search version history if tags specified)
         if tags:
@@ -1423,22 +1491,14 @@ def now(
                 typer.echo("No version found matching tags", err=True)
                 raise typer.Exit(1)
             # No version nav or similar items for filtered results
-            typer.echo(_format_item(item, as_json=_get_json_output()))
+            typer.echo(render_context(ItemContext(item=item), as_json=_get_json_output()))
         else:
             # Standard: get current with version navigation and similar items
-            item = kp.get_now(scope=scope)
-            version_nav = kp.get_version_nav(doc_id, None)
-            similar_items = kp.get_similar_for_display(doc_id, limit=limit)
-            similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-            meta_sections = kp.resolve_meta(doc_id, limit_per_doc=limit)
-            typer.echo(_format_item(
-                item,
-                as_json=_get_json_output(),
-                version_nav=version_nav,
-                similar_items=similar_items,
-                similar_offsets=similar_offsets,
-                meta_sections=meta_sections,
-            ))
+            ctx = kp.get_context(doc_id, similar_limit=limit, meta_limit=limit)
+            if ctx is None:
+                kp.get_now(scope=scope)  # force-create
+                ctx = kp.get_context(doc_id, similar_limit=limit, meta_limit=limit)
+            typer.echo(render_context(ctx, as_json=_get_json_output()))
 
 
 def _find_now_version_by_tags(kp, tags: list[str], *, scope: Optional[str] = None):
@@ -1859,22 +1919,10 @@ def _get_one(
                 lines.append("  No matching notes found.")
             return "\n".join(lines)
 
-    # Get specific version or current
+    # Assemble complete display context
     offset = effective_version if effective_version is not None else 0
-
-    if offset == 0:
-        item = kp.get(actual_id)
-        internal_version = None
-    else:
-        item = kp.get_version(actual_id, offset)
-        # Calculate internal version number for API call
-        versions = kp.list_versions(actual_id, limit=1)
-        if versions:
-            internal_version = versions[0].version - (offset - 1)
-        else:
-            internal_version = None
-
-    if item is None:
+    ctx = kp.get_context(actual_id, version=offset if offset > 0 else None)
+    if ctx is None:
         if offset > 0:
             typer.echo(f"Version not found: {actual_id} (offset {offset})", err=True)
         else:
@@ -1883,37 +1931,14 @@ def _get_one(
 
     # Check tag filter if specified
     if tag:
-        filtered = _filter_by_tags([item], tag)
+        filtered = _filter_by_tags([ctx.item], tag)
         if not filtered:
             typer.echo(f"Tag filter not matched: {actual_id}", err=True)
             return None
 
-    # Get version navigation
-    version_nav = kp.get_version_nav(actual_id, internal_version)
-
-    # Get similar items, meta sections, and parts manifest for current version
-    similar_items = None
-    similar_offsets = None
-    meta_sections = None
-    parts_manifest = None
-    if offset == 0:
-        similar_items = kp.get_similar_for_display(actual_id, limit=3)
-        similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-        meta_sections = kp.resolve_meta(actual_id)
-        parts = kp.list_parts(actual_id)
-        if parts:
-            parts_manifest = parts
-
-    return _format_item(
-        item,
-        as_json=_get_json_output(),
-        version_nav=version_nav,
-        viewing_offset=offset if offset > 0 else None,
-        similar_items=similar_items,
-        similar_offsets=similar_offsets,
-        meta_sections=meta_sections,
-        parts_manifest=parts_manifest,
-    )
+    if _get_ids_output():
+        return _format_versioned_id(ctx.item)
+    return render_context(ctx, as_json=_get_json_output())
 
 
 @app.command("del")
@@ -1956,14 +1981,10 @@ def del_cmd(
             typer.echo(_format_summary_line(item))
         else:
             # Reverted — show the restored version with similar items
-            similar_items = kp.get_similar_for_display(restored.id, limit=3)
-            similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-            typer.echo(_format_item(
-                restored,
-                as_json=_get_json_output(),
-                similar_items=similar_items if similar_items else None,
-                similar_offsets=similar_offsets if similar_items else None,
-            ))
+            ctx = kp.get_context(
+                restored.id, include_meta=False, include_parts=False,
+            )
+            typer.echo(render_context(ctx, as_json=_get_json_output()))
 
     if had_errors:
         raise typer.Exit(1)

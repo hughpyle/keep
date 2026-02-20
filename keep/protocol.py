@@ -11,7 +11,7 @@ from typing import Any, Iterator, Optional, Protocol, runtime_checkable
 from .document_store import DocumentRecord, PartInfo, VersionInfo
 from .pending_summaries import PendingSummary
 from .store import StoreResult
-from .types import Item
+from .types import Item, ItemContext
 
 
 @runtime_checkable
@@ -127,6 +127,21 @@ class KeeperProtocol(Protocol):
         include_history: bool = False,
         limit: int = 10,
     ) -> list[Item]: ...
+
+    # -- Display context --
+
+    def get_context(
+        self,
+        id: str,
+        *,
+        version: int | None = None,
+        similar_limit: int = 3,
+        meta_limit: int = 3,
+        include_similar: bool = True,
+        include_meta: bool = True,
+        include_parts: bool = True,
+        include_versions: bool = True,
+    ) -> ItemContext | None: ...
 
     # -- Direct access --
 
