@@ -368,6 +368,38 @@ class MediaDescriber(Protocol):
 
 
 # -----------------------------------------------------------------------------
+# Content Extraction (OCR, STT)
+# -----------------------------------------------------------------------------
+
+@runtime_checkable
+class ContentExtractor(Protocol):
+    """
+    Recovers actual text content from media files (OCR, speech-to-text).
+
+    Unlike MediaDescriber which generates *descriptions* (semantic),
+    ContentExtractor recovers the *original text* present in the media.
+    For example: OCR extracts text from a scanned document image,
+    STT recovers spoken words from audio.
+
+    Returns None for unsupported content types.
+    """
+
+    def extract(self, path: str, content_type: str) -> str | None:
+        """
+        Extract text content from a media file.
+
+        Args:
+            path: Absolute filesystem path to the media file
+            content_type: MIME type (e.g., "image/png", "audio/wav")
+
+        Returns:
+            Extracted text, or None if this extractor does not
+            support the given content_type.
+        """
+        ...
+
+
+# -----------------------------------------------------------------------------
 # Analysis (Document Decomposition)
 # -----------------------------------------------------------------------------
 
@@ -494,6 +526,7 @@ class ProviderRegistry:
         self._document_providers: dict[str, type] = {}
         self._media_providers: dict[str, type] = {}
         self._analyzer_providers: dict[str, type] = {}
+        self._content_extractor_providers: dict[str, type] = {}
         self._lazy_loaded = False
     
     def _ensure_providers_loaded(self) -> None:
@@ -560,6 +593,10 @@ class ProviderRegistry:
     def register_analyzer(self, name: str, provider_class: type) -> None:
         """Register an analyzer provider class."""
         self._analyzer_providers[name] = provider_class
+
+    def register_content_extractor(self, name: str, provider_class: type) -> None:
+        """Register a content extractor provider class."""
+        self._content_extractor_providers[name] = provider_class
     
     # Factory methods
 
@@ -610,6 +647,11 @@ class ProviderRegistry:
         self._ensure_providers_loaded()
         return self._create_provider("analyzer", name, self._analyzer_providers, params)
 
+    def create_content_extractor(self, name: str, params: dict | None = None) -> ContentExtractor:
+        """Create a content extractor provider instance."""
+        self._ensure_providers_loaded()
+        return self._create_provider("content_extractor", name, self._content_extractor_providers, params)
+
     def create_document(self, name: str, params: dict | None = None) -> DocumentProvider:
         """Create a document provider instance."""
         self._ensure_providers_loaded()
@@ -636,6 +678,10 @@ class ProviderRegistry:
     def list_media_providers(self) -> list[str]:
         """List registered media describer names."""
         return list(self._media_providers.keys())
+
+    def list_content_extractor_providers(self) -> list[str]:
+        """List registered content extractor names."""
+        return list(self._content_extractor_providers.keys())
 
 
 # Global registry instance

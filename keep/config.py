@@ -119,6 +119,9 @@ class StoreConfig:
     # Analyzer provider (optional - if None, uses SlidingWindowAnalyzer wrapping summarization)
     analyzer: Optional[ProviderConfig] = None
 
+    # Content extractor (optional - if None, scanned PDFs fall back to text-only extraction)
+    content_extractor: Optional[ProviderConfig] = None
+
     # Embedding identity (set after first use, used for validation)
     embedding_identity: Optional[EmbeddingIdentity] = None
 
@@ -392,6 +395,29 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
 
     providers["media"] = media_provider
 
+    # --- Content extractor (OCR) ---
+    # Priority: Ollama (auto-pull glm-ocr) > MLX (Apple Silicon) > None
+    extractor_provider: ProviderConfig | None = None
+
+    # 1. Ollama (glm-ocr is auto-pulled on first use)
+    if extractor_provider is None:
+        ollama = get_ollama()
+        if ollama:
+            params: dict[str, Any] = {"model": "glm-ocr"}
+            if ollama["base_url"] != "http://localhost:11434":
+                params["base_url"] = ollama["base_url"]
+            extractor_provider = ProviderConfig("ollama", params)
+
+    # 2. MLX (Apple Silicon with mlx-vlm)
+    if extractor_provider is None and is_apple_silicon:
+        try:
+            import mlx_vlm  # noqa
+            extractor_provider = ProviderConfig("mlx")
+        except ImportError:
+            pass
+
+    providers["content_extractor"] = extractor_provider
+
     # Document provider is always composite
     providers["document"] = ProviderConfig("composite")
 
@@ -423,6 +449,7 @@ def create_default_config(config_dir: Path, store_path: Optional[Path] = None) -
         summarization=providers["summarization"],
         document=providers["document"],
         media=providers.get("media"),
+        content_extractor=providers.get("content_extractor"),
     )
 
 
@@ -496,6 +523,9 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse optional analyzer section
     analyzer_config = parse_provider(data["analyzer"]) if "analyzer" in data else None
 
+    # Parse optional content_extractor section
+    content_extractor_config = parse_provider(data["content_extractor"]) if "content_extractor" in data else None
+
     # Parse remote backend config (env vars override TOML)
     remote = None
     remote_data = data.get("remote", {})
@@ -522,6 +552,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         document=parse_provider(data.get("document", {"name": "composite"})),
         media=media_config,
         analyzer=analyzer_config,
+        content_extractor=content_extractor_config,
         embedding_identity=parse_embedding_identity(data.get("embedding_identity")),
         default_tags=default_tags,
         required_tags=required_tags,
@@ -601,6 +632,8 @@ def save_config(config: StoreConfig) -> None:
         data["media"] = provider_to_dict(config.media)
     if config.analyzer:
         data["analyzer"] = provider_to_dict(config.analyzer)
+    if config.content_extractor:
+        data["content_extractor"] = provider_to_dict(config.content_extractor)
 
     # Add embedding identity if set
     if config.embedding_identity:

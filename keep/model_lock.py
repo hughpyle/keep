@@ -255,3 +255,34 @@ class LockedMediaDescriber:
         self._provider = None
         gc.collect()
         logger.debug("Released media describer")
+
+
+class LockedContentExtractor:
+    """
+    Per-call locked wrapper for a content extractor.
+
+    Same pattern as LockedMediaDescriber — acquires the lock only
+    during extract() calls.
+    """
+
+    def __init__(self, provider, lock_path: Path):
+        self._provider = provider
+        self._lock = ModelLock(lock_path)
+
+    @property
+    def model_name(self) -> str:
+        return getattr(self._provider, "model_name", "unknown")
+
+    def extract(self, path: str, content_type: str) -> str | None:
+        with self._lock:
+            return self._provider.extract(path, content_type)
+
+    def release(self) -> None:
+        """Free the model."""
+        try:
+            del self._provider
+        except AttributeError:
+            pass
+        self._provider = None
+        gc.collect()
+        logger.debug("Released content extractor")
