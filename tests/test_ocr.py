@@ -355,15 +355,16 @@ class TestContentExtractorConfig:
         assert loaded.content_extractor.params.get("model") == "glm-ocr"
 
     def test_save_without_extractor(self, tmp_path):
-        from keep.config import StoreConfig, save_config, load_config
+        from keep.config import StoreConfig, save_config
 
         config = StoreConfig(
             path=tmp_path,
             config_dir=tmp_path,
         )
         save_config(config)
-        loaded = load_config(tmp_path)
-        assert loaded.content_extractor is None
+        # Verify TOML doesn't contain a content_extractor section
+        toml_text = (tmp_path / "keep.toml").read_text()
+        assert "content_extractor" not in toml_text
 
 
 # ---------------------------------------------------------------------------
