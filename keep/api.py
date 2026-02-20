@@ -3409,6 +3409,7 @@ class Keeper:
                 _permanent = (
                     "content too short" in str(e).lower()
                     or "no text extracted" in str(e).lower()
+                    or "no content extractor" in str(e).lower()
                 )
                 if _permanent:
                     self._pending_queue.abandon(
@@ -3580,11 +3581,10 @@ class Keeper:
             logger.warning("File no longer exists for OCR: %s", path)
             return
 
-        # OCR the blank pages using a fresh FileDocumentProvider
+        # OCR the blank pages
         from .providers.documents import FileDocumentProvider
         file_provider = FileDocumentProvider()
-        file_provider.set_content_extractor(extractor)
-        ocr_results = file_provider._ocr_pdf_pages(path, ocr_pages)
+        ocr_results = file_provider._ocr_pdf_pages(path, ocr_pages, extractor=extractor)
 
         if not ocr_results:
             logger.info("OCR produced no usable text for %s", uri)
@@ -3644,7 +3644,7 @@ class Keeper:
 
         # Update vector store embedding
         chroma_coll = self._resolve_chroma_collection()
-        embedding = self._get_embedding_provider().embed(full_content)
+        embedding = self._get_embedding_provider().embed(summary)
         self._store.upsert(
             collection=chroma_coll,
             id=item.id,
