@@ -10,6 +10,10 @@ Dequeue is atomic: items transition from 'pending' to 'processing' with
 a PID claim inside a single IMMEDIATE transaction. Concurrent processors
 cannot grab the same items. Stale claims (crashed processors) are
 recovered automatically.
+
+Failed items use exponential backoff before retry (30s, 60s, 120s, ...
+up to 1h). Items that exhaust MAX_ATTEMPTS are moved to 'failed' status
+(dead letter) rather than deleted, preserving the error for diagnosis.
 """
 
 import json
@@ -18,7 +22,7 @@ import os
 import sqlite3
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 # Claims older than this are considered stale (processor crashed)
 STALE_CLAIM_SECONDS = 600  # 10 minutes
+
+# Retry backoff: min(BASE * 2^(attempts-1), MAX) seconds
+RETRY_BACKOFF_BASE = 30     # 30 seconds initial delay
+RETRY_BACKOFF_MAX = 3600    # 1 hour maximum delay
 
 
 @dataclass
@@ -87,6 +95,8 @@ class PendingSummaryQueue:
                 status TEXT DEFAULT 'pending',
                 claimed_by TEXT,
                 claimed_at TEXT,
+                last_error TEXT,
+                retry_after TEXT,
                 PRIMARY KEY (id, collection, task_type)
             )
         """)
@@ -124,6 +134,8 @@ class PendingSummaryQueue:
                     status TEXT DEFAULT 'pending',
                     claimed_by TEXT,
                     claimed_at TEXT,
+                    last_error TEXT,
+                    retry_after TEXT,
                     PRIMARY KEY (id, collection, task_type)
                 )
             """)
@@ -163,6 +175,16 @@ class PendingSummaryQueue:
                 CREATE INDEX IF NOT EXISTS idx_status
                 ON pending_summaries(status)
             """)
+            self._conn.commit()
+
+        # Add error tracking and retry backoff columns
+        if "last_error" not in columns:
+            self._conn.execute(
+                "ALTER TABLE pending_summaries ADD COLUMN last_error TEXT"
+            )
+            self._conn.execute(
+                "ALTER TABLE pending_summaries ADD COLUMN retry_after TEXT"
+            )
             self._conn.commit()
 
     def _recover_stale_claims(self) -> int:
@@ -238,15 +260,16 @@ class PendingSummaryQueue:
             # preventing any other writer from interleaving
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                # Select oldest pending items
+                # Select oldest pending items, respecting retry backoff
                 cursor = self._conn.execute("""
                     SELECT id, collection, content, queued_at, attempts,
                            task_type, metadata
                     FROM pending_summaries
                     WHERE status = 'pending'
+                      AND (retry_after IS NULL OR retry_after <= ?)
                     ORDER BY queued_at ASC
                     LIMIT ?
-                """, (limit,))
+                """, (now, limit))
 
                 rows = cursor.fetchall()
                 items = []
@@ -304,28 +327,74 @@ class PendingSummaryQueue:
         self, id: str, collection: str, task_type: str = "summarize",
         error: str | None = None,
     ) -> None:
-        """Release a claimed item back to pending for retry.
+        """Release a claimed item back to pending with exponential backoff.
 
-        The attempt counter (already incremented by dequeue) is preserved
-        so that items aren't retried indefinitely.
+        The attempt counter (already incremented by dequeue) is preserved.
+        Retry delay: min(BASE * 2^(attempts-1), MAX) seconds.
+        Error message is stored for diagnosis.
+        """
+        with self._lock:
+            # Read current attempt count to compute backoff
+            cursor = self._conn.execute(
+                "SELECT attempts FROM pending_summaries "
+                "WHERE id = ? AND collection = ? AND task_type = ?",
+                (id, collection, task_type),
+            )
+            row = cursor.fetchone()
+            attempts = row[0] if row else 1
+
+            delay = min(RETRY_BACKOFF_BASE * (2 ** (attempts - 1)), RETRY_BACKOFF_MAX)
+            now = datetime.now(timezone.utc)
+            retry_at = (now + timedelta(seconds=delay)).isoformat()
+
+            self._conn.execute("""
+                UPDATE pending_summaries
+                SET status = 'pending', claimed_by = NULL, claimed_at = NULL,
+                    last_error = ?, retry_after = ?
+                WHERE id = ? AND collection = ? AND task_type = ?
+            """, (error, retry_at, id, collection, task_type))
+            self._conn.commit()
+
+            logger.info(
+                "Item %s failed (attempt %d), retry after %ds: %s",
+                id, attempts, delay, error or "unknown",
+            )
+
+    def abandon(
+        self, id: str, collection: str, task_type: str = "summarize",
+        error: str | None = None,
+    ) -> None:
+        """Move an item to 'failed' status (dead letter).
+
+        Called when an item has exhausted all retry attempts. The item
+        is preserved with its error message for diagnosis, not deleted.
         """
         with self._lock:
             self._conn.execute("""
                 UPDATE pending_summaries
-                SET status = 'pending', claimed_by = NULL, claimed_at = NULL
+                SET status = 'failed', claimed_by = NULL, claimed_at = NULL,
+                    last_error = ?
                 WHERE id = ? AND collection = ? AND task_type = ?
-            """, (id, collection, task_type))
+            """, (error, id, collection, task_type))
             self._conn.commit()
+            logger.warning("Abandoned %s/%s (%s): %s", collection, id, task_type, error or "max attempts")
 
     def count(self) -> int:
-        """Get count of pending items (excludes items being processed)."""
+        """Get count of pending items (excludes processing and failed)."""
         cursor = self._conn.execute(
             "SELECT COUNT(*) FROM pending_summaries WHERE status = 'pending'"
         )
         return cursor.fetchone()[0]
 
     def stats(self) -> dict:
-        """Get queue statistics."""
+        """Get queue statistics including status breakdown."""
+        cursor = self._conn.execute("""
+            SELECT status, COUNT(*) as cnt
+            FROM pending_summaries
+            GROUP BY status
+        """)
+        by_status = {row[0] or "pending": row[1] for row in cursor.fetchall()}
+
         cursor = self._conn.execute("""
             SELECT
                 COUNT(*) as total,
@@ -336,7 +405,10 @@ class PendingSummaryQueue:
         """)
         row = cursor.fetchone()
         return {
-            "pending": row[0],
+            "pending": by_status.get("pending", 0),
+            "processing": by_status.get("processing", 0),
+            "failed": by_status.get("failed", 0),
+            "total": row[0],
             "collections": row[1],
             "max_attempts": row[2] or 0,
             "oldest": row[3],
@@ -349,10 +421,50 @@ class PendingSummaryQueue:
         cursor = self._conn.execute("""
             SELECT task_type, COUNT(*) as cnt
             FROM pending_summaries
+            WHERE status IN ('pending', 'processing')
             GROUP BY task_type
             ORDER BY cnt DESC
         """)
         return {row[0]: row[1] for row in cursor.fetchall()}
+
+    def list_failed(self) -> list[dict]:
+        """List items in failed (dead letter) status.
+
+        Returns list of dicts with id, collection, task_type, attempts,
+        last_error, queued_at.
+        """
+        cursor = self._conn.execute("""
+            SELECT id, collection, task_type, attempts, last_error, queued_at
+            FROM pending_summaries
+            WHERE status = 'failed'
+            ORDER BY queued_at ASC
+        """)
+        return [
+            {
+                "id": row[0], "collection": row[1], "task_type": row[2],
+                "attempts": row[3], "last_error": row[4], "queued_at": row[5],
+            }
+            for row in cursor.fetchall()
+        ]
+
+    def retry_failed(self) -> int:
+        """Reset all failed items back to pending for retry.
+
+        Resets attempt counters and clears backoff. Returns count of
+        items moved back to pending.
+        """
+        with self._lock:
+            cursor = self._conn.execute("""
+                UPDATE pending_summaries
+                SET status = 'pending', attempts = 0, claimed_by = NULL,
+                    claimed_at = NULL, last_error = NULL, retry_after = NULL
+                WHERE status = 'failed'
+            """)
+            self._conn.commit()
+            count = cursor.rowcount
+            if count:
+                logger.info("Reset %d failed items back to pending", count)
+            return count
 
     def get_status(self, id: str) -> dict | None:
         """Get pending task status for a specific note.

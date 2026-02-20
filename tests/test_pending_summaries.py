@@ -2,6 +2,7 @@
 
 import tempfile
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from keep.pending_summaries import PendingSummaryQueue
@@ -78,6 +79,12 @@ class TestPendingSummaryQueue:
             # Release it back via fail()
             queue.fail("doc1", "default")
 
+            # Clear retry_after so it's immediately available
+            queue._conn.execute(
+                "UPDATE pending_summaries SET retry_after = NULL WHERE id = 'doc1'"
+            )
+            queue._conn.commit()
+
             # Dequeue again — attempt counter should be incremented
             items = queue.dequeue(limit=1)
             assert items[0].attempts == 1
@@ -109,9 +116,15 @@ class TestPendingSummaryQueue:
             assert len(items) == 1
             assert queue.count() == 0  # Not pending anymore
 
-            # Fail it — should be pending again
+            # Fail it — should be pending again (with retry backoff)
             queue.fail("doc1", "default")
             assert queue.count() == 1
+
+            # Clear retry_after so it's immediately available
+            queue._conn.execute(
+                "UPDATE pending_summaries SET retry_after = NULL WHERE id = 'doc1'"
+            )
+            queue._conn.commit()
 
             # Can dequeue again
             items = queue.dequeue(limit=1)
@@ -290,5 +303,148 @@ class TestPendingSummaryQueue:
             items = queue.dequeue(limit=1)
             assert len(items) == 1
             assert items[0].id == "old_doc"
+
+            queue.close()
+
+    def test_fail_sets_retry_backoff(self):
+        """fail() should set retry_after in the future, blocking immediate dequeue."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "content")
+            queue.dequeue(limit=1)
+
+            # Fail it — sets retry_after ~30s in the future
+            queue.fail("doc1", "default", error="test error")
+
+            # Item is pending but backoff hasn't elapsed
+            assert queue.count() == 1
+
+            # Immediate dequeue should return nothing (backoff active)
+            items = queue.dequeue(limit=1)
+            assert len(items) == 0
+
+            queue.close()
+
+    def test_fail_stores_error_message(self):
+        """fail() should store the error message for diagnosis."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "content")
+            queue.dequeue(limit=1)
+            queue.fail("doc1", "default", error="RuntimeError: model crashed")
+
+            # Check error is stored
+            cursor = queue._conn.execute(
+                "SELECT last_error FROM pending_summaries WHERE id = 'doc1'"
+            )
+            row = cursor.fetchone()
+            assert row[0] == "RuntimeError: model crashed"
+
+            queue.close()
+
+    def test_fail_backoff_increases_exponentially(self):
+        """Successive failures should increase the retry delay."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "content")
+
+            retry_afters = []
+            for i in range(3):
+                # Clear backoff to allow dequeue
+                queue._conn.execute(
+                    "UPDATE pending_summaries SET retry_after = NULL WHERE id = 'doc1'"
+                )
+                queue._conn.commit()
+
+                queue.dequeue(limit=1)
+                queue.fail("doc1", "default", error=f"fail {i}")
+
+                cursor = queue._conn.execute(
+                    "SELECT retry_after FROM pending_summaries WHERE id = 'doc1'"
+                )
+                retry_afters.append(cursor.fetchone()[0])
+
+            # Each retry_after should be further in the future
+            # (30s, 60s, 120s from roughly the same "now")
+            for i in range(1, len(retry_afters)):
+                assert retry_afters[i] > retry_afters[i - 1], \
+                    f"Backoff should increase: {retry_afters}"
+
+            queue.close()
+
+    def test_abandon_moves_to_failed_status(self):
+        """abandon() should move item to 'failed' (dead letter)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "content")
+            queue.dequeue(limit=1)
+
+            queue.abandon("doc1", "default", error="Exhausted 5 attempts")
+
+            # Not pending, not available for dequeue
+            assert queue.count() == 0
+            items = queue.dequeue(limit=1)
+            assert len(items) == 0
+
+            # But preserved in failed list
+            failed = queue.list_failed()
+            assert len(failed) == 1
+            assert failed[0]["id"] == "doc1"
+            assert failed[0]["last_error"] == "Exhausted 5 attempts"
+
+            queue.close()
+
+    def test_retry_failed_resets_to_pending(self):
+        """retry_failed() should reset dead-letter items back to pending."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "content")
+            queue.dequeue(limit=1)
+            queue.abandon("doc1", "default", error="gave up")
+
+            assert queue.count() == 0
+            assert len(queue.list_failed()) == 1
+
+            # Retry resets them
+            n = queue.retry_failed()
+            assert n == 1
+            assert queue.count() == 1
+            assert len(queue.list_failed()) == 0
+
+            # Can dequeue again
+            items = queue.dequeue(limit=1)
+            assert len(items) == 1
+            assert items[0].id == "doc1"
+            assert items[0].attempts == 0  # Reset
+
+            queue.close()
+
+    def test_stats_includes_status_breakdown(self):
+        """stats() should include pending, processing, and failed counts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "content")
+            queue.enqueue("doc2", "default", "content")
+            queue.enqueue("doc3", "default", "content")
+
+            # doc1 → processing
+            queue.dequeue(limit=1)
+            # doc2 → failed
+            queue._conn.execute(
+                "UPDATE pending_summaries SET status = 'failed' WHERE id = 'doc2'"
+            )
+            queue._conn.commit()
+
+            stats = queue.stats()
+            assert stats["pending"] == 1     # doc3
+            assert stats["processing"] == 1  # doc1
+            assert stats["failed"] == 1      # doc2
+            assert stats["total"] == 3
 
             queue.close()

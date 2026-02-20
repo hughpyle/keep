@@ -2140,6 +2140,10 @@ def pending_cmd(
         "--reindex",
         help="Enqueue all items for re-embedding, then process"
     )] = False,
+    retry: Annotated[bool, typer.Option(
+        "--retry",
+        help="Reset failed items back to pending for retry"
+    )] = False,
     stop: Annotated[bool, typer.Option(
         "--stop",
         help="Stop the background processor"
@@ -2225,6 +2229,16 @@ def pending_cmd(
             processor_lock.release()
         return
 
+    # --retry: reset failed items back to pending
+    if retry:
+        n = kp._pending_queue.retry_failed()
+        if n:
+            typer.echo(f"Reset {n} failed items back to pending.", err=True)
+        else:
+            typer.echo("No failed items to retry.", err=True)
+            kp.close()
+            return
+
     # --reindex: enqueue all items for re-embedding
     if reindex:
         count = kp.count()
@@ -2242,6 +2256,21 @@ def pending_cmd(
     # Interactive mode: show status, ensure daemon running, tail log
     pending_count = kp.pending_count()
 
+    # Show failed items if any
+    queue_stats = kp._pending_queue.stats()
+    failed_count = queue_stats.get("failed", 0)
+    if failed_count and pending_count == 0:
+        typer.echo(f"Nothing pending. {failed_count} failed (use --retry to requeue).", err=True)
+        # Show first few failed items
+        failed_items = kp._pending_queue.list_failed()
+        for item in failed_items[:5]:
+            error = item.get("last_error", "unknown")
+            typer.echo(f"  {item['id']} ({item['task_type']}): {error}", err=True)
+        if len(failed_items) > 5:
+            typer.echo(f"  ... and {len(failed_items) - 5} more", err=True)
+        kp.close()
+        return
+
     if pending_count == 0:
         typer.echo("Nothing pending.")
         kp.close()
@@ -2249,7 +2278,10 @@ def pending_cmd(
 
     by_type = kp.pending_stats_by_type()
     parts = [f"{count} {ttype}" for ttype, count in sorted(by_type.items())]
-    typer.echo(f"Queue: {pending_count} items ({', '.join(parts)})", err=True)
+    status_line = f"Queue: {pending_count} items ({', '.join(parts)})"
+    if failed_count:
+        status_line += f" + {failed_count} failed"
+    typer.echo(status_line, err=True)
 
     # Ensure daemon is running
     if not kp._is_processor_running():
