@@ -208,12 +208,17 @@ class TestPendingSummaryQueue:
             queue.close()
 
     def test_concurrent_dequeue_no_overlap(self):
-        """Two threads calling dequeue() should never get the same item."""
+        """Two threads calling dequeue() should never get the same item.
+
+        Uses small dequeue batches (limit=2) across multiple rounds to
+        force actual thread interleaving — not just one thread winning
+        all items in a single BEGIN IMMEDIATE.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
 
-            # Enqueue 10 items
-            for i in range(10):
+            # Enqueue 20 items
+            for i in range(20):
                 queue.enqueue(f"doc{i}", "default", f"content {i}")
 
             results = [[], []]
@@ -221,21 +226,26 @@ class TestPendingSummaryQueue:
 
             def dequeue_worker(idx):
                 barrier.wait()  # Synchronize start
-                items = queue.dequeue(limit=10)
-                results[idx] = [item.id for item in items]
+                # Multiple small dequeues to create interleaving
+                for _ in range(10):
+                    items = queue.dequeue(limit=2)
+                    results[idx].extend(item.id for item in items)
+                    # Complete items so they don't stay "processing"
+                    for item in items:
+                        queue.complete(item.id, item.collection, item.task_type)
 
             t1 = threading.Thread(target=dequeue_worker, args=(0,))
             t2 = threading.Thread(target=dequeue_worker, args=(1,))
             t1.start()
             t2.start()
-            t1.join()
-            t2.join()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
 
             # No overlap: each item claimed by exactly one thread
             all_claimed = results[0] + results[1]
             assert len(all_claimed) == len(set(all_claimed)), \
                 f"Overlap detected: {results[0]} vs {results[1]}"
-            assert len(all_claimed) == 10
+            assert len(all_claimed) == 20
 
             queue.close()
 
@@ -446,5 +456,41 @@ class TestPendingSummaryQueue:
             assert stats["processing"] == 1  # doc1
             assert stats["failed"] == 1      # doc2
             assert stats["total"] == 3
+
+            queue.close()
+
+    def test_stale_claim_recovery_respects_task_type(self):
+        """analyze tasks should get a longer stale claim threshold than embed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            # Enqueue two items with different task types
+            queue.enqueue("doc1", "default", "c", task_type="embed")
+            queue.enqueue("doc2", "default", "c", task_type="analyze")
+
+            # Dequeue both (claims them with current timestamp)
+            items = queue.dequeue(limit=2)
+            assert len(items) == 2
+
+            # Fake claimed_at to 15 minutes ago (> 10 min default, < 1 hour analyze)
+            queue._conn.execute("""
+                UPDATE pending_summaries SET claimed_at =
+                    datetime('now', '-15 minutes')
+                WHERE status = 'processing'
+            """)
+            queue._conn.commit()
+
+            # Recover stale claims — should only recover embed (15 min > 10 min)
+            # but NOT analyze (15 min < 1 hour)
+            recovered = queue._recover_stale_claims()
+            assert recovered == 1
+
+            # embed should be back to pending, analyze still processing
+            cursor = queue._conn.execute(
+                "SELECT id, status FROM pending_summaries ORDER BY id"
+            )
+            rows = {r[0]: r[1] for r in cursor.fetchall()}
+            assert rows["doc1"] == "pending"    # embed: recovered
+            assert rows["doc2"] == "processing"  # analyze: still claimed
 
             queue.close()

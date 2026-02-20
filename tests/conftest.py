@@ -239,6 +239,12 @@ class MockChromaStore:
             return True
         return False
 
+    def delete_collection(self, name: str) -> bool:
+        if name in self._data:
+            del self._data[name]
+            return True
+        return False
+
     def close(self) -> None:
         self._data.clear()
 
