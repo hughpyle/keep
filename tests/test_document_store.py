@@ -309,7 +309,8 @@ class TestVersioning:
         versions = store.list_versions("default", "doc:1")
         assert len(versions) == 1
         assert versions[0].summary == "Version 1"
-        assert versions[0].tags == {"tag": "a"}
+        # Version tags include injected _created/_updated for frontmatter display
+        assert versions[0].tags["tag"] == "a"
 
         # Current should be updated
         current = store.get("default", "doc:1")

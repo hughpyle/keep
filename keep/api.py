@@ -1691,9 +1691,10 @@ class Keeper:
             id: Custom ID (auto-generated for inline content if None)
             summary: User-provided summary (skips auto-summarization)
             tags: User-provided tags to merge with existing tags
-            created_at: Override creation timestamp (ISO 8601) for new items.
+            created_at: Override creation timestamp (ISO 8601).
                         For importing historical data via the Python API.
-                        Ignored if the item already exists (preserves original).
+                        When updating an existing item, sets the head's
+                        created_at so version archives carry accurate dates.
 
         Returns:
             The stored Item with merged tags and summary
@@ -1965,6 +1966,40 @@ class Keeper:
         if not include_hidden:
             items = [i for i in items if not _is_hidden(i)]
 
+        # Part-to-parent uplift: replace part hits with their parent
+        # documents, carrying _focus_part so the formatter can window
+        # the parts manifest around the hit.  Dedup: keep the highest-
+        # scoring part when multiple parts of the same parent match.
+        uplifted: list[Item] = []
+        seen_parents: dict[str, int] = {}  # parent_id -> index in uplifted
+        for item in items:
+            if is_part_id(item.id):
+                parent_id = item.tags.get("_base_id", item.id.split("@")[0])
+                part_num = item.tags.get("_part_num")
+                if parent_id in seen_parents:
+                    # Already have this parent — skip (first hit had higher score)
+                    continue
+                parent_doc = self._document_store.get(doc_coll, parent_id)
+                if parent_doc:
+                    parent_item = _record_to_item(parent_doc)
+                    parent_tags = dict(parent_item.tags)
+                    if part_num:
+                        parent_tags["_focus_part"] = part_num
+                    uplifted.append(Item(
+                        id=parent_id, summary=parent_item.summary,
+                        tags=parent_tags, score=item.score,
+                    ))
+                    seen_parents[parent_id] = len(uplifted) - 1
+                else:
+                    uplifted.append(item)  # Parent gone — keep raw part
+            else:
+                # Regular document — dedup against uplifted parents
+                if item.id in seen_parents:
+                    continue
+                uplifted.append(item)
+                seen_parents[item.id] = len(uplifted) - 1
+        items = uplifted
+
         final = items[:limit]
         # Enrich tags from SQLite (ChromaDB stores casefolded values;
         # SQLite has the canonical original-case values for display)
@@ -1974,9 +2009,14 @@ class Keeper:
             for item in final:
                 doc = self._document_store.get(doc_coll, item.id)
                 if doc:
+                    tags = dict(doc.tags)
+                    # Preserve _focus_part from uplift
+                    focus = item.tags.get("_focus_part")
+                    if focus:
+                        tags["_focus_part"] = focus
                     enriched.append(Item(
                         id=item.id, summary=item.summary,
-                        tags=doc.tags, score=item.score,
+                        tags=tags, score=item.score,
                     ))
                 else:
                     enriched.append(item)

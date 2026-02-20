@@ -13,7 +13,7 @@ SYSTEM_TAG_PREFIX = "_"
 
 # Tags used internally but hidden from display output
 # These exist for efficient queries/sorting but aren't user-facing
-INTERNAL_TAGS = frozenset({"_updated_date", "_accessed_date"})
+INTERNAL_TAGS = frozenset({"_updated_date", "_accessed_date", "_focus_part"})
 
 
 def utc_now() -> str:

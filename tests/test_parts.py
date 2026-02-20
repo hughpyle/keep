@@ -455,6 +455,63 @@ class TestAnalyzeSkip:
 
 
 # ---------------------------------------------------------------------------
+# Part-to-parent uplift in find()
+# ---------------------------------------------------------------------------
+
+
+class TestFindPartUplift:
+    """find() replaces part hits with their parent document."""
+
+    MOCK_PARTS = [
+        {"summary": "Trip to Miami", "content": "Went to Miami in January",
+         "tags": {"topic": "travel"}},
+        {"summary": "Planning next trip", "content": "Looking at flights to NYC",
+         "tags": {"topic": "travel"}},
+        {"summary": "Work update", "content": "Finished the project report",
+         "tags": {"topic": "work"}},
+    ]
+
+    def test_find_uplifts_part_to_parent(self, mock_providers, tmp_path):
+        """When find() hits a part, it returns the parent with _focus_part."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("A multi-topic document about trips and work. " * 20,
+               id="test-doc", tags={"project": "journal"})
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc")
+
+        # Search for something a part matches
+        results = kp.find("Miami trip")
+
+        # Should find the parent, not the part
+        parent_results = [r for r in results if r.id == "test-doc"]
+        assert len(parent_results) >= 1
+        parent = parent_results[0]
+        # Should have _focus_part set
+        assert "_focus_part" in parent.tags
+
+        # Should NOT have raw part IDs in results
+        part_results = [r for r in results if "@p" in r.id or "@P" in r.id]
+        assert len(part_results) == 0
+
+    def test_find_dedupes_multiple_part_hits(self, mock_providers, tmp_path):
+        """Multiple parts of the same parent produce one result."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Travel travel travel. " * 20,
+               id="test-doc", tags={"project": "journal"})
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc")
+
+        # "travel" matches multiple parts — should still get one parent
+        results = kp.find("travel")
+        parent_count = sum(1 for r in results if r.id == "test-doc")
+        assert parent_count <= 1
+
+
+# ---------------------------------------------------------------------------
 # CLI tests
 # ---------------------------------------------------------------------------
 

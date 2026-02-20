@@ -429,7 +429,7 @@ class DocumentStore:
             tags: All tags (source + system)
             content_hash: Short SHA256 hash of content (for change detection)
             content_hash_full: Full SHA256 hash (for dedup verification)
-            created_at: Optional override for created_at on new documents
+            created_at: Optional override for created_at timestamp
                         (for importing historical data with original timestamps)
 
         Returns:
@@ -447,7 +447,10 @@ class DocumentStore:
             try:
                 # Check if exists to preserve created_at and archive
                 existing = self._get_unlocked(collection, id)
-                created_at = existing.created_at if existing else (created_at or now)
+                # If caller provides created_at, honour it (vstring ingest
+                # passes per-version original dates).  Otherwise fall back to
+                # the existing row's created_at, or now for brand-new docs.
+                created_at = created_at or (existing.created_at if existing else now)
                 content_changed = False
 
                 if existing:
@@ -510,7 +513,16 @@ class DocumentStore:
         """, (id, collection))
         next_version = cursor.fetchone()[0]
 
-        # Insert the current state as a version
+        # Insert the current state as a version.
+        # Inject _created/_updated into tags so version nav can display
+        # accurate timestamps (these are normally synthesized by
+        # _record_to_item but not stored in tags_json).
+        version_tags = dict(current.tags)
+        if current.created_at:
+            version_tags.setdefault("_created", current.created_at)
+        if current.updated_at:
+            version_tags["_updated"] = current.updated_at
+
         self._conn.execute("""
             INSERT INTO document_versions
             (id, collection, version, summary, tags_json, content_hash, created_at)
@@ -520,7 +532,7 @@ class DocumentStore:
             collection,
             next_version,
             current.summary,
-            json.dumps(current.tags, ensure_ascii=False),
+            json.dumps(version_tags, ensure_ascii=False),
             current.content_hash,
             current.updated_at,  # Use updated_at as the version's timestamp
         ))
