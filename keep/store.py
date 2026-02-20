@@ -318,28 +318,6 @@ class ChromaStore:
         except ValueError:
             return 0  # No parts exist
 
-    def get_content_hash(self, collection: str, id: str) -> Optional[str]:
-        """
-        Get the content hash of an existing item.
-
-        Used to check if content changed (to skip re-embedding).
-
-        Args:
-            collection: Collection name
-            id: Item identifier
-
-        Returns:
-            Content hash if item exists and has one, None otherwise
-        """
-        coll = self._get_collection(collection)
-        result = coll.get(ids=[id], include=["metadatas"])
-
-        if not result["ids"]:
-            return None
-
-        metadata = result["metadatas"][0] or {}
-        return metadata.get("_content_hash")
-    
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         """
         Delete an item from the store.

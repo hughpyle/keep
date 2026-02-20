@@ -1,13 +1,27 @@
 """
-Shared Ollama utilities — model availability check and auto-pull.
+Shared Ollama utilities — base URL resolution, model check, auto-pull.
 """
 
 import logging
+import os
 import sys
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+def ollama_base_url(url: str | None = None) -> str:
+    """Resolve and normalize an Ollama base URL.
+
+    Checks OLLAMA_HOST env var, defaults to localhost:11434.
+    Ensures http:// prefix and strips trailing slash.
+    """
+    if url is None:
+        url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    if not url.startswith("http"):
+        url = f"http://{url}"
+    return url.rstrip("/")
 
 
 def ollama_ensure_model(base_url: str, model: str) -> None:

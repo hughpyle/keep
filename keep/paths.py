@@ -25,31 +25,6 @@ if TYPE_CHECKING:
     from .config import StoreConfig
 
 
-def find_git_root(start_path: Optional[Path] = None) -> Optional[Path]:
-    """
-    Find the root of the git repository containing the given path.
-    
-    Args:
-        start_path: Path to start searching from. Defaults to cwd.
-    
-    Returns:
-        Path to git root, or None if not in a git repository.
-    """
-    if start_path is None:
-        start_path = Path.cwd()
-    
-    current = start_path.resolve()
-    
-    while current != current.parent:
-        if (current / ".git").exists():
-            return current
-        current = current.parent
-    
-    # Check root as well
-    if (current / ".git").exists():
-        return current
-    
-    return None
 
 
 def find_config_dir(start_path: Optional[Path] = None) -> Path:

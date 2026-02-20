@@ -164,35 +164,6 @@ class StoreConfig:
         return self.config_path.exists()
 
 
-def read_openclaw_config() -> dict | None:
-    """
-    Read OpenClaw configuration if available.
-
-    Checks:
-    1. OPENCLAW_CONFIG environment variable
-    2. ~/.openclaw/openclaw.json (default location)
-
-    Returns None if not found or invalid.
-    """
-    import json
-
-    # Try environment variable first
-    config_path_str = os.environ.get("OPENCLAW_CONFIG")
-    if config_path_str:
-        config_file = Path(config_path_str)
-    else:
-        # Default location
-        config_file = Path.home() / ".openclaw" / "openclaw.json"
-
-    if not config_file.exists():
-        return None
-
-    try:
-        with open(config_file) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return None
-
 
 
 def _detect_ollama() -> dict | None:
