@@ -152,7 +152,7 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples
 - **[docs/REFERENCE.md](docs/REFERENCE.md)** — Quick reference index
 - **[docs/TAGGING.md](docs/TAGGING.md)** — Tags, speech acts, project/topic organization
 - **[docs/VERSIONING.md](docs/VERSIONING.md)** — Document versioning and history
-- **[docs/META-DOCS.md](docs/META-DOCS.md)** — How meta-docs surface contextual feedback
+- **[docs/META-TAGS.md](docs/META-TAGS.md)** — Tag descriptions, constrained values, and contextual queries
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Working session patterns
 - **[docs/LANGCHAIN-INTEGRATION.md](docs/LANGCHAIN-INTEGRATION.md)** — LangChain/LangGraph integration
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — How it works under the hood

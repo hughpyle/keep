@@ -123,30 +123,7 @@ This pattern works for any isolation key — `user`, `project`, `tenant`, `sessi
 
 ## Speech-act tags
 
-Two tags make the commitment structure of work visible:
-
-### `act` — speech-act category
-
-| Value | What it marks | Example |
-|-------|---------------|---------|
-| `commitment` | A promise to act | "I'll fix auth by Friday" |
-| `request` | Asking someone to act | "Please review the PR" |
-| `offer` | Proposing to act | "I could refactor the cache" |
-| `assertion` | A claim of fact | "The tests pass on main" |
-| `assessment` | A judgment | "This approach is risky" |
-| `declaration` | Changing reality | "Released v2.0" |
-
-### `status` — lifecycle state
-
-| Value | Meaning |
-|-------|---------|
-| `open` | Active, unfulfilled |
-| `fulfilled` | Completed and satisfied |
-| `declined` | Not accepted |
-| `withdrawn` | Cancelled by originator |
-| `renegotiated` | Terms changed |
-
-### Usage
+Two tags — `act` and `status` — make the commitment structure of work visible. These are **constrained tags**: only pre-defined values are accepted.
 
 ```bash
 # Track a commitment
@@ -158,13 +135,9 @@ keep list -t act=request -t status=open
 
 # Mark fulfilled
 keep tag-update ID --tag status=fulfilled
-
-# Record an assertion or assessment (no lifecycle)
-keep put "The tests pass" -t act=assertion
-keep put "This approach is risky" -t act=assessment -t topic=architecture
 ```
 
-For full details: `keep get .tag/act` and `keep get .tag/status`.
+For the full value tables, constrained tag validation, and how to extend with custom values, see [META-TAGS.md](META-TAGS.md). For inline reference: `keep get .tag/act` and `keep get .tag/status`.
 
 ## System tags
 
@@ -189,6 +162,7 @@ See [PYTHON-API.md](PYTHON-API.md) for complete Python API reference.
 
 ## See Also
 
+- [META-TAGS.md](META-TAGS.md) — Tag descriptions, constrained values, and contextual queries
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags
 - [KEEP-LIST.md](KEEP-LIST.md) — List and filter by tags
 - [KEEP-FIND.md](KEEP-FIND.md) — Search with tag filters

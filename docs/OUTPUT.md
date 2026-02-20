@@ -84,7 +84,7 @@ Similar items are occasions for reflection: what else do I know about this? Cont
 
 ### 5. `meta/*:` — Contextual sections
 
-Meta-docs surface items matching tag-based queries relevant to what you're viewing. Each section name maps to a meta-doc:
+Meta-tags surface items matching tag-based queries relevant to what you're viewing. Each section name maps to a `.meta/*` query:
 
 | Section | Surfaces | Source |
 |---------|----------|--------|
@@ -94,7 +94,7 @@ Meta-docs surface items matching tag-based queries relevant to what you're viewi
 
 These are dynamically resolved — the same item shows different meta sections depending on its tags. For example, an item tagged `project=myapp` surfaces todos and learnings also tagged with that project.
 
-See [META-DOCS.md](META-DOCS.md) for how meta-docs work and how to create custom ones.
+See [META-TAGS.md](META-TAGS.md) for how contextual queries work and how to create custom ones.
 
 ### 6. `parts:` — Structural decomposition
 
@@ -148,6 +148,6 @@ See [REFERENCE.md](REFERENCE.md#output-formats) for examples of each format.
 
 - [TAGGING.md](TAGGING.md) — Tag system and conventions
 - [VERSIONING.md](VERSIONING.md) — Version history and navigation
-- [META-DOCS.md](META-DOCS.md) — How meta sections are resolved
+- [META-TAGS.md](META-TAGS.md) — Tag descriptions and contextual queries
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Hidden system tags
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

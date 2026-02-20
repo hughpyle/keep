@@ -34,7 +34,7 @@ keep list .tag/act                    # Items under ".tag/act/"
 ```bash
 keep list .tag                        # All items under ".tag/"
 keep list .tag/act                    # All items under ".tag/act/"
-keep list .meta                       # All meta-doc definitions
+keep list .meta                       # All contextual query definitions
 ```
 
 Prefix queries always include hidden (dot-prefix) items.
