@@ -656,31 +656,39 @@ class Keeper:
     def _release_summarization_provider(self) -> None:
         """Release summarization model to free GPU/unified memory.
 
+        Only actually releases GPU-resident providers (MLX). HTTP-based
+        providers (Ollama, OpenAI, etc.) are lightweight and reusable —
+        recreating them wastes time on model availability checks.
+
         Safe to call at any time — the lazy getter will reconstruct
-        the provider on next use.
+        the provider on next use if needed.
         """
         if self._summarization_provider is not None:
             if hasattr(self._summarization_provider, 'release'):
                 self._summarization_provider.release()
-            self._summarization_provider = None
+                self._summarization_provider = None
 
     def _release_embedding_provider(self) -> None:
         """Release embedding model to free GPU/unified memory.
 
-        Also closes the embedding cache. Safe to call at any time —
-        the lazy getter will reconstruct both on next use.
+        Only actually releases GPU-resident providers (MLX). HTTP-based
+        providers (Ollama, OpenAI, etc.) are lightweight and reusable.
+
+        Also closes the embedding cache when releasing.
+        Safe to call at any time — the lazy getter will reconstruct
+        both on next use if needed.
         """
         if self._embedding_provider is not None:
             # Release the locked inner provider (frees model weights)
             inner = getattr(self._embedding_provider, '_provider', None)
             if hasattr(inner, 'release'):
                 inner.release()
-            # Close the embedding cache
-            if hasattr(self._embedding_provider, '_cache'):
-                cache = self._embedding_provider._cache
-                if hasattr(cache, 'close'):
-                    cache.close()
-            self._embedding_provider = None
+                # Close the embedding cache
+                if hasattr(self._embedding_provider, '_cache'):
+                    cache = self._embedding_provider._cache
+                    if hasattr(cache, 'close'):
+                        cache.close()
+                self._embedding_provider = None
 
     def _get_media_describer(self) -> Optional[MediaDescriber]:
         """

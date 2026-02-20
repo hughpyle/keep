@@ -266,7 +266,7 @@ class OllamaSummarization:
                 ],
                 "stream": False,
             },
-            timeout=120,
+            timeout=(10, 120),  # (connect, read)
         )
         if not response.ok:
             detail = response.text[:200] if response.text else ""
@@ -297,7 +297,7 @@ class OllamaSummarization:
                 ],
                 "stream": False,
             },
-            timeout=300,
+            timeout=(10, 300),  # (connect, read) — generation can be slow
         )
         if not response.ok:
             detail = response.text[:200] if response.text else ""
