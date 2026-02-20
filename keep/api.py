@@ -1251,6 +1251,7 @@ class Keeper:
         summary: Optional[str] = None,
         system_tags: dict[str, str],
         created_at: Optional[str] = None,
+        force: bool = False,
     ) -> Item:
         """Core upsert logic used by put()."""
         # Wait for background reconciliation to finish before writing.
@@ -1307,7 +1308,7 @@ class Keeper:
         )
 
         # Early return: nothing to do
-        if content_unchanged and not tags_changed and summary is None:
+        if content_unchanged and not tags_changed and summary is None and not force:
             logger.debug("Content and tags unchanged, skipping for %s", id)
             return _record_to_item(existing_doc, changed=False)
 
@@ -1440,6 +1441,7 @@ class Keeper:
         summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
         created_at: Optional[str] = None,
+        force: bool = False,
     ) -> Item:
         """
         Store content in the memory.
@@ -1505,7 +1507,7 @@ class Keeper:
 
             # Fast path for local files: skip expensive read if stat unchanged
             is_file_uri = uri.startswith("file://") or uri.startswith("/")
-            if is_file_uri and summary is None:
+            if is_file_uri and summary is None and not force:
                 try:
                     fpath = Path(uri.removeprefix("file://")).resolve()
                     st = fpath.stat()
@@ -1582,6 +1584,7 @@ class Keeper:
                 tags=merged_tags, summary=summary,
                 system_tags=system_tags,
                 created_at=created_at,
+                force=force,
             )
 
             # Enqueue background OCR for scanned PDF pages
@@ -1613,6 +1616,7 @@ class Keeper:
                 tags=tags, summary=summary,
                 system_tags={"_source": "inline"},
                 created_at=created_at,
+                force=force,
             )
 
     # -------------------------------------------------------------------------
