@@ -31,8 +31,7 @@ _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 
 from .api import Keeper, _text_content_id
 from .config import get_tool_directory
-from .document_store import VersionInfo
-from .types import Item, ItemContext, local_date
+from .types import Item, ItemContext, PartRef, local_date
 from .logging_config import configure_quiet_mode, enable_debug_mode
 
 # Maximum number of files to index from a directory at once
@@ -201,139 +200,6 @@ def _filter_display_tags(tags: dict) -> dict:
     """Filter out internal-only tags for display."""
     from .types import INTERNAL_TAGS
     return {k: v for k, v in tags.items() if k not in INTERNAL_TAGS}
-
-
-def _format_yaml_frontmatter(
-    item: Item,
-    version_nav: Optional[dict[str, list[VersionInfo]]] = None,
-    viewing_offset: Optional[int] = None,
-    similar_items: Optional[list[Item]] = None,
-    similar_offsets: Optional[dict[str, int]] = None,
-    meta_sections: Optional[dict[str, list[Item]]] = None,
-    parts_manifest: Optional[list] = None,
-    focus_part: Optional[int] = None,
-) -> str:
-    """
-    Format item as YAML frontmatter with summary as content.
-
-    Args:
-        item: The item to format
-        version_nav: Optional version navigation info (prev/next lists)
-        viewing_offset: If viewing an old version, the offset (1=previous, 2=two ago)
-        similar_items: Optional list of similar items to display
-        similar_offsets: Version offsets for similar items (item.id -> offset)
-        meta_sections: Optional dict of {name: [Items]} from meta-doc resolution
-        parts_manifest: Optional list of PartInfo from structural decomposition
-        focus_part: If set, window parts_manifest to this part and its neighbors
-
-    Note: Offset computation (v1, v2, etc.) assumes version_nav lists
-    are ordered newest-first, matching list_versions() ordering.
-    Changing that ordering would break the vN = -V N correspondence.
-    """
-    cols = _output_width()
-
-    def _truncate_summary(summary: str, prefix_len: int) -> str:
-        """Truncate summary to fit terminal width, matching _format_summary_line."""
-        max_width = max(cols - prefix_len, 20)
-        s = summary.replace("\n", " ")
-        if len(s) > max_width:
-            s = s[:max_width - 3].rsplit(" ", 1)[0] + "..."
-        return s
-
-    version = viewing_offset if viewing_offset is not None else 0
-    version_suffix = f"@V{{{version}}}" if version > 0 else ""
-    lines = ["---", f"id: {_shell_quote_id(item.id)}{version_suffix}"]
-    display_tags = _filter_display_tags(item.tags)
-    if display_tags:
-        tag_items = ", ".join(f"{k}: {v}" for k, v in sorted(display_tags.items()))
-        lines.append(f"tags: {{{tag_items}}}")
-    if item.score is not None:
-        lines.append(f"score: {item.score:.3f}")
-
-    # Add similar items if available (version-scoped IDs with date and summary)
-    if similar_items:
-        # Build ID strings for alignment
-        sim_ids = []
-        for sim_item in similar_items:
-            base_id = sim_item.tags.get("_base_id", sim_item.id)
-            offset = (similar_offsets or {}).get(sim_item.id, 0)
-            version_suffix = f"@V{{{offset}}}" if offset > 0 else ""
-            sim_ids.append(f"{base_id}{version_suffix}")
-        id_width = min(max(len(s) for s in sim_ids), 20)
-        lines.append("similar:")
-        for sim_item, sid in zip(similar_items, sim_ids):
-            score_str = f"({sim_item.score:.2f})" if sim_item.score else ""
-            date_part = local_date(sim_item.tags.get("_updated") or sim_item.tags.get("_created", ""))
-            actual_id_len = max(len(sid), id_width)
-            prefix_len = 4 + actual_id_len + 1 + len(score_str) + 1 + len(date_part) + 1
-            summary_preview = _truncate_summary(sim_item.summary, prefix_len)
-            lines.append(f"  - {sid.ljust(id_width)} {score_str} {date_part} {summary_preview}")
-
-    # Add meta-doc sections (tag-based contextual results, prefixed to avoid key conflicts)
-    if meta_sections:
-        for name, meta_items in meta_sections.items():
-            meta_ids = [_shell_quote_id(mi.id) for mi in meta_items]
-            id_width = min(max(len(s) for s in meta_ids), 20)
-            lines.append(f"meta/{name}:")
-            for meta_item, mid in zip(meta_items, meta_ids):
-                actual_id_len = max(len(mid), id_width)
-                prefix_len = 4 + actual_id_len + 1
-                summary_preview = _truncate_summary(meta_item.summary, prefix_len)
-                lines.append(f"  - {mid.ljust(id_width)} {summary_preview}")
-
-    # Add parts manifest (structural decomposition)
-    if parts_manifest:
-        # Window around focus_part: show the hit and one neighbor each side
-        if focus_part is not None:
-            visible = []
-            for p in parts_manifest:
-                if abs(p.part_num - focus_part) <= 1:
-                    visible.append(p)
-        else:
-            visible = parts_manifest
-
-        part_ids = [f"@P{{{p.part_num}}}" for p in visible]
-        id_width = max(len(s) for s in part_ids)
-        total = len(parts_manifest)
-        label = "parts:" if focus_part is None else f"parts: # {total} total, showing around @P{{{focus_part}}}"
-        lines.append(label)
-        for part, pid in zip(visible, part_ids):
-            marker = " *" if focus_part is not None and part.part_num == focus_part else ""
-            prefix_len = 4 + id_width + 1 + len(marker)
-            summary_preview = _truncate_summary(part.summary, prefix_len)
-            lines.append(f"  - {pid.ljust(id_width)} {summary_preview}{marker}")
-
-    # Add version navigation (just @V{N} since ID is shown at top, with date + summary)
-    if version_nav:
-        # Current offset (0 if viewing current)
-        current_offset = viewing_offset if viewing_offset is not None else 0
-
-        if version_nav.get("prev"):
-            prev_ids = [f"@V{{{current_offset + i + 1}}}" for i in range(len(version_nav["prev"]))]
-            id_width = max(len(s) for s in prev_ids)
-            lines.append("prev:")
-            for vid, v in zip(prev_ids, version_nav["prev"]):
-                date_part = local_date(v.tags.get("_created") or v.created_at or "")
-                prefix_len = 4 + id_width + 1 + len(date_part) + 1
-                summary_preview = _truncate_summary(v.summary, prefix_len)
-                lines.append(f"  - {vid.ljust(id_width)} {date_part} {summary_preview}")
-        if version_nav.get("next"):
-            next_ids = [f"@V{{{current_offset - i - 1}}}" for i in range(len(version_nav["next"]))]
-            id_width = max(len(s) for s in next_ids)
-            lines.append("next:")
-            for vid, v in zip(next_ids, version_nav["next"]):
-                date_part = local_date(v.tags.get("_created") or v.created_at or "")
-                prefix_len = 4 + id_width + 1 + len(date_part) + 1
-                summary_preview = _truncate_summary(v.summary, prefix_len)
-                lines.append(f"  - {vid.ljust(id_width)} {date_part} {summary_preview}")
-        elif viewing_offset is not None:
-            # Viewing old version and next is empty means current is next
-            lines.append("next:")
-            lines.append(f"  - @V{{0}}")
-
-    lines.append("---")
-    lines.append(item.summary)  # Summary IS the content
-    return "\n".join(lines)
 
 
 def render_context(ctx: ItemContext, as_json: bool = False) -> str:
@@ -644,9 +510,12 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None) -> str:
             manifest = None
             if focus_int and keeper:
                 manifest = keeper.list_parts(item.id) or None
-            parts.append(_format_yaml_frontmatter(
-                item, parts_manifest=manifest, focus_part=focus_int,
-            ))
+            ctx = ItemContext(
+                item=item,
+                parts=[PartRef(part_num=p.part_num, summary=p.summary) for p in manifest] if manifest else [],
+                focus_part=focus_int,
+            )
+            parts.append(_render_frontmatter(ctx))
         return "\n\n".join(parts)
 
     # Compute ID column width for alignment (capped to avoid long URIs dominating)

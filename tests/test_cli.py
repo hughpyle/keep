@@ -182,14 +182,14 @@ class TestHumanOutput:
     
     def test_human_item_with_score(self):
         """Human-readable item shows score in full YAML mode."""
-        from keep.cli import _format_yaml_frontmatter
-        from keep.types import Item
+        from keep.cli import render_context
+        from keep.types import Item, ItemContext
 
         item = Item(id="test:1", summary="Test", score=0.95)
-        output = _format_yaml_frontmatter(item)
+        output = render_context(ItemContext(item=item))
 
         # YAML frontmatter format includes score
-        assert "score: 0.950" in output
+        assert "score: 0.95" in output
         assert "---" in output
     
     def test_human_list_empty(self):
