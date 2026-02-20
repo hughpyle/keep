@@ -491,23 +491,11 @@ class Keeper:
         embedding provider is available.
         """
         try:
-            chroma_coll = self._resolve_chroma_collection()
-            doc_coll = self._resolve_doc_collection()
-            doc_ids = self._document_store.list_ids(doc_coll)
-            missing = self._store.find_missing_ids(chroma_coll, doc_ids)
-            # Check for orphaned ChromaDB entries
-            # Skip versioned (@v{N}) and part (@p{N}) IDs — they are stored
-            # alongside main entries in ChromaDB but tracked in separate tables
-            chroma_ids = self._store.list_ids(chroma_coll)
-            doc_id_set = set(doc_ids)
-            orphaned = [
-                cid for cid in chroma_ids
-                if cid not in doc_id_set and "@v" not in cid and "@p" not in cid
-            ]
-            if missing or orphaned:
+            result = self.reconcile(fix=False)
+            if result["missing_from_index"] or result["orphaned_in_index"]:
                 logger.info(
                     "Store inconsistency: %d missing from search index, %d orphaned (will auto-reconcile)",
-                    len(missing), len(orphaned),
+                    result["missing_from_index"], result["orphaned_in_index"],
                 )
                 return True
         except Exception as e:
@@ -1116,8 +1104,23 @@ class Keeper:
         return "default"
     
     # -------------------------------------------------------------------------
-    # Constrained Tag Validation
+    # Tag Validation
     # -------------------------------------------------------------------------
+
+    def _validate_write_tags(self, tags: dict[str, str]) -> dict[str, str]:
+        """Casefold, validate keys/lengths, and check constrained values.
+
+        Returns the casefolded tags dict.  Used by put(), tag(), tag_part().
+        """
+        tags = casefold_tags(tags)
+        for key, value in tags.items():
+            if key.startswith(SYSTEM_TAG_PREFIX):
+                continue
+            validate_tag_key(key)
+            if len(value) > MAX_TAG_VALUE_LENGTH:
+                raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
+        self._validate_constrained_tags(tags)
+        return tags
 
     def _validate_constrained_tags(self, tags: dict[str, str]) -> None:
         """Check constrained tag values against sub-doc existence.
@@ -1396,18 +1399,8 @@ class Keeper:
         if content is None and uri is None:
             raise ValueError("Either content or uri is required")
 
-        # Validate and normalize tags (shared by both URI and inline paths)
         if tags:
-            tags = casefold_tags(tags)
-            for key, value in tags.items():
-                if not key.startswith(SYSTEM_TAG_PREFIX):
-                    validate_tag_key(key)
-                    if len(value) > MAX_TAG_VALUE_LENGTH:
-                        raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
-            self._validate_constrained_tags(
-                {k: v for k, v in tags.items()
-                 if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
-            )
+            tags = self._validate_write_tags(tags)
 
         # Parts are immutable — block put() with part-like IDs
         effective_id = id or uri or ""
@@ -2633,18 +2626,7 @@ class Keeper:
         # Validate inputs
         validate_id(id)
         if tags:
-            # Casefold user tags on write
-            tags = casefold_tags(tags)
-            for key, value in tags.items():
-                if not key.startswith(SYSTEM_TAG_PREFIX):
-                    validate_tag_key(key)
-                    if len(value) > MAX_TAG_VALUE_LENGTH:
-                        raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
-            # Validate constrained tags
-            self._validate_constrained_tags(
-                {k: v for k, v in tags.items()
-                 if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
-            )
+            tags = self._validate_write_tags(tags)
 
         # Get existing item (prefer document store, fall back to ChromaDB)
         existing = self.get(id)
@@ -2712,21 +2694,14 @@ class Keeper:
         # Merge: existing tags + new tags, empty string = delete
         merged = dict(part.tags)
         if tags:
-            tags = casefold_tags(tags)
+            tags = self._validate_write_tags(tags)
             for key, value in tags.items():
                 if key.startswith(SYSTEM_TAG_PREFIX):
-                    continue  # skip system tags
-                validate_tag_key(key)
-                if len(value) > MAX_TAG_VALUE_LENGTH:
-                    raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
+                    continue
                 if value == "":
                     merged.pop(key, None)
                 else:
                     merged[key] = value
-            self._validate_constrained_tags(
-                {k: v for k, v in tags.items()
-                 if not k.startswith(SYSTEM_TAG_PREFIX) and v != ""}
-            )
 
         # Dual-write: SQLite gets original values, ChromaDB gets casefolded
         self._document_store.update_part_tags(doc_coll, id, part_num, merged)
