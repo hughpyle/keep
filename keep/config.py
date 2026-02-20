@@ -224,6 +224,30 @@ def _ollama_pick_models(models: list[str]) -> tuple[str, str | None]:
     return embed_model, chat_model
 
 
+def _detect_content_extractor() -> "ProviderConfig | None":
+    """Auto-detect a content extractor (OCR) provider.
+
+    Priority: Ollama (glm-ocr auto-pulled on first use) > MLX > None.
+    """
+    # 1. Ollama
+    ollama = _detect_ollama()
+    if ollama:
+        params: dict[str, Any] = {"model": "glm-ocr"}
+        if ollama["base_url"] != "http://localhost:11434":
+            params["base_url"] = ollama["base_url"]
+        return ProviderConfig("ollama", params)
+
+    # 2. MLX (Apple Silicon with mlx-vlm)
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        try:
+            import mlx_vlm  # noqa
+            return ProviderConfig("mlx")
+        except ImportError:
+            pass
+
+    return None
+
+
 def detect_default_providers() -> dict[str, ProviderConfig | None]:
     """
     Detect the best default providers for the current environment.
@@ -396,27 +420,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     providers["media"] = media_provider
 
     # --- Content extractor (OCR) ---
-    # Priority: Ollama (auto-pull glm-ocr) > MLX (Apple Silicon) > None
-    extractor_provider: ProviderConfig | None = None
-
-    # 1. Ollama (glm-ocr is auto-pulled on first use)
-    if extractor_provider is None:
-        ollama = get_ollama()
-        if ollama:
-            params: dict[str, Any] = {"model": "glm-ocr"}
-            if ollama["base_url"] != "http://localhost:11434":
-                params["base_url"] = ollama["base_url"]
-            extractor_provider = ProviderConfig("ollama", params)
-
-    # 2. MLX (Apple Silicon with mlx-vlm)
-    if extractor_provider is None and is_apple_silicon:
-        try:
-            import mlx_vlm  # noqa
-            extractor_provider = ProviderConfig("mlx")
-        except ImportError:
-            pass
-
-    providers["content_extractor"] = extractor_provider
+    providers["content_extractor"] = _detect_content_extractor()
 
     # Document provider is always composite
     providers["document"] = ProviderConfig("composite")
@@ -523,8 +527,11 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse optional analyzer section
     analyzer_config = parse_provider(data["analyzer"]) if "analyzer" in data else None
 
-    # Parse optional content_extractor section
-    content_extractor_config = parse_provider(data["content_extractor"]) if "content_extractor" in data else None
+    # Parse optional content_extractor section (auto-detect if not in config)
+    if "content_extractor" in data:
+        content_extractor_config = parse_provider(data["content_extractor"])
+    else:
+        content_extractor_config = _detect_content_extractor()
 
     # Parse remote backend config (env vars override TOML)
     remote = None
