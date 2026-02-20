@@ -71,11 +71,11 @@ class TestParseParts:
 class TestPrompts:
 
     def test_all_expected_keys(self):
-        expected = {"structural", "temporal", "temporal-v2", "temporal-v3", "temporal-v4", "commitments"}
+        expected = {"structural", "temporal", "temporal-v2", "temporal-v3", "temporal-v4", "commitments", "conversation"}
         assert set(PROMPTS.keys()) == expected
 
     def test_default_prompt_exists(self):
-        assert DEFAULT_PROMPT in PROMPTS
+        assert DEFAULT_PROMPT == "auto" or DEFAULT_PROMPT in PROMPTS
 
     def test_prompts_are_nonempty_strings(self):
         for key, prompt in PROMPTS.items():
