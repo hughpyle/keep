@@ -94,7 +94,7 @@ If you've defined `.tag/topic` with values like "auth", "pricing", "deployment",
 
 These are complementary dimensions of the same document:
 
-| | Versions (`@V{N}`) | Parts (`@P{N}`) |
+| &nbsp; | Versions (`@V{N}`) | Parts (`@P{N}`) |
 |---|---|---|
 | **Dimension** | Temporal | Structural |
 | **Created by** | `put` (each update adds one) | `analyze` (replaces all) |

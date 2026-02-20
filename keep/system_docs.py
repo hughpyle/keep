@@ -237,10 +237,13 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
             tags["category"] = "system"
             tags["bundled_hash"] = bundled_hash
 
-            # Check for user edits before overwriting
+            # Check existing doc: skip if unchanged, preserve user edits
             existing_doc = keeper._document_store.get(doc_coll, new_id)
             if existing_doc:
                 prev_hash = existing_doc.tags.get("bundled_hash")
+                if prev_hash == bundled_hash:
+                    # Content unchanged — skip to avoid creating spurious versions
+                    continue
                 if prev_hash and existing_doc.content_hash != prev_hash:
                     stats["skipped"] += 1
                     logger.info("Preserving user-edited system doc: %s", new_id)
