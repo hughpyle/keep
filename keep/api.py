@@ -3342,9 +3342,28 @@ class Keeper:
                 time.sleep(0.1)
 
             except Exception as e:
-                # Mark as failed so it resets to pending for retry.
-                # (attempt counter already incremented by dequeue)
                 error_msg = f"{type(e).__name__}: {e}"
+
+                # Permanent failures: content issues that won't resolve
+                # on retry (e.g. scanned PDF with no text layer).
+                _permanent = (
+                    "content too short" in str(e).lower()
+                    or "no text extracted" in str(e).lower()
+                )
+                if _permanent:
+                    self._pending_queue.abandon(
+                        item.id, item.collection, item.task_type,
+                        error=f"Permanent: {error_msg}",
+                    )
+                    result["abandoned"] = result.get("abandoned", 0) + 1
+                    logger.info(
+                        "Abandoned %s %s (permanent failure): %s",
+                        item.task_type, item.id, e,
+                    )
+                    continue
+
+                # Transient failure — retry on next batch.
+                # (attempt counter already incremented by dequeue)
                 self._pending_queue.fail(
                     item.id, item.collection, item.task_type,
                     error=error_msg,
