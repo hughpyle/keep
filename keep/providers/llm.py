@@ -7,8 +7,8 @@ import os
 
 from .base import (
     get_registry,
-    SUMMARIZATION_SYSTEM_PROMPT,
     build_summarization_prompt,
+    get_summarization_system_prompt,
     strip_summary_preamble,
 )
 
@@ -82,9 +82,9 @@ class AnthropicSummarization:
         # Build prompt with optional context
         prompt = build_summarization_prompt(truncated, context)
 
-        # Use base system prompt when context is included in user message
-        system = SUMMARIZATION_SYSTEM_PROMPT if not context else (
-            "You are a helpful assistant that summarizes documents. "
+        # Auto-detect content type and select appropriate system prompt
+        system = get_summarization_system_prompt(truncated) if not context else (
+            "You are a helpful assistant that summarizes content. "
             "Follow the instructions in the user message."
         )
 
@@ -180,9 +180,9 @@ class OpenAISummarization:
         # Build prompt with optional context
         prompt = build_summarization_prompt(truncated, context)
 
-        # Use base system prompt when context is included in user message
-        system = SUMMARIZATION_SYSTEM_PROMPT if not context else (
-            "You are a helpful assistant that summarizes documents. "
+        # Auto-detect content type and select appropriate system prompt
+        system = get_summarization_system_prompt(truncated) if not context else (
+            "You are a helpful assistant that summarizes content. "
             "Follow the instructions in the user message."
         )
 
@@ -256,9 +256,9 @@ class OllamaSummarization:
         # Build prompt with optional context
         prompt = build_summarization_prompt(truncated, context)
 
-        # Use base system prompt when context is included in user message
-        system = SUMMARIZATION_SYSTEM_PROMPT if not context else (
-            "You are a helpful assistant that summarizes documents. "
+        # Auto-detect content type and select appropriate system prompt
+        system = get_summarization_system_prompt(truncated) if not context else (
+            "You are a helpful assistant that summarizes content. "
             "Follow the instructions in the user message."
         )
 

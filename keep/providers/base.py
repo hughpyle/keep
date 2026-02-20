@@ -5,6 +5,7 @@ These define the interfaces that concrete providers must implement.
 Using Protocol for structural subtyping - no explicit inheritance required.
 """
 
+import re
 from dataclasses import dataclass
 from collections.abc import Iterable
 from typing import Any, Protocol, runtime_checkable
@@ -161,6 +162,32 @@ Bad: "This document describes..." or "The main purpose is..."
 
 Include what it does, key features, and why someone might find it useful."""
 
+# Conversation-specific system prompt — preserves temporal anchors and user-stated facts
+CONVERSATION_SYSTEM_PROMPT = """Summarize this conversation in under 300 words.
+
+Preserve ALL specific dates, times, names, locations, numbers, and factual claims stated by the user.
+
+Focus on: what the user said happened, what was decided, what preferences or facts were stated. Preserve the chronological order of events.
+
+Begin with the topic discussed — not "This conversation is about..." or "The user discusses..."."""
+
+_SPEAKER_RE = re.compile(
+    r"^(?:User|Assistant|Human|AI|System)\s*:",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _is_conversation(content: str) -> bool:
+    """Detect if content looks like a conversation transcript."""
+    return len(_SPEAKER_RE.findall(content[:5000])) >= 4
+
+
+def get_summarization_system_prompt(content: str) -> str:
+    """Select the appropriate system prompt based on content type."""
+    if _is_conversation(content):
+        return CONVERSATION_SYSTEM_PROMPT
+    return SUMMARIZATION_SYSTEM_PROMPT
+
 
 def build_summarization_prompt(content: str, context: str | None = None) -> str:
     """
@@ -168,6 +195,7 @@ def build_summarization_prompt(content: str, context: str | None = None) -> str:
 
     When context is provided (as topic keywords), it gives the LLM
     thematic context without leaking specific phrases from other summaries.
+    Auto-detects conversation content and adjusts instructions accordingly.
 
     Args:
         content: The document content to summarize
@@ -177,7 +205,19 @@ def build_summarization_prompt(content: str, context: str | None = None) -> str:
         The complete prompt string for the LLM
     """
     if context:
-        return f"""Summarize this document in under 200 words.
+        if _is_conversation(content):
+            return f"""Summarize this conversation in under 300 words.
+
+This conversation is part of a collection about: {context}
+
+Summarize only this conversation.
+
+Preserve ALL specific dates, times, names, locations, and factual claims stated by the user. Preserve the chronological order of events.
+
+Conversation:
+{content}"""
+        else:
+            return f"""Summarize this document in under 200 words.
 
 This document is part of a collection about: {context}
 
@@ -200,7 +240,6 @@ def strip_summary_preamble(text: str) -> str:
     Many models add introductory phrases despite instructions not to.
     This post-processes the output to strip them.
     """
-    import re
     preambles = [
         r"^here is a summary[^:]*[:.]\s*",
         r"^here is a concise summary[^:]*:\s*",
@@ -215,6 +254,10 @@ def strip_summary_preamble(text: str) -> str:
         r"^the main purpose of this document is\s+",
         r"^the purpose of this document is\s+",
         r"^this is a document (about|describing|that)\s+",
+        r"^this conversation (is about|covers|discusses)\s+",
+        r"^the conversation (is about|covers|discusses)\s+",
+        r"^in this conversation,?\s+",
+        r"^the user (discusses|talks about|mentions)\s+",
     ]
     result = text
     for pattern in preambles:

@@ -323,6 +323,75 @@ class TestSummarizationPrompts:
         assert strip_summary_preamble("This document describes a system.") == "a system."
         assert strip_summary_preamble("Redis is fast.") == "Redis is fast."
 
+    def test_strip_summary_preamble_conversation(self):
+        """strip_summary_preamble removes conversation-specific preambles."""
+        from keep.providers.base import strip_summary_preamble
+        assert strip_summary_preamble("This conversation discusses car repairs.") == "car repairs."
+        assert strip_summary_preamble("In this conversation, the user bought a phone.") == "the user bought a phone."
+        assert strip_summary_preamble("The user discusses their new laptop.") == "their new laptop."
+
+    def test_is_conversation_detects_chat_transcript(self):
+        """_is_conversation detects user/assistant turn-taking patterns."""
+        from keep.providers.base import _is_conversation
+        chat = (
+            "User: I bought a new car yesterday.\n"
+            "Assistant: That's great! What kind?\n"
+            "User: A Toyota Corolla, 2023 model.\n"
+            "Assistant: Nice choice. How's it driving?\n"
+        )
+        assert _is_conversation(chat) is True
+
+    def test_is_conversation_rejects_document(self):
+        """_is_conversation rejects normal document content."""
+        from keep.providers.base import _is_conversation
+        doc = (
+            "Redis is an in-memory data store used as a database, cache, and message broker. "
+            "It supports various data structures such as strings, hashes, lists, and sets."
+        )
+        assert _is_conversation(doc) is False
+
+    def test_get_system_prompt_varies_by_content(self):
+        """get_summarization_system_prompt returns different prompts for docs vs conversations."""
+        from keep.providers.base import (
+            get_summarization_system_prompt,
+            SUMMARIZATION_SYSTEM_PROMPT,
+            CONVERSATION_SYSTEM_PROMPT,
+        )
+        doc = "Redis is a fast in-memory database."
+        chat = (
+            "User: I need help.\nAssistant: Sure!\n"
+            "User: My car broke down.\nAssistant: When?\n"
+        )
+        assert get_summarization_system_prompt(doc) == SUMMARIZATION_SYSTEM_PROMPT
+        assert get_summarization_system_prompt(chat) == CONVERSATION_SYSTEM_PROMPT
+
+    def test_conversation_prompt_does_not_mention_keep(self):
+        """Conversation system prompt must not prime the LLM with keep's identity."""
+        from keep.providers.base import CONVERSATION_SYSTEM_PROMPT
+        assert "keep" not in CONVERSATION_SYSTEM_PROMPT.lower().split()
+
+    def test_build_prompt_conversation_with_context(self):
+        """With context, conversation content gets conversation-specific framing."""
+        from keep.providers.base import build_summarization_prompt
+        chat = (
+            "User: I bought a car on Feb 20.\n"
+            "Assistant: What kind?\n"
+            "User: Toyota Corolla.\n"
+            "Assistant: Nice!\n"
+        )
+        result = build_summarization_prompt(chat, context="vehicles, purchases")
+        assert "conversation" in result.lower()
+        assert "Preserve ALL specific dates" in result
+        assert "vehicles, purchases" in result
+
+    def test_build_prompt_document_with_context_unchanged(self):
+        """With context, document content still gets document framing."""
+        from keep.providers.base import build_summarization_prompt
+        doc = "Redis is a fast in-memory database used for caching."
+        result = build_summarization_prompt(doc, context="databases")
+        assert "document" in result.lower()
+        assert "key features" in result
+
 
 # -----------------------------------------------------------------------------
 # Meta-doc Parser Tests
