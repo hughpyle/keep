@@ -280,7 +280,7 @@ class OllamaEmbedding:
             response = requests.post(
                 f"{self.base_url}/api/embeddings",
                 json={"model": self.model_name, "prompt": attempt},
-                timeout=60,
+                timeout=(10, 120),  # (connect, read) — model loading can be slow
             )
             if response.ok:
                 embedding = response.json()["embedding"]
