@@ -1,0 +1,330 @@
+"""
+System document management — constants, loading, and migration.
+
+System documents are bundled .md files that provide reference material
+(tag specs, meta-doc definitions, etc.) for keep stores. They're loaded
+on first use and upgraded when the bundled content changes.
+"""
+
+import hashlib
+import importlib.resources
+import logging
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .api import Keeper
+
+logger = logging.getLogger(__name__)
+
+
+def _get_system_doc_dir() -> Path:
+    """
+    Get path to system docs, works in both dev and installed environments.
+
+    Tries in order:
+    1. Package data via importlib.resources (installed packages)
+    2. Relative path inside package (development)
+    3. Legacy path outside package (backwards compatibility)
+    """
+    try:
+        with importlib.resources.as_file(
+            importlib.resources.files("keep.data.system")
+        ) as path:
+            if path.exists():
+                return path
+    except (ModuleNotFoundError, TypeError):
+        pass
+
+    dev_path = Path(__file__).parent / "data" / "system"
+    if dev_path.exists():
+        return dev_path
+
+    return Path(__file__).parent.parent / "docs" / "system"
+
+
+# Path to system documents
+SYSTEM_DOC_DIR = _get_system_doc_dir()
+
+# Stable IDs for system documents (path-independent)
+# Convention: filename sans .md, hyphens -> /, prefixed with .
+SYSTEM_DOC_IDS = {
+    "now.md": ".now",
+    "conversations.md": ".conversations",
+    "domains.md": ".domains",
+    "library.md": ".library",
+    "tag-act.md": ".tag/act",
+    "tag-act-commitment.md": ".tag/act/commitment",
+    "tag-act-request.md": ".tag/act/request",
+    "tag-act-offer.md": ".tag/act/offer",
+    "tag-act-assertion.md": ".tag/act/assertion",
+    "tag-act-assessment.md": ".tag/act/assessment",
+    "tag-act-declaration.md": ".tag/act/declaration",
+    "tag-status.md": ".tag/status",
+    "tag-status-open.md": ".tag/status/open",
+    "tag-status-blocked.md": ".tag/status/blocked",
+    "tag-status-fulfilled.md": ".tag/status/fulfilled",
+    "tag-status-declined.md": ".tag/status/declined",
+    "tag-status-withdrawn.md": ".tag/status/withdrawn",
+    "tag-status-renegotiated.md": ".tag/status/renegotiated",
+    "tag-project.md": ".tag/project",
+    "tag-topic.md": ".tag/topic",
+    "tag-type.md": ".tag/type",
+    "meta-todo.md": ".meta/todo",
+    "meta-learnings.md": ".meta/learnings",
+    "meta-genre.md": ".meta/genre",
+    "meta-artist.md": ".meta/artist",
+    "meta-album.md": ".meta/album",
+}
+
+# Migration renames from old ID prefixes to new stable IDs
+_OLD_ID_RENAMES = {
+    "_system:now": ".now",
+    "_system:conversations": ".conversations",
+    "_system:domains": ".domains",
+    "_system:library": ".library",
+    "_tag:act": ".tag/act",
+    "_tag:status": ".tag/status",
+    "_tag:project": ".tag/project",
+    "_tag:topic": ".tag/topic",
+    "_now:default": "now",
+}
+
+
+def _load_frontmatter(path: Path) -> tuple[str, dict[str, str]]:
+    """
+    Load content and tags from a file with optional YAML frontmatter.
+
+    Returns:
+        (content, tags) tuple. Tags empty if no frontmatter.
+
+    Raises:
+        FileNotFoundError: If the file doesn't exist
+    """
+    text = path.read_text()
+
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            import yaml
+            frontmatter = yaml.safe_load(parts[1])
+            content = parts[2].lstrip("\n")
+            if frontmatter:
+                tags = frontmatter.get("tags", {})
+                tags = {k: str(v) for k, v in tags.items()}
+                return content, tags
+            return content, {}
+
+    return text, {}
+
+
+def _content_hash(content: str) -> str:
+    """Short SHA256 hash of content for change detection."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[-10:]
+
+
+def migrate_system_documents(keeper: "Keeper") -> dict:
+    """
+    Migrate system documents to stable IDs and current version.
+
+    Handles:
+    - Migration from old file:// URIs to stable IDs
+    - Rename of old prefixes (_system:, _tag:, _now:, _text:) to new (.x, .tag/x, now, %x)
+    - Fresh creation for new stores
+    - Version upgrades when bundled content changes
+
+    Called during init. Only loads docs that don't already exist,
+    so user modifications are preserved. Updates config version
+    after successful migration.
+
+    Returns:
+        Dict with migration stats: created, migrated, skipped, cleaned
+    """
+    from .config import SYSTEM_DOCS_VERSION, save_config
+    from .types import casefold_tags_for_index
+
+    stats = {"created": 0, "migrated": 0, "skipped": 0, "cleaned": 0}
+
+    if keeper._config.system_docs_version >= SYSTEM_DOCS_VERSION:
+        return stats
+
+    filename_to_id = {name: doc_id for name, doc_id in SYSTEM_DOC_IDS.items()}
+
+    # First pass: clean up old file:// URIs with category=system tag
+    try:
+        old_system_docs = keeper.list_items(tags={"category": "system"}, limit=100)
+        for doc in old_system_docs:
+            if doc.id.startswith("file://") and doc.id.endswith(".md"):
+                filename = Path(doc.id.replace("file://", "")).name
+                new_id = filename_to_id.get(filename)
+                if new_id and not keeper.exists(new_id):
+                    keeper.put(doc.summary, id=new_id, tags=doc.tags)
+                    keeper.delete(doc.id)
+                    stats["migrated"] += 1
+                    logger.info("Migrated system doc: %s -> %s", doc.id, new_id)
+                elif new_id:
+                    keeper.delete(doc.id)
+                    stats["cleaned"] += 1
+                    logger.info("Cleaned up old system doc: %s", doc.id)
+    except (OSError, ValueError, KeyError, RuntimeError) as e:
+        logger.debug("Error scanning old system docs: %s", e)
+
+    # Second pass: rename old prefixes to new
+    for old_id, new_id in _OLD_ID_RENAMES.items():
+        try:
+            old_item = keeper.get(old_id)
+            if old_item and not keeper.exists(new_id):
+                keeper.put(old_item.summary, id=new_id, tags=old_item.tags)
+                keeper.delete(old_id)
+                stats["migrated"] += 1
+                logger.info("Renamed ID: %s -> %s", old_id, new_id)
+            elif old_item:
+                keeper.delete(old_id)
+                stats["cleaned"] += 1
+        except (OSError, ValueError, KeyError, RuntimeError) as e:
+            logger.debug("Error renaming %s: %s", old_id, e)
+
+    # Rename _text:hash -> %hash (transfer embeddings directly, no re-embedding)
+    # Preserves original timestamps - these are user memories with meaningful dates
+    try:
+        doc_coll = keeper._resolve_doc_collection()
+        chroma_coll_name = keeper._resolve_chroma_collection()
+        old_text_docs = keeper._document_store.query_by_id_prefix(doc_coll, "_text:")
+        for rec in old_text_docs:
+            new_id = "%" + rec.id[len("_text:"):]
+            if not keeper._document_store.get(doc_coll, new_id):
+                keeper._document_store.copy_record(doc_coll, rec.id, new_id)
+                try:
+                    entries = keeper._store.get_entries_full(chroma_coll_name, [rec.id])
+                    if entries and entries[0].get("embedding") is not None:
+                        entry = entries[0]
+                        keeper._store.upsert_batch(
+                            chroma_coll_name,
+                            [new_id],
+                            [entry["embedding"]],
+                            [entry["summary"] or rec.summary],
+                            [casefold_tags_for_index(entry["tags"])],
+                        )
+                except (ValueError, KeyError) as e:
+                    logger.debug("ChromaDB transfer skipped for %s: %s", rec.id, e)
+            keeper.delete(rec.id)
+            stats["migrated"] += 1
+            logger.info("Renamed text ID: %s -> %s", rec.id, new_id)
+    except (OSError, ValueError, KeyError) as e:
+        logger.debug("Error migrating _text: IDs: %s", e)
+
+    # Third pass: remove system docs no longer bundled
+    _RETIRED_SYSTEM_IDS = [".meta/decisions"]
+    for old_id in _RETIRED_SYSTEM_IDS:
+        try:
+            if keeper.exists(old_id):
+                keeper.delete(old_id)
+                stats["cleaned"] += 1
+                logger.info("Removed retired system doc: %s", old_id)
+        except (OSError, ValueError, KeyError) as e:
+            logger.debug("Error removing retired doc %s: %s", old_id, e)
+
+    # Fourth pass: create or update system docs from bundled content
+    for path in SYSTEM_DOC_DIR.glob("*.md"):
+        new_id = SYSTEM_DOC_IDS.get(path.name)
+        if new_id is None:
+            logger.debug("Skipping unknown system doc: %s", path.name)
+            continue
+
+        try:
+            content, tags = _load_frontmatter(path)
+            bundled_hash = _content_hash(content)
+            tags["category"] = "system"
+            tags["bundled_hash"] = bundled_hash
+
+            # Check for user edits before overwriting
+            existing_doc = keeper._document_store.get(doc_coll, new_id)
+            if existing_doc:
+                prev_hash = existing_doc.tags.get("bundled_hash")
+                if prev_hash and existing_doc.content_hash != prev_hash:
+                    stats["skipped"] += 1
+                    logger.info("Preserving user-edited system doc: %s", new_id)
+                    continue
+
+            # Store to DocumentStore directly (always works, no embedding needed).
+            # System docs are reference material - store full verbatim content.
+            from .types import utc_now as _utc_now
+            now_ts = _utc_now()
+            tags.setdefault("_created", now_ts)
+            tags["_updated"] = now_ts
+            tags["_updated_date"] = now_ts[:10]
+            tags["_source"] = "inline"
+            keeper._document_store.upsert(
+                collection=doc_coll, id=new_id, summary=content,
+                tags=tags, content_hash=bundled_hash,
+            )
+            # Also embed to ChromaDB if provider is available.
+            # Cloud mode skips - embedding is deferred to background worker.
+            if keeper._is_local:
+                try:
+                    embedding = keeper._get_embedding_provider().embed(content)
+                    keeper._store.upsert(
+                        collection=chroma_coll_name, id=new_id,
+                        embedding=embedding, summary=content,
+                        tags=casefold_tags_for_index(tags),
+                    )
+                except (RuntimeError, Exception) as e:
+                    logger.debug("Skipped embedding for system doc %s: %s", new_id, e)
+            if existing_doc:
+                stats["migrated"] += 1
+                logger.info("Updated system doc: %s", new_id)
+            else:
+                stats["created"] += 1
+                logger.info("Created system doc: %s", new_id)
+        except FileNotFoundError:
+            pass
+
+    keeper._config.system_docs_version = SYSTEM_DOCS_VERSION
+    save_config(keeper._config)
+
+    return stats
+
+
+def reset_system_documents(keeper: "Keeper") -> dict:
+    """
+    Force reload all system documents from bundled content.
+
+    This overwrites any user modifications to system documents.
+    Use with caution - primarily for recovery or testing.
+
+    Returns:
+        Dict with stats: reset count
+    """
+    from .config import SYSTEM_DOCS_VERSION, save_config
+
+    stats = {"reset": 0}
+    doc_coll = keeper._resolve_doc_collection()
+
+    for path in SYSTEM_DOC_DIR.glob("*.md"):
+        new_id = SYSTEM_DOC_IDS.get(path.name)
+        if new_id is None:
+            continue
+
+        try:
+            content, tags = _load_frontmatter(path)
+            bundled_hash = _content_hash(content)
+            tags["category"] = "system"
+            tags["bundled_hash"] = bundled_hash
+
+            keeper.delete(new_id)
+            keeper.put(content, id=new_id, tags=tags)
+            keeper._document_store.upsert(
+                collection=doc_coll, id=new_id, summary=content,
+                tags=keeper._document_store.get(doc_coll, new_id).tags,
+                content_hash=bundled_hash,
+            )
+            stats["reset"] += 1
+            logger.info("Reset system doc: %s", new_id)
+
+        except FileNotFoundError:
+            logger.warning("System doc file not found: %s", path)
+
+    keeper._config.system_docs_version = SYSTEM_DOCS_VERSION
+    save_config(keeper._config)
+
+    return stats
