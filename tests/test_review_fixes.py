@@ -376,33 +376,33 @@ class TestIsPartId:
 class TestPartImmutability:
     """Parts cannot be put, deleted, reverted, or moved."""
 
-    def test_put_rejects_part_id(self, mock_providers):
+    def test_put_rejects_part_id(self, mock_providers, tmp_path):
         from keep.api import Keeper
-        kp = Keeper()
+        kp = Keeper(store_path=tmp_path)
         with pytest.raises(ValueError, match="Cannot modify part directly"):
             kp.put("content", id="doc@p3")
 
-    def test_put_rejects_display_format(self, mock_providers):
+    def test_put_rejects_display_format(self, mock_providers, tmp_path):
         from keep.api import Keeper
-        kp = Keeper()
+        kp = Keeper(store_path=tmp_path)
         with pytest.raises(ValueError, match="Cannot modify part directly"):
             kp.put("content", id="doc@P{3}")
 
-    def test_delete_rejects_part_id(self, mock_providers):
+    def test_delete_rejects_part_id(self, mock_providers, tmp_path):
         from keep.api import Keeper
-        kp = Keeper()
+        kp = Keeper(store_path=tmp_path)
         with pytest.raises(ValueError, match="Cannot delete part directly"):
             kp.delete("doc@p3")
 
-    def test_revert_rejects_part_id(self, mock_providers):
+    def test_revert_rejects_part_id(self, mock_providers, tmp_path):
         from keep.api import Keeper
-        kp = Keeper()
+        kp = Keeper(store_path=tmp_path)
         with pytest.raises(ValueError, match="Cannot revert part directly"):
             kp.revert("doc@p3")
 
-    def test_move_rejects_part_name(self, mock_providers):
+    def test_move_rejects_part_name(self, mock_providers, tmp_path):
         from keep.api import Keeper
-        kp = Keeper()
+        kp = Keeper(store_path=tmp_path)
         # Guard fires before any source lookup
         with pytest.raises(ValueError, match="Cannot move to a part ID"):
             kp.move("target@p3", only_current=True)
@@ -411,16 +411,16 @@ class TestPartImmutability:
 class TestTagPart:
     """Tag editing on parts."""
 
-    def test_tag_part_not_found(self, mock_providers):
+    def test_tag_part_not_found(self, mock_providers, tmp_path):
         from keep.api import Keeper
-        kp = Keeper()
+        kp = Keeper(store_path=tmp_path)
         result = kp.tag_part("nonexistent", 1, tags={"topic": "test"})
         assert result is None
 
-    def test_tag_part_updates_tags(self, mock_providers):
+    def test_tag_part_updates_tags(self, mock_providers, tmp_path):
         from keep.api import Keeper
         from keep.document_store import PartInfo
-        kp = Keeper()
+        kp = Keeper(store_path=tmp_path)
 
         # Create a doc and manually insert a part
         kp.put("test content", id="test-doc")
@@ -440,10 +440,10 @@ class TestTagPart:
         assert result.tags["topic"] == "updated"
         assert result.tags["project"] == "myapp"
 
-    def test_tag_part_delete_with_empty_string(self, mock_providers):
+    def test_tag_part_delete_with_empty_string(self, mock_providers, tmp_path):
         from keep.api import Keeper
         from keep.document_store import PartInfo
-        kp = Keeper()
+        kp = Keeper(store_path=tmp_path)
 
         kp.put("test content", id="test-doc2")
         doc_coll = kp._resolve_doc_collection()
@@ -462,10 +462,10 @@ class TestTagPart:
         assert "topic" not in result.tags
         assert result.tags["project"] == "myapp"
 
-    def test_tag_part_skips_system_tags(self, mock_providers):
+    def test_tag_part_skips_system_tags(self, mock_providers, tmp_path):
         from keep.api import Keeper
         from keep.document_store import PartInfo
-        kp = Keeper()
+        kp = Keeper(store_path=tmp_path)
 
         kp.put("test content", id="test-doc3")
         doc_coll = kp._resolve_doc_collection()

@@ -267,20 +267,31 @@ def _render_frontmatter(ctx: ItemContext) -> str:
 
     # Parts manifest
     if ctx.parts:
+        total = len(ctx.parts)
         if ctx.focus_part is not None:
             visible = [p for p in ctx.parts if abs(p.part_num - ctx.focus_part) <= 1]
-        else:
+        elif total <= 3:
             visible = ctx.parts
+        else:
+            visible = [ctx.parts[0], ctx.parts[-1]]  # first + last
         part_ids = [f"@P{{{p.part_num}}}" for p in visible]
         id_width = max(len(s) for s in part_ids)
-        total = len(ctx.parts)
         label = "parts:" if ctx.focus_part is None else f"parts: # {total} total, showing around @P{{{ctx.focus_part}}}"
         lines.append(label)
-        for part, pid in zip(visible, part_ids):
-            marker = " *" if ctx.focus_part is not None and part.part_num == ctx.focus_part else ""
-            prefix_len = 4 + id_width + 1 + len(marker)
-            summary_preview = _truncate(part.summary, prefix_len)
-            lines.append(f"  - {pid.ljust(id_width)} {summary_preview}{marker}")
+        if ctx.focus_part is not None or total <= 3:
+            for part, pid in zip(visible, part_ids):
+                marker = " *" if ctx.focus_part is not None and part.part_num == ctx.focus_part else ""
+                prefix_len = 4 + id_width + 1 + len(marker)
+                summary_preview = _truncate(part.summary, prefix_len)
+                lines.append(f"  - {pid.ljust(id_width)} {summary_preview}{marker}")
+        else:
+            # Compact: first, "N more...", last
+            first, last = visible[0], visible[1]
+            first_pid, last_pid = part_ids[0], part_ids[1]
+            prefix_len = 4 + id_width + 1
+            lines.append(f"  - {first_pid.ljust(id_width)} {_truncate(first.summary, prefix_len)}")
+            lines.append(f"  # (...{total - 2} more...)")
+            lines.append(f"  - {last_pid.ljust(id_width)} {_truncate(last.summary, prefix_len)}")
 
     # Version navigation
     if ctx.prev:
@@ -782,6 +793,10 @@ def list_recent(
         "--parts", "-P",
         help="Include structural parts (from analyze)"
     )] = False,
+    with_parts: Annotated[bool, typer.Option(
+        "--with-parts",
+        help="Only show notes that have been analyzed into parts"
+    )] = False,
     show_all: Annotated[bool, typer.Option(
         "--all", "-a",
         help="Include hidden system notes (IDs starting with '.')"
@@ -852,6 +867,12 @@ def list_recent(
             kwargs["tag_keys"] = tag_key_list
 
     results = kp.list_items(**kwargs)
+
+    # Filter to only items with parts
+    if with_parts:
+        doc_coll = kp._resolve_doc_collection()
+        results = [item for item in results
+                   if kp._document_store.part_count(doc_coll, item.id) > 0]
 
     # Expand with parts if requested
     if parts:
@@ -1524,33 +1545,12 @@ def _get_part_direct(kp: Keeper, actual_id: str, part_num: int) -> Optional[str]
 
 
 def _get_parts_list(kp: Keeper, actual_id: str) -> str:
-    """List all parts of a document."""
+    """List all parts of a document (same format as 'keep list')."""
     part_list = kp.list_parts(actual_id)
-    if _get_ids_output():
-        return "\n".join(f"{actual_id}@P{{{p.part_num}}}" for p in part_list)
-    if _get_json_output():
-        result = {
-            "id": actual_id,
-            "parts": [
-                {
-                    "part": p.part_num,
-                    "pid": f"{actual_id}@P{{{p.part_num}}}",
-                    "summary": p.summary[:100],
-                    "tags": {k: v for k, v in p.tags.items() if not k.startswith("_")},
-                }
-                for p in part_list
-            ],
-        }
-        return json.dumps(result, indent=2)
     if not part_list:
         return f"No parts for {actual_id}. Use 'keep analyze {actual_id}' to create parts."
-    lines = [f"Parts for {actual_id}:"]
-    for p in part_list:
-        summary_preview = p.summary[:60].replace("\n", " ")
-        if len(p.summary) > 60:
-            summary_preview += "..."
-        lines.append(f"  @P{{{p.part_num}}} {summary_preview}")
-    return "\n".join(lines)
+    items = _parts_to_items(actual_id, None, part_list)
+    return _format_items(items, as_json=_get_json_output())
 
 
 def _get_similar_list(kp: Keeper, actual_id: str, limit: int) -> str:

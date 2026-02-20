@@ -1981,8 +1981,17 @@ class Keeper:
             matches = self._resolve_meta_queries(
                 item_id, current_tags, query_lines, context_keys, prereq_keys, limit_per_doc,
             )
-            if matches:
-                result[short_name] = matches
+            if not matches:
+                continue
+
+            # Split: direct matches go to {name}, part-sourced go to {name}/provisional
+            direct = [m for m in matches if not m.tags.get("_provisional")]
+            provisional = [m for m in matches if m.tags.get("_provisional")]
+
+            if direct:
+                result[short_name] = direct
+            if provisional:
+                result[f"{short_name}/provisional"] = provisional
 
         return result
 
@@ -2078,9 +2087,41 @@ class Keeper:
         if not matches:
             return []
 
+        # Part-to-parent uplift: replace part hits with parent doc ID
+        # but keep the part's summary text.  Mark uplifted items with
+        # _provisional tag so resolve_meta() can route them separately.
+        doc_coll = self._resolve_doc_collection()
+        direct_ids: set[str] = set()
+        uplifted: list[Item] = []
+
+        # First pass: collect direct (non-part) IDs
+        for item in matches:
+            if not is_part_id(item.id):
+                direct_ids.add(item.id)
+
+        # Second pass: uplift parts, skip if parent already matched directly
+        seen_parents: set[str] = set()
+        for item in matches:
+            if is_part_id(item.id):
+                parent_id = item.tags.get("_base_id", item.id.split("@")[0])
+                if parent_id in direct_ids or parent_id in seen_parents:
+                    continue  # Parent already matched directly, or another part did
+                seen_parents.add(parent_id)
+                tags = dict(item.tags)
+                tags["_provisional"] = "1"
+                uplifted.append(Item(
+                    id=parent_id, summary=item.summary,
+                    tags=tags, score=item.score,
+                ))
+            else:
+                uplifted.append(item)
+
+        if not uplifted:
+            return []
+
         # Rank by similarity to current item + recency decay
-        matches = self._rank_by_relevance(self._resolve_chroma_collection(), item_id, matches)
-        return matches[:limit]
+        uplifted = self._rank_by_relevance(self._resolve_chroma_collection(), item_id, uplifted)
+        return uplifted[:limit]
 
     def _rank_by_relevance(
         self,
@@ -3130,14 +3171,10 @@ class Keeper:
                 items = [i for i in items if extra_key in i.tags]
 
         elif prefix is not None:
-            # ID prefix query
-            pfx = prefix.rstrip("/") + "/"
-            records = self._document_store.query_by_id_prefix(doc_coll, pfx)
+            # ID prefix query — match IDs starting with the given string.
+            # Also look for children under prefix/ (e.g. ".tag" finds ".tag/foo").
+            records = self._document_store.query_by_id_prefix(doc_coll, prefix)
             items = [_record_to_item(rec) for rec in records]
-            # Also include the parent doc itself
-            parent = self._document_store.get(doc_coll, prefix)
-            if parent and not any(i.id == prefix for i in items):
-                items.insert(0, _record_to_item(parent))
 
         else:
             # Default: recent items
@@ -3157,8 +3194,7 @@ class Keeper:
 
         # Prefix filter (if primary query wasn't prefix-based)
         if prefix is not None and tags:
-            pfx = prefix.rstrip("/") + "/"
-            items = [i for i in items if i.id.startswith(pfx) or i.id == prefix]
+            items = [i for i in items if i.id.startswith(prefix)]
 
         # Tag-key filter (if primary query was something else)
         if tag_keys and tags:
