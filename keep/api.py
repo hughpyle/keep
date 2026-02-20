@@ -436,6 +436,7 @@ class Keeper:
         self._reconcile_lock = threading.Lock()
         self._reconcile_done = threading.Event()
         self._provider_init_lock = threading.Lock()
+        self._last_spawn_time: float = 0.0
 
         # Check store consistency and reconcile in background if needed
         # (safe for all backends — uses abstract store interface)
@@ -444,9 +445,9 @@ class Keeper:
         # If cosine migration fired (L2→cosine), auto-enqueue reindex
         if getattr(self._store, "migrated_to_cosine", False):
             logger.info("Cosine migration detected — enqueuing reindex")
+            import sys
             try:
                 stats = self.enqueue_reindex()
-                import sys
                 print(
                     f"Search index migrated to cosine similarity.\n"
                     f"Search is unavailable until reindex completes.\n"
@@ -454,7 +455,13 @@ class Keeper:
                     file=sys.stderr,
                 )
             except Exception as e:
-                logger.warning("Failed to enqueue reindex after cosine migration: %s", e)
+                logger.error("Failed to enqueue reindex after cosine migration: %s", e)
+                print(
+                    f"ERROR: Search index migration failed. Search may not work.\n"
+                    f"Try: keep pending --force\n"
+                    f"Details: {e}",
+                    file=sys.stderr,
+                )
             needs_reconcile = False  # reindex will handle everything
 
         if needs_reconcile:
@@ -812,13 +819,14 @@ class Keeper:
         stored = self._config.embedding_identity
 
         if stored is None:
-            # First use: record the identity
+            # First use: record the identity and set store dimension
             logger.info(
                 "Recording embedding identity: %s/%s (%dd)",
                 current.provider, current.model, current.dimension,
             )
             self._config.embedding_identity = current
             save_config(self._config)
+            self._store.reset_embedding_dimension(current.dimension)
         else:
             # Check for provider change
             if (stored.provider != current.provider or
@@ -2845,6 +2853,13 @@ class Keeper:
         # Content not decomposable — single section is redundant with the note
         if len(raw_parts) <= 1:
             logger.info("Content not decomposable into multiple parts: %s", id)
+            # Record _analyzed_hash so we don't re-run the LLM next time
+            if doc_record.content_hash:
+                updated_tags = dict(doc_record.tags)
+                updated_tags["_analyzed_hash"] = doc_record.content_hash
+                self._document_store.update_tags(doc_coll, id, updated_tags)
+                self._store.update_tags(chroma_coll, id,
+                                        casefold_tags_for_index(updated_tags))
             return []
 
         # Post-analysis classification: if constrained tag specs exist in the
@@ -3271,14 +3286,18 @@ class Keeper:
         """Process a pending summarization work item."""
         # Get item's tags for contextual summarization
         doc = self._document_store.get(item.collection, item.id)
+        if doc is None:
+            # Doc was deleted/moved since enqueue — skip (no point retrying)
+            logger.info("Skipping summary for deleted doc: %s", item.id)
+            return
+
         context = None
-        if doc:
-            # Filter to user tags (non-system)
-            user_tags = filter_non_system_tags(doc.tags)
-            if user_tags:
-                context = self._gather_context(
-                    item.id, user_tags
-                )
+        # Filter to user tags (non-system)
+        user_tags = filter_non_system_tags(doc.tags)
+        if user_tags:
+            context = self._gather_context(
+                item.id, user_tags
+            )
 
         # Generate real summary (with optional context)
         summary = self._get_summarization_provider().summarize(
@@ -3430,10 +3449,24 @@ class Keeper:
         where two processes could both check, find no processor, and
         both spawn one.
 
+        Throttled: skips if < 30s since last spawn.
+        Gated: waits up to 5s for background reconcile to finish.
+
         Returns True if a new processor was spawned, False if one was
         already running or spawn failed.
         """
+        import time
         from .model_lock import ModelLock
+
+        # Throttle: don't spawn more than once per 30 seconds
+        now = time.monotonic()
+        if now - self._last_spawn_time < 30:
+            return False
+
+        # Gate on reconcile: wait briefly, skip if not done
+        if not self._reconcile_done.wait(timeout=5):
+            logger.debug("Skipping spawn: reconcile still in progress")
+            return False
 
         spawn_lock = ModelLock(self._store_path / ".processor_spawn.lock")
 
@@ -3476,6 +3509,7 @@ class Keeper:
                 kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
             subprocess.Popen(cmd, **kwargs)
+            self._last_spawn_time = time.monotonic()
             logger.info("Spawned background processor")
             return True
 

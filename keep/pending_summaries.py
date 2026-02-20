@@ -5,15 +5,27 @@ Stores work items (summarization, analysis, etc.) for serial background
 processing. This enables fast indexing with lazy summarization, and
 ensures heavy ML work (MLX model loading) is serialized to prevent
 memory exhaustion.
+
+Dequeue is atomic: items transition from 'pending' to 'processing' with
+a PID claim inside a single IMMEDIATE transaction. Concurrent processors
+cannot grab the same items. Stale claims (crashed processors) are
+recovered automatically.
 """
 
 import json
+import logging
+import os
 import sqlite3
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# Claims older than this are considered stale (processor crashed)
+STALE_CLAIM_SECONDS = 600  # 10 minutes
 
 
 @dataclass
@@ -51,7 +63,12 @@ class PendingSummaryQueue:
     def _init_db(self) -> None:
         """Initialize the SQLite database."""
         self._queue_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._queue_path), check_same_thread=False)
+        # isolation_level=None gives us manual transaction control
+        # so we can use BEGIN IMMEDIATE for atomic dequeue
+        self._conn = sqlite3.connect(
+            str(self._queue_path), check_same_thread=False,
+            isolation_level=None,
+        )
 
         # Enable WAL mode for better concurrent access across processes
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -67,6 +84,9 @@ class PendingSummaryQueue:
                 attempts INTEGER DEFAULT 0,
                 task_type TEXT DEFAULT 'summarize',
                 metadata TEXT DEFAULT '{}',
+                status TEXT DEFAULT 'pending',
+                claimed_by TEXT,
+                claimed_at TEXT,
                 PRIMARY KEY (id, collection, task_type)
             )
         """)
@@ -74,10 +94,15 @@ class PendingSummaryQueue:
             CREATE INDEX IF NOT EXISTS idx_queued_at
             ON pending_summaries(queued_at)
         """)
-        self._conn.commit()
 
         # Migrate existing databases: add new columns if missing
         self._migrate()
+
+        # Index on status (safe after migration ensures column exists)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_status
+            ON pending_summaries(status)
+        """)
 
     def _migrate(self) -> None:
         """Migrate existing databases to current schema."""
@@ -96,6 +121,9 @@ class PendingSummaryQueue:
                     attempts INTEGER DEFAULT 0,
                     task_type TEXT DEFAULT 'summarize',
                     metadata TEXT DEFAULT '{}',
+                    status TEXT DEFAULT 'pending',
+                    claimed_by TEXT,
+                    claimed_at TEXT,
                     PRIMARY KEY (id, collection, task_type)
                 )
             """)
@@ -113,7 +141,53 @@ class PendingSummaryQueue:
                 CREATE INDEX IF NOT EXISTS idx_queued_at
                 ON pending_summaries(queued_at)
             """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_status
+                ON pending_summaries(status)
+            """)
             self._conn.commit()
+            return  # Full recreate already has all columns
+
+        # Incremental migration: add status/claimed columns
+        if "status" not in columns:
+            self._conn.execute(
+                "ALTER TABLE pending_summaries ADD COLUMN status TEXT DEFAULT 'pending'"
+            )
+            self._conn.execute(
+                "ALTER TABLE pending_summaries ADD COLUMN claimed_by TEXT"
+            )
+            self._conn.execute(
+                "ALTER TABLE pending_summaries ADD COLUMN claimed_at TEXT"
+            )
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_status
+                ON pending_summaries(status)
+            """)
+            self._conn.commit()
+
+    def _recover_stale_claims(self) -> int:
+        """Reset items claimed by crashed processors back to pending.
+
+        Called at the start of dequeue. Items stuck in 'processing'
+        longer than STALE_CLAIM_SECONDS are assumed to be from crashed
+        processors and are reset.
+
+        Returns count of recovered items.
+        """
+        cutoff = datetime.now(timezone.utc).isoformat()
+        # Use a simple approach: check claimed_at timestamp
+        cursor = self._conn.execute("""
+            UPDATE pending_summaries
+            SET status = 'pending', claimed_by = NULL, claimed_at = NULL
+            WHERE status = 'processing'
+              AND claimed_at IS NOT NULL
+              AND julianday(?) - julianday(claimed_at) > ? / 86400.0
+        """, (cutoff, STALE_CLAIM_SECONDS))
+        recovered = cursor.rowcount
+        if recovered:
+            self._conn.commit()
+            logger.info("Recovered %d stale claims from crashed processors", recovered)
+        return recovered
 
     def enqueue(
         self,
@@ -127,7 +201,8 @@ class PendingSummaryQueue:
         """
         Add an item to the pending queue.
 
-        If the same (id, collection, task_type) already exists, replaces it.
+        If the same (id, collection, task_type) already exists, replaces it
+        (resets to pending status).
         Different task types for the same document coexist independently.
         """
         now = datetime.now(timezone.utc).isoformat()
@@ -135,56 +210,82 @@ class PendingSummaryQueue:
         with self._lock:
             self._conn.execute("""
                 INSERT OR REPLACE INTO pending_summaries
-                (id, collection, content, queued_at, attempts, task_type, metadata)
-                VALUES (?, ?, ?, ?, 0, ?, ?)
+                (id, collection, content, queued_at, attempts, task_type, metadata,
+                 status, claimed_by, claimed_at)
+                VALUES (?, ?, ?, ?, 0, ?, ?, 'pending', NULL, NULL)
             """, (id, collection, content, now, task_type, meta_json))
             self._conn.commit()
 
     def dequeue(self, limit: int = 10) -> list[PendingSummary]:
         """
-        Get the oldest pending items for processing.
+        Atomically claim the oldest pending items for processing.
 
-        Items are returned but not removed - call `complete()` after successful processing.
-        Increments attempt counter on each dequeue.
+        Uses BEGIN IMMEDIATE to get an exclusive write lock, then
+        selects and claims items in a single transaction. Concurrent
+        processors will block briefly, then see only unclaimed items.
+
+        Items transition from 'pending' to 'processing'. Call complete()
+        after success or fail() to return to pending.
         """
+        pid = str(os.getpid())
+        now = datetime.now(timezone.utc).isoformat()
+
         with self._lock:
-            cursor = self._conn.execute("""
-                SELECT id, collection, content, queued_at, attempts, task_type, metadata
-                FROM pending_summaries
-                ORDER BY queued_at ASC
-                LIMIT ?
-            """, (limit,))
+            # Recover stale claims from crashed processors
+            self._recover_stale_claims()
 
-            items = []
-            for row in cursor.fetchall():
-                meta = {}
-                if row[6]:
-                    try:
-                        meta = json.loads(row[6])
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                items.append(PendingSummary(
-                    id=row[0],
-                    collection=row[1],
-                    content=row[2],
-                    queued_at=row[3],
-                    attempts=row[4],
-                    task_type=row[5] or "summarize",
-                    metadata=meta,
-                ))
+            # BEGIN IMMEDIATE acquires a write lock immediately,
+            # preventing any other writer from interleaving
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Select oldest pending items
+                cursor = self._conn.execute("""
+                    SELECT id, collection, content, queued_at, attempts,
+                           task_type, metadata
+                    FROM pending_summaries
+                    WHERE status = 'pending'
+                    ORDER BY queued_at ASC
+                    LIMIT ?
+                """, (limit,))
 
-            # Increment attempt counters
-            if items:
-                keys = [
-                    (item.id, item.collection, item.task_type)
-                    for item in items
-                ]
-                self._conn.executemany("""
-                    UPDATE pending_summaries
-                    SET attempts = attempts + 1
-                    WHERE id = ? AND collection = ? AND task_type = ?
-                """, keys)
+                rows = cursor.fetchall()
+                items = []
+                for row in rows:
+                    meta = {}
+                    if row[6]:
+                        try:
+                            meta = json.loads(row[6])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    items.append(PendingSummary(
+                        id=row[0],
+                        collection=row[1],
+                        content=row[2],
+                        queued_at=row[3],
+                        attempts=row[4],
+                        task_type=row[5] or "summarize",
+                        metadata=meta,
+                    ))
+
+                # Claim them atomically
+                if items:
+                    keys = [
+                        (pid, now, item.id, item.collection, item.task_type)
+                        for item in items
+                    ]
+                    self._conn.executemany("""
+                        UPDATE pending_summaries
+                        SET status = 'processing',
+                            claimed_by = ?,
+                            claimed_at = ?,
+                            attempts = attempts + 1
+                        WHERE id = ? AND collection = ? AND task_type = ?
+                    """, keys)
+
                 self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
         return items
 
@@ -203,18 +304,24 @@ class PendingSummaryQueue:
         self, id: str, collection: str, task_type: str = "summarize",
         error: str | None = None,
     ) -> None:
-        """Record failure but leave in queue for retry.
+        """Release a claimed item back to pending for retry.
 
-        The item stays in the queue with its bumped attempts counter.
-        Next dequeue will pick it up again (unless attempts >= MAX).
-        For SQLite (local mode) this is a no-op — items are already
-        retryable since dequeue doesn't change their status.
+        The attempt counter (already incremented by dequeue) is preserved
+        so that items aren't retried indefinitely.
         """
-        pass  # SQLite queue has no status column; retry is automatic
+        with self._lock:
+            self._conn.execute("""
+                UPDATE pending_summaries
+                SET status = 'pending', claimed_by = NULL, claimed_at = NULL
+                WHERE id = ? AND collection = ? AND task_type = ?
+            """, (id, collection, task_type))
+            self._conn.commit()
 
     def count(self) -> int:
-        """Get count of pending items."""
-        cursor = self._conn.execute("SELECT COUNT(*) FROM pending_summaries")
+        """Get count of pending items (excludes items being processed)."""
+        cursor = self._conn.execute(
+            "SELECT COUNT(*) FROM pending_summaries WHERE status = 'pending'"
+        )
         return cursor.fetchone()[0]
 
     def stats(self) -> dict:
@@ -255,7 +362,7 @@ class PendingSummaryQueue:
         """
         with self._lock:
             cursor = self._conn.execute(
-                "SELECT id, task_type, queued_at FROM pending_summaries WHERE id = ?",
+                "SELECT id, task_type, queued_at, status FROM pending_summaries WHERE id = ?",
                 (id,),
             )
             row = cursor.fetchone()
@@ -264,14 +371,15 @@ class PendingSummaryQueue:
         return {
             "id": row[0],
             "task_type": row[1],
-            "status": "queued",
+            "status": row[3] or "queued",
             "queued_at": row[2],
         }
 
     def clear(self) -> int:
         """Clear all pending items. Returns count of items cleared."""
         with self._lock:
-            count = self.count()
+            cursor = self._conn.execute("SELECT COUNT(*) FROM pending_summaries")
+            count = cursor.fetchone()[0]
             self._conn.execute("DELETE FROM pending_summaries")
             self._conn.commit()
         return count
