@@ -405,6 +405,7 @@ class Keeper:
         self._embedding_provider: Optional[EmbeddingProvider] = None
         self._summarization_provider: Optional[SummarizationProvider] = None
         self._media_describer: Optional[MediaDescriber] = None
+        self._content_extractor = None  # ContentExtractor, lazy-loaded
         self._analyzer = None  # AnalyzerProvider, lazy-loaded
 
         # Cache env tags once per Keeper instance (stable within a process)
@@ -715,6 +716,41 @@ class Keeper:
                 )
             self._media_describer = provider
         return self._media_describer
+
+    def _get_content_extractor(self):
+        """
+        Get content extractor, creating it lazily on first use.
+
+        Used by the background OCR processor. Returns None if no content
+        extractor is configured or creation fails.
+        """
+        if self._content_extractor is None:
+            if self._config.content_extractor is None:
+                return None
+            registry = get_registry()
+            try:
+                provider = registry.create_content_extractor(
+                    self._config.content_extractor.name,
+                    self._config.content_extractor.params,
+                )
+            except (ValueError, RuntimeError) as e:
+                logger.warning("Content extractor unavailable: %s", e)
+                return None
+            if self._is_local and self._config.content_extractor.name == "mlx":
+                from .model_lock import LockedContentExtractor
+                provider = LockedContentExtractor(
+                    provider,
+                    self._store_path / ".extractor.lock",
+                )
+            self._content_extractor = provider
+        return self._content_extractor
+
+    def _release_content_extractor(self) -> None:
+        """Release content extractor to free GPU/unified memory."""
+        if self._content_extractor is not None:
+            if hasattr(self._content_extractor, 'release'):
+                self._content_extractor.release()
+            self._content_extractor = None
 
     def _get_analyzer(self):
         """Get analyzer provider, creating it lazily on first use."""
@@ -1215,6 +1251,7 @@ class Keeper:
         summary: Optional[str] = None,
         system_tags: dict[str, str],
         created_at: Optional[str] = None,
+        force: bool = False,
     ) -> Item:
         """Core upsert logic used by put()."""
         # Wait for background reconciliation to finish before writing.
@@ -1271,7 +1308,7 @@ class Keeper:
         )
 
         # Early return: nothing to do
-        if content_unchanged and not tags_changed and summary is None:
+        if content_unchanged and not tags_changed and summary is None and not force:
             logger.debug("Content and tags unchanged, skipping for %s", id)
             return _record_to_item(existing_doc, changed=False)
 
@@ -1390,7 +1427,7 @@ class Keeper:
                 )
 
         # Spawn background processor if needed (local only — uses filesystem locks)
-        if summary is None and len(content) > max_len and (not content_unchanged or tags_changed):
+        if summary is None and len(content) > max_len and (not content_unchanged or tags_changed or force):
             self._spawn_processor()
 
         return _record_to_item(result, changed=not content_unchanged)
@@ -1404,6 +1441,7 @@ class Keeper:
         summary: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
         created_at: Optional[str] = None,
+        force: bool = False,
     ) -> Item:
         """
         Store content in the memory.
@@ -1469,7 +1507,7 @@ class Keeper:
 
             # Fast path for local files: skip expensive read if stat unchanged
             is_file_uri = uri.startswith("file://") or uri.startswith("/")
-            if is_file_uri and summary is None:
+            if is_file_uri and summary is None and not force:
                 try:
                     fpath = Path(uri.removeprefix("file://")).resolve()
                     st = fpath.stat()
@@ -1541,12 +1579,30 @@ class Keeper:
                         birthtime, tz=timezone.utc
                     ).isoformat()
 
-            return self._upsert(
+            result = self._upsert(
                 uri, doc.content,
                 tags=merged_tags, summary=summary,
                 system_tags=system_tags,
                 created_at=created_at,
+                force=force,
             )
+
+            # Enqueue background OCR for scanned PDF pages
+            ocr_pages = (doc.metadata or {}).get("_ocr_pages")
+            if ocr_pages and self._config.content_extractor:
+                doc_coll = self._resolve_doc_collection()
+                self._pending_queue.enqueue(
+                    uri, doc_coll, "",
+                    task_type="ocr",
+                    metadata={"uri": uri, "ocr_pages": ocr_pages},
+                )
+                self._spawn_processor()
+                logger.info(
+                    "Enqueued OCR for %s (%d pages)",
+                    uri, len(ocr_pages),
+                )
+
+            return result
         else:
             # Inline mode: store content directly
             if id is None:
@@ -1560,6 +1616,7 @@ class Keeper:
                 tags=tags, summary=summary,
                 system_tags={"_source": "inline"},
                 created_at=created_at,
+                force=force,
             )
 
     # -------------------------------------------------------------------------
@@ -3268,10 +3325,11 @@ class Keeper:
 
     def process_pending(self, limit: int = 10) -> dict:
         """
-        Process pending work items (embedding, summaries, and analysis).
+        Process pending work items (embedding, summaries, OCR, and analysis).
 
-        Handles three task types serially:
+        Handles task types serially:
         - "embed": computes and stores embeddings (cloud mode deferred writes)
+        - "ocr": OCR scanned PDF pages, update document content
         - "summarize": generates real summaries for lazy-indexed items
         - "analyze": decomposes documents into parts via LLM
 
@@ -3307,6 +3365,7 @@ class Keeper:
                 _task_verbs = {
                     "analyze": "Analyzing",
                     "embed": "Embedding",
+                    "ocr": "OCR",
                     "reindex": "Re-embedding",
                     "summarize": "Summarizing",
                 }
@@ -3319,6 +3378,11 @@ class Keeper:
                     self._release_embedding_provider()
                 elif item.task_type == "embed":
                     self._process_pending_embed(item)
+                    self._release_embedding_provider()
+                elif item.task_type == "ocr":
+                    self._process_pending_ocr(item)
+                    self._release_content_extractor()
+                    self._release_summarization_provider()
                     self._release_embedding_provider()
                 elif item.task_type == "reindex":
                     self._process_pending_reindex(item)
@@ -3349,6 +3413,7 @@ class Keeper:
                 _permanent = (
                     "content too short" in str(e).lower()
                     or "no text extracted" in str(e).lower()
+                    or "no content extractor" in str(e).lower()
                 )
                 if _permanent:
                     self._pending_queue.abandon(
@@ -3495,6 +3560,107 @@ class Keeper:
                 summary=item.content,
                 tags=casefold_tags_for_index(doc.tags),
             )
+
+    def _process_pending_ocr(self, item) -> None:
+        """Process a pending OCR work item: OCR scanned PDF pages.
+
+        Renders blank PDF pages to images, runs OCR via content extractor,
+        merges with text-layer pages, then updates the document summary
+        and embedding with the full content.
+        """
+        meta = item.metadata or {}
+        uri = meta.get("uri") or item.id
+        ocr_pages = meta.get("ocr_pages", [])
+
+        if not ocr_pages:
+            return
+
+        # Load content extractor
+        extractor = self._get_content_extractor()
+        if not extractor:
+            raise IOError("No content extractor configured for OCR")
+
+        path = Path(uri.removeprefix("file://")).resolve()
+        if not path.exists():
+            logger.warning("File no longer exists for OCR: %s", path)
+            return
+
+        # OCR the blank pages
+        from .providers.documents import FileDocumentProvider
+        file_provider = FileDocumentProvider()
+        ocr_results = file_provider._ocr_pdf_pages(path, ocr_pages, extractor=extractor)
+
+        if not ocr_results:
+            logger.info("OCR produced no usable text for %s", uri)
+            return
+
+        # Re-extract text pages (fast) and merge with OCR
+        from pypdf import PdfReader
+        reader = PdfReader(str(path))
+        text_parts: list[tuple[int, str]] = []
+        ocr_set = set(ocr_pages)
+        for i, page in enumerate(reader.pages):
+            if i not in ocr_set:
+                text = page.extract_text()
+                if text and text.strip():
+                    text_parts.append((i, text))
+        text_parts.extend(ocr_results)
+        text_parts.sort(key=lambda t: t[0])
+        full_content = "\n\n".join(text for _, text in text_parts)
+
+        if not full_content.strip():
+            return
+
+        # Get existing document
+        doc_coll = item.collection
+        existing = self._document_store.get(doc_coll, item.id)
+        if not existing:
+            return  # deleted since enqueue
+
+        # Generate summary
+        max_len = self._config.max_summary_length
+        if len(full_content) <= max_len:
+            summary = full_content
+        else:
+            try:
+                context = None
+                user_tags = filter_non_system_tags(existing.tags)
+                if user_tags:
+                    context = self._gather_context(item.id, user_tags)
+                summary = self._get_summarization_provider().summarize(
+                    full_content, context=context
+                )
+            except Exception as e:
+                logger.warning("OCR summarization failed for %s: %s", uri, e)
+                summary = full_content[:max_len] + "..."
+
+        new_hash = _content_hash(full_content)
+
+        # Update document store in-place (no version archive —
+        # the placeholder "[Scanned document...]" is not a meaningful
+        # version, just a transient state before OCR completed).
+        self._document_store.update_summary(doc_coll, item.id, summary)
+        self._document_store.update_content_hash(
+            doc_coll, item.id,
+            content_hash=new_hash,
+            content_hash_full=_content_hash_full(full_content),
+        )
+
+        # Update vector store embedding
+        chroma_coll = self._resolve_chroma_collection()
+        embedding = self._get_embedding_provider().embed(summary)
+        self._store.upsert(
+            collection=chroma_coll,
+            id=item.id,
+            embedding=embedding,
+            summary=summary,
+            tags=casefold_tags_for_index(existing.tags),
+        )
+
+        logger.info(
+            "OCR complete for %s: %d/%d pages, %d chars",
+            uri, len(ocr_results), len(ocr_pages), len(full_content),
+        )
 
     def pending_count(self) -> int:
         """Get count of pending summaries awaiting processing."""
@@ -3707,6 +3873,11 @@ class Keeper:
             if hasattr(self._media_describer, 'release'):
                 self._media_describer.release()
             self._media_describer = None
+
+        if self._content_extractor is not None:
+            if hasattr(self._content_extractor, 'release'):
+                self._content_extractor.release()
+            self._content_extractor = None
 
         # Close ChromaDB store
         if hasattr(self, '_store') and self._store is not None:

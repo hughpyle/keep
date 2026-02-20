@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 STALE_CLAIM_SECONDS = 600  # 10 minutes (default)
 STALE_CLAIM_SECONDS_BY_TYPE = {
     "analyze": 3600,   # 1 hour — large docs via ollama are slow
+    "ocr": 1800,       # 30 min — multi-page PDF OCR can be slow
 }
 
 # Retry backoff: min(BASE * 2^(attempts-1), MAX) seconds

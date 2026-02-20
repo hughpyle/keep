@@ -962,6 +962,7 @@ def _put_store(
     id: Optional[str],
     summary: Optional[str],
     do_analyze: bool,
+    force: bool = False,
 ) -> Optional["Item"]:
     """Execute the store operation for put(). Returns Item, or None for directory mode."""
     if source == "-" or (source is None and _has_stdin_data()):
@@ -985,7 +986,7 @@ def _put_store(
             raise typer.Exit(1)
         # Use content-addressed ID for stdin text (enables versioning)
         doc_id = id or _text_content_id(content)
-        return kp.put(content, id=doc_id, tags=parsed_tags or None)
+        return kp.put(content, id=doc_id, tags=parsed_tags or None, force=force)
     elif resolved_path is not None and resolved_path.is_dir():
         # Directory mode: index all regular files in directory
         if summary is not None:
@@ -1009,7 +1010,7 @@ def _put_store(
         for i, fpath in enumerate(files, 1):
             file_uri = f"file://{fpath}"
             try:
-                item = kp.put(uri=file_uri, tags=parsed_tags or None)
+                item = kp.put(uri=file_uri, tags=parsed_tags or None, force=force)
                 results.append(item)
                 typer.echo(f"[{i}/{total}] {fpath.name} ok", err=True)
             except Exception as e:
@@ -1036,10 +1037,10 @@ def _put_store(
     elif resolved_path is not None and resolved_path.is_file():
         # File mode: bare file path → normalize to file:// URI
         file_uri = f"file://{resolved_path}"
-        return kp.put(uri=file_uri, tags=parsed_tags or None, summary=summary)
+        return kp.put(uri=file_uri, tags=parsed_tags or None, summary=summary, force=force)
     elif source and _URI_SCHEME_PATTERN.match(source):
         # URI mode: fetch from URI (ID is the URI itself)
-        return kp.put(uri=source, tags=parsed_tags or None, summary=summary)
+        return kp.put(uri=source, tags=parsed_tags or None, summary=summary, force=force)
     elif source:
         # Text mode: inline content (no :// in source)
         if summary is not None:
@@ -1053,7 +1054,7 @@ def _put_store(
             raise typer.Exit(1)
         # Use content-addressed ID for text (enables versioning)
         doc_id = id or _text_content_id(source)
-        return kp.put(source, id=doc_id, tags=parsed_tags or None)
+        return kp.put(source, id=doc_id, tags=parsed_tags or None, force=force)
     else:
         typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
         raise typer.Exit(1)
@@ -1084,6 +1085,10 @@ def put(
     do_analyze: Annotated[bool, typer.Option(
         "--analyze",
         help="Queue background analysis (decompose into parts)"
+    )] = False,
+    force: Annotated[bool, typer.Option(
+        "--force",
+        help="Re-process even if content is unchanged"
     )] = False,
 ):
     """
@@ -1116,7 +1121,7 @@ def put(
     resolved_path = _is_filesystem_path(source) if source and source != "-" else None
 
     try:
-        item = _put_store(kp, source, resolved_path, parsed_tags, id, summary, do_analyze)
+        item = _put_store(kp, source, resolved_path, parsed_tags, id, summary, do_analyze, force)
     except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
