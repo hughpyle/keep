@@ -95,21 +95,6 @@
 
 * Measure some outcomes.  Describe behavior in openclaw, in claude code, etc.  Show where it works.
 
-* tag-by-model ("auto-tag")?
-    - in the "analyze" pipeline
-        - then the things that are tagged are all synthetic (analysis) anyway, not raw observation
-    - is there a model-supported tagging? what would that need to be useful? (specific domains??)
-      - i.e. as well as summarization, there's a "system document" that the model reads, and uses that document to decide which tags should be applied
-      - it really needs to be one document per tag (because the model might choose multiple tags)
-      - these are "system documents"
-    - want this to be pluggable, guide the model-driven tagging from a sysdoc that defines how it works
-    - want "references" for this too... maybe later
-    - good tagging: speech acts
-        - constrained list of valid values
-        - clear descriptions of each
-    - hey we should be able to confidently tag for *any* constrained domain
-        - just get the list of tagdocs, and prompt with it
-
 * Other auto-taggers:
     - geolocation-tagger to extract location stuff from latlong
 
@@ -262,3 +247,5 @@ x `context` text alongside summaries? (no, summary is good now)
 . `keep data export` and `keep data import`
 . sliding-window analysis
 x check for CLI compatibility with windows (WLS should work but no plan to validate at this stage)
+. tag-by-model ("auto-tag") in the analysis process (based on any constrained tags)
+. filter noisy tags from parts-classification: meta/foo/provisional

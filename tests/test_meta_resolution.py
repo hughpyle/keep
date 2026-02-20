@@ -223,3 +223,70 @@ class TestResolveInlineMeta:
             "does-not-exist", [{"type": "learning"}],
         )
         assert items == []
+
+
+class TestProvisionalMeta:
+    """Tests for provisional meta routing (part-sourced matches)."""
+
+    def test_part_match_routes_to_provisional(self, kp):
+        """Part-sourced meta match should appear under {name}/provisional."""
+        # Create a parent doc WITHOUT act=commitment
+        kp.put("Meeting notes from Tuesday", id="meeting-notes", tags={
+            "topic": "meetings", "project": "myapp",
+        })
+
+        # Directly inject a part into ChromaDB with act=commitment tag
+        # (simulates analyze_tagging producing a part with that tag)
+        chroma_coll = kp._resolve_chroma_collection()
+        embed = kp._get_embedding_provider()
+        embedding = embed.embed("I will refactor the auth module by Friday")
+        kp._store.upsert_part(
+            chroma_coll, "meeting-notes", 1,
+            embedding,
+            "I will refactor the auth module by Friday",
+            {"act": "commitment", "status": "open", "_base_id": "meeting-notes"},
+        )
+
+        result = kp.resolve_meta("anchor")
+
+        # The part match should appear under todo/provisional, not todo
+        if "todo/provisional" in result:
+            prov = result["todo/provisional"]
+            # ID should be the parent doc, not the part
+            assert all(item.id == "meeting-notes" for item in prov)
+            # Summary should be the part's text
+            assert any("refactor the auth" in item.summary for item in prov)
+        # Part should NOT appear under direct "todo" with a part ID
+        if "todo" in result:
+            for item in result["todo"]:
+                assert "@p" not in item.id
+
+    def test_direct_match_suppresses_provisional(self, kp):
+        """When parent matches directly, part match should be suppressed."""
+        # This parent already has act=commitment (direct match)
+        # so any part of it should NOT appear in provisional
+        chroma_coll = kp._resolve_chroma_collection()
+        # Find an existing commitment
+        items = kp.list_items(tags={"act": "commitment", "status": "open"}, limit=1)
+        assert items, "Need at least one commitment for this test"
+        parent_id = items[0].id
+
+        # Inject a part of that same parent
+        embed = kp._get_embedding_provider()
+        embedding = embed.embed("Sub-task: write unit tests")
+        kp._store.upsert_part(
+            chroma_coll, parent_id, 1,
+            embedding,
+            "Sub-task: write unit tests",
+            {"act": "commitment", "status": "open", "_base_id": parent_id},
+        )
+
+        result = kp.resolve_meta("anchor")
+
+        # Parent should still appear directly under "todo"
+        if "todo" in result:
+            assert any(item.id == parent_id for item in result["todo"])
+        # Part should NOT appear in provisional (parent already matched)
+        if "todo/provisional" in result:
+            prov_ids = [item.id for item in result["todo/provisional"]]
+            assert parent_id not in prov_ids
