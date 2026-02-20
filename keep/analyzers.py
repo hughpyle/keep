@@ -156,24 +156,15 @@ Rules:
 - One speech act per line, no numbering
 - Skip procedural exchanges (greetings, acknowledgments)
 - If no speech acts found, write: EMPTY""",
-    "conversation": """Analyze a conversation between a user and an assistant. Entries are wrapped in <content> tags. Only analyze content inside <analyze> tags.
+    "conversation": """Extract facts from a conversation. Entries are wrapped in <content> tags. Only analyze content inside <analyze> tags.
 
-Extract key FACTS about the user: events they attended, dates mentioned, preferences stated, decisions made, locations named, people referenced, and specific numbers or quantities.
-
-Write ONE LINE per distinct fact. Preserve dates and names exactly as stated.
-
-Good: "User ran 5km in the 'Run for the Cure' event on October 15th, raising $250 for breast cancer research"
-Good: "User prefers wildlife conservation volunteer work within 30 minutes of home"
-Good: "User attended charity golf tournament on July 17th with colleagues"
-Bad: "The assistant provided a list of resources" (this is about the assistant, not the user)
-Bad: "Tips for improving golf swing" (this is generic advice, not a user fact)
+Write ONE LINE per fact stated by the user: events, dates, names, preferences, decisions, locations, numbers.
+Preserve dates and names exactly as stated. Skip assistant advice and generic information.
 
 Rules:
 - One fact per line, no numbering, no bullets, no preamble
-- Focus on USER-stated facts, not assistant advice or generic information
 - Preserve all dates, times, names, locations, and numbers exactly
-- Skip assistant responses unless they confirm or clarify a user fact
-- If no user facts found: EMPTY""",
+- If no facts found: EMPTY""",
 }
 
 DEFAULT_PROMPT = "auto"
@@ -280,7 +271,8 @@ class SlidingWindowAnalyzer:
             provider: A SummarizationProvider with generate() support.
             context_budget: Total token budget per window.
             target_ratio: Fraction of budget allocated to target chunks (vs context).
-            prompt: Prompt key from PROMPTS registry (default: temporal-v2).
+            prompt: Prompt key from PROMPTS registry, or "auto" (default) to
+                detect content type and select prompt per call.
         """
         self._provider = provider
         self._context_budget = context_budget
@@ -288,23 +280,29 @@ class SlidingWindowAnalyzer:
         if prompt != "auto" and prompt not in PROMPTS:
             raise ValueError(f"Unknown prompt: {prompt!r}. Choose from: {list(PROMPTS.keys())}")
         self._auto_prompt = (prompt == "auto")
-        self._system_prompt = None if self._auto_prompt else PROMPTS[prompt]
+        self._fixed_prompt = None if self._auto_prompt else PROMPTS[prompt]
         self._prompt_name = prompt
 
     @staticmethod
     def _detect_prompt(chunks: list[AnalysisChunk]) -> str:
         """Auto-detect the best prompt based on content type."""
-        # Sample first ~5000 chars across chunks
+        from .providers.base import _is_conversation
         sample = ""
         for chunk in chunks:
             sample += chunk.content
             if len(sample) >= 5000:
                 break
-        # Reuse the conversation detection heuristic from summarization
-        from .providers.base import _SPEAKER_RE
-        if len(_SPEAKER_RE.findall(sample[:5000])) >= 4:
+        if _is_conversation(sample):
             return "conversation"
         return "temporal-v4"
+
+    def _resolve_prompt(self, chunks: list[AnalysisChunk]) -> str:
+        """Return the system prompt text for this analysis call."""
+        if not self._auto_prompt:
+            return self._fixed_prompt
+        detected = self._detect_prompt(chunks)
+        logger.info("Auto-detected analysis prompt: %s", detected)
+        return PROMPTS[detected]
 
     def analyze(
         self,
@@ -316,17 +314,13 @@ class SlidingWindowAnalyzer:
         if not chunk_list:
             return []
 
-        # Resolve prompt (auto-detect if configured)
-        if self._auto_prompt:
-            detected = self._detect_prompt(chunk_list)
-            self._system_prompt = PROMPTS[detected]
-            logger.info("Auto-detected analysis prompt: %s", detected)
+        system_prompt = self._resolve_prompt(chunk_list)
 
         total_tokens = sum(_estimate_tokens(c.content) for c in chunk_list)
 
         # Fits in one window — single-pass
         if total_tokens <= self._context_budget:
-            return self._single_pass(chunk_list, guide_context)
+            return self._single_pass(chunk_list, guide_context, system_prompt)
 
         target_budget = int(self._context_budget * self._target_ratio)
         context_budget_per_side = (self._context_budget - target_budget) // 2
@@ -371,7 +365,8 @@ class SlidingWindowAnalyzer:
             target_end_in_window = target_end - ctx_before
 
             raw = self._analyze_window(
-                window, target_start_in_window, target_end_in_window, guide_context,
+                window, target_start_in_window, target_end_in_window,
+                guide_context, system_prompt,
             )
 
             # Dedup across windows by summary hash
@@ -385,7 +380,8 @@ class SlidingWindowAnalyzer:
 
         return all_parts
 
-    def _single_pass(self, chunks: list[AnalysisChunk], guide_context: str) -> list[dict]:
+    def _single_pass(self, chunks: list[AnalysisChunk], guide_context: str,
+                     system_prompt: str) -> list[dict]:
         """Content fits in one window — send all as targets."""
         provider = self._provider
         if provider is None:
@@ -402,7 +398,7 @@ class SlidingWindowAnalyzer:
             user_prompt = f"{guide_context}\n\n---\n\n{user_prompt}"
 
         try:
-            result = provider.generate(self._system_prompt, user_prompt, max_tokens=4096)
+            result = provider.generate(system_prompt, user_prompt, max_tokens=4096)
             if result:
                 return _parse_parts(result)
             logger.warning("Provider returned no result for analysis")
@@ -416,6 +412,7 @@ class SlidingWindowAnalyzer:
         target_start: int,
         target_end: int,
         guide_context: str,
+        system_prompt: str,
     ) -> list[dict]:
         """Analyze a single window with XML-tagged target marking."""
         provider = self._provider
@@ -431,7 +428,7 @@ class SlidingWindowAnalyzer:
             prompt = f"{guide_context}\n\n---\n\n{prompt}"
 
         try:
-            result = provider.generate(self._system_prompt, prompt, max_tokens=4096)
+            result = provider.generate(system_prompt, prompt, max_tokens=4096)
             if result:
                 return _parse_parts(result)
             logger.warning("Sliding window: provider returned no result")
