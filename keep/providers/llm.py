@@ -729,6 +729,60 @@ class OllamaMediaDescriber:
         return text if text else None
 
 
+class OllamaContentExtractor:
+    """
+    OCR content extraction using Ollama.
+
+    Uses GLM-OCR via Ollama's /api/generate endpoint (recommended for
+    vision tasks with this model). Extracts actual text from document images.
+
+    Respects OLLAMA_HOST env var (default: http://localhost:11434).
+    """
+
+    OCR_PROMPT = "Extract all text from this image exactly as written."
+
+    def __init__(
+        self,
+        model: str = "glm-ocr",
+        base_url: str | None = None,
+    ):
+        self.model = model
+        from .ollama_utils import ollama_base_url, ollama_ensure_model
+        self.base_url = ollama_base_url(base_url)
+        ollama_ensure_model(self.base_url, self.model)
+
+    def extract(self, path: str, content_type: str) -> str | None:
+        """Extract text from an image using Ollama OCR model."""
+        if not content_type.startswith("image/"):
+            return None
+
+        import base64
+        import requests
+
+        with open(path, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode("utf-8")
+
+        response = requests.post(
+            f"{self.base_url}/api/generate",
+            json={
+                "model": self.model,
+                "prompt": self.OCR_PROMPT,
+                "images": [image_data],
+                "stream": False,
+            },
+            timeout=120,
+        )
+        if not response.ok:
+            detail = response.text[:200] if response.text else ""
+            raise RuntimeError(
+                f"Ollama OCR failed (model={self.model}): "
+                f"HTTP {response.status_code} from {self.base_url}. {detail}"
+            )
+
+        text = response.json().get("response", "").strip()
+        return text if len(text) > 10 else None
+
+
 # Register providers
 _registry = get_registry()
 _registry.register_summarization("anthropic", AnthropicSummarization)
@@ -742,3 +796,4 @@ _registry.register_tagging("ollama", OllamaTagging)
 _registry.register_tagging("gemini", GeminiTagging)
 _registry.register_tagging("noop", NoopTagging)
 _registry.register_media("ollama", OllamaMediaDescriber)
+_registry.register_content_extractor("ollama", OllamaContentExtractor)
