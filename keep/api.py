@@ -3233,6 +3233,20 @@ class Keeper:
             logger.info("Content not decomposable into multiple parts: %s", id)
             return []
 
+        # Post-analysis classification: if constrained tag specs exist in the
+        # store, classify parts against the taxonomy (one extra LLM call).
+        try:
+            from .analyzers import TagClassifier
+            classifier = TagClassifier(
+                provider=self._get_summarization_provider(),
+            )
+            specs = classifier.load_specs(self)
+            if specs:
+                classifier.classify(raw_parts, specs)
+                logger.info("Classified %d parts against %d tag specs", len(raw_parts), len(specs))
+        except Exception as e:
+            logger.warning("Tag classification skipped: %s", e)
+
         # Build PartInfo list
         from .types import utc_now
         now = utc_now()

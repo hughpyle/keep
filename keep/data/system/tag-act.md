@@ -31,6 +31,19 @@ The other three — `assertion`, `assessment`, `declaration` — are typically c
 
 The `act` tag is orthogonal to `type`. An item can be both `type=learning` and `act=assessment` — the learning is *about* an assessment. Or `type=breakdown` and `act=commitment` — the breakdown occurred in a commitment.
 
+## Prompt
+
+Classify the speech act being performed — what the speaker is *doing* with their words. When a summary describes what someone said or did ("The user requested...", "The assistant recommended..."), classify the described speech act, not the act of summarizing.
+
+Key distinctions:
+- assertion vs assessment: assertion states facts ("tests pass"); assessment judges quality ("this approach is risky")
+- assertion vs request: stating information is assertion; asking someone to act is request
+- commitment vs offer: commitment binds the speaker ("I will do X"); offer proposes without binding ("I could do X")
+- commitment vs declaration: commitment is about future action; declaration changes state now ("released v2.0")
+- request vs assertion: "You should use X" giving advice is assertion; "Please do X" asking for action is request
+
+Only assign status when act is commitment, request, or offer. Assertions, assessments, and declarations do not have lifecycle status.
+
 ## Examples
 
 ```bash

@@ -31,6 +31,15 @@ keep remember "Active work in progress on this item." --id .tag/status/working
 
 The sub-doc's existence makes the value valid. Its content serves as documentation.
 
+## Prompt
+
+Only assign status when act is commitment, request, or offer. Never assign status to assertions, assessments, or declarations.
+
+YES: act=commitment status=open, act=request status=fulfilled, act=offer status=declined
+NO: act=assessment status=open, act=assertion status=open, act=declaration status=fulfilled
+
+When classifying analyzed fragments: look at later fragments to determine if a commitment/request was fulfilled, declined, or withdrawn. If the outcome is not visible in the fragments, assign status=open.
+
 ## Examples
 
 ```bash
