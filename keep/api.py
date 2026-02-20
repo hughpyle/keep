@@ -841,6 +841,19 @@ class Keeper:
                 save_config(self._config)
                 # Update store dimension for new model
                 self._store.reset_embedding_dimension(current.dimension)
+                # If dimension changed, drop ChromaDB collection so it's
+                # recreated with the new dimension on first write.
+                # Without this, ChromaDB rejects new-dimension vectors.
+                if stored.dimension != current.dimension:
+                    chroma_coll = self._resolve_chroma_collection()
+                    try:
+                        self._store.delete_collection(chroma_coll)
+                        logger.info(
+                            "Dropped search index (dimension %d → %d)",
+                            stored.dimension, current.dimension,
+                        )
+                    except Exception as e:
+                        logger.warning("Could not drop search index: %s", e)
                 # Enqueue reindex tasks for pending queue
                 stats = self.enqueue_reindex()
                 logger.info(
@@ -850,6 +863,7 @@ class Keeper:
                 import sys
                 print(
                     f"Embedding model changed. Enqueued {stats['enqueued']} items for reindex.\n"
+                    f"Search is unavailable until reindex completes.\n"
                     f"Run: keep pending",
                     file=sys.stderr,
                 )
