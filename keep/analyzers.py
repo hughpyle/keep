@@ -562,6 +562,321 @@ class SinglePassAnalyzer:
 
 
 # ---------------------------------------------------------------------------
+# TagClassifier — data-driven post-analysis classification
+# ---------------------------------------------------------------------------
+
+# Regex to parse classifier output lines like:
+#   3: act=commitment(0.9) status=open(0.85)
+# Tolerant: handles "NUMBER:" prefix echo from small models
+_CLASSIFY_LINE_RE = re.compile(
+    r"^(?:NUMBER:\s*)?(\d+):\s*(.*)$"
+)
+# Tolerant: handles spaces around parens (e.g. "act=assertion (0.9)")
+_TAG_ASSIGNMENT_RE = re.compile(
+    r"(\w+)=(\w+)\s*\(\s*([0-9.]+)\s*\)"
+)
+# Extract ## Prompt section from document content
+_PROMPT_SECTION_RE = re.compile(
+    r"^## Prompt\s*\n(.*?)(?=^## |\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+class TagClassifier:
+    """
+    Data-driven tag classification for analyzed parts.
+
+    Reads constrained tag specifications from the store and builds a
+    classification prompt dynamically. Each part summary is classified
+    against the taxonomy; tags are applied only above a confidence threshold.
+
+    This is a post-processing step — run after SlidingWindowAnalyzer
+    produces parts, before tags are written to the store.
+    """
+
+    def __init__(
+        self,
+        provider=None,
+        confidence_threshold: float = 0.7,
+    ):
+        """
+        Args:
+            provider: A SummarizationProvider with generate() support.
+            confidence_threshold: Minimum confidence (0-1) to apply a tag.
+        """
+        self._provider = provider
+        self._confidence_threshold = confidence_threshold
+        self._tag_specs: list[dict] | None = None
+
+    @staticmethod
+    def _extract_prompt_section(content: str) -> str:
+        """Extract ## Prompt section from document content, if present."""
+        m = _PROMPT_SECTION_RE.search(content)
+        return m.group(1).strip() if m else ""
+
+    def load_specs(self, keeper) -> list[dict]:
+        """
+        Load constrained tag specifications from the store.
+
+        Scans for .tag/* documents with _constrained=true, then loads
+        their sub-documents to build the classification taxonomy.
+
+        If a document contains a ``## Prompt`` section, that section is
+        extracted and used as the classifier-facing description (the
+        ``prompt`` field). The human-readable description (``description``)
+        is always taken from the document summary.
+
+        Args:
+            keeper: A Keeper instance to read tag specs from.
+
+        Returns:
+            List of tag spec dicts, each with:
+              - key: tag name (e.g. "act")
+              - description: from the parent doc summary
+              - prompt: from the parent doc's ## Prompt section (or "")
+              - values: list of {value, description, prompt} dicts
+        """
+        specs = []
+        # Find all .tag/* parent docs
+        doc_coll = keeper._resolve_doc_collection()
+        tag_docs = keeper._document_store.query_by_id_prefix(doc_coll, ".tag/")
+
+        # Group: parent docs vs value docs
+        parents = {}  # key -> record
+        children = {}  # key -> [record, ...]
+        for rec in tag_docs:
+            doc_id = rec.id if hasattr(rec, 'id') else rec.get("id", "")
+            # .tag/act -> parent; .tag/act/commitment -> child
+            parts = doc_id.split("/")
+            if len(parts) == 2:
+                # Parent: .tag/KEY
+                key = parts[1]
+                parents[key] = rec
+            elif len(parts) == 3:
+                # Child: .tag/KEY/VALUE
+                key = parts[1]
+                children.setdefault(key, []).append(rec)
+
+        for key, parent_rec in parents.items():
+            tags = parent_rec.tags if hasattr(parent_rec, 'tags') else parent_rec.get("tags", {})
+            if tags.get("_constrained") != "true":
+                continue
+
+            parent_summary = parent_rec.summary if hasattr(parent_rec, 'summary') else parent_rec.get("summary", "")
+            parent_prompt = self._extract_prompt_section(parent_summary)
+
+            # Build value list from children
+            values = []
+            for child_rec in children.get(key, []):
+                child_id = child_rec.id if hasattr(child_rec, 'id') else child_rec.get("id", "")
+                value_name = child_id.split("/")[-1]
+                summary = child_rec.summary if hasattr(child_rec, 'summary') else child_rec.get("summary", "")
+                child_prompt = self._extract_prompt_section(summary)
+                values.append({
+                    "value": value_name,
+                    "description": summary,
+                    "prompt": child_prompt,
+                })
+
+            specs.append({
+                "key": key,
+                "description": parent_summary,
+                "prompt": parent_prompt,
+                "values": sorted(values, key=lambda v: v["value"]),
+            })
+
+        self._tag_specs = specs
+        return specs
+
+    def build_prompt(self, specs: list[dict] | None = None) -> str:
+        """
+        Build a classification system prompt from tag specs.
+
+        The prompt is generated entirely from store data — no hardcoded
+        tag names or values.  If a spec or value has a ``prompt`` field
+        (from a ``## Prompt`` section in the tag doc), it is used as the
+        classifier-facing description.
+        """
+        specs = specs or self._tag_specs
+        if not specs:
+            return ""
+
+        sections = []
+        for spec in specs:
+            lines = [f"## Tag: `{spec['key']}`"]
+            # Prefer prompt section over raw description
+            desc = spec.get("prompt") or spec.get("description", "")
+            if desc:
+                lines.append(desc)
+            lines.append("")
+            lines.append("Values (pick at most one):")
+            for v in spec["values"]:
+                vdesc = v.get("prompt") or v.get("description", "")
+                if vdesc:
+                    lines.append(f"- `{v['value']}` — {vdesc}")
+                else:
+                    lines.append(f"- `{v['value']}`")
+            sections.append("\n".join(lines))
+
+        taxonomy = "\n\n".join(sections)
+
+        # Build valid values summary for enforcement
+        valid_per_key = {}
+        for spec in specs:
+            valid_per_key[spec["key"]] = [v["value"] for v in spec["values"]]
+        valid_summary = "; ".join(
+            f"{k}: {', '.join(vs)}" for k, vs in valid_per_key.items()
+        )
+
+        # Build examples from the first few tag keys
+        keys = [s["key"] for s in specs]
+        examples = []
+        if "act" in keys:
+            examples.extend([
+                "1: act=assertion(0.9)",
+                "2: act=commitment(0.8) status=open(0.9)",
+                "3: NONE",
+                "4: act=request(0.7) status=open(0.8)",
+                "5: act=commitment(0.9) status=fulfilled(0.8)",
+                "6: act=assessment(0.8)",
+            ])
+        else:
+            # Generic examples for other taxonomies
+            k0 = keys[0] if keys else "tag"
+            v0 = specs[0]["values"][0]["value"] if specs and specs[0]["values"] else "value"
+            examples.extend([
+                f"1: {k0}={v0}(0.9)",
+                "2: NONE",
+            ])
+
+        return f"""Classify each numbered text fragment.
+
+{taxonomy}
+
+Output one line per fragment. Format — one or more tag=value(confidence) pairs:
+NUMBER: tag1=value1(CONFIDENCE) tag2=value2(CONFIDENCE)
+
+CONFIDENCE is 0.0 to 1.0. If no tags apply, write:
+NUMBER: NONE
+
+Examples:
+{chr(10).join(examples)}
+
+Rules:
+- ONLY use these values — {valid_summary}
+- Do NOT invent new values
+- If a fragment is just a preamble, heading, or meta-commentary with no substantive content, output NONE
+- 0.9+ = unambiguous, 0.7-0.9 = likely"""
+
+    def classify(
+        self,
+        parts: list[dict],
+        specs: list[dict] | None = None,
+    ) -> list[dict]:
+        """
+        Classify parts and add tags above the confidence threshold.
+
+        Args:
+            parts: List of part dicts (must have "summary" key).
+            specs: Tag specs (uses loaded specs if not provided).
+
+        Returns:
+            The same parts list, with "tags" dicts added/updated in place.
+        """
+        specs = specs or self._tag_specs
+        if not parts or not specs:
+            return parts
+
+        provider = self._provider
+        if provider is None:
+            return parts
+
+        if hasattr(provider, '_provider') and provider._provider is not None:
+            provider = provider._provider
+
+        system_prompt = self.build_prompt(specs)
+        if not system_prompt:
+            return parts
+
+        # Build user message: numbered fragments
+        fragment_lines = []
+        for i, part in enumerate(parts, 1):
+            summary = part.get("summary", "").strip()
+            if summary:
+                fragment_lines.append(f"{i}: {summary}")
+
+        if not fragment_lines:
+            return parts
+
+        user_prompt = "Classify these fragments:\n\n" + "\n".join(fragment_lines)
+
+        try:
+            result = provider.generate(system_prompt, user_prompt, max_tokens=2048)
+            if result:
+                self._apply_classifications(parts, result, specs)
+        except Exception as e:
+            logger.warning("Tag classification failed: %s", e)
+
+        return parts
+
+    def _apply_classifications(
+        self,
+        parts: list[dict],
+        llm_output: str,
+        specs: list[dict] | None = None,
+    ) -> None:
+        """Parse LLM output and apply tags to parts above threshold.
+
+        Validates assigned values against the taxonomy specs to reject
+        invented values from small models.
+        """
+        # Build valid value sets for validation
+        valid_values: dict[str, set[str]] = {}
+        if specs:
+            for spec in specs:
+                valid_values[spec["key"]] = {v["value"] for v in spec["values"]}
+
+        for line in llm_output.strip().splitlines():
+            line = line.strip()
+            m = _CLASSIFY_LINE_RE.match(line)
+            if not m:
+                continue
+
+            part_num = int(m.group(1))
+            assignments_str = m.group(2).strip()
+
+            if assignments_str == "NONE" or not assignments_str:
+                continue
+
+            # 1-indexed → 0-indexed
+            if part_num < 1 or part_num > len(parts):
+                continue
+            part = parts[part_num - 1]
+
+            # Parse tag=value(confidence) assignments
+            tags = part.get("tags", {})
+            for tm in _TAG_ASSIGNMENT_RE.finditer(assignments_str):
+                key = tm.group(1)
+                value = tm.group(2)
+
+                # Validate against taxonomy
+                if key in valid_values and value not in valid_values[key]:
+                    logger.debug("Rejected invented value: %s=%s", key, value)
+                    continue
+
+                try:
+                    confidence = float(tm.group(3))
+                except ValueError:
+                    continue
+
+                if confidence >= self._confidence_threshold:
+                    tags[key] = value
+
+            if tags:
+                part["tags"] = tags
+
+
+# ---------------------------------------------------------------------------
 # Register with the provider registry
 # ---------------------------------------------------------------------------
 
