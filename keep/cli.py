@@ -211,6 +211,7 @@ def _format_yaml_frontmatter(
     similar_offsets: Optional[dict[str, int]] = None,
     meta_sections: Optional[dict[str, list[Item]]] = None,
     parts_manifest: Optional[list] = None,
+    focus_part: Optional[int] = None,
 ) -> str:
     """
     Format item as YAML frontmatter with summary as content.
@@ -223,6 +224,7 @@ def _format_yaml_frontmatter(
         similar_offsets: Version offsets for similar items (item.id -> offset)
         meta_sections: Optional dict of {name: [Items]} from meta-doc resolution
         parts_manifest: Optional list of PartInfo from structural decomposition
+        focus_part: If set, window parts_manifest to this part and its neighbors
 
     Note: Offset computation (v1, v2, etc.) assumes version_nav lists
     are ordered newest-first, matching list_versions() ordering.
@@ -281,13 +283,25 @@ def _format_yaml_frontmatter(
 
     # Add parts manifest (structural decomposition)
     if parts_manifest:
-        part_ids = [f"@P{{{p.part_num}}}" for p in parts_manifest]
+        # Window around focus_part: show the hit and one neighbor each side
+        if focus_part is not None:
+            visible = []
+            for p in parts_manifest:
+                if abs(p.part_num - focus_part) <= 1:
+                    visible.append(p)
+        else:
+            visible = parts_manifest
+
+        part_ids = [f"@P{{{p.part_num}}}" for p in visible]
         id_width = max(len(s) for s in part_ids)
-        lines.append("parts:")
-        for part, pid in zip(parts_manifest, part_ids):
-            prefix_len = 4 + id_width + 1
+        total = len(parts_manifest)
+        label = "parts:" if focus_part is None else f"parts: # {total} total, showing around @P{{{focus_part}}}"
+        lines.append(label)
+        for part, pid in zip(visible, part_ids):
+            marker = " *" if focus_part is not None and part.part_num == focus_part else ""
+            prefix_len = 4 + id_width + 1 + len(marker)
             summary_preview = _truncate_summary(part.summary, prefix_len)
-            lines.append(f"  - {pid.ljust(id_width)} {summary_preview}")
+            lines.append(f"  - {pid.ljust(id_width)} {summary_preview}{marker}")
 
     # Add version navigation (just @V{N} since ID is shown at top, with date + summary)
     if version_nav:
@@ -299,7 +313,7 @@ def _format_yaml_frontmatter(
             id_width = max(len(s) for s in prev_ids)
             lines.append("prev:")
             for vid, v in zip(prev_ids, version_nav["prev"]):
-                date_part = local_date(v.created_at) if v.created_at else ""
+                date_part = local_date(v.tags.get("_created") or v.created_at or "")
                 prefix_len = 4 + id_width + 1 + len(date_part) + 1
                 summary_preview = _truncate_summary(v.summary, prefix_len)
                 lines.append(f"  - {vid.ljust(id_width)} {date_part} {summary_preview}")
@@ -308,7 +322,7 @@ def _format_yaml_frontmatter(
             id_width = max(len(s) for s in next_ids)
             lines.append("next:")
             for vid, v in zip(next_ids, version_nav["next"]):
-                date_part = local_date(v.created_at) if v.created_at else ""
+                date_part = local_date(v.tags.get("_created") or v.created_at or "")
                 prefix_len = 4 + id_width + 1 + len(date_part) + 1
                 summary_preview = _truncate_summary(v.summary, prefix_len)
                 lines.append(f"  - {vid.ljust(id_width)} {date_part} {summary_preview}")
@@ -574,6 +588,7 @@ def _format_item(
     similar_offsets: Optional[dict[str, int]] = None,
     meta_sections: Optional[dict[str, list[Item]]] = None,
     parts_manifest: Optional[list] = None,
+    focus_part: Optional[int] = None,
 ) -> str:
     """
     Format a single item for display.
@@ -592,6 +607,7 @@ def _format_item(
         similar_offsets: Version offsets for similar items
         meta_sections: Meta-doc resolved sections {name: [Items]}
         parts_manifest: List of PartInfo for structural decomposition
+        focus_part: If set, window parts around this part number
     """
     if _get_ids_output():
         versioned_id = _format_versioned_id(item)
@@ -669,6 +685,7 @@ def _format_item(
             item, version_nav, viewing_offset,
             similar_items, similar_offsets, meta_sections,
             parts_manifest=parts_manifest,
+            focus_part=focus_part,
         )
     return _format_summary_line(item)
 
@@ -701,8 +718,14 @@ def _parts_to_items(doc_id: str, current: Item | None, parts: list) -> list[Item
     return items
 
 
-def _format_items(items: list[Item], as_json: bool = False) -> str:
-    """Format multiple items for display."""
+def _format_items(items: list[Item], as_json: bool = False, keeper=None) -> str:
+    """Format multiple items for display.
+
+    Args:
+        keeper: Optional Keeper instance. When provided, items with
+                _focus_part (uplifted from part hits) get their parts
+                manifest loaded and windowed around the hit.
+    """
     if _get_ids_output():
         ids = [_format_versioned_id(item) for item in items]
         return json.dumps(ids) if as_json else "\n".join(ids)
@@ -724,7 +747,17 @@ def _format_items(items: list[Item], as_json: bool = False) -> str:
     # Full format: YAML frontmatter with double-newline separator
     # Default: summary lines with single-newline separator
     if _get_full_output():
-        return "\n\n".join(_format_yaml_frontmatter(item) for item in items)
+        parts = []
+        for item in items:
+            focus = item.tags.get("_focus_part")
+            focus_int = int(focus) if focus else None
+            manifest = None
+            if focus_int and keeper:
+                manifest = keeper.list_parts(item.id) or None
+            parts.append(_format_yaml_frontmatter(
+                item, parts_manifest=manifest, focus_part=focus_int,
+            ))
+        return "\n\n".join(parts)
 
     # Compute ID column width for alignment (capped to avoid long URIs dominating)
     max_id = max(len(_format_versioned_id(item)) for item in items)
@@ -942,7 +975,7 @@ def find(
             expanded.extend(_versions_to_items(item.id, item, versions))
         results = expanded
 
-    typer.echo(_format_items(results, as_json=_get_json_output()))
+    typer.echo(_format_items(results, as_json=_get_json_output(), keeper=kp))
 
 
 @app.command(hidden=True)
@@ -958,7 +991,7 @@ def search(
     """
     kp = _get_keeper(store)
     results = kp.find(query, fulltext=True, limit=limit, since=since, until=until)
-    typer.echo(_format_items(results, as_json=_get_json_output()))
+    typer.echo(_format_items(results, as_json=_get_json_output(), keeper=kp))
 
 
 @app.command("list")
@@ -1707,6 +1740,7 @@ def _get_one(
     tag: Optional[list[str]],
     limit: int,
     show_parts: bool = False,
+    focus_part: Optional[int] = None,
 ) -> Optional[str]:
     """Get a single item and return its formatted output, or None on error."""
 
