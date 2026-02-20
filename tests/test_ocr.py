@@ -103,8 +103,6 @@ class TestPdfTextExtraction:
         from keep.providers.documents import FileDocumentProvider
 
         provider = FileDocumentProvider()
-        # Set a dummy extractor so the method doesn't raise
-        provider.set_content_extractor(MagicMock())
 
         try:
             from pypdf import PdfWriter
@@ -127,7 +125,6 @@ class TestPdfTextExtraction:
         from keep.providers.documents import FileDocumentProvider
 
         provider = FileDocumentProvider()
-        assert provider._content_extractor is None
 
         try:
             from pypdf import PdfWriter
@@ -207,7 +204,6 @@ class TestOcrPdfPages:
         # Mock extractor that returns text
         mock_extractor = MagicMock()
         mock_extractor.extract.return_value = "OCR extracted text from page"
-        provider.set_content_extractor(mock_extractor)
 
         try:
             from pypdf import PdfWriter
@@ -225,7 +221,7 @@ class TestOcrPdfPages:
         with open(pdf_path, "wb") as f:
             writer.write(f)
 
-        results = provider._ocr_pdf_pages(pdf_path, [0])
+        results = provider._ocr_pdf_pages(pdf_path, [0], extractor=mock_extractor)
         assert len(results) == 1
         assert results[0][0] == 0  # page index
         assert "OCR extracted text from page" in results[0][1]
@@ -244,7 +240,6 @@ class TestOcrPdfPages:
         # Mock extractor that returns garbage
         mock_extractor = MagicMock()
         mock_extractor.extract.return_value = "!@#$%^&*()"
-        provider.set_content_extractor(mock_extractor)
 
         try:
             from pypdf import PdfWriter
@@ -258,7 +253,7 @@ class TestOcrPdfPages:
         with open(pdf_path, "wb") as f:
             writer.write(f)
 
-        results = provider._ocr_pdf_pages(pdf_path, [0])
+        results = provider._ocr_pdf_pages(pdf_path, [0], extractor=mock_extractor)
         # Garbage OCR gets rejected
         assert len(results) == 0
 

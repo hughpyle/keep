@@ -53,11 +53,6 @@ class FileDocumentProvider:
 
     def __init__(self, max_size: int | None = None):
         self.max_size = max_size or self.MAX_FILE_SIZE
-        self._content_extractor = None
-
-    def set_content_extractor(self, extractor) -> None:
-        """Inject a ContentExtractor for OCR fallback on scanned PDFs."""
-        self._content_extractor = extractor
 
     EXTENSION_TYPES = {
         ".md": "text/markdown",
@@ -625,9 +620,14 @@ class FileDocumentProvider:
             raise IOError(f"Failed to extract text from PDF {path}: {e}")
 
     def _ocr_pdf_pages(
-        self, path: Path, page_indices: list[int]
+        self, path: Path, page_indices: list[int], extractor=None,
     ) -> list[tuple[int, str]]:
-        """Render PDF pages to images and OCR them."""
+        """Render PDF pages to images and OCR them.
+
+        Args:
+            extractor: ContentExtractor to use. Falls back to
+                       self._content_extractor if not provided.
+        """
         import logging
         import tempfile
         import time
@@ -637,6 +637,10 @@ class FileDocumentProvider:
             import pypdfium2 as pdfium
         except ImportError:
             _log.warning("pypdfium2 not installed; cannot OCR PDF pages")
+            return []
+
+        if not extractor:
+            _log.warning("No content extractor available for OCR")
             return []
 
         results: list[tuple[int, str]] = []
@@ -653,7 +657,7 @@ class FileDocumentProvider:
                     pil_image.save(tmp, format="PNG")
                     tmp_path = tmp.name
                 try:
-                    text = self._content_extractor.extract(
+                    text = extractor.extract(
                         tmp_path, "image/png"
                     )
                     if text:
