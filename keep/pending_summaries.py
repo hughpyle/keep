@@ -28,8 +28,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Claims older than this are considered stale (processor crashed)
-STALE_CLAIM_SECONDS = 600  # 10 minutes
+# Claims older than this are considered stale (processor crashed).
+# analyze tasks get a longer timeout because ollama can be slow
+# (20s per window × many windows on large documents).
+STALE_CLAIM_SECONDS = 600  # 10 minutes (default)
+STALE_CLAIM_SECONDS_BY_TYPE = {
+    "analyze": 3600,   # 1 hour — large docs via ollama are slow
+}
 
 # Retry backoff: min(BASE * 2^(attempts-1), MAX) seconds
 RETRY_BACKOFF_BASE = 30     # 30 seconds initial delay
@@ -191,25 +196,40 @@ class PendingSummaryQueue:
         """Reset items claimed by crashed processors back to pending.
 
         Called at the start of dequeue. Items stuck in 'processing'
-        longer than STALE_CLAIM_SECONDS are assumed to be from crashed
-        processors and are reset.
+        longer than the stale threshold are assumed to be from crashed
+        processors and are reset. The threshold varies by task_type
+        (analyze tasks get longer because ollama can be slow).
 
         Returns count of recovered items.
         """
-        cutoff = datetime.now(timezone.utc).isoformat()
-        # Use a simple approach: check claimed_at timestamp
+        now_iso = datetime.now(timezone.utc).isoformat()
+        total = 0
+        # Recover each task type with its own threshold
+        for task_type, threshold in STALE_CLAIM_SECONDS_BY_TYPE.items():
+            cursor = self._conn.execute("""
+                UPDATE pending_summaries
+                SET status = 'pending', claimed_by = NULL, claimed_at = NULL
+                WHERE status = 'processing'
+                  AND task_type = ?
+                  AND claimed_at IS NOT NULL
+                  AND julianday(?) - julianday(claimed_at) > ? / 86400.0
+            """, (task_type, now_iso, threshold))
+            total += cursor.rowcount
+        # Default threshold for all other task types
         cursor = self._conn.execute("""
             UPDATE pending_summaries
             SET status = 'pending', claimed_by = NULL, claimed_at = NULL
             WHERE status = 'processing'
+              AND task_type NOT IN ({})
               AND claimed_at IS NOT NULL
               AND julianday(?) - julianday(claimed_at) > ? / 86400.0
-        """, (cutoff, STALE_CLAIM_SECONDS))
-        recovered = cursor.rowcount
-        if recovered:
+        """.format(",".join("?" for _ in STALE_CLAIM_SECONDS_BY_TYPE)),
+            (*STALE_CLAIM_SECONDS_BY_TYPE.keys(), now_iso, STALE_CLAIM_SECONDS))
+        total += cursor.rowcount
+        if total:
             self._conn.commit()
-            logger.info("Recovered %d stale claims from crashed processors", recovered)
-        return recovered
+            logger.info("Recovered %d stale claims from crashed processors", total)
+        return total
 
     def enqueue(
         self,

@@ -656,39 +656,38 @@ class Keeper:
     def _release_summarization_provider(self) -> None:
         """Release summarization model to free GPU/unified memory.
 
-        Only actually releases GPU-resident providers (MLX). HTTP-based
-        providers (Ollama, OpenAI, etc.) are lightweight and reusable —
-        recreating them wastes time on model availability checks.
+        Always clears the provider reference so the lazy getter will
+        reconstruct it on next use. For GPU-resident providers (MLX),
+        also calls release() to free model weights immediately.
 
-        Safe to call at any time — the lazy getter will reconstruct
-        the provider on next use if needed.
+        Safe to call at any time.
         """
         if self._summarization_provider is not None:
             if hasattr(self._summarization_provider, 'release'):
                 self._summarization_provider.release()
-                self._summarization_provider = None
+            self._summarization_provider = None
 
     def _release_embedding_provider(self) -> None:
         """Release embedding model to free GPU/unified memory.
 
-        Only actually releases GPU-resident providers (MLX). HTTP-based
-        providers (Ollama, OpenAI, etc.) are lightweight and reusable.
+        Always clears the provider reference so the lazy getter will
+        reconstruct it on next use. For GPU-resident providers (MLX),
+        also calls release() to free model weights immediately.
 
         Also closes the embedding cache when releasing.
-        Safe to call at any time — the lazy getter will reconstruct
-        both on next use if needed.
+        Safe to call at any time.
         """
         if self._embedding_provider is not None:
             # Release the locked inner provider (frees model weights)
             inner = getattr(self._embedding_provider, '_provider', None)
             if hasattr(inner, 'release'):
                 inner.release()
-                # Close the embedding cache
-                if hasattr(self._embedding_provider, '_cache'):
-                    cache = self._embedding_provider._cache
-                    if hasattr(cache, 'close'):
-                        cache.close()
-                self._embedding_provider = None
+            # Close the embedding cache
+            if hasattr(self._embedding_provider, '_cache'):
+                cache = self._embedding_provider._cache
+                if hasattr(cache, 'close'):
+                    cache.close()
+            self._embedding_provider = None
 
     def _get_media_describer(self) -> Optional[MediaDescriber]:
         """
@@ -863,18 +862,34 @@ class Keeper:
                     except Exception as e:
                         logger.warning("Could not drop search index: %s", e)
                 # Enqueue reindex tasks for pending queue
-                stats = self.enqueue_reindex()
-                logger.info(
-                    "Enqueued %d items (+%d versions) for reindex",
-                    stats["enqueued"], stats["versions"],
-                )
                 import sys
-                print(
-                    f"Embedding model changed. Enqueued {stats['enqueued']} items for reindex.\n"
-                    f"Search is unavailable until reindex completes.\n"
-                    f"Run: keep pending",
-                    file=sys.stderr,
-                )
+                try:
+                    stats = self.enqueue_reindex()
+                    logger.info(
+                        "Enqueued %d items (+%d versions) for reindex",
+                        stats["enqueued"], stats["versions"],
+                    )
+                    dim_msg = (
+                        f" Dimension changed ({stored.dimension}→{current.dimension});"
+                        f" search index was cleared."
+                        if stored.dimension != current.dimension else ""
+                    )
+                    print(
+                        f"Embedding model changed.{dim_msg}\n"
+                        f"Enqueued {stats['enqueued']} items for reindex.\n"
+                        f"Search is unavailable until reindex completes.\n"
+                        f"Run: keep pending",
+                        file=sys.stderr,
+                    )
+                except Exception as e:
+                    logger.error("Failed to enqueue reindex after model change: %s", e)
+                    print(
+                        f"ERROR: Embedding model changed but reindex failed.\n"
+                        f"Search will not work until reindex completes.\n"
+                        f"Try: keep pending --force\n"
+                        f"Details: {e}",
+                        file=sys.stderr,
+                    )
             else:
                 logger.debug(
                     "Embedding identity unchanged: %s/%s (%dd)",
