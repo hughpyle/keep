@@ -530,63 +530,23 @@ class Keeper:
     def _auto_reconcile(self, chroma_coll: str, doc_coll: str) -> None:
         """Fix store divergence using summaries (no content re-fetch needed).
 
-        Requires an embedding provider to re-embed missing items.
-        Skips entirely if no provider is configured or provider creation
-        fails (avoids removing orphans without being able to re-embed).
+        Validates embedding provider first, then delegates to reconcile(fix=True).
+        Skips entirely if no provider is configured or creation fails.
         """
         if self._config.embedding is None:
             logger.info("Skipping reconciliation: no embedding provider configured")
             return
 
-        # Validate provider before entering loop — catches broken installs
-        # (e.g. mlx configured but not installed) early and cleanly
         try:
-            provider = self._get_embedding_provider()
+            self._get_embedding_provider()
         except Exception as e:
             logger.warning("Skipping reconciliation: provider unavailable: %s", e)
             return
 
-        doc_ids = self._document_store.list_ids(doc_coll)
-        missing = self._store.find_missing_ids(chroma_coll, doc_ids)
-
-        logger.info("Auto-reconcile started: %d missing, collection=%s", len(missing), chroma_coll)
-        reconciled = 0
-        failed = 0
-
-        # Items in DocumentStore but missing from ChromaDB — re-embed summary
-        for doc_id in missing:
-            try:
-                record = self._document_store.get(doc_coll, doc_id)
-                if record:
-                    embedding = provider.embed(record.summary)
-                    # Re-verify document still exists after (potentially slow) embedding
-                    if self._document_store.get(doc_coll, doc_id) is not None:
-                        self._store.upsert(
-                            collection=chroma_coll, id=doc_id,
-                            embedding=embedding, summary=record.summary,
-                            tags=casefold_tags_for_index(record.tags),
-                        )
-                        reconciled += 1
-            except Exception as e:
-                failed += 1
-                logger.warning("Failed to reconcile %s: %s", doc_id, e)
-
-        # Items in ChromaDB but not in DocumentStore — remove orphaned embeddings
-        # Skip versioned (@v{N}) and part (@p{N}) IDs — tracked in separate tables
-        chroma_ids = self._store.list_ids(chroma_coll)
-        doc_id_set = set(doc_ids)
-        removed = 0
-        for orphan_id in chroma_ids:
-            if orphan_id not in doc_id_set and "@v" not in orphan_id and "@p" not in orphan_id:
-                try:
-                    self._store.delete(chroma_coll, orphan_id)
-                    removed += 1
-                except Exception as e:
-                    logger.warning("Failed to remove orphan %s: %s", orphan_id, e)
-
+        result = self.reconcile(fix=True)
         logger.info(
-            "Auto-reconcile complete: %d reconciled, %d failed, %d orphans removed",
-            reconciled, failed, removed,
+            "Auto-reconcile complete: %d fixed, %d orphans removed, %d missing",
+            result["fixed"], result["removed"], result["missing_from_index"],
         )
 
     def _migrate_system_documents(self) -> dict:
