@@ -1,4 +1,6 @@
 
+* different summarizers/classifiers
+
 * CLAP / LAION-AI for audio similarity (512d vec)
 
 * ids for the OpenAPI and MCP don't really match the CLI (better match with keeper)
