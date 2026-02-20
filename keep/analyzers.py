@@ -156,9 +156,27 @@ Rules:
 - One speech act per line, no numbering
 - Skip procedural exchanges (greetings, acknowledgments)
 - If no speech acts found, write: EMPTY""",
+    "conversation": """Analyze a conversation between a user and an assistant. Entries are wrapped in <content> tags. Only analyze content inside <analyze> tags.
+
+Extract key FACTS about the user: events they attended, dates mentioned, preferences stated, decisions made, locations named, people referenced, and specific numbers or quantities.
+
+Write ONE LINE per distinct fact. Preserve dates and names exactly as stated.
+
+Good: "User ran 5km in the 'Run for the Cure' event on October 15th, raising $250 for breast cancer research"
+Good: "User prefers wildlife conservation volunteer work within 30 minutes of home"
+Good: "User attended charity golf tournament on July 17th with colleagues"
+Bad: "The assistant provided a list of resources" (this is about the assistant, not the user)
+Bad: "Tips for improving golf swing" (this is generic advice, not a user fact)
+
+Rules:
+- One fact per line, no numbering, no bullets, no preamble
+- Focus on USER-stated facts, not assistant advice or generic information
+- Preserve all dates, times, names, locations, and numbers exactly
+- Skip assistant responses unless they confirm or clarify a user fact
+- If no user facts found: EMPTY""",
 }
 
-DEFAULT_PROMPT = "temporal-v4"
+DEFAULT_PROMPT = "auto"
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +285,26 @@ class SlidingWindowAnalyzer:
         self._provider = provider
         self._context_budget = context_budget
         self._target_ratio = target_ratio
-        if prompt not in PROMPTS:
+        if prompt != "auto" and prompt not in PROMPTS:
             raise ValueError(f"Unknown prompt: {prompt!r}. Choose from: {list(PROMPTS.keys())}")
-        self._system_prompt = PROMPTS[prompt]
+        self._auto_prompt = (prompt == "auto")
+        self._system_prompt = None if self._auto_prompt else PROMPTS[prompt]
         self._prompt_name = prompt
+
+    @staticmethod
+    def _detect_prompt(chunks: list[AnalysisChunk]) -> str:
+        """Auto-detect the best prompt based on content type."""
+        # Sample first ~5000 chars across chunks
+        sample = ""
+        for chunk in chunks:
+            sample += chunk.content
+            if len(sample) >= 5000:
+                break
+        # Reuse the conversation detection heuristic from summarization
+        from .providers.base import _SPEAKER_RE
+        if len(_SPEAKER_RE.findall(sample[:5000])) >= 4:
+            return "conversation"
+        return "temporal-v4"
 
     def analyze(
         self,
@@ -281,6 +315,12 @@ class SlidingWindowAnalyzer:
         chunk_list = list(chunks)
         if not chunk_list:
             return []
+
+        # Resolve prompt (auto-detect if configured)
+        if self._auto_prompt:
+            detected = self._detect_prompt(chunk_list)
+            self._system_prompt = PROMPTS[detected]
+            logger.info("Auto-detected analysis prompt: %s", detected)
 
         total_tokens = sum(_estimate_tokens(c.content) for c in chunk_list)
 
