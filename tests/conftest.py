@@ -48,7 +48,7 @@ class MockEmbeddingProvider:
 class MockSummarizationProvider:
     """Mock summarization provider - returns truncated content."""
 
-    def summarize(self, content: str) -> str:
+    def summarize(self, content: str, *, context: str | None = None) -> str:
         """Return first 200 chars as summary."""
         return content[:200] if len(content) > 200 else content
 
@@ -344,6 +344,14 @@ class MockDocumentStore:
     def update_summary(self, collection: str, id: str, summary: str) -> bool:
         if collection in self._data and id in self._data[collection]:
             self._data[collection][id]["summary"] = summary
+            return True
+        return False
+
+    def update_content_hash(self, collection: str, id: str,
+                            content_hash: str, content_hash_full: str) -> bool:
+        if collection in self._data and id in self._data[collection]:
+            self._data[collection][id]["content_hash"] = content_hash
+            self._data[collection][id]["content_hash_full"] = content_hash_full
             return True
         return False
 
