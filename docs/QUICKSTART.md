@@ -255,9 +255,11 @@ Auto-detected if `mlx-vlm` or `mlx-whisper` is installed, or if Ollama has a vis
 | **Ollama** | Embeddings | `nomic-embed-text` (recommended), `mxbai-embed-large` |
 | **Ollama** | Summarization | `gemma3:1b` (fast), `llama3.2:3b`, `mistral`, `phi3` |
 | **Ollama** | Media | Vision models: `llava`, `moondream`, `bakllava` (images only) |
+| **Ollama** | OCR | `glm-ocr` (auto-pulled on first use) — scanned PDFs and images |
 | **MLX** | Embeddings | `all-MiniLM-L6-v2` (sentence-transformers, Apple Silicon only) |
 | **MLX** | Summarization | MLX models, e.g. `Llama-3.2-3B-Instruct-4bit` (Apple Silicon only) |
 | **MLX** | Media | `mlx-vlm` for images, `mlx-whisper` for audio (Apple Silicon only) |
+| **MLX** | OCR | `mlx-vlm` vision models (Apple Silicon only) |
 
 ## Tool Integrations
 

@@ -135,6 +135,10 @@ keep list -t act=request -t status=open
 
 # Mark fulfilled
 keep tag-update ID --tag status=fulfilled
+
+# Record an assertion or assessment (no lifecycle)
+keep put "The tests pass" -t act=assertion
+keep put "This approach is risky" -t act=assessment -t topic=architecture
 ```
 
 For the full value tables, constrained tag validation, and how to extend with custom values, see [META-TAGS.md](META-TAGS.md). For inline reference: `keep get .tag/act` and `keep get .tag/status`.
