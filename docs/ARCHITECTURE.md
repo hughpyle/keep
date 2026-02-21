@@ -87,9 +87,11 @@ The original document content is **not stored** — only the summary and embeddi
 - Persists choices in `keep.toml`
 - Auto-creates on first use
 
-**[pending_summaries.py](keep/pending_summaries.py)** — Deferred processing
-- Queue for background summarization and embedding
-- Used in cloud mode where embedding happens server-side
+**[pending_summaries.py](keep/pending_summaries.py)** — Background work queue
+- SQLite-backed queue for deferred processing: summarization, embedding, OCR, and analysis
+- Atomic dequeue with PID claims; stale claim recovery for crashed processors
+- Exponential backoff on failure (30s → 1h); dead-letter for exhausted retries
+- Task types: `summarize`, `embed`, `reindex`, `ocr`, `analyze`
 
 **[types.py](keep/types.py)** — Data model
 - `Item`: Immutable result type
