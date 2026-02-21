@@ -21,7 +21,7 @@
 | `keep tag-update` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
 | `keep data export` | Export store to JSON for backup or migration | [KEEP-DATA.md](KEEP-DATA.md) |
 | `keep data import` | Import documents from JSON export file | [KEEP-DATA.md](KEEP-DATA.md) |
-| `keep pending` | Process pending tasks (summarize, embed, reindex) | — |
+| `keep pending` | Process pending tasks (summarize, embed, OCR, analyze, reindex) | — |
 
 ## Global Flags
 
@@ -148,6 +148,7 @@ keep data import backup.json -m replace  # Import (replace all)
 # Maintenance
 keep pending                         # Process pending tasks, tail progress
 keep pending --reindex               # Re-embed all items + process
+keep pending --retry                 # Reset failed items back to pending
 keep pending --stop                  # Stop background processor
 ```
 
