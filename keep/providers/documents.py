@@ -163,6 +163,8 @@ class FileDocumentProvider:
                 content, extracted_tags = self._extract_audio_metadata(path)
             elif content_type and content_type.startswith("image/"):
                 content, extracted_tags = self._extract_image_metadata(path)
+                # Signal that this image should be OCR'd in background
+                ocr_pages = [0]
             else:
                 # Read as plain text
                 content = path.read_text(encoding="utf-8")
@@ -500,6 +502,10 @@ class FileDocumentProvider:
                 f"Cannot read image metadata: {path}"
             )
 
+        # Guard against decompression bombs — allow large images (up to ~15800x15800)
+        # but reject pathological ones that would exhaust memory.
+        Image.MAX_IMAGE_PIXELS = 250_000_000
+
         try:
             img = Image.open(path)
             lines = []
@@ -646,19 +652,17 @@ class FileDocumentProvider:
         results: list[tuple[int, str]] = []
         start = time.monotonic()
         pdf = pdfium.PdfDocument(str(path))
+        tmp_dir = tempfile.mkdtemp(prefix="keep_ocr_")
         try:
             for i in page_indices:
                 page = pdf[i]
                 bitmap = page.render(scale=2)
                 pil_image = bitmap.to_pil()
-                with tempfile.NamedTemporaryFile(
-                    suffix=".png", delete=False
-                ) as tmp:
-                    pil_image.save(tmp, format="PNG")
-                    tmp_path = tmp.name
+                tmp_path = Path(tmp_dir) / f"page_{i}.png"
+                pil_image.save(str(tmp_path), format="PNG")
                 try:
                     text = extractor.extract(
-                        tmp_path, "image/png"
+                        str(tmp_path), "image/png"
                     )
                     if text:
                         cleaned = self._clean_ocr_text(text)
@@ -676,10 +680,10 @@ class FileDocumentProvider:
                             )
                 except Exception as e:
                     _log.warning("OCR failed for page %d: %s", i, e)
-                finally:
-                    Path(tmp_path).unlink(missing_ok=True)
         finally:
             pdf.close()
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
         elapsed = time.monotonic() - start
         _log.info(

@@ -2223,7 +2223,17 @@ def pending_cmd(
                     result["processed"], result["failed"],
                 )
                 if result["processed"] == 0 and result["failed"] == 0:
-                    break
+                    # Items may have been enqueued after our last dequeue
+                    # (e.g. OCR enqueued while we were processing a summarize).
+                    # Wait briefly and check once more before exiting.
+                    time.sleep(1)
+                    result = kp.process_pending(limit=50)
+                    if result["processed"] == 0 and result["failed"] == 0:
+                        break
+                    _daemon_logger.info(
+                        "Daemon batch (drain): processed=%d failed=%d",
+                        result["processed"], result["failed"],
+                    )
         finally:
             _daemon_logger.info("Daemon shutting down")
             try:
@@ -2261,29 +2271,31 @@ def pending_cmd(
     # Interactive mode: show status, ensure daemon running, tail log
     pending_count = kp.pending_count()
 
-    # Show failed items if any
+    # Show failed and processing items
     queue_stats = kp._pending_queue.stats()
     failed_count = queue_stats.get("failed", 0)
-    if failed_count and pending_count == 0:
-        typer.echo(f"Nothing pending. {failed_count} failed (use --retry to requeue).", err=True)
-        # Show first few failed items
-        failed_items = kp._pending_queue.list_failed()
-        for item in failed_items[:5]:
-            error = item.get("last_error", "unknown")
-            typer.echo(f"  {item['id']} ({item['task_type']}): {error}", err=True)
-        if len(failed_items) > 5:
-            typer.echo(f"  ... and {len(failed_items) - 5} more", err=True)
-        kp.close()
-        return
+    processing_count = queue_stats.get("processing", 0)
 
-    if pending_count == 0:
-        typer.echo("Nothing pending.")
+    if pending_count == 0 and processing_count == 0:
+        if failed_count:
+            typer.echo(f"Nothing pending. {failed_count} failed (use --retry to requeue).", err=True)
+            # Show first few failed items
+            failed_items = kp._pending_queue.list_failed()
+            for item in failed_items[:5]:
+                error = item.get("last_error", "unknown")
+                typer.echo(f"  {item['id']} ({item['task_type']}): {error}", err=True)
+            if len(failed_items) > 5:
+                typer.echo(f"  ... and {len(failed_items) - 5} more", err=True)
+        else:
+            typer.echo("Nothing pending.")
         kp.close()
         return
 
     by_type = kp.pending_stats_by_type()
     parts = [f"{count} {ttype}" for ttype, count in sorted(by_type.items())]
     status_line = f"Queue: {pending_count} items ({', '.join(parts)})"
+    if processing_count:
+        status_line += f" + {processing_count} processing"
     if failed_count:
         status_line += f" + {failed_count} failed"
     typer.echo(status_line, err=True)
