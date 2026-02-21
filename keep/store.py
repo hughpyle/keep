@@ -371,8 +371,11 @@ class ChromaStore:
         """
         coll = self._get_collection(collection)
 
-        # Get existing item
-        existing = coll.get(ids=[id], include=["metadatas"])
+        # Get existing item — include embeddings so we can preserve them.
+        # ChromaDB re-embeds when documents= is passed, using its default
+        # embedding function (384d all-MiniLM-L6-v2) which would corrupt
+        # embeddings produced by the configured provider (e.g. 768d nomic).
+        existing = coll.get(ids=[id], include=["metadatas", "embeddings"])
         if not existing["ids"]:
             return False
 
@@ -382,10 +385,12 @@ class ChromaStore:
         metadata["_updated"] = now
         metadata["_updated_date"] = now[:10]
 
-        # Update just the document (summary) and metadata
+        # Update document text + metadata, passing existing embeddings
+        # to prevent ChromaDB from re-embedding with its default function.
         coll.update(
             ids=[id],
             documents=[summary],
+            embeddings=[existing["embeddings"][0]],
             metadatas=[metadata],
         )
         return True
