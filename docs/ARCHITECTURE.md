@@ -111,10 +111,10 @@ URI or content
          │ raw bytes
          ▼
 ┌─────────────────┐
-│ Content Regular-│ ← Extract text from HTML/PDF
+│ Content Regular-│ ← Extract text from HTML/PDF/DOCX/PPTX
 │ ization         │   (scripts/styles removed)
 └────────┬────────┘
-         │ clean text
+         │ clean text (+ OCR page list if scanned)
          ▼
 ┌─────────────────┐
 │ Media Enrichment│ ← Optional: vision description (images)
@@ -140,6 +140,13 @@ URI or content
 │ - content hash  │  │ - version embed │
 │ - archive prev  │  │                 │
 └─────────────────┘  └─────────────────┘
+         │
+         ▼ (if scanned PDF or image)
+┌─────────────────────────────────┐
+│ Background OCR (keep pending)   │
+│ Placeholder stored immediately; │
+│ OCR text replaces it + re-embeds│
+└─────────────────────────────────┘
 ```
 
 **Versioning on update:**
@@ -326,14 +333,34 @@ Fetch content from URIs with content regularization.
 - Extensible for s3://, gs://, etc.
 
 **Content Regularization:**
-- **PDF**: text extracted via pypdf
+- **PDF**: text extracted via pypdf; scanned pages (no extractable text) flagged for background OCR
 - **HTML**: text extracted via BeautifulSoup (scripts/styles removed)
 - **DOCX/PPTX**: text + tables/slides extracted via python-docx/python-pptx; auto-tags: author, title
 - **Audio** (MP3, FLAC, OGG, WAV, AIFF, M4A, WMA): metadata via tinytag; auto-tags: artist, album, genre, year
-- **Images** (JPEG, PNG, TIFF, WEBP): EXIF metadata via Pillow; auto-tags: dimensions, camera, date
+- **Images** (JPEG, PNG, TIFF, WEBP): EXIF metadata via Pillow; auto-tags: dimensions, camera, date; flagged for background OCR
 - **Other formats**: treated as plain text
 
 Provider-extracted tags merge with user tags (user wins on collision). This ensures both embedding and summarization receive clean text.
+
+### Content Extractor / OCR Providers
+Extract text from scanned PDFs and images via optical character recognition.
+
+- **ollama**: Uses `glm-ocr` model (auto-pulled on first use)
+- **mlx**: Apple Silicon — uses `mlx-vlm` vision models
+
+OCR runs in the background via the pending queue (`keep pending`), not during `put()`. The flow:
+
+1. During `put()`, content regularization detects scanned PDF pages (no extractable text) or image files
+2. A placeholder is stored immediately so the item is indexed right away
+3. The pages/image are enqueued for background OCR processing
+4. `keep pending` picks up the OCR task, renders pages to images, runs OCR, cleans and scores the text
+5. The full OCR text replaces the placeholder and the item is re-embedded
+
+Design points:
+- Auto-detected: Ollama (with `glm-ocr`) > MLX > None. No configuration needed.
+- Security: Pillow decompression bomb guard (250MP limit), PDF page cap (1000), temp directory cleanup
+- OCR text is cleaned (whitespace normalized) and confidence-scored
+- Graceful degradation: no OCR provider = metadata-only indexing (unchanged behavior)
 
 ### Media Description Providers (optional)
 Generate text descriptions from media files, enriching metadata-only content.

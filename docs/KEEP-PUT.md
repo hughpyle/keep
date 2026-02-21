@@ -83,14 +83,16 @@ keep put doc.pdf -t topic=auth         # Re-queued for contextual summary
 | Format | Extensions | Content extracted | Auto-tags |
 |--------|-----------|-------------------|-----------|
 | **Text** | .md, .txt, .py, .js, .json, .yaml, ... | Full text | — |
-| **PDF** | .pdf | Text from all pages | — |
+| **PDF** | .pdf | Text from all pages; scanned pages OCR'd in background† | — |
 | **HTML** | .html, .htm | Text (scripts/styles removed) | — |
 | **DOCX** | .docx | Paragraphs + tables | `author`, `title` |
 | **PPTX** | .pptx | Slides + notes | `author`, `title` |
 | **Audio** | .mp3, .flac, .ogg, .wav, .aiff, .m4a, .wma | Structured metadata (+ transcription\*) | `artist`, `album`, `genre`, `year`, `title` |
-| **Images** | .jpg, .png, .tiff, .webp | EXIF metadata (+ description\*) | `dimensions`, `camera`, `date` |
+| **Images** | .jpg, .png, .tiff, .webp | EXIF metadata + OCR text† (+ description\*) | `dimensions`, `camera`, `date` |
 
 \* When a media description provider is configured (`[media]` in `keep.toml`), images get vision-model descriptions and audio files get speech-to-text transcription, appended to the extracted metadata. See [QUICKSTART.md](QUICKSTART.md#media-description-optional) for setup.
+
+† **OCR (optical character recognition):** Scanned PDF pages (pages with no extractable text) and all image files are automatically queued for background OCR when an OCR provider is available. Keep auto-detects Ollama (using `glm-ocr`, pulled automatically on first use) or MLX (`mlx-vlm` on Apple Silicon). A placeholder is stored immediately so the item is indexed right away; the full OCR text replaces it once background processing completes via `keep pending`. No configuration needed — if Ollama is running, OCR just works.
 
 Auto-extracted tags merge with user-provided tags. User tags win on collision:
 
