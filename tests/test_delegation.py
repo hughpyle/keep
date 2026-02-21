@@ -157,6 +157,115 @@ class TestDelegateTask:
         kp.close()
 
 
+class TestAnalyzeDelegation:
+    """Test analyze task delegation."""
+
+    def test_delegates_analyze_task(self, mock_providers, tmp_path):
+        """Analyze tasks are delegated when TaskClient is available."""
+        from keep import Keeper
+
+        kp = Keeper(store_path=tmp_path)
+
+        queue = PendingSummaryQueue(tmp_path / "pending.db")
+        kp._pending_queue = queue
+
+        mock_tc = MagicMock(spec=TaskClient)
+        mock_tc.submit.return_value = "remote-analyze-001"
+        kp._task_client = mock_tc
+
+        # Create a doc to analyze
+        kp.put(content="This is a long document with multiple sections about different topics.", id="doc1")
+
+        # Clear auto-enqueued tasks and enqueue analyze
+        queue.clear()
+        queue.enqueue("doc1", "default", "", task_type="analyze",
+                       metadata={"tags": ["topic"]})
+
+        result = kp.process_pending(limit=10)
+
+        assert result["delegated"] == 1
+        # Submit should include chunks in metadata
+        call_args = mock_tc.submit.call_args
+        assert call_args[0][0] == "analyze"
+        meta = call_args[1].get("metadata") or call_args[0][2]
+        assert "chunks" in meta
+
+        queue.close()
+        kp.close()
+
+    def test_poll_applies_analyze_result(self, mock_providers, tmp_path):
+        """Completed analyze delegation applies parts to stores."""
+        from keep import Keeper
+
+        kp = Keeper(store_path=tmp_path)
+
+        queue = PendingSummaryQueue(tmp_path / "pending.db")
+        kp._pending_queue = queue
+
+        # Create a doc
+        kp.put(content="Content to decompose into parts", id="doc1")
+
+        # Simulate delegated analyze task
+        queue.enqueue("doc1", "default", "", task_type="analyze")
+        queue.dequeue(limit=1)
+        queue.mark_delegated("doc1", "default", "analyze", "rt-analyze-001")
+
+        mock_tc = MagicMock(spec=TaskClient)
+        mock_tc.poll.return_value = {
+            "status": "completed",
+            "result": {
+                "parts": [
+                    {"summary": "Part 1: Introduction", "content": "Intro text", "tags": {}},
+                    {"summary": "Part 2: Details", "content": "Detail text", "tags": {"topic": "tech"}},
+                ],
+            },
+            "error": None,
+            "task_type": "analyze",
+        }
+        kp._task_client = mock_tc
+
+        result = {"processed": 0, "failed": 0}
+        kp._poll_delegated(result)
+
+        assert result["processed"] == 1
+
+        # Parts should be in the store
+        parts = kp.list_parts("doc1")
+        assert len(parts) == 2
+        assert parts[0].summary == "Part 1: Introduction"
+        assert parts[1].summary == "Part 2: Details"
+
+        queue.close()
+        kp.close()
+
+    def test_analyze_fallback_to_local(self, mock_providers, tmp_path):
+        """When analyze delegation fails, falls back to local processing."""
+        from keep import Keeper
+
+        kp = Keeper(store_path=tmp_path)
+
+        queue = PendingSummaryQueue(tmp_path / "pending.db")
+        kp._pending_queue = queue
+
+        mock_tc = MagicMock(spec=TaskClient)
+        mock_tc.submit.side_effect = TaskClientError("Service unavailable")
+        kp._task_client = mock_tc
+
+        # Create a doc with enough content
+        kp.put(content="A long document with enough content to be analyzed. " * 10, id="doc1")
+
+        queue.clear()
+        queue.enqueue("doc1", "default", "", task_type="analyze")
+
+        result = kp.process_pending(limit=10)
+
+        # Delegation failed, should fall back to local
+        assert result["delegated"] == 0
+
+        queue.close()
+        kp.close()
+
+
 class TestPollDelegated:
     """Test _poll_delegated method on Keeper."""
 

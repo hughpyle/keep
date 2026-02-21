@@ -2868,6 +2868,57 @@ class Keeper:
     # Parts (structural decomposition)
     # -------------------------------------------------------------------------
 
+    def _gather_analyze_chunks(self, id: str, doc_record) -> list[dict]:
+        """Gather content chunks for analysis as serializable dicts.
+
+        For URI sources: re-fetch the document content.
+        For inline notes: assemble version history chronologically.
+        """
+        doc_coll = self._resolve_doc_collection()
+        source = doc_record.tags.get("_source")
+        parent_user_tags = {
+            k: v for k, v in doc_record.tags.items()
+            if not k.startswith(SYSTEM_TAG_PREFIX)
+        }
+        chunks: list[dict] = []
+
+        if source == "uri":
+            try:
+                doc = self._document_provider.fetch(id)
+                chunks = [{"content": doc.content, "tags": parent_user_tags, "index": 0}]
+            except Exception as e:
+                logger.warning("Could not re-fetch %s: %s, using summary", id, e)
+
+        if not chunks:
+            versions = self._document_store.list_versions(doc_coll, id, limit=100)
+            if versions:
+                for i, v in enumerate(reversed(versions)):
+                    date_str = v.created_at[:10] if v.created_at else ""
+                    chunks.append({
+                        "content": f"[{date_str}]\n{v.summary}",
+                        "tags": parent_user_tags,
+                        "index": i,
+                    })
+                chunks.append({
+                    "content": f"[current]\n{doc_record.summary}",
+                    "tags": parent_user_tags,
+                    "index": len(chunks),
+                })
+            else:
+                chunks = [{"content": doc_record.summary, "tags": parent_user_tags, "index": 0}]
+
+        return chunks
+
+    def _gather_guide_context(self, tags: list[str]) -> str:
+        """Build guide context string from tag descriptions."""
+        doc_coll = self._resolve_doc_collection()
+        guide_parts = []
+        for tag_key in tags:
+            tag_doc = self._document_store.get(doc_coll, f".tag/{tag_key}")
+            if tag_doc:
+                guide_parts.append(f"## Tag: {tag_key}\n{tag_doc.summary}")
+        return "\n\n".join(guide_parts)
+
     def analyze(
         self,
         id: str,
@@ -2901,11 +2952,10 @@ class Keeper:
         Returns:
             List of PartInfo for the created parts (empty list if skipped)
         """
-        from .providers.base import AnalysisChunk
+        from .processors import ProcessorResult, process_analyze
 
         validate_id(id)
         doc_coll = self._resolve_doc_collection()
-        chroma_coll = self._resolve_chroma_collection()
 
         # Get the document
         doc_record = self._document_store.get(doc_coll, id)
@@ -2919,88 +2969,66 @@ class Keeper:
                 logger.info("Skipping analysis for %s: parts already current", id)
                 return self.list_parts(id)
 
-        # Build AnalysisChunks from content.
-        # For URI sources: re-fetch → single chunk.
-        # For inline sources (strings): version history → one chunk per version.
-        chunks: list[AnalysisChunk] = []
-        source = doc_record.tags.get("_source")
-        parent_user_tags = {
-            k: v for k, v in doc_record.tags.items()
-            if not k.startswith(SYSTEM_TAG_PREFIX)
-        }
+        # Phase 1: Gather — assemble chunks, guide context, tag specs (local)
+        chunk_dicts = self._gather_analyze_chunks(id, doc_record)
 
-        if source == "uri":
-            try:
-                doc = self._document_provider.fetch(id)
-                chunks = [AnalysisChunk(
-                    content=doc.content,
-                    tags=parent_user_tags,
-                    index=0,
-                )]
-            except Exception as e:
-                logger.warning("Could not re-fetch %s: %s, using summary", id, e)
-
-        if not chunks:
-            # For inline notes, build chunks from version history
-            versions = self._document_store.list_versions(doc_coll, id, limit=100)
-            if versions:
-                # Chronological order (oldest first)
-                for i, v in enumerate(reversed(versions)):
-                    date_str = v.created_at[:10] if v.created_at else ""
-                    chunks.append(AnalysisChunk(
-                        content=f"[{date_str}]\n{v.summary}",
-                        tags=parent_user_tags,
-                        index=i,
-                    ))
-                # Current version as newest
-                chunks.append(AnalysisChunk(
-                    content=f"[current]\n{doc_record.summary}",
-                    tags=parent_user_tags,
-                    index=len(chunks),
-                ))
-            else:
-                chunks = [AnalysisChunk(
-                    content=doc_record.summary,
-                    tags=parent_user_tags,
-                    index=0,
-                )]
-
-        # Validate minimum content
-        total_content = "".join(c.content for c in chunks)
+        total_content = "".join(c["content"] for c in chunk_dicts)
         if len(total_content.strip()) < 50:
             raise ValueError(f"Document content too short to analyze: {id}")
 
-        # Build guide context from tag descriptions
-        guide_context = ""
-        if tags:
-            guide_parts = []
-            for tag_key in tags:
-                tag_doc_id = f".tag/{tag_key}"
-                tag_doc = self._document_store.get(doc_coll, tag_doc_id)
-                if tag_doc:
-                    guide_parts.append(
-                        f"## Tag: {tag_key}\n{tag_doc.summary}"
-                    )
-            if guide_parts:
-                guide_context = "\n\n".join(guide_parts)
+        guide_context = self._gather_guide_context(tags) if tags else ""
 
-        # Get the analyzer.
+        tag_specs = None
+        try:
+            from .analyzers import TagClassifier
+            classifier = TagClassifier(
+                provider=self._get_summarization_provider(),
+            )
+            tag_specs = classifier.load_specs(self) or None
+        except Exception as e:
+            logger.warning("Could not load tag specs: %s", e)
+
+        # Phase 2: Compute — pure processor (local or remote)
         # Wait for any background reconciliation to finish first — both
         # sentence-transformers (embedding) and mlx-lm (summarization)
         # import the `transformers` package, and concurrent imports
         # corrupt module state (Python import lock is per-module).
         if analyzer is None:
             self._reconcile_done.wait(timeout=30)
-            analyzer = self._get_analyzer()
+            analyzer_provider = self._get_summarization_provider()
+        else:
+            analyzer_provider = None  # custom analyzer passed directly
 
-        # Delegate to the analyzer
-        raw_parts = analyzer.analyze(chunks, guide_context)
+        if analyzer is not None:
+            # Custom analyzer: call directly (not through process_analyze)
+            from .providers.base import AnalysisChunk
+            analysis_chunks = [
+                AnalysisChunk(
+                    content=c["content"], tags=c.get("tags", {}),
+                    index=c.get("index", i),
+                )
+                for i, c in enumerate(chunk_dicts)
+            ]
+            raw_parts = analyzer.analyze(analysis_chunks, guide_context)
+            if tag_specs and raw_parts:
+                try:
+                    classifier.classify(raw_parts, tag_specs)
+                except Exception as e:
+                    logger.warning("Tag classification skipped: %s", e)
+            proc_result = ProcessorResult(task_type="analyze", parts=raw_parts)
+        else:
+            proc_result = process_analyze(
+                chunk_dicts, guide_context, tag_specs,
+                analyzer_provider=analyzer_provider,
+                classifier_provider=analyzer_provider,
+            )
 
         # Content not decomposable — single section is redundant with the note
-        if len(raw_parts) <= 1:
+        if not proc_result.parts or len(proc_result.parts) <= 1:
             logger.info("Content not decomposable into multiple parts: %s", id)
             # Record _analyzed_hash so we don't re-run the LLM next time
             if doc_record.content_hash:
+                chroma_coll = self._resolve_chroma_collection()
                 updated_tags = dict(doc_record.tags)
                 updated_tags["_analyzed_hash"] = doc_record.content_hash
                 self._document_store.update_tags(doc_coll, id, updated_tags)
@@ -3008,77 +3036,13 @@ class Keeper:
                                         casefold_tags_for_index(updated_tags))
             return []
 
-        # Post-analysis classification: if constrained tag specs exist in the
-        # store, classify parts against the taxonomy (one extra LLM call).
-        try:
-            from .analyzers import TagClassifier
-            classifier = TagClassifier(
-                provider=self._get_summarization_provider(),
-            )
-            specs = classifier.load_specs(self)
-            if specs:
-                classifier.classify(raw_parts, specs)
-                logger.info("Classified %d parts against %d tag specs", len(raw_parts), len(specs))
-        except Exception as e:
-            logger.warning("Tag classification skipped: %s", e)
+        # Phase 3: Apply — write parts + embeddings to stores (local)
+        self.apply_result(
+            id, doc_coll, proc_result,
+            existing_tags=doc_record.tags,
+        )
 
-        # Build PartInfo list
-        from .types import utc_now
-        now = utc_now()
-
-        parts: list[PartInfo] = []
-        for i, raw in enumerate(raw_parts, 1):
-            part_tags = dict(parent_user_tags)
-            # Merge part-specific tags from LLM
-            if raw.get("tags"):
-                part_tags.update(raw["tags"])
-
-            part_content = raw.get("content", "")
-            part_summary = raw.get("summary", part_content[:200])
-
-            parts.append(PartInfo(
-                part_num=i,
-                summary=part_summary,
-                tags=part_tags,
-                content=part_content,
-                created_at=now,
-            ))
-
-        # Delete existing parts (re-analysis = fresh decomposition)
-        self._store.delete_parts(chroma_coll, id)
-        self._document_store.delete_parts(doc_coll, id)
-
-        # Store parts in document store
-        self._document_store.upsert_parts(doc_coll, id, parts)
-
-        # NOTE: Previously released summarization model here to avoid both
-        # MLX + embedding models being resident simultaneously. However,
-        # releasing causes MLX to leak ~40MB per reload cycle (Metal allocator
-        # doesn't return pages to OS). Keeping the model resident is better —
-        # total footprint is ~3GB (MLX 1.8GB + ST 0.5GB + overhead) which
-        # fits on 16GB+ machines. On low-memory systems, consider subprocess
-        # isolation instead.
-        # self._release_summarization_provider()
-
-        # Generate embeddings and store in vector store
-        embed = self._get_embedding_provider()
-        for part in parts:
-            embedding = embed.embed(part.summary)
-            self._store.upsert_part(
-                chroma_coll, id, part.part_num,
-                embedding, part.summary, casefold_tags_for_index(part.tags),
-            )
-
-        # Record the content hash at which analysis was performed,
-        # so future calls can skip if content hasn't changed.
-        if doc_record.content_hash:
-            updated_tags = dict(doc_record.tags)
-            updated_tags["_analyzed_hash"] = doc_record.content_hash
-            self._document_store.update_tags(doc_coll, id, updated_tags)
-            self._store.update_tags(chroma_coll, id,
-                                    casefold_tags_for_index(updated_tags))
-
-        return parts
+        return self.list_parts(id)
 
     def get_part(self, id: str, part_num: int) -> Optional[Item]:
         """
@@ -3491,6 +3455,28 @@ class Keeper:
                     if context:
                         meta["context"] = context
 
+        elif item.task_type == "analyze":
+            doc = self._document_store.get(item.collection, item.id)
+            if not doc:
+                logger.info("Skipping delegation for deleted doc: %s", item.id)
+                return
+            # Gather chunks, guide context, and tag specs locally
+            meta["chunks"] = self._gather_analyze_chunks(item.id, doc)
+            guidance_tags = (item.metadata or {}).get("tags")
+            if guidance_tags:
+                meta["guide_context"] = self._gather_guide_context(guidance_tags)
+            try:
+                from .analyzers import TagClassifier
+                classifier = TagClassifier(
+                    provider=self._get_summarization_provider(),
+                )
+                specs = classifier.load_specs(self)
+                if specs:
+                    meta["tag_specs"] = specs
+            except Exception as e:
+                logger.warning("Could not load tag specs for delegation: %s", e)
+            content = ""  # content is in chunks, not top-level
+
         try:
             remote_task_id = self._task_client.submit(
                 item.task_type, content, meta or None,
@@ -3534,6 +3520,7 @@ class Keeper:
                     content=task_result.get("content"),
                     content_hash=task_result.get("content_hash"),
                     content_hash_full=task_result.get("content_hash_full"),
+                    parts=task_result.get("parts"),
                 )
                 # Get existing doc tags for apply_result
                 doc = self._document_store.get(item.collection, item.id)
@@ -3585,6 +3572,57 @@ class Keeper:
                 summary=result.summary,
                 tags=casefold_tags_for_index(existing_tags or {}),
             )
+
+        elif result.task_type == "analyze":
+            from .document_store import PartInfo
+            from .types import utc_now
+
+            doc = self._document_store.get(collection, item_id)
+            if not doc:
+                return
+
+            parent_user_tags = {
+                k: v for k, v in (existing_tags or {}).items()
+                if not k.startswith(SYSTEM_TAG_PREFIX)
+            }
+
+            now = utc_now()
+            parts = []
+            for i, raw in enumerate(result.parts or [], 1):
+                part_tags = dict(parent_user_tags)
+                if raw.get("tags"):
+                    part_tags.update(raw["tags"])
+                parts.append(PartInfo(
+                    part_num=i,
+                    summary=raw.get("summary", ""),
+                    tags=part_tags,
+                    content=raw.get("content", ""),
+                    created_at=now,
+                ))
+
+            chroma_coll = self._resolve_chroma_collection()
+
+            # Atomic replace: delete old, insert new
+            self._store.delete_parts(chroma_coll, item_id)
+            self._document_store.delete_parts(collection, item_id)
+            self._document_store.upsert_parts(collection, item_id, parts)
+
+            # Embed each part
+            embed = self._get_embedding_provider()
+            for part in parts:
+                embedding = embed.embed(part.summary)
+                self._store.upsert_part(
+                    chroma_coll, item_id, part.part_num,
+                    embedding, part.summary, casefold_tags_for_index(part.tags),
+                )
+
+            # Record _analyzed_hash
+            if doc.content_hash:
+                updated_tags = dict(doc.tags)
+                updated_tags["_analyzed_hash"] = doc.content_hash
+                self._document_store.update_tags(collection, item_id, updated_tags)
+                self._store.update_tags(chroma_coll, item_id,
+                                        casefold_tags_for_index(updated_tags))
 
     def _process_pending_summarize(self, item) -> None:
         """Process a pending summarization work item."""

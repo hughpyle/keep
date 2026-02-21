@@ -35,7 +35,7 @@ def _content_hash_full(content: str) -> str:
 # --- Task type constants ---
 
 # Task types that can be delegated to the hosted service
-DELEGATABLE_TASK_TYPES = ("summarize", "ocr")
+DELEGATABLE_TASK_TYPES = ("summarize", "ocr", "analyze")
 
 # Task types that must run locally (need local store access)
 LOCAL_ONLY_TASK_TYPES = ("embed", "reindex")
@@ -139,3 +139,54 @@ def process_ocr(
         content_hash=_content_hash(full_content),
         content_hash_full=_content_hash_full(full_content),
     )
+
+
+def process_analyze(
+    chunks: list[dict],
+    guide_context: str = "",
+    tag_specs: list[dict] | None = None,
+    *,
+    analyzer_provider=None,
+    classifier_provider=None,
+) -> ProcessorResult:
+    """Analyze + classify content into parts.  Pure function — no store access.
+
+    Args:
+        chunks: Serializable chunk dicts [{"content": str, "tags": dict, "index": int}].
+        guide_context: Tag guidance descriptions for the analyzer.
+        tag_specs: Tag taxonomy specs for classification (from TagClassifier.load_specs).
+        analyzer_provider: SummarizationProvider for the analyzer LLM.
+        classifier_provider: SummarizationProvider for the classifier LLM
+            (defaults to analyzer_provider if not set).
+
+    Returns:
+        ProcessorResult with parts=[{"summary": str, "content": str, "tags": dict}, ...]
+    """
+    from .analyzers import SlidingWindowAnalyzer, TagClassifier
+    from .providers.base import AnalysisChunk
+
+    # Reconstruct AnalysisChunk objects from serializable dicts
+    analysis_chunks = [
+        AnalysisChunk(
+            content=c.get("content", ""),
+            tags=c.get("tags", {}),
+            index=c.get("index", i),
+        )
+        for i, c in enumerate(chunks)
+    ]
+
+    # Run analyzer
+    analyzer = SlidingWindowAnalyzer(provider=analyzer_provider)
+    raw_parts = analyzer.analyze(analysis_chunks, guide_context)
+
+    # Run classifier if tag specs provided
+    if tag_specs and raw_parts:
+        try:
+            classifier = TagClassifier(
+                provider=classifier_provider or analyzer_provider,
+            )
+            classifier.classify(raw_parts, tag_specs)
+        except Exception as e:
+            logger.warning("Tag classification skipped: %s", e)
+
+    return ProcessorResult(task_type="analyze", parts=raw_parts)

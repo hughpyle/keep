@@ -7,6 +7,7 @@ import pytest
 from keep.processors import (
     ProcessorResult,
     process_summarize,
+    process_analyze,
     process_ocr,
     ocr_image,
     ocr_pdf,
@@ -304,8 +305,153 @@ class TestConstants:
         assert MIME_TO_EXTENSION["image/jpeg"] == ".jpg"
         assert MIME_TO_EXTENSION["image/png"] == ".png"
 
+    def test_analyze_is_delegatable(self):
+        assert "analyze" in DELEGATABLE_TASK_TYPES
+
     def test_exports_from_init(self):
         """ProcessorResult and DELEGATABLE_TASK_TYPES are exported from keep."""
         from keep import ProcessorResult as PR, DELEGATABLE_TASK_TYPES as DT
         assert PR is ProcessorResult
         assert DT is DELEGATABLE_TASK_TYPES
+
+
+# ---------------------------------------------------------------------------
+# process_analyze
+# ---------------------------------------------------------------------------
+
+
+class TestProcessAnalyze:
+    """Tests for the process_analyze pure function."""
+
+    def test_returns_parts(self):
+        """Analyzer output is returned as ProcessorResult.parts."""
+        raw_parts = [
+            {"summary": "Part 1 summary", "content": "Section A"},
+            {"summary": "Part 2 summary", "content": "Section B"},
+        ]
+        chunks = [
+            {"content": "First section.", "tags": {}, "index": 0},
+            {"content": "Second section.", "tags": {}, "index": 1},
+        ]
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer") as MockAnalyzer:
+            MockAnalyzer.return_value.analyze.return_value = raw_parts
+            result = process_analyze(chunks, analyzer_provider=MagicMock())
+
+        assert result.task_type == "analyze"
+        assert result.parts == raw_parts
+
+    def test_single_part_returned(self):
+        """Single-part result is returned (caller decides to skip)."""
+        raw_parts = [{"summary": "Only part", "content": "All content"}]
+        chunks = [{"content": "Short content.", "tags": {}, "index": 0}]
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer") as MockAnalyzer:
+            MockAnalyzer.return_value.analyze.return_value = raw_parts
+            result = process_analyze(chunks, analyzer_provider=MagicMock())
+
+        assert result.task_type == "analyze"
+        assert len(result.parts) == 1
+
+    def test_passes_guide_context(self):
+        """Guide context is forwarded to the analyzer."""
+        chunks = [{"content": "Content.", "tags": {}, "index": 0}]
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer") as MockAnalyzer:
+            MockAnalyzer.return_value.analyze.return_value = [{"summary": "P1"}]
+            process_analyze(
+                chunks,
+                guide_context="## Tag: topic\nUse these topics",
+                analyzer_provider=MagicMock(),
+            )
+            MockAnalyzer.return_value.analyze.assert_called_once()
+            call_args = MockAnalyzer.return_value.analyze.call_args
+            assert call_args[0][1] == "## Tag: topic\nUse these topics"
+
+    def test_with_classification(self):
+        """Tag specs trigger classification pass."""
+        raw_parts = [
+            {"summary": "Part 1", "content": "I will do X."},
+            {"summary": "Part 2", "content": "The sky is blue."},
+        ]
+        chunks = [{"content": "I will do X. The sky is blue.", "tags": {}, "index": 0}]
+        tag_specs = [{
+            "key": "act",
+            "description": "Speech act type",
+            "prompt": "",
+            "values": [
+                {"value": "commitment", "description": "A promise", "prompt": ""},
+                {"value": "assertion", "description": "A claim", "prompt": ""},
+            ],
+        }]
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer") as MockAnalyzer, \
+             patch("keep.analyzers.TagClassifier") as MockClassifier:
+            MockAnalyzer.return_value.analyze.return_value = raw_parts
+            mock_provider = MagicMock()
+            result = process_analyze(
+                chunks,
+                tag_specs=tag_specs,
+                analyzer_provider=mock_provider,
+                classifier_provider=mock_provider,
+            )
+
+            # Classifier should be called with parts and specs
+            MockClassifier.return_value.classify.assert_called_once_with(raw_parts, tag_specs)
+
+        assert result.task_type == "analyze"
+        assert len(result.parts) == 2
+
+    def test_classification_failure_is_non_fatal(self):
+        """If classifier fails, parts are returned without tags."""
+        raw_parts = [{"summary": "P1"}, {"summary": "P2"}]
+        chunks = [{"content": "Content.", "tags": {}, "index": 0}]
+        tag_specs = [{"key": "act", "description": "...", "prompt": "", "values": []}]
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer") as MockAnalyzer, \
+             patch("keep.analyzers.TagClassifier") as MockClassifier:
+            MockAnalyzer.return_value.analyze.return_value = raw_parts
+            MockClassifier.return_value.classify.side_effect = Exception("crash")
+
+            result = process_analyze(
+                chunks,
+                tag_specs=tag_specs,
+                analyzer_provider=MagicMock(),
+                classifier_provider=MagicMock(),
+            )
+
+        assert result.task_type == "analyze"
+        assert len(result.parts) == 2
+
+    def test_no_classification_without_specs(self):
+        """Without tag_specs, classifier is not invoked."""
+        raw_parts = [{"summary": "P1"}, {"summary": "P2"}]
+        chunks = [{"content": "Content.", "tags": {}, "index": 0}]
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer") as MockAnalyzer, \
+             patch("keep.analyzers.TagClassifier") as MockClassifier:
+            MockAnalyzer.return_value.analyze.return_value = raw_parts
+
+            result = process_analyze(chunks, analyzer_provider=MagicMock())
+
+            MockClassifier.return_value.classify.assert_not_called()
+
+        assert len(result.parts) == 2
+
+    def test_reconstructs_analysis_chunks(self):
+        """Input dicts are converted to AnalysisChunk objects."""
+        chunks = [
+            {"content": "Hello", "tags": {"topic": "greeting"}, "index": 0},
+            {"content": "World", "tags": {}, "index": 1},
+        ]
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer") as MockAnalyzer:
+            MockAnalyzer.return_value.analyze.return_value = [{"summary": "P1"}]
+            process_analyze(chunks, analyzer_provider=MagicMock())
+
+            call_args = MockAnalyzer.return_value.analyze.call_args
+            passed_chunks = call_args[0][0]
+            assert len(passed_chunks) == 2
+            assert passed_chunks[0].content == "Hello"
+            assert passed_chunks[0].tags == {"topic": "greeting"}
+            assert passed_chunks[1].index == 1

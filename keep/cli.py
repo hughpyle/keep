@@ -2300,14 +2300,7 @@ def pending_cmd(
         kp.close()
         return
 
-    by_type = kp.pending_stats_by_type()
-    parts = [f"{count} {ttype}" for ttype, count in sorted(by_type.items())]
-    status_line = f"Queue: {pending_count} items ({', '.join(parts)})"
-    if processing_count:
-        status_line += f" + {processing_count} processing"
-    if failed_count:
-        status_line += f" + {failed_count} failed"
-    typer.echo(status_line, err=True)
+    typer.echo(_queue_status_line(kp, queue_stats), err=True)
 
     # Ensure daemon is running
     if not kp._is_processor_running():
@@ -2320,6 +2313,30 @@ def pending_cmd(
     log_path = kp._store_path / "keep-ops.log"
     _tail_ops_log(log_path, kp)
     kp.close()
+
+
+def _queue_status_line(kp, queue_stats: dict) -> str:
+    """Build a consistent queue status string like '2 queued, 1 processing (1 ocr)'."""
+    pending = queue_stats.get("pending", 0)
+    processing = queue_stats.get("processing", 0)
+    delegated = queue_stats.get("delegated", 0)
+    failed = queue_stats.get("failed", 0)
+
+    by_type = kp.pending_stats_by_type()
+    type_parts = ", ".join(f"{c} {t}" for t, c in sorted(by_type.items()))
+
+    parts = [f"{pending} queued"]
+    if processing:
+        parts.append(f"{processing} processing")
+    if delegated:
+        parts.append(f"{delegated} delegated")
+
+    line = ", ".join(parts)
+    if type_parts:
+        line += f" ({type_parts})"
+    if failed:
+        line += f" + {failed} failed"
+    return line
 
 
 def _tail_ops_log(log_path: Path, kp) -> None:
@@ -2344,17 +2361,17 @@ def _tail_ops_log(log_path: Path, kp) -> None:
                     # No new line — check if daemon is still running
                     idle_checks += 1
                     if idle_checks >= 5 and not kp._is_processor_running():
-                        remaining = kp.pending_count()
-                        if remaining == 0:
+                        stats = kp._pending_queue.stats()
+                        if stats.get("pending", 0) == 0 and stats.get("processing", 0) == 0:
                             typer.echo("Done.", err=True)
                         else:
-                            typer.echo(f"{remaining} items remaining.", err=True)
+                            typer.echo(_queue_status_line(kp, stats), err=True)
                         break
                     time.sleep(0.5)
     except (KeyboardInterrupt, EOFError):
-        remaining = kp.pending_count()
+        stats = kp._pending_queue.stats()
         typer.echo(
-            f"\nDetached. Daemon still running. {remaining} remaining.",
+            f"\nDetached. Daemon still running. {_queue_status_line(kp, stats)}",
             err=True,
         )
 
