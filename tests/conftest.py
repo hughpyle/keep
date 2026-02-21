@@ -510,6 +510,15 @@ class MockPendingSummaryQueue:
         """Count pending items."""
         return len(self._queue)
 
+    def mark_delegated(self, id: str, collection: str, task_type: str, remote_task_id: str) -> None:
+        pass
+
+    def list_delegated(self) -> list:
+        return []
+
+    def count_delegated(self) -> int:
+        return 0
+
     def close(self) -> None:
         self._queue.clear()
 

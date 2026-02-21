@@ -193,6 +193,16 @@ class PendingSummaryQueue:
             )
             self._conn.commit()
 
+        # Add delegation tracking columns (Phase 3)
+        if "remote_task_id" not in columns:
+            self._conn.execute(
+                "ALTER TABLE pending_summaries ADD COLUMN remote_task_id TEXT"
+            )
+            self._conn.execute(
+                "ALTER TABLE pending_summaries ADD COLUMN delegated_at TEXT"
+            )
+            self._conn.commit()
+
     def _recover_stale_claims(self) -> int:
         """Reset items claimed by crashed processors back to pending.
 
@@ -400,6 +410,69 @@ class PendingSummaryQueue:
             self._conn.commit()
             logger.warning("Abandoned %s/%s (%s): %s", collection, id, task_type, error or "max attempts")
 
+    def mark_delegated(
+        self,
+        id: str,
+        collection: str,
+        task_type: str,
+        remote_task_id: str,
+    ) -> None:
+        """Mark an item as delegated to a remote service.
+
+        Transitions from 'processing' to 'delegated' and records the
+        remote task ID for polling.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            self._conn.execute("""
+                UPDATE pending_summaries
+                SET status = 'delegated',
+                    remote_task_id = ?,
+                    delegated_at = ?
+                WHERE id = ? AND collection = ? AND task_type = ?
+            """, (remote_task_id, now, id, collection, task_type))
+            self._conn.commit()
+
+    def list_delegated(self) -> list[PendingSummary]:
+        """List items delegated to a remote service.
+
+        Returns PendingSummary objects with remote_task_id in metadata.
+        """
+        with self._lock:
+            cursor = self._conn.execute("""
+                SELECT id, collection, content, queued_at, attempts,
+                       task_type, metadata, remote_task_id
+                FROM pending_summaries
+                WHERE status = 'delegated'
+                ORDER BY delegated_at ASC
+            """)
+            items = []
+            for row in cursor.fetchall():
+                meta = {}
+                if row[6]:
+                    try:
+                        meta = json.loads(row[6])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                meta["_remote_task_id"] = row[7]
+                items.append(PendingSummary(
+                    id=row[0],
+                    collection=row[1],
+                    content=row[2],
+                    queued_at=row[3],
+                    attempts=row[4],
+                    task_type=row[5] or "summarize",
+                    metadata=meta,
+                ))
+        return items
+
+    def count_delegated(self) -> int:
+        """Count items currently delegated to a remote service."""
+        cursor = self._conn.execute(
+            "SELECT COUNT(*) FROM pending_summaries WHERE status = 'delegated'"
+        )
+        return cursor.fetchone()[0]
+
     def count(self) -> int:
         """Get count of pending items (excludes processing and failed)."""
         cursor = self._conn.execute(
@@ -428,6 +501,7 @@ class PendingSummaryQueue:
         return {
             "pending": by_status.get("pending", 0),
             "processing": by_status.get("processing", 0),
+            "delegated": by_status.get("delegated", 0),
             "failed": by_status.get("failed", 0),
             "total": row[0],
             "collections": row[1],
@@ -438,11 +512,11 @@ class PendingSummaryQueue:
         }
 
     def stats_by_type(self) -> dict[str, int]:
-        """Get count of pending items grouped by task type."""
+        """Get count of active items grouped by task type."""
         cursor = self._conn.execute("""
             SELECT task_type, COUNT(*) as cnt
             FROM pending_summaries
-            WHERE status IN ('pending', 'processing')
+            WHERE status IN ('pending', 'processing', 'delegated')
             GROUP BY task_type
             ORDER BY cnt DESC
         """)

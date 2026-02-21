@@ -12,13 +12,42 @@ via Keeper.apply_result().
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from .api import _content_hash, _content_hash_full
-
 logger = logging.getLogger(__name__)
+
+
+# --- Hash functions (used by OCR processing and document dedup) ---
+
+def _content_hash(content: str) -> str:
+    """Short SHA256 hash of content for change detection."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[-10:]
+
+
+def _content_hash_full(content: str) -> str:
+    """Full SHA256 hash of content for dedup verification."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+# --- Task type constants ---
+
+# Task types that can be delegated to the hosted service
+DELEGATABLE_TASK_TYPES = ("summarize", "ocr")
+
+# Task types that must run locally (need local store access)
+LOCAL_ONLY_TASK_TYPES = ("embed", "reindex")
+
+# MIME type → file extension for OCR temp files
+MIME_TO_EXTENSION = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/tiff": ".tiff",
+    "image/webp": ".webp",
+}
 
 
 @dataclass

@@ -35,6 +35,7 @@ from .protocol import (
     PendingQueueProtocol,
     VectorStoreProtocol,
 )
+from .processors import ProcessorResult, DELEGATABLE_TASK_TYPES
 from .types import Item, filter_non_system_tags, SYSTEM_TAG_PREFIX, INTERNAL_TAGS
 
 try:
@@ -56,4 +57,7 @@ __all__ = [
     "VectorStoreProtocol",
     "PendingQueueProtocol",
     "KeeperProtocol",
+    # Processing pipeline
+    "ProcessorResult",
+    "DELEGATABLE_TASK_TYPES",
 ]

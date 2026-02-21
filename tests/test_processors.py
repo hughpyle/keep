@@ -10,6 +10,11 @@ from keep.processors import (
     process_ocr,
     ocr_image,
     ocr_pdf,
+    _content_hash,
+    _content_hash_full,
+    DELEGATABLE_TASK_TYPES,
+    LOCAL_ONLY_TASK_TYPES,
+    MIME_TO_EXTENSION,
 )
 
 
@@ -226,3 +231,81 @@ class TestOcrPdf:
         result = ocr_pdf(pdf_path, [0], extractor)
 
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Hash functions (moved from api.py in Phase 3 consolidation)
+# ---------------------------------------------------------------------------
+
+
+class TestContentHash:
+    """Tests for _content_hash and _content_hash_full."""
+
+    def test_short_hash_length(self):
+        """Short hash is last 10 chars of SHA256."""
+        h = _content_hash("hello world")
+        assert len(h) == 10
+        assert h.isalnum()
+
+    def test_full_hash_length(self):
+        """Full hash is complete 64-char SHA256."""
+        h = _content_hash_full("hello world")
+        assert len(h) == 64
+        assert h.isalnum()
+
+    def test_short_is_suffix_of_full(self):
+        """Short hash should be the last 10 chars of the full hash."""
+        short = _content_hash("test content")
+        full = _content_hash_full("test content")
+        assert full.endswith(short)
+
+    def test_deterministic(self):
+        """Same input produces same hash."""
+        assert _content_hash("abc") == _content_hash("abc")
+        assert _content_hash_full("abc") == _content_hash_full("abc")
+
+    def test_different_inputs_differ(self):
+        """Different inputs produce different hashes."""
+        assert _content_hash("foo") != _content_hash("bar")
+        assert _content_hash_full("foo") != _content_hash_full("bar")
+
+    def test_backwards_compat_import(self):
+        """Hash functions are still importable from api.py."""
+        from keep.api import _content_hash as api_hash
+        from keep.api import _content_hash_full as api_hash_full
+        assert api_hash("test") == _content_hash("test")
+        assert api_hash_full("test") == _content_hash_full("test")
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+
+class TestConstants:
+    """Tests for task type constants and MIME mapping."""
+
+    def test_delegatable_types(self):
+        assert "summarize" in DELEGATABLE_TASK_TYPES
+        assert "ocr" in DELEGATABLE_TASK_TYPES
+        assert "embed" not in DELEGATABLE_TASK_TYPES
+
+    def test_local_only_types(self):
+        assert "embed" in LOCAL_ONLY_TASK_TYPES
+        assert "reindex" in LOCAL_ONLY_TASK_TYPES
+        assert "summarize" not in LOCAL_ONLY_TASK_TYPES
+
+    def test_no_overlap(self):
+        """Delegatable and local-only should not overlap."""
+        assert set(DELEGATABLE_TASK_TYPES) & set(LOCAL_ONLY_TASK_TYPES) == set()
+
+    def test_mime_to_extension(self):
+        assert MIME_TO_EXTENSION["application/pdf"] == ".pdf"
+        assert MIME_TO_EXTENSION["image/jpeg"] == ".jpg"
+        assert MIME_TO_EXTENSION["image/png"] == ".png"
+
+    def test_exports_from_init(self):
+        """ProcessorResult and DELEGATABLE_TASK_TYPES are exported from keep."""
+        from keep import ProcessorResult as PR, DELEGATABLE_TASK_TYPES as DT
+        assert PR is ProcessorResult
+        assert DT is DELEGATABLE_TASK_TYPES
