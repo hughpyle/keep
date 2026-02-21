@@ -61,8 +61,8 @@ class NullPendingQueue:
         return 0
 
     def stats(self) -> dict:
-        return {"pending": 0, "processing": 0, "failed": 0, "total": 0,
-                "collections": 0, "max_attempts": 0, "oldest": None}
+        return {"pending": 0, "processing": 0, "delegated": 0, "failed": 0,
+                "total": 0, "collections": 0, "max_attempts": 0, "oldest": None}
 
     def stats_by_type(self) -> dict[str, int]:
         return {}
@@ -78,6 +78,17 @@ class NullPendingQueue:
 
     def get_status(self, id: str) -> dict | None:
         return None
+
+    def mark_delegated(
+        self, id: str, collection: str, task_type: str, remote_task_id: str,
+    ) -> None:
+        pass
+
+    def list_delegated(self) -> list:
+        return []
+
+    def count_delegated(self) -> int:
+        return 0
 
     def close(self) -> None:
         pass

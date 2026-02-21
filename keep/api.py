@@ -287,14 +287,8 @@ def _get_env_tags() -> dict[str, str]:
     return tags
 
 
-def _content_hash(content: str) -> str:
-    """Short SHA256 hash of content for change detection."""
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()[-10:]
-
-
-def _content_hash_full(content: str) -> str:
-    """Full SHA256 hash of content for dedup verification."""
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+# Hash functions moved to processors.py — kept here for backwards compatibility
+from .processors import _content_hash, _content_hash_full  # noqa: F401
 
 
 def _user_tags_changed(old_tags: dict, new_tags: dict) -> bool:
@@ -473,6 +467,19 @@ class Keeper:
             ).start()
         else:
             self._reconcile_done.set()
+
+        # --- Task delegation client (for hosted processing) ---
+        self._task_client = None
+        if self._config.remote:
+            from .task_client import TaskClient
+            try:
+                self._task_client = TaskClient(
+                    self._config.remote.api_url,
+                    self._config.remote.api_key,
+                    project=self._config.remote.project,
+                )
+            except Exception as e:
+                logger.warning("Failed to initialize TaskClient: %s", e)
 
         # System doc migration deferred to first write (needs embeddings)
         from .config import SYSTEM_DOCS_VERSION
@@ -3346,8 +3353,10 @@ class Keeper:
         Returns:
             Dict with: processed (int), failed (int), abandoned (int), errors (list)
         """
+        from .processors import DELEGATABLE_TASK_TYPES
+
         items = self._pending_queue.dequeue(limit=limit)
-        result = {"processed": 0, "failed": 0, "abandoned": 0, "errors": []}
+        result = {"processed": 0, "failed": 0, "abandoned": 0, "delegated": 0, "errors": []}
 
         for item in items:
             # Skip items that have failed too many times
@@ -3364,6 +3373,23 @@ class Keeper:
                     item.task_type, item.attempts, item.id
                 )
                 continue
+
+            # Delegate to hosted service if available and appropriate
+            if (
+                self._task_client
+                and item.task_type in DELEGATABLE_TASK_TYPES
+                and not (item.metadata or {}).get("_local_only")
+            ):
+                try:
+                    self._delegate_task(item)
+                    result["delegated"] += 1
+                    continue
+                except Exception as e:
+                    logger.warning(
+                        "Delegation failed for %s %s, falling back to local: %s",
+                        item.task_type, item.id, e,
+                    )
+                    # Fall through to local processing
 
             try:
                 _task_verbs = {
@@ -3442,7 +3468,100 @@ class Keeper:
                 logger.warning("Failed to %s %s (attempt %d): %s",
                              item.task_type, item.id, item.attempts, e)
 
+        # Poll for delegated task results
+        if self._task_client:
+            self._poll_delegated(result)
+
         return result
+
+    def _delegate_task(self, item) -> None:
+        """Submit a task to the hosted service and mark as delegated."""
+        from .task_client import TaskClientError
+
+        content = item.content
+        # For summarize tasks, gather context to include in metadata
+        meta = dict(item.metadata or {})
+
+        if item.task_type == "summarize":
+            doc = self._document_store.get(item.collection, item.id)
+            if doc:
+                user_tags = filter_non_system_tags(doc.tags)
+                if user_tags:
+                    context = self._gather_context(item.id, user_tags)
+                    if context:
+                        meta["context"] = context
+
+        try:
+            remote_task_id = self._task_client.submit(
+                item.task_type, content, meta or None,
+            )
+        except TaskClientError:
+            raise  # Let caller handle fallback
+
+        self._pending_queue.mark_delegated(
+            item.id, item.collection, item.task_type, remote_task_id,
+        )
+        logger.info(
+            "Delegated %s %s → remote task %s",
+            item.task_type, item.id, remote_task_id,
+        )
+
+    def _poll_delegated(self, result: dict) -> None:
+        """Poll for results of delegated tasks and apply them."""
+        from .processors import ProcessorResult
+        from .task_client import TaskClientError
+
+        delegated = self._pending_queue.list_delegated()
+        if not delegated:
+            return
+
+        for item in delegated:
+            remote_task_id = item.metadata.get("_remote_task_id")
+            if not remote_task_id:
+                continue
+
+            try:
+                resp = self._task_client.poll(remote_task_id)
+            except TaskClientError as e:
+                logger.warning("Poll failed for %s: %s", remote_task_id, e)
+                continue
+
+            if resp["status"] == "completed":
+                task_result = resp.get("result") or {}
+                proc_result = ProcessorResult(
+                    task_type=item.task_type,
+                    summary=task_result.get("summary"),
+                    content=task_result.get("content"),
+                    content_hash=task_result.get("content_hash"),
+                    content_hash_full=task_result.get("content_hash_full"),
+                )
+                # Get existing doc tags for apply_result
+                doc = self._document_store.get(item.collection, item.id)
+                existing_tags = doc.tags if doc else None
+                self.apply_result(
+                    item.id, item.collection, proc_result,
+                    existing_tags=existing_tags,
+                )
+                self._pending_queue.complete(item.id, item.collection, item.task_type)
+                try:
+                    self._task_client.acknowledge(remote_task_id)
+                except Exception:
+                    pass  # Non-critical
+                result["processed"] = result.get("processed", 0) + 1
+                logger.info("Delegated %s %s completed", item.task_type, item.id)
+
+            elif resp["status"] == "failed":
+                error = resp.get("error", "Remote processing failed")
+                self._pending_queue.fail(
+                    item.id, item.collection, item.task_type,
+                    error=f"Remote: {error}",
+                )
+                result["failed"] = result.get("failed", 0) + 1
+                logger.warning(
+                    "Delegated %s %s failed: %s",
+                    item.task_type, item.id, error,
+                )
+            # else: still queued/processing — skip, poll again next cycle
 
     def apply_result(self, item_id, collection, result, *, existing_tags=None):
         """Apply a ProcessorResult to the local store."""
@@ -3919,6 +4038,11 @@ class Keeper:
         # Close pending summary queue
         if hasattr(self, '_pending_queue'):
             self._pending_queue.close()
+
+        # Close task delegation client
+        if hasattr(self, '_task_client') and self._task_client is not None:
+            self._task_client.close()
+            self._task_client = None
 
         # Remove ops log handler to avoid handler accumulation
         if hasattr(self, '_ops_log_handler') and self._ops_log_handler:

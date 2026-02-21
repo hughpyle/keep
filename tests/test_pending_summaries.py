@@ -494,3 +494,134 @@ class TestPendingSummaryQueue:
             assert rows["doc2"] == "processing"  # analyze: still claimed
 
             queue.close()
+
+    def test_mark_delegated(self):
+        """mark_delegated should transition to 'delegated' status."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "content", task_type="summarize")
+            items = queue.dequeue(limit=1)
+            assert len(items) == 1
+
+            queue.mark_delegated("doc1", "default", "summarize", "remote-task-abc")
+
+            # Should not be pending or processing
+            assert queue.count() == 0
+            items = queue.dequeue(limit=1)
+            assert len(items) == 0
+
+            # Should appear in delegated list
+            delegated = queue.list_delegated()
+            assert len(delegated) == 1
+            assert delegated[0].id == "doc1"
+            assert delegated[0].metadata["_remote_task_id"] == "remote-task-abc"
+
+            queue.close()
+
+    def test_list_delegated_empty(self):
+        """list_delegated should return empty list when nothing is delegated."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "content")
+
+            assert queue.list_delegated() == []
+            queue.close()
+
+    def test_count_delegated(self):
+        """count_delegated should count only delegated items."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "c1", task_type="summarize")
+            queue.enqueue("doc2", "default", "c2", task_type="ocr")
+            assert queue.count_delegated() == 0
+
+            items = queue.dequeue(limit=2)
+            queue.mark_delegated("doc1", "default", "summarize", "rt-1")
+
+            assert queue.count_delegated() == 1
+
+            queue.mark_delegated("doc2", "default", "ocr", "rt-2")
+            assert queue.count_delegated() == 2
+
+            queue.close()
+
+    def test_complete_delegated(self):
+        """complete() should work on delegated items (same as processing)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "content", task_type="summarize")
+            queue.dequeue(limit=1)
+            queue.mark_delegated("doc1", "default", "summarize", "rt-1")
+            assert queue.count_delegated() == 1
+
+            queue.complete("doc1", "default", "summarize")
+            assert queue.count_delegated() == 0
+
+            queue.close()
+
+    def test_stats_includes_delegated(self):
+        """stats() should include delegated count."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
+
+            queue.enqueue("doc1", "default", "c1", task_type="summarize")
+            queue.enqueue("doc2", "default", "c2", task_type="ocr")
+
+            items = queue.dequeue(limit=1)
+            queue.mark_delegated("doc1", "default", "summarize", "rt-1")
+
+            stats = queue.stats()
+            assert stats["delegated"] == 1
+            assert stats["pending"] == 1
+
+            queue.close()
+
+    def test_migration_adds_delegation_columns(self):
+        """Opening a pre-delegation database should add new columns."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "pending.db"
+
+            # Create database with old schema (no remote_task_id/delegated_at)
+            import sqlite3
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("""
+                CREATE TABLE pending_summaries (
+                    id TEXT NOT NULL,
+                    collection TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    queued_at TEXT NOT NULL,
+                    attempts INTEGER DEFAULT 0,
+                    task_type TEXT DEFAULT 'summarize',
+                    metadata TEXT DEFAULT '{}',
+                    status TEXT DEFAULT 'pending',
+                    claimed_by TEXT,
+                    claimed_at TEXT,
+                    last_error TEXT,
+                    retry_after TEXT,
+                    PRIMARY KEY (id, collection, task_type)
+                )
+            """)
+            conn.execute("""
+                INSERT INTO pending_summaries (id, collection, content, queued_at)
+                VALUES ('old_doc', 'default', 'old content', '2025-01-01T00:00:00')
+            """)
+            conn.commit()
+            conn.close()
+
+            # Open with new code — should migrate
+            queue = PendingSummaryQueue(db_path)
+
+            # Verify new columns exist by using delegation methods
+            items = queue.dequeue(limit=1)
+            assert len(items) == 1
+
+            queue.mark_delegated("old_doc", "default", "summarize", "rt-1")
+            delegated = queue.list_delegated()
+            assert len(delegated) == 1
+
+            queue.close()

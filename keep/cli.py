@@ -2218,17 +2218,26 @@ def pending_cmd(
             pid_path.write_text(str(os.getpid()))
             while not shutdown_requested:
                 result = kp.process_pending(limit=50)
+                delegated = result.get("delegated", 0)
                 _daemon_logger.info(
-                    "Daemon batch: processed=%d failed=%d",
-                    result["processed"], result["failed"],
+                    "Daemon batch: processed=%d failed=%d delegated=%d",
+                    result["processed"], result["failed"], delegated,
                 )
-                if result["processed"] == 0 and result["failed"] == 0:
+                if result["processed"] == 0 and result["failed"] == 0 and delegated == 0:
+                    # Check for outstanding delegated tasks before exiting
+                    has_delegated = hasattr(kp._pending_queue, "count_delegated") and kp._pending_queue.count_delegated() > 0
+                    if has_delegated:
+                        # Delegated tasks outstanding — poll less aggressively
+                        _daemon_logger.info("Waiting for %d delegated tasks", kp._pending_queue.count_delegated())
+                        time.sleep(5)
+                        continue
+
                     # Items may have been enqueued after our last dequeue
                     # (e.g. OCR enqueued while we were processing a summarize).
                     # Wait briefly and check once more before exiting.
                     time.sleep(1)
                     result = kp.process_pending(limit=50)
-                    if result["processed"] == 0 and result["failed"] == 0:
+                    if result["processed"] == 0 and result["failed"] == 0 and result.get("delegated", 0) == 0:
                         break
                     _daemon_logger.info(
                         "Daemon batch (drain): processed=%d failed=%d",
