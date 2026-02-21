@@ -3444,9 +3444,33 @@ class Keeper:
 
         return result
 
+    def apply_result(self, item_id, collection, result, *, existing_tags=None):
+        """Apply a ProcessorResult to the local store."""
+        if result.task_type == "summarize":
+            self._document_store.update_summary(collection, item_id, result.summary)
+            self._store.update_summary(collection, item_id, result.summary)
+
+        elif result.task_type == "ocr":
+            self._document_store.update_summary(collection, item_id, result.summary)
+            self._document_store.update_content_hash(
+                collection, item_id,
+                content_hash=result.content_hash,
+                content_hash_full=result.content_hash_full,
+            )
+            chroma_coll = self._resolve_chroma_collection()
+            embedding = self._get_embedding_provider().embed(result.summary)
+            self._store.upsert(
+                collection=chroma_coll,
+                id=item_id,
+                embedding=embedding,
+                summary=result.summary,
+                tags=casefold_tags_for_index(existing_tags or {}),
+            )
+
     def _process_pending_summarize(self, item) -> None:
         """Process a pending summarization work item."""
-        # Get item's tags for contextual summarization
+        from .processors import process_summarize
+
         doc = self._document_store.get(item.collection, item.id)
         if doc is None:
             # Doc was deleted/moved since enqueue — skip (no point retrying)
@@ -3454,21 +3478,15 @@ class Keeper:
             return
 
         context = None
-        # Filter to user tags (non-system)
         user_tags = filter_non_system_tags(doc.tags)
         if user_tags:
-            context = self._gather_context(
-                item.id, user_tags
-            )
+            context = self._gather_context(item.id, user_tags)
 
-        # Generate real summary (with optional context)
-        summary = self._get_summarization_provider().summarize(
-            item.content, context=context
+        result = process_summarize(
+            item.content, context=context,
+            summarization_provider=self._get_summarization_provider(),
         )
-
-        # Update summary in both stores
-        self._document_store.update_summary(item.collection, item.id, summary)
-        self._store.update_summary(item.collection, item.id, summary)
+        self.apply_result(item.id, item.collection, result)
 
     def _process_pending_embed(self, item) -> None:
         """Process a deferred embedding task (cloud mode).
@@ -3567,40 +3585,13 @@ class Keeper:
 
     def _ocr_image(self, path: Path, content_type: str, extractor) -> str | None:
         """OCR a single image file. Returns extracted text or None."""
-        from .providers.documents import FileDocumentProvider
-
-        text = extractor.extract(str(path), content_type)
-        if not text:
-            return None
-        cleaned = FileDocumentProvider._clean_ocr_text(text)
-        confidence = FileDocumentProvider._estimate_ocr_confidence(cleaned)
-        if confidence < 0.3 or len(cleaned) <= 10:
-            logger.info("Image OCR low confidence (%.2f) for %s", confidence, path.name)
-            return None
-        return cleaned
+        from .processors import ocr_image
+        return ocr_image(path, content_type, extractor)
 
     def _ocr_pdf(self, path: Path, ocr_pages: list[int], extractor) -> str | None:
         """OCR scanned PDF pages and merge with text-layer pages."""
-        from .providers.documents import FileDocumentProvider
-        file_provider = FileDocumentProvider()
-        ocr_results = file_provider._ocr_pdf_pages(path, ocr_pages, extractor=extractor)
-
-        if not ocr_results:
-            return None
-
-        # Re-extract text pages (fast) and merge with OCR
-        from pypdf import PdfReader
-        reader = PdfReader(str(path))
-        text_parts: list[tuple[int, str]] = []
-        ocr_set = set(ocr_pages)
-        for i, page in enumerate(reader.pages):
-            if i not in ocr_set:
-                text = page.extract_text()
-                if text and text.strip():
-                    text_parts.append((i, text))
-        text_parts.extend(ocr_results)
-        text_parts.sort(key=lambda t: t[0])
-        return "\n\n".join(text for _, text in text_parts)
+        from .processors import ocr_pdf
+        return ocr_pdf(path, ocr_pages, extractor)
 
     def _process_pending_ocr(self, item) -> None:
         """Process a pending OCR work item: OCR scanned PDFs or images.
@@ -3611,6 +3602,7 @@ class Keeper:
 
         Then updates the document summary and embedding with the content.
         """
+        from .processors import process_ocr
         meta = item.metadata or {}
         uri = meta.get("uri") or item.id
         ocr_pages = meta.get("ocr_pages", [])
@@ -3663,51 +3655,36 @@ class Keeper:
             logger.info("OCR produced no usable text for %s", uri)
             return
 
-        # Get existing document
+        # Get existing document for context + tags
         doc_coll = item.collection
         existing = self._document_store.get(doc_coll, item.id)
         if not existing:
             return  # deleted since enqueue
 
-        # Generate summary
-        max_len = self._config.max_summary_length
-        if len(full_content) <= max_len:
-            summary = full_content
-        else:
-            try:
-                context = None
-                user_tags = filter_non_system_tags(existing.tags)
-                if user_tags:
-                    context = self._gather_context(item.id, user_tags)
-                summary = self._get_summarization_provider().summarize(
-                    full_content, context=context
-                )
-            except Exception as e:
-                logger.warning("OCR summarization failed for %s: %s", uri, e)
-                summary = full_content[:max_len] + "..."
+        context = None
+        user_tags = filter_non_system_tags(existing.tags)
+        if user_tags:
+            context = self._gather_context(item.id, user_tags)
 
-        new_hash = _content_hash(full_content)
+        # Process (pure function)
+        try:
+            result = process_ocr(
+                full_content,
+                max_summary_length=self._config.max_summary_length,
+                context=context,
+                summarization_provider=self._get_summarization_provider(),
+            )
+        except Exception as e:
+            logger.warning("OCR summarization failed for %s: %s", uri, e)
+            result = process_ocr(
+                full_content,
+                max_summary_length=self._config.max_summary_length,
+                context=context,
+                summarization_provider=None,
+            )
 
-        # Update document store in-place (no version archive —
-        # the placeholder "[Scanned document...]" is not a meaningful
-        # version, just a transient state before OCR completed).
-        self._document_store.update_summary(doc_coll, item.id, summary)
-        self._document_store.update_content_hash(
-            doc_coll, item.id,
-            content_hash=new_hash,
-            content_hash_full=_content_hash_full(full_content),
-        )
-
-        # Update vector store embedding
-        chroma_coll = self._resolve_chroma_collection()
-        embedding = self._get_embedding_provider().embed(summary)
-        self._store.upsert(
-            collection=chroma_coll,
-            id=item.id,
-            embedding=embedding,
-            summary=summary,
-            tags=casefold_tags_for_index(existing.tags),
-        )
+        # Apply to store
+        self.apply_result(item.id, doc_coll, result, existing_tags=existing.tags)
 
         logger.info(
             "OCR complete for %s: %d chars, type=%s",
