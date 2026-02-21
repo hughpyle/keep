@@ -4,6 +4,7 @@ When you run `keep get` or `keep now`, items are displayed in YAML frontmatter f
 
 ## Annotated Example
 
+<!-- tabs -->
 ```yaml
 ---
 id: %a1b2c3d4                                            # 1. Identity
@@ -28,6 +29,43 @@ prev:                                                     # 7. Version navigatio
 ---
 I'll fix the auth bug by Friday                           # 8. Content
 ```
+```json
+{
+  "id": "%a1b2c3d4",                                      // 1. Identity
+  "tags": {                                                // 2. Tags
+    "project": "myapp",
+    "topic": "auth",
+    "act": "commitment",
+    "status": "open"
+  },
+  "score": 0.823,                                          // 3. Relevance
+  "similar": [                                             // 4. Similar items
+    {"id": "%e5f6a7b8", "score": 0.89, "date": "2026-01-14", "summary": "OAuth2 token refresh pattern..."},
+    {"id": "%c9d0e1f2", "score": 0.85, "date": "2026-01-13", "summary": "Token handling notes..."},
+    {"id": ".tag/act",  "score": 0.45, "date": "2026-01-10", "summary": "Speech-act categories..."}
+  ],
+  "meta": {                                                // 5. Meta sections
+    "todo": [
+      {"id": "%d3e4f5a6", "summary": "validate redirect URIs"},
+      {"id": "%b7c8d9e0", "summary": "update auth docs for new flow"}
+    ],
+    "learnings": [
+      {"id": "%f1a2b3c4", "summary": "Token refresh needs clock sync"}
+    ]
+  },
+  "parts": [                                               // 6. Parts (structural)
+    {"ref": "@P{1}", "summary": "OAuth2 Flow Design (§1, pp.1-7)"},
+    {"ref": "@P{2}", "summary": "Token Storage Strategy (§2, pp.8-13)"},
+    {"ref": "@P{3}", "summary": "Session Management (§3, pp.14-18)"}
+  ],
+  "prev": [                                                // 7. Version navigation
+    {"ref": "@V{1}", "date": "2026-01-14", "summary": "Previous version of this item..."},
+    {"ref": "@V{2}", "date": "2026-01-13", "summary": "Older version..."}
+  ],
+  "content": "I'll fix the auth bug by Friday"             // 8. Content
+}
+```
+<!-- /tabs -->
 
 ## Sections
 
