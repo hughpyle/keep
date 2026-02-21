@@ -259,6 +259,171 @@ class TestOcrPdfPages:
 
 
 # ---------------------------------------------------------------------------
+# Image OCR
+# ---------------------------------------------------------------------------
+
+
+class TestImageOcr:
+    """Test OCR for image files (PNG, JPG, etc.)."""
+
+    def test_fetch_sets_ocr_pages_for_image(self, tmp_path, monkeypatch):
+        """fetch() signals OCR needed for image files."""
+        from keep.providers.documents import FileDocumentProvider
+
+        provider = FileDocumentProvider()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+        # Create a minimal PNG (1x1 pixel)
+        from PIL import Image
+        img = Image.new("RGB", (100, 100), color="white")
+        img_path = tmp_path / "receipt.png"
+        img.save(img_path)
+
+        doc = provider.fetch(f"file://{img_path}")
+        assert doc.metadata.get("_ocr_pages") == [0]
+        assert doc.content_type == "image/png"
+
+    def test_fetch_sets_ocr_pages_for_jpeg(self, tmp_path, monkeypatch):
+        """fetch() signals OCR for JPEG images."""
+        from keep.providers.documents import FileDocumentProvider
+
+        provider = FileDocumentProvider()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+        from PIL import Image
+        img = Image.new("RGB", (100, 100), color="white")
+        img_path = tmp_path / "photo.jpg"
+        img.save(img_path)
+
+        doc = provider.fetch(f"file://{img_path}")
+        assert doc.metadata.get("_ocr_pages") == [0]
+        assert doc.content_type == "image/jpeg"
+
+    def test_image_metadata_still_in_content(self, tmp_path, monkeypatch):
+        """Image EXIF metadata is still extracted as content."""
+        from keep.providers.documents import FileDocumentProvider
+
+        provider = FileDocumentProvider()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+        from PIL import Image
+        img = Image.new("RGB", (200, 300), color="white")
+        img_path = tmp_path / "test.png"
+        img.save(img_path)
+
+        doc = provider.fetch(f"file://{img_path}")
+        assert "200x300" in doc.content
+
+    def test_ocr_image_calls_extractor(self, tmp_path, mock_providers):
+        """_ocr_image calls the extractor and cleans the result."""
+        from keep.api import Keeper
+
+        kp = Keeper(str(tmp_path / "store"))
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract.return_value = "Total: $42.99\nThank you for your purchase"
+
+        result = kp._ocr_image(tmp_path / "receipt.png", "image/png", mock_extractor)
+        assert result is not None
+        assert "42.99" in result
+        mock_extractor.extract.assert_called_once_with(
+            str(tmp_path / "receipt.png"), "image/png"
+        )
+        kp.close()
+
+    def test_ocr_image_rejects_garbage(self, tmp_path, mock_providers):
+        """_ocr_image rejects low-confidence OCR output."""
+        from keep.api import Keeper
+
+        kp = Keeper(str(tmp_path / "store"))
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract.return_value = "!@#$%^&*()"
+
+        result = kp._ocr_image(tmp_path / "garbage.png", "image/png", mock_extractor)
+        assert result is None
+        kp.close()
+
+    def test_ocr_image_returns_none_on_empty(self, tmp_path, mock_providers):
+        """_ocr_image returns None when extractor returns nothing."""
+        from keep.api import Keeper
+
+        kp = Keeper(str(tmp_path / "store"))
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract.return_value = None
+
+        result = kp._ocr_image(tmp_path / "blank.png", "image/png", mock_extractor)
+        assert result is None
+        kp.close()
+
+    def test_process_pending_ocr_dispatches_image(self, tmp_path, mock_providers):
+        """_process_pending_ocr routes to _ocr_image for image content types."""
+        from keep.api import Keeper
+
+        kp = Keeper(str(tmp_path / "store"))
+
+        # Create a test image
+        from PIL import Image
+        img = Image.new("RGB", (100, 100), color="white")
+        img_path = tmp_path / "receipt.png"
+        img.save(img_path)
+
+        # Mock _ocr_image to verify dispatch without needing full store updates
+        kp._content_extractor = MagicMock()
+        kp._ocr_image = MagicMock(return_value=None)
+
+        item = MagicMock()
+        item.id = f"file://{img_path}"
+        item.collection = kp._resolve_doc_collection()
+        item.metadata = {
+            "uri": f"file://{img_path}",
+            "ocr_pages": [0],
+            "content_type": "image/png",
+        }
+
+        # tmp_path is outside $HOME; patch Path.home so the boundary check passes
+        with patch("keep.api.Path.home", return_value=tmp_path):
+            kp._process_pending_ocr(item)
+
+        # Verify _ocr_image was called (not _ocr_pdf)
+        kp._ocr_image.assert_called_once()
+        call_args = kp._ocr_image.call_args[0]
+        assert call_args[1] == "image/png"
+        kp.close()
+
+    def test_process_pending_ocr_dispatches_pdf(self, tmp_path, mock_providers):
+        """_process_pending_ocr routes to _ocr_pdf for PDFs."""
+        from keep.api import Keeper
+
+        kp = Keeper(str(tmp_path / "store"))
+
+        # Create a dummy PDF path (won't be read since we mock _ocr_pdf)
+        pdf_path = tmp_path / "doc.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+
+        kp._content_extractor = MagicMock()
+        kp._ocr_pdf = MagicMock(return_value=None)
+
+        item = MagicMock()
+        item.id = f"file://{pdf_path}"
+        item.collection = kp._resolve_doc_collection()
+        item.metadata = {
+            "uri": f"file://{pdf_path}",
+            "ocr_pages": [0, 1],
+            "content_type": "application/pdf",
+        }
+
+        # tmp_path is outside $HOME; patch Path.home so the boundary check passes
+        with patch("keep.api.Path.home", return_value=tmp_path):
+            kp._process_pending_ocr(item)
+
+        # Verify _ocr_pdf was called (not _ocr_image)
+        kp._ocr_pdf.assert_called_once()
+        kp.close()
+
+
+# ---------------------------------------------------------------------------
 # ContentExtractor protocol + registry
 # ---------------------------------------------------------------------------
 

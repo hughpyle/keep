@@ -1587,14 +1587,18 @@ class Keeper:
                 force=force,
             )
 
-            # Enqueue background OCR for scanned PDF pages
+            # Enqueue background OCR for scanned PDFs and images
             ocr_pages = (doc.metadata or {}).get("_ocr_pages")
             if ocr_pages and self._config.content_extractor:
                 doc_coll = self._resolve_doc_collection()
                 self._pending_queue.enqueue(
                     uri, doc_coll, "",
                     task_type="ocr",
-                    metadata={"uri": uri, "ocr_pages": ocr_pages},
+                    metadata={
+                        "uri": uri,
+                        "ocr_pages": ocr_pages,
+                        "content_type": doc.content_type,
+                    },
                 )
                 self._spawn_processor()
                 logger.info(
@@ -3561,38 +3565,28 @@ class Keeper:
                 tags=casefold_tags_for_index(doc.tags),
             )
 
-    def _process_pending_ocr(self, item) -> None:
-        """Process a pending OCR work item: OCR scanned PDF pages.
+    def _ocr_image(self, path: Path, content_type: str, extractor) -> str | None:
+        """OCR a single image file. Returns extracted text or None."""
+        from .providers.documents import FileDocumentProvider
 
-        Renders blank PDF pages to images, runs OCR via content extractor,
-        merges with text-layer pages, then updates the document summary
-        and embedding with the full content.
-        """
-        meta = item.metadata or {}
-        uri = meta.get("uri") or item.id
-        ocr_pages = meta.get("ocr_pages", [])
+        text = extractor.extract(str(path), content_type)
+        if not text:
+            return None
+        cleaned = FileDocumentProvider._clean_ocr_text(text)
+        confidence = FileDocumentProvider._estimate_ocr_confidence(cleaned)
+        if confidence < 0.3 or len(cleaned) <= 10:
+            logger.info("Image OCR low confidence (%.2f) for %s", confidence, path.name)
+            return None
+        return cleaned
 
-        if not ocr_pages:
-            return
-
-        # Load content extractor
-        extractor = self._get_content_extractor()
-        if not extractor:
-            raise IOError("No content extractor configured for OCR")
-
-        path = Path(uri.removeprefix("file://")).resolve()
-        if not path.exists():
-            logger.warning("File no longer exists for OCR: %s", path)
-            return
-
-        # OCR the blank pages
+    def _ocr_pdf(self, path: Path, ocr_pages: list[int], extractor) -> str | None:
+        """OCR scanned PDF pages and merge with text-layer pages."""
         from .providers.documents import FileDocumentProvider
         file_provider = FileDocumentProvider()
         ocr_results = file_provider._ocr_pdf_pages(path, ocr_pages, extractor=extractor)
 
         if not ocr_results:
-            logger.info("OCR produced no usable text for %s", uri)
-            return
+            return None
 
         # Re-extract text pages (fast) and merge with OCR
         from pypdf import PdfReader
@@ -3606,9 +3600,67 @@ class Keeper:
                     text_parts.append((i, text))
         text_parts.extend(ocr_results)
         text_parts.sort(key=lambda t: t[0])
-        full_content = "\n\n".join(text for _, text in text_parts)
+        return "\n\n".join(text for _, text in text_parts)
 
-        if not full_content.strip():
+    def _process_pending_ocr(self, item) -> None:
+        """Process a pending OCR work item: OCR scanned PDFs or images.
+
+        For PDFs: renders blank pages to images, runs OCR, merges with
+        text-layer pages.
+        For images: runs OCR directly on the image file.
+
+        Then updates the document summary and embedding with the content.
+        """
+        meta = item.metadata or {}
+        uri = meta.get("uri") or item.id
+        ocr_pages = meta.get("ocr_pages", [])
+        content_type = meta.get("content_type", "")
+
+        if not ocr_pages:
+            return
+
+        # Cap page count to prevent unbounded OCR on huge documents
+        MAX_OCR_PAGES = 1000
+        if len(ocr_pages) > MAX_OCR_PAGES:
+            logger.warning(
+                "OCR page count %d exceeds limit %d for %s — truncating",
+                len(ocr_pages), MAX_OCR_PAGES, uri,
+            )
+            ocr_pages = ocr_pages[:MAX_OCR_PAGES]
+
+        # Load content extractor
+        extractor = self._get_content_extractor()
+        if not extractor:
+            raise IOError("No content extractor configured for OCR")
+
+        path = Path(uri.removeprefix("file://")).resolve()
+        if not path.exists():
+            logger.warning("File no longer exists for OCR: %s", path)
+            return
+
+        # Re-validate path is within home directory (may differ from enqueue time)
+        home = Path.home().resolve()
+        if not path.is_relative_to(home):
+            logger.warning("OCR path outside home directory, skipping: %s", path)
+            return
+
+        is_image = content_type.startswith("image/") if content_type else False
+        # Fallback: detect from extension if content_type not in metadata
+        if not content_type:
+            from .providers.documents import FileDocumentProvider
+            ext = path.suffix.lower()
+            ct = FileDocumentProvider.EXTENSION_TYPES.get(ext, "")
+            is_image = ct.startswith("image/")
+            if is_image:
+                content_type = ct
+
+        if is_image:
+            full_content = self._ocr_image(path, content_type, extractor)
+        else:
+            full_content = self._ocr_pdf(path, ocr_pages, extractor)
+
+        if not full_content or not full_content.strip():
+            logger.info("OCR produced no usable text for %s", uri)
             return
 
         # Get existing document
@@ -3658,8 +3710,8 @@ class Keeper:
         )
 
         logger.info(
-            "OCR complete for %s: %d/%d pages, %d chars",
-            uri, len(ocr_results), len(ocr_pages), len(full_content),
+            "OCR complete for %s: %d chars, type=%s",
+            uri, len(full_content), content_type or "pdf",
         )
 
     def pending_count(self) -> int:
