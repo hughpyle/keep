@@ -2506,6 +2506,35 @@ class Keeper:
 
         return self.get(id)
 
+    def delete_version(self, id: str, offset: int) -> bool:
+        """
+        Delete a specific archived version by offset.
+
+        Offset semantics match get_version: 1=previous, 2=two ago, etc.
+        Offset 0 is the current version — use revert() for that.
+
+        Returns True if the version was found and deleted.
+        """
+        validate_id(id)
+        if offset < 1:
+            raise ValueError("Use revert() to delete the current version (offset 0)")
+        doc_coll = self._resolve_doc_collection()
+        chroma_coll = self._resolve_chroma_collection()
+
+        # Resolve offset → internal version number
+        version_info = self._document_store.get_version(doc_coll, id, offset)
+        if version_info is None:
+            return False
+
+        # Delete from SQLite
+        self._document_store.delete_version(doc_coll, id, version_info.version)
+
+        # Delete from ChromaDB
+        versioned_chroma_id = f"{id}@v{version_info.version}"
+        self._store.delete_entries(chroma_coll, [versioned_chroma_id])
+
+        return True
+
     # -------------------------------------------------------------------------
     # Current Working Context (Now)
     # -------------------------------------------------------------------------

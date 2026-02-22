@@ -1747,16 +1747,17 @@ def del_cmd(
     store: StoreOption = None,
 ):
     """
-    Delete the current version of note(s).
+    Delete the current version of note(s), or a specific version.
 
-    If a note has version history, reverts to the previous version.
-    If no history exists, removes the note completely.
+    Without @V{N}: reverts to the previous version (or fully deletes if no history).
+    With @V{N}: deletes that specific archived version; other versions remain.
 
     \b
     Examples:
         keep del %abc123def456        # Remove a text note
         keep del %abc123 %def456      # Remove multiple notes
         keep del now                  # Revert now to previous
+        keep del 'now@V{3}'          # Delete version 3 only
     """
     kp = _get_keeper(store)
     had_errors = False
@@ -1768,23 +1769,41 @@ def del_cmd(
             had_errors = True
             continue
 
-        item = kp.get(one_id)
-        if item is None:
-            typer.echo(f"Not found: {one_id}", err=True)
-            had_errors = True
-            continue
+        # Parse @V{N} suffix
+        version_offset = None
+        actual_id = one_id
+        match = VERSION_SUFFIX_PATTERN.search(one_id)
+        if match:
+            version_offset = int(match.group(1))
+            actual_id = one_id[:match.start()]
 
-        restored = kp.revert(one_id)
-
-        if restored is None:
-            # Fully deleted
-            typer.echo(_format_summary_line(item))
+        if version_offset is not None and version_offset > 0:
+            # Delete a specific archived version
+            deleted = kp.delete_version(actual_id, version_offset)
+            if not deleted:
+                typer.echo(f"Version not found: {one_id}", err=True)
+                had_errors = True
+            else:
+                typer.echo(f"Deleted {one_id}")
         else:
-            # Reverted — show the restored version with similar items
-            ctx = kp.get_context(
-                restored.id, include_meta=False, include_parts=False,
-            )
-            typer.echo(render_context(ctx, as_json=_get_json_output()))
+            # Original behavior: revert current (or delete if no history)
+            item = kp.get(actual_id)
+            if item is None:
+                typer.echo(f"Not found: {actual_id}", err=True)
+                had_errors = True
+                continue
+
+            restored = kp.revert(actual_id)
+
+            if restored is None:
+                # Fully deleted
+                typer.echo(_format_summary_line(item))
+            else:
+                # Reverted — show the restored version with similar items
+                ctx = kp.get_context(
+                    restored.id, include_meta=False, include_parts=False,
+                )
+                typer.echo(render_context(ctx, as_json=_get_json_output()))
 
     if had_errors:
         raise typer.Exit(1)
