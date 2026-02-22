@@ -1462,6 +1462,47 @@ class DocumentStore:
                 id=row["id"],
                 collection=row["collection"],
                 summary=row["summary"],
+                tags=json.loads(row["tags_json"]) if row["tags_json"] else {},
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                content_hash=row["content_hash"],
+                accessed_at=row["accessed_at"],
+            ))
+        return results
+
+    def query_by_id_glob(
+        self,
+        collection: str,
+        pattern: str,
+    ) -> list[DocumentRecord]:
+        """
+        Query documents by ID glob pattern.
+
+        Supports * (any chars) and ? (single char).
+
+        Args:
+            collection: Collection name
+            pattern: Glob pattern (e.g., "session-*", "*auth*")
+
+        Returns:
+            List of matching DocumentRecords
+        """
+        # Escape SQL LIKE special chars first, then convert glob to LIKE
+        escaped = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like_pattern = escaped.replace("*", "%").replace("?", "_")
+        cursor = self._conn.execute("""
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
+            FROM documents
+            WHERE collection = ? AND id LIKE ? ESCAPE '\\'
+            ORDER BY id
+        """, (collection, like_pattern))
+
+        results = []
+        for row in cursor:
+            results.append(DocumentRecord(
+                id=row["id"],
+                collection=row["collection"],
+                summary=row["summary"],
                 tags=json.loads(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],

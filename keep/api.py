@@ -3221,9 +3221,12 @@ class Keeper:
                 items = [i for i in items if extra_key in i.tags]
 
         elif prefix is not None:
-            # ID prefix query — match IDs starting with the given string.
-            # Also look for children under prefix/ (e.g. ".tag" finds ".tag/foo").
-            records = self._document_store.query_by_id_prefix(doc_coll, prefix)
+            # ID pattern query — glob if pattern contains * or ?, else prefix.
+            if "*" in prefix or "?" in prefix:
+                records = self._document_store.query_by_id_glob(doc_coll, prefix)
+            else:
+                # Prefix match — also finds children (e.g. ".tag" finds ".tag/foo").
+                records = self._document_store.query_by_id_prefix(doc_coll, prefix)
             items = [_record_to_item(rec) for rec in records]
 
         else:

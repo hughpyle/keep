@@ -460,6 +460,10 @@ class DocumentStoreProtocol(Protocol):
         self, collection: str, prefix: str
     ) -> list[DocumentRecord]: ...
 
+    def query_by_id_glob(
+        self, collection: str, pattern: str
+    ) -> list[DocumentRecord]: ...
+
     def list_distinct_tag_keys(self, collection: str) -> list[str]: ...
 
     def list_distinct_tag_values(

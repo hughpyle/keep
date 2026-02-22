@@ -770,7 +770,7 @@ def list_recent(
     store: StoreOption = None,
     limit: LimitOption = 10,
     prefix: Annotated[Optional[str], typer.Argument(
-        help="ID prefix filter (e.g. '.tag' or '.meta')"
+        help="ID filter — prefix (e.g. '.tag') or glob (e.g. 'session-*', '*auth*')"
     )] = None,
     tag: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
@@ -811,6 +811,8 @@ def list_recent(
         keep list                      # Recent notes (by update time)
         keep list .tag                 # All .tag/* system docs
         keep list .meta                # All .meta/* system docs
+        keep list session-*            # All session-* items (glob)
+        keep list *auth*               # Items with 'auth' anywhere in ID
         keep list --sort accessed      # Recent notes (by access time)
         keep list --tag foo            # Notes with tag 'foo' (any value)
         keep list --tag foo=bar        # Notes with tag foo=bar
