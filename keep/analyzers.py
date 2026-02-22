@@ -163,6 +163,12 @@ Example: "User spent $15 on a car wash on February 3rd."
 Example: "User's grandmother is 75 years old and still energetic."
 
 No preamble, no numbering. If no user facts found: EMPTY""",
+    "conversation-v2": """Extract key facts from this conversation. Include facts stated by BOTH the user AND the assistant.
+
+One sentence per fact. Be specific: include names, numbers, dates, places.
+Only extract facts from the conversation below. Do NOT repeat these instructions.
+
+No preamble, no numbering. If no facts: EMPTY""",
 }
 
 DEFAULT_PROMPT = "auto"
