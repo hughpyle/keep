@@ -38,7 +38,7 @@ Invalid value for constrained tag 'act': 'blurb'. Valid values: assertion, asses
 You can extend constrained tags by creating new sub-documents:
 
 ```bash
-keep remember "Active work in progress." --id .tag/status/working
+keep put "Active work in progress." --id .tag/status/working
 # Now status=working is accepted
 ```
 
@@ -208,7 +208,7 @@ Create a new prompt doc with match rules targeting specific tags:
 
 ```bash
 # Custom summarization for code documentation
-keep remember "$(cat <<'EOF'
+keep put "$(cat <<'EOF'
 topic=code
 
 ## Prompt
@@ -224,7 +224,7 @@ Match rules can combine multiple tags for higher specificity:
 
 ```bash
 # Prompt for meeting notes in a specific project
-keep remember "$(cat <<'EOF'
+keep put "$(cat <<'EOF'
 type=meeting project=myapp
 
 ## Prompt

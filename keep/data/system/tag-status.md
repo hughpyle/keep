@@ -26,7 +26,7 @@ The normal flow: `open` → `fulfilled`. `blocked` is a sub-state of open — th
 The `status` tag is constrained — only values with a sub-doc at `.tag/status/VALUE` are accepted. To add domain-specific values (e.g. `working`, `broken`, `needs_review`), create a sub-doc:
 
 ```bash
-keep remember "Active work in progress on this item." --id .tag/status/working
+keep put "Active work in progress on this item." --id .tag/status/working
 ```
 
 The sub-doc's existence makes the value valid. Its content serves as documentation.
