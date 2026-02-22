@@ -381,6 +381,11 @@ def check_and_install(config: "StoreConfig") -> None:
                     f"keep: {verb} {' and '.join(actions)} for {key} ({tool_dir}/)",
                     file=sys.stderr,
                 )
+                if key == "openclaw" and "plugin" in actions:
+                    print(
+                        "keep: run 'openclaw gateway restart' to load updated plugin",
+                        file=sys.stderr,
+                    )
             config.integrations[key] = HOOKS_VERSION
         else:
             # Detected but no installer

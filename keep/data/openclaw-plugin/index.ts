@@ -62,18 +62,31 @@ export default function register(api: any) {
       const sid = ctx?.sessionId || ctx?.sessionKey;
       const sessionTag = sid ? `-t session=${sid}` : "";
 
+      // Separate conversation metadata from user text.
+      // OpenClaw prompts may start with "Conversation info..." fenced block.
+      // We index only the user text (+ timestamp) but return both to the agent.
+      let convInfo = "";
+      let userText = event.prompt || "";
+      const fenceEnd = userText.indexOf("```\n\n");
+      if (fenceEnd !== -1 && userText.startsWith("Conversation info")) {
+        convInfo = userText.slice(0, fenceEnd + 4); // includes closing fence
+        userText = userText.slice(fenceEnd + 5);    // after fence + blank line
+      }
+
       let now: string | null;
-      if (event.prompt) {
-        const truncated = event.prompt.slice(0, 500);
+      const trimmed = userText.trim();
+      if (trimmed) {
+        const truncated = trimmed.slice(0, 500);
         // Update + get context in one call (set_now outputs context with similar/meta)
-        now = runKeep(`now -n 10 ${sessionTag}`, `User prompt: ${truncated}`);
+        now = runKeep(`now -n 10 ${sessionTag}`, truncated);
       } else {
         now = runKeep("now -n 10");
       }
       if (!now) return;
 
+      const prefix = convInfo ? `${convInfo}\n\n` : "";
       return {
-        prependContext: `\`keep now\`:\n${now}`,
+        prependContext: `${prefix}\`keep now\`:\n${now}`,
       };
     },
     { priority: 10 },
