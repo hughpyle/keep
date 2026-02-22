@@ -32,6 +32,14 @@ The `type` tag describes the *content*. The `act` tag describes the *speech act*
 
 A single item might be `type=learning act=assessment` — a learning that takes the form of an evaluation.
 
+## Injection
+
+When `analyze --tags type` is used, the full text of this doc is prepended to the analysis prompt as guide context. This tag is unconstrained — values are free-form, but the table above lists the standard vocabulary.
+
+## Prompt
+
+Classify what kind of content this is. Use one of the standard values when applicable: `learning` (hard-won insight), `breakdown` (failure/revealed assumption), `gotcha` (known trap), `reference` (indexed document), `teaching` (source material), `meeting` (conversation notes), `pattern` (recurring structure), `possibility` (exploration of options), `decision` (choice with reasoning).
+
 ## Examples
 
 ```bash

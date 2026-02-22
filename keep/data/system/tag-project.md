@@ -22,6 +22,14 @@ The `project` tag marks an item as belonging to a specific, bounded piece of wor
 
 An item often has both: `-t project=myapp -t topic=auth` means "authentication work within the myapp project." Knowledge tagged with `topic` only persists across projects.
 
+## Injection
+
+When `analyze --tags project` is used, the full text of this doc is prepended to the analysis prompt as guide context. This tag is unconstrained — values are free-form.
+
+## Prompt
+
+Identify the bounded work context this belongs to. Projects have a beginning, end, and scope. Use short, lowercase, hyphenated names (e.g., `myapp`, `api-v2`, `q1-migration`).
+
 ## Examples
 
 ```bash

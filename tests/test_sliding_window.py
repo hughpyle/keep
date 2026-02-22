@@ -33,7 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from keep.providers.base import AnalysisChunk
-from keep.analyzers import SlidingWindowAnalyzer, PROMPTS, get_budget_for_model
+from keep.analyzers import SlidingWindowAnalyzer, DEFAULT_ANALYSIS_PROMPT, get_budget_for_model
 
 LONGMEM_DATA = Path(__file__).parent.parent.parent / "keepmem" / "bench" / "longmemeval" / "data" / "longmemeval_oracle.json"
 
@@ -172,17 +172,18 @@ def get_file_chunks(file_path):
     return [AnalysisChunk(content=p, tags={}, index=i) for i, p in enumerate(merged)]
 
 
-def run_analysis(chunks, prompt_name, provider_name, model, budget):
+def run_analysis(chunks, prompt_text, provider_name, model, budget):
     """Run sliding-window analysis and display results."""
     provider = make_provider(provider_name, model)
 
     analyzer = SlidingWindowAnalyzer(
         provider=provider,
         context_budget=budget,
-        prompt=prompt_name,
+        prompt=prompt_text,
     )
 
-    print(f"\nRunning analysis ({prompt_name})...")
+    label = "custom" if prompt_text else "default"
+    print(f"\nRunning analysis ({label})...")
     t0 = time.time()
     parts = analyzer.analyze(chunks)
     elapsed = time.time() - t0
@@ -196,18 +197,18 @@ def run_analysis(chunks, prompt_name, provider_name, model, budget):
 
     print(f"\n{'=' * 70}")
     print(f"{len(parts)} parts from {len(chunks)} chunks in {elapsed:.1f}s")
-    print(f"Provider: {provider_name}, Model: {model}, Prompt: {prompt_name}, Budget: {budget}")
+    print(f"Provider: {provider_name}, Model: {model}, Budget: {budget}")
     return parts
 
 
 def main():
-    prompt_names = list(PROMPTS.keys())
     provider_names = list(DEFAULT_MODELS.keys())
 
     parser = argparse.ArgumentParser(description="Test sliding-window analysis")
     parser.add_argument("--provider", choices=provider_names, default="ollama",
                         help="LLM provider (default: ollama)")
-    parser.add_argument("--prompt", choices=prompt_names, default="temporal-v2")
+    parser.add_argument("--prompt", default=None,
+                        help="Custom prompt text (default: built-in analysis prompt)")
     parser.add_argument("--source", choices=["now", "longmem", "file"], default="now")
     parser.add_argument("--versions", type=int, default=10, help="Versions of 'now' (default: 10)")
     parser.add_argument("--item", type=int, default=0, help="LongMem item index (default: 0)")
@@ -223,7 +224,7 @@ def main():
 
     print(f"Provider: {args.provider}")
     print(f"Model: {model}")
-    print(f"Prompt: {args.prompt}")
+    print(f"Prompt: {'custom' if args.prompt else 'default'}")
     print(f"Context budget: {budget} tokens")
     print(f"Source: {args.source}")
     print("=" * 70)

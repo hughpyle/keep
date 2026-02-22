@@ -350,26 +350,6 @@ class TestSummarizationPrompts:
         )
         assert _is_conversation(doc) is False
 
-    def test_get_system_prompt_varies_by_content(self):
-        """get_summarization_system_prompt returns different prompts for docs vs conversations."""
-        from keep.providers.base import (
-            get_summarization_system_prompt,
-            SUMMARIZATION_SYSTEM_PROMPT,
-            CONVERSATION_SYSTEM_PROMPT,
-        )
-        doc = "Redis is a fast in-memory database."
-        chat = (
-            "User: I need help.\nAssistant: Sure!\n"
-            "User: My car broke down.\nAssistant: When?\n"
-        )
-        assert get_summarization_system_prompt(doc) == SUMMARIZATION_SYSTEM_PROMPT
-        assert get_summarization_system_prompt(chat) == CONVERSATION_SYSTEM_PROMPT
-
-    def test_conversation_prompt_does_not_mention_keep(self):
-        """Conversation system prompt must not prime the LLM with keep's identity."""
-        from keep.providers.base import CONVERSATION_SYSTEM_PROMPT
-        assert "keep" not in CONVERSATION_SYSTEM_PROMPT.lower().split()
-
     def test_build_prompt_conversation_with_context(self):
         """With context, conversation content gets conversation-specific framing."""
         from keep.providers.base import build_summarization_prompt

@@ -10,8 +10,9 @@ Requires: pip install mlx-lm mlx
 from .base import (
     get_registry,
     build_summarization_prompt,
-    get_summarization_system_prompt,
-    strip_summary_preamble,
+    SUMMARIZATION_SYSTEM_PROMPT,
+    TAGGING_SYSTEM_PROMPT,
+    parse_tag_json,
 )
 
 
@@ -140,47 +141,11 @@ class MLXSummarization:
         context: str | None = None,
     ) -> str:
         """Generate a summary using MLX-LM."""
-        from mlx_lm import generate
-
-        # Truncate very long content to fit context window
-        # Most models have 4k-8k context, leave room for prompt and response
-        max_content_chars = 12000
-        truncated = content[:max_content_chars] if len(content) > max_content_chars else content
-
-        # Build prompt with optional context
-        user_content = build_summarization_prompt(truncated, context)
-
-        # Auto-detect content type and select appropriate system prompt
-        system = get_summarization_system_prompt(truncated) if not context else (
-            "You are a helpful assistant that summarizes content. "
-            "Follow the instructions in the user message."
-        )
-
-        # Format as chat (works with instruction-tuned models)
-        if hasattr(self._tokenizer, "apply_chat_template"):
-            messages = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ]
-            prompt = self._tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-        else:
-            # Fallback for models without chat template
-            prompt = f"{system}\n\n{user_content}\n\nSummary:"
-
-        # Generate
-        response = generate(
-            self._model,
-            self._tokenizer,
-            prompt=prompt,
-            max_tokens=self.max_tokens,
-            verbose=False,
-        )
-
-        return strip_summary_preamble(response.strip())
+        # MLX models have smaller context windows (4k-8k)
+        truncated = content[:12000] if len(content) > 12000 else content
+        prompt = build_summarization_prompt(truncated, context)
+        result = self.generate(SUMMARIZATION_SYSTEM_PROMPT, prompt)
+        return result if result else truncated[:max_length]
 
     def generate(
         self,
@@ -222,17 +187,6 @@ class MLXTagging:
     Requires: pip install mlx-lm
     """
     
-    SYSTEM_PROMPT = """Analyze the document and generate relevant tags as a JSON object.
-
-Generate tags for these categories when applicable:
-- content_type: The type of content (e.g., "documentation", "code", "article", "config")
-- language: Programming language if code (e.g., "python", "javascript")
-- domain: Subject domain (e.g., "authentication", "database", "api", "testing")
-- framework: Framework or library if relevant (e.g., "react", "django", "fastapi")
-
-Only include tags that clearly apply. Values should be lowercase.
-Respond with ONLY a JSON object, no explanation or other text."""
-    
     def __init__(
         self,
         model: str = "mlx-community/Llama-3.2-3B-Instruct-4bit",
@@ -273,49 +227,26 @@ Respond with ONLY a JSON object, no explanation or other text."""
 
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using MLX-LM."""
-        import json
         from mlx_lm import generate
-        
-        # Truncate content
-        max_content_chars = 8000
-        truncated = content[:max_content_chars] if len(content) > max_content_chars else content
-        
-        # Format prompt
+
+        truncated = content[:8000] if len(content) > 8000 else content
+
         if hasattr(self._tokenizer, "apply_chat_template"):
             messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": TAGGING_SYSTEM_PROMPT},
                 {"role": "user", "content": truncated},
             ]
             prompt = self._tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
+                messages, tokenize=False, add_generation_prompt=True,
             )
         else:
-            prompt = f"{self.SYSTEM_PROMPT}\n\nDocument:\n{truncated}\n\nJSON:"
-        
+            prompt = f"{TAGGING_SYSTEM_PROMPT}\n\nDocument:\n{truncated}\n\nJSON:"
+
         response = generate(
-            self._model,
-            self._tokenizer,
-            prompt=prompt,
-            max_tokens=self.max_tokens,
-            verbose=False,
+            self._model, self._tokenizer,
+            prompt=prompt, max_tokens=self.max_tokens, verbose=False,
         )
-        
-        # Parse JSON from response
-        try:
-            # Try to extract JSON from response
-            response = response.strip()
-            # Handle case where model includes markdown code fence
-            if response.startswith("```"):
-                response = response.split("```")[1]
-                if response.startswith("json"):
-                    response = response[4:]
-            
-            tags = json.loads(response)
-            return {str(k): str(v) for k, v in tags.items()}
-        except (json.JSONDecodeError, IndexError):
-            return {}
+        return parse_tag_json(response)
 
 
 class MLXVisionDescriber:

@@ -8,8 +8,9 @@ import os
 from .base import (
     get_registry,
     build_summarization_prompt,
-    get_summarization_system_prompt,
-    strip_summary_preamble,
+    SUMMARIZATION_SYSTEM_PROMPT,
+    TAGGING_SYSTEM_PROMPT,
+    parse_tag_json,
 )
 
 
@@ -76,33 +77,10 @@ class AnthropicSummarization:
         context: str | None = None,
     ) -> str:
         """Generate summary using Anthropic Claude."""
-        # Truncate very long content
         truncated = content[:50000] if len(content) > 50000 else content
-
-        # Build prompt with optional context
         prompt = build_summarization_prompt(truncated, context)
-
-        # Auto-detect content type and select appropriate system prompt
-        system = get_summarization_system_prompt(truncated) if not context else (
-            "You are a helpful assistant that summarizes content. "
-            "Follow the instructions in the user message."
-        )
-
-        # The Anthropic SDK has built-in retry with exponential backoff for rate limits.
-        # Let rate limit errors propagate so pending queue can retry later.
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=system,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-        )
-
-        # Extract text from response
-        if response.content and len(response.content) > 0:
-            return strip_summary_preamble(response.content[0].text)
-        return truncated[:500]  # Fallback for empty response
+        result = self.generate(SUMMARIZATION_SYSTEM_PROMPT, prompt)
+        return result if result else truncated[:max_length]
 
     def generate(
         self,
@@ -174,28 +152,10 @@ class OpenAISummarization:
         context: str | None = None,
     ) -> str:
         """Generate a summary using OpenAI."""
-        # Truncate very long content to avoid token limits
         truncated = content[:50000] if len(content) > 50000 else content
-
-        # Build prompt with optional context
         prompt = build_summarization_prompt(truncated, context)
-
-        # Auto-detect content type and select appropriate system prompt
-        system = get_summarization_system_prompt(truncated) if not context else (
-            "You are a helpful assistant that summarizes content. "
-            "Follow the instructions in the user message."
-        )
-
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            **self._completion_kwargs(self.max_tokens),
-        )
-
-        return strip_summary_preamble(response.choices[0].message.content.strip())
+        result = self.generate(SUMMARIZATION_SYSTEM_PROMPT, prompt)
+        return result if result else truncated[:max_length]
 
     def generate(
         self,
@@ -243,39 +203,10 @@ class OllamaSummarization:
         context: str | None = None,
     ) -> str:
         """Generate a summary using Ollama."""
-        import requests
-
         truncated = content[:50000] if len(content) > 50000 else content
-
-        # Build prompt with optional context
         prompt = build_summarization_prompt(truncated, context)
-
-        # Auto-detect content type and select appropriate system prompt
-        system = get_summarization_system_prompt(truncated) if not context else (
-            "You are a helpful assistant that summarizes content. "
-            "Follow the instructions in the user message."
-        )
-
-        response = requests.post(
-            f"{self.base_url}/api/chat",
-            json={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                "stream": False,
-            },
-            timeout=(10, 120),  # (connect, read)
-        )
-        if not response.ok:
-            detail = response.text[:200] if response.text else ""
-            raise RuntimeError(
-                f"Ollama summarization failed (model={self.model}): "
-                f"HTTP {response.status_code} from {self.base_url}. {detail}"
-            )
-
-        return strip_summary_preamble(response.json()["message"]["content"].strip())
+        result = self.generate(SUMMARIZATION_SYSTEM_PROMPT, prompt)
+        return result if result else truncated[:max_length]
 
     def generate(
         self,
@@ -341,16 +272,9 @@ class GeminiSummarization:
     ) -> str:
         """Generate summary using Google Gemini."""
         truncated = content[:50000] if len(content) > 50000 else content
-
-        # Build prompt with optional context
         prompt = build_summarization_prompt(truncated, context)
-
-        # Let errors propagate so pending queue can retry
-        response = self._client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-        )
-        return strip_summary_preamble(response.text)
+        result = self.generate(SUMMARIZATION_SYSTEM_PROMPT, prompt)
+        return result if result else truncated[:max_length]
 
     def generate(
         self,
@@ -419,18 +343,6 @@ class AnthropicTagging:
     for model options and pricing.
     """
 
-    SYSTEM_PROMPT = """Analyze the document and generate relevant tags as a JSON object.
-
-Generate tags for these categories when applicable:
-- content_type: The type of content (e.g., "documentation", "code", "article", "config")
-- language: Programming language if code (e.g., "python", "javascript")
-- domain: Subject domain (e.g., "authentication", "database", "api", "testing")
-- framework: Framework or library if relevant (e.g., "react", "django", "fastapi")
-
-Only include tags that clearly apply. Values should be lowercase.
-
-Respond with a JSON object only, no explanation."""
-
     def __init__(
         self,
         model: str = "claude-haiku-4-5-20251001",
@@ -443,10 +355,6 @@ Respond with a JSON object only, no explanation."""
 
         self.model = model
 
-        # Try multiple auth sources (same as AnthropicSummarization):
-        # 1. Explicit api_key parameter
-        # 2. ANTHROPIC_API_KEY (API key from console.anthropic.com: sk-ant-api03-...)
-        # 3. CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token': sk-ant-oat01-...)
         key = (
             api_key or
             os.environ.get("ANTHROPIC_API_KEY") or
@@ -460,42 +368,26 @@ Respond with a JSON object only, no explanation."""
             )
 
         self._client = Anthropic(api_key=key)
-    
+
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using Anthropic Claude."""
-        import logging
         truncated = content[:20000] if len(content) > 20000 else content
-
         try:
             response = self._client.messages.create(
-                model=self.model,
-                max_tokens=200,
-                temperature=0.2,
-                system=self.SYSTEM_PROMPT,
-                messages=[
-                    {"role": "user", "content": truncated}
-                ],
+                model=self.model, max_tokens=200, temperature=0.2,
+                system=TAGGING_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": truncated}],
             )
-        except Exception as e:
-            logging.getLogger(__name__).warning("Anthropic tagging failed: %s", e)
+            text = response.content[0].text if response.content else None
+        except Exception:
             return {}
-
-        # Parse JSON from response
-        if response.content and len(response.content) > 0:
-            try:
-                tags = json.loads(response.content[0].text)
-                return {str(k): str(v) for k, v in tags.items()}
-            except json.JSONDecodeError:
-                return {}
-        return {}
+        return parse_tag_json(text)
 
 
 class OpenAITagging:
     """
     Tagging provider using OpenAI's chat API with JSON output.
     """
-    
-    SYSTEM_PROMPT = AnthropicTagging.SYSTEM_PROMPT
 
     def __init__(
         self,
@@ -506,9 +398,9 @@ class OpenAITagging:
             from openai import OpenAI
         except ImportError:
             raise RuntimeError("OpenAITagging requires 'openai' library")
-        
+
         self.model = model
-        
+
         key = api_key or os.environ.get("KEEP_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise ValueError(
@@ -521,11 +413,10 @@ class OpenAITagging:
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using OpenAI."""
         truncated = content[:20000] if len(content) > 20000 else content
-
         kwargs: dict = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": TAGGING_SYSTEM_PROMPT},
                 {"role": "user", "content": truncated},
             ],
             "response_format": {"type": "json_object"},
@@ -535,15 +426,8 @@ class OpenAITagging:
         else:
             kwargs["max_tokens"] = 200
             kwargs["temperature"] = 0.2
-
         response = self._client.chat.completions.create(**kwargs)
-        
-        try:
-            tags = json.loads(response.choices[0].message.content)
-            # Ensure all values are strings
-            return {str(k): str(v) for k, v in tags.items()}
-        except json.JSONDecodeError:
-            return {}
+        return parse_tag_json(response.choices[0].message.content if response.choices else None)
 
 
 class OllamaTagging:
@@ -552,8 +436,6 @@ class OllamaTagging:
 
     Respects OLLAMA_HOST env var (default: http://localhost:11434).
     """
-
-    SYSTEM_PROMPT = OpenAITagging.SYSTEM_PROMPT
 
     def __init__(
         self,
@@ -568,15 +450,14 @@ class OllamaTagging:
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using Ollama."""
         import requests
-        
+
         truncated = content[:20000] if len(content) > 20000 else content
-        
         response = requests.post(
             f"{self.base_url}/api/chat",
             json={
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "system", "content": TAGGING_SYSTEM_PROMPT},
                     {"role": "user", "content": truncated},
                 ],
                 "format": "json",
@@ -590,12 +471,7 @@ class OllamaTagging:
                 f"Ollama tagging failed (model={self.model}): "
                 f"HTTP {response.status_code} from {self.base_url}. {detail}"
             )
-
-        try:
-            tags = json.loads(response.json()["message"]["content"])
-            return {str(k): str(v) for k, v in tags.items()}
-        except (json.JSONDecodeError, KeyError):
-            return {}
+        return parse_tag_json(response.json().get("message", {}).get("content"))
 
 
 class GeminiTagging:
@@ -607,8 +483,6 @@ class GeminiTagging:
     2. GOOGLE_CLOUD_PROJECT env var (uses Vertex AI with ADC)
     3. GEMINI_API_KEY or GOOGLE_API_KEY (uses Google AI Studio)
     """
-
-    SYSTEM_PROMPT = OpenAITagging.SYSTEM_PROMPT
 
     def __init__(
         self,
@@ -622,32 +496,16 @@ class GeminiTagging:
 
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using Google Gemini."""
-        import logging
         truncated = content[:20000] if len(content) > 20000 else content
-
         try:
-            full_prompt = f"{self.SYSTEM_PROMPT}\n\n{truncated}"
+            full_prompt = f"{TAGGING_SYSTEM_PROMPT}\n\n{truncated}"
             response = self._client.models.generate_content(
-                model=self.model,
-                contents=full_prompt,
+                model=self.model, contents=full_prompt,
             )
-        except Exception as e:
-            logging.getLogger(__name__).warning("Gemini tagging failed: %s", e)
+            text = response.text
+        except Exception:
             return {}
-
-        # Parse JSON from response
-        try:
-            text = response.text.strip()
-            # Strip markdown code fences if present
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3].strip()
-
-            tags = json.loads(text)
-            return {str(k): str(v) for k, v in tags.items()}
-        except json.JSONDecodeError:
-            return {}
+        return parse_tag_json(text)
 
 
 class NoopTagging:

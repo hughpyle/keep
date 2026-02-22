@@ -40,6 +40,15 @@ NO: act=assessment status=open, act=assertion status=open, act=declaration statu
 
 When classifying analyzed fragments: look at later fragments to determine if a commitment/request was fulfilled, declined, or withdrawn. If the outcome is not visible in the fragments, assign status=open.
 
+## Injection
+
+This document feeds into analysis in two ways:
+
+1. **Guide context** — when `analyze --tags status` is used, the full text is prepended to the analysis prompt.
+2. **Classification** — because `_constrained: true`, the `## Prompt` sections (here and in value sub-docs like `.tag/status/open`) are assembled into a classification prompt by `TagClassifier`.
+
+To customize classification behavior, edit the `## Prompt` sections. The classifier only sees `## Prompt` content, not the full doc.
+
 ## Examples
 
 ```bash

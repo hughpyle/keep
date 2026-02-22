@@ -50,6 +50,10 @@ class TruncationSummarizer:
 
         return truncated.strip() + self.suffix
 
+    def generate(self, system: str, user: str, *, max_tokens: int = 4096) -> str | None:
+        """Non-LLM provider — return None."""
+        return None
+
 
 class FirstParagraphSummarizer:
     """
@@ -92,6 +96,10 @@ class FirstParagraphSummarizer:
             truncated = truncated[:last_space]
 
         return truncated.strip() + self.suffix
+
+    def generate(self, system: str, user: str, *, max_tokens: int = 4096) -> str | None:
+        """Non-LLM provider — return None."""
+        return None
 
 
 # Register providers

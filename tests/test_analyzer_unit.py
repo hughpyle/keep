@@ -6,8 +6,7 @@ from unittest.mock import patch
 from keep.analyzers import (
     _estimate_tokens,
     _parse_parts,
-    PROMPTS,
-    DEFAULT_PROMPT,
+    DEFAULT_ANALYSIS_PROMPT,
     SlidingWindowAnalyzer,
 )
 from keep.providers.base import AnalysisChunk
@@ -68,26 +67,14 @@ class TestParseParts:
         assert "Here is a summary" not in result[0]["summary"]
 
 
-class TestPrompts:
+class TestDefaultPrompt:
 
-    def test_all_expected_keys(self):
-        expected = {"structural", "temporal", "temporal-v2", "temporal-v3", "temporal-v4", "commitments", "conversation"}
-        assert set(PROMPTS.keys()) == expected
-
-    def test_default_prompt_exists(self):
-        assert DEFAULT_PROMPT == "auto" or DEFAULT_PROMPT in PROMPTS
-
-    def test_prompts_are_nonempty_strings(self):
-        for key, prompt in PROMPTS.items():
-            assert isinstance(prompt, str), f"PROMPTS[{key!r}] is not a string"
-            assert len(prompt) > 50, f"PROMPTS[{key!r}] seems too short"
+    def test_default_prompt_is_nonempty(self):
+        assert isinstance(DEFAULT_ANALYSIS_PROMPT, str)
+        assert len(DEFAULT_ANALYSIS_PROMPT) > 50
 
 
 class TestSlidingWindowAnalyzer:
-
-    def test_unknown_prompt_raises(self):
-        with pytest.raises(ValueError, match="Unknown prompt"):
-            SlidingWindowAnalyzer(prompt="nonexistent")
 
     def test_build_window_prompt_single_target(self):
         chunks = [

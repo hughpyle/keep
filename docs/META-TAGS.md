@@ -1,9 +1,10 @@
 # Meta-Tags
 
-Meta-tags are system documents stored at `.tag/*` and `.meta/*` that define your store's tag vocabulary and contextual queries. They serve two purposes:
+Meta-tags are system documents stored at `.tag/*`, `.meta/*`, and `.prompt/*` that define your store's tag vocabulary, contextual queries, and LLM prompt overrides. They serve three purposes:
 
 1. **Tag descriptions** (`.tag/*`) — Define tags, constrain valid values, and guide auto-tagging during analysis
 2. **Contextual queries** (`.meta/*`) — Surface relevant items when you view context with `keep now` or `keep get`
+3. **Prompt overrides** (`.prompt/*`) — Customize the LLM prompts used for summarization and analysis
 
 ## Tag descriptions (`.tag/*`)
 
@@ -57,23 +58,36 @@ Constrained tags (`act`, `status`) also have individual sub-documents (e.g., `.t
 
 Unconstrained tags (`type`, `project`, `topic`) accept any value. Their descriptions document conventions but don't enforce them.
 
-### Auto-tagging during analysis
+### How tag docs are injected into LLM prompts
 
-When `keep analyze` decomposes a document into parts, it loads all constrained tag descriptions and uses them to classify each part. The `.tag/KEY` documents contain a `## Prompt` section that guides the LLM on how to assign values.
+Tag descriptions feed into analysis through two independent paths:
 
-For example, the `act` tag description tells the analyzer how to distinguish commitments from requests, assertions from assessments. Each part gets tagged automatically based on this guidance.
+#### 1. Guide context (all tags)
 
-Pass `-t` to `keep analyze` to include additional tag descriptions in the prompt:
+When you pass `-t` to `keep analyze`, the full content of each `.tag/KEY` document is prepended to the analysis prompt as context. This guides the LLM's decomposition — how it splits content into parts and what boundaries it recognizes.
 
 ```bash
 keep analyze doc:1 -t topic -t project
 ```
 
-This fetches `.tag/topic` and `.tag/project` descriptions and includes them in the analysis prompt, producing better part boundaries and more consistent tagging.
+This fetches `.tag/topic` and `.tag/project` descriptions and includes them in the analysis prompt, producing better part boundaries and more consistent tagging. Any tag doc participates in guide context, whether constrained or not.
+
+#### 2. Classification (constrained tags only)
+
+After decomposition, a second LLM pass classifies each part. The `TagClassifier` loads all constrained tag descriptions (those with `_constrained: true`) and assembles a classification prompt from their `## Prompt` sections:
+
+- The **parent doc's** `## Prompt` section (e.g., from `.tag/act`) provides overall guidance for the tag key
+- Each **value sub-doc's** `## Prompt` section (e.g., from `.tag/act/commitment`) describes when to assign that specific value
+
+The classifier assigns tags only when confidence exceeds the threshold (default 0.7). Tags without a `## Prompt` section use their full content as a fallback description.
+
+To customize classification behavior, edit the `## Prompt` section in a tag doc — the classifier only sees `## Prompt` content, not the surrounding documentation.
 
 ## Contextual queries (`.meta/*`)
 
 Meta-tags at `.meta/*` contain **tag queries** that surface relevant items when you run `keep now` or `keep get`. They answer: *what else should I be aware of right now?*
+
+Meta docs currently serve as query patterns — they define what gets surfaced as context, not how the LLM behaves.
 
 For example, when you run `keep now` while working on a project tagged `project=myapp`:
 
@@ -166,6 +180,72 @@ keep get .meta/learnings   # See the learnings query definition
 keep list .meta            # All contextual query definitions
 ```
 
+## Prompt overrides (`.prompt/*`)
+
+Prompt docs at `.prompt/summarize/*` and `.prompt/analyze/*` let you customize the LLM system prompts used for summarization and analysis. Unlike tag docs (which augment the prompt), prompt docs **replace** the default system prompt entirely.
+
+### How prompt docs work
+
+Each prompt doc has two parts:
+
+1. **Match rules** — tag queries that determine when this prompt applies (same DSL as `.meta/*` docs)
+2. **`## Prompt` section** — the actual system prompt text sent to the LLM
+
+When a document is summarized or analyzed, keep scans all `.prompt/{type}/*` docs, finds those whose match rules match the document's tags, and selects the most specific match (most rules matched). The `## Prompt` section from the winner replaces the default system prompt.
+
+### Bundled prompt docs
+
+| ID | Match rule | Purpose |
+|----|-----------|---------|
+| `.prompt/summarize/default` | *(none — fallback)* | Default summarization prompt |
+| `.prompt/summarize/conversation` | `type=conversation` | Preserves dates, names, facts from conversations |
+| `.prompt/analyze/default` | *(none — fallback)* | Default analysis prompt for structural decomposition |
+| `.prompt/analyze/conversation` | `type=conversation` | Fact extraction from conversations |
+
+### Creating custom prompts
+
+Create a new prompt doc with match rules targeting specific tags:
+
+```bash
+# Custom summarization for code documentation
+keep remember "$(cat <<'EOF'
+topic=code
+
+## Prompt
+
+Summarize this code documentation in under 200 words.
+Focus on: what the API does, key parameters, return values, and common pitfalls.
+Begin with the function or class name.
+EOF
+)" --id .prompt/summarize/code
+```
+
+Match rules can combine multiple tags for higher specificity:
+
+```bash
+# Prompt for meeting notes in a specific project
+keep remember "$(cat <<'EOF'
+type=meeting project=myapp
+
+## Prompt
+
+Summarize this meeting in under 300 words.
+Focus on decisions made, action items assigned, and deadlines mentioned.
+List each action item with its owner.
+EOF
+)" --id .prompt/summarize/myapp-meetings
+```
+
+The most specific match wins — a prompt matching `type=meeting project=myapp` (2 rules) beats one matching just `type=meeting` (1 rule), which beats the default (0 rules).
+
+### Viewing prompt docs
+
+```bash
+keep get .prompt/summarize/default      # See the default summarization prompt
+keep get .prompt/analyze/conversation   # See the conversation analysis prompt
+keep list .prompt                       # All prompt docs
+```
+
 ## Feeding the loop
 
 Meta-tags only surface what you put in. The tags that matter:
@@ -196,9 +276,14 @@ keep put ~/Music/OK_Computer/01_Airbag.flac -t artist=Radiohead -t album="OK Com
 
 Now `keep get` on that item shows `meta/artist:`, `meta/album:`, and `meta/genre:` sections with related tracks.
 
+## The `## Injection` section
+
+Every system doc contains a `## Injection` section that describes how its content flows into the system. This serves as inline documentation — when you `keep get .tag/act`, the Injection section tells you exactly how the doc's content is used (guide context, classification, query pattern, or prompt override).
+
 ## See Also
 
 - [TAGGING.md](TAGGING.md) — Tag basics: setting, filtering, isolation
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags (`_created`, `_updated`, etc.)
 - [ANALYSIS.md](ANALYSIS.md) — How analysis uses tag descriptions to auto-tag parts
+- [KEEP-ANALYZE.md](KEEP-ANALYZE.md) — CLI reference for `keep analyze`
 - [REFERENCE.md](REFERENCE.md) — Complete CLI reference

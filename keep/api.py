@@ -785,6 +785,65 @@ class Keeper:
                 )
         return self._analyzer
 
+    def _resolve_prompt_doc(
+        self,
+        prefix: str,
+        doc_tags: dict[str, str],
+    ) -> str | None:
+        """
+        Find a .prompt/* doc matching the given tags and return its prompt text.
+
+        Scans .prompt/{prefix}/* documents. For each, parses match rules
+        from content (same DSL as .meta/* docs) and checks against doc_tags.
+        Returns the ## Prompt section of the best match (most specific).
+
+        Args:
+            prefix: "analyze" or "summarize"
+            doc_tags: Tags of the document being analyzed/summarized
+
+        Returns:
+            Prompt text from the best-matching doc, or None.
+        """
+        from .analyzers import extract_prompt_section
+
+        doc_coll = self._resolve_doc_collection()
+        prompt_docs = self._document_store.query_by_id_prefix(
+            doc_coll, f".prompt/{prefix}/"
+        )
+        if not prompt_docs:
+            return None
+
+        best_prompt = None
+        best_specificity = -1  # more match rules = more specific
+
+        for rec in prompt_docs:
+            content = rec.summary if hasattr(rec, 'summary') else ""
+
+            prompt_text = extract_prompt_section(content)
+            if not prompt_text:
+                continue
+
+            # Parse match rules from body (before ## Prompt)
+            query_lines, _, _ = _parse_meta_doc(content)
+
+            if not query_lines:
+                # No match rules = default/fallback (specificity 0)
+                if best_specificity < 0:
+                    best_prompt = prompt_text
+                    best_specificity = 0
+                continue
+
+            # Check if any query line fully matches doc_tags
+            for query in query_lines:
+                if all(doc_tags.get(k) == v for k, v in query.items()):
+                    specificity = len(query)
+                    if specificity > best_specificity:
+                        best_specificity = specificity
+                        best_prompt = prompt_text
+                    break
+
+        return best_prompt
+
     def _gather_context(
         self,
         id: str,
@@ -3006,6 +3065,13 @@ class Keeper:
         except Exception as e:
             logger.warning("Could not load tag specs: %s", e)
 
+        # Resolve analysis prompt from .prompt/analyze/* docs
+        analysis_prompt = None
+        try:
+            analysis_prompt = self._resolve_prompt_doc("analyze", doc_record.tags)
+        except Exception as e:
+            logger.debug("Prompt doc resolution failed: %s", e)
+
         # Phase 2: Compute — pure processor (local or remote)
         # Wait for any background reconciliation to finish first — both
         # sentence-transformers (embedding) and mlx-lm (summarization)
@@ -3027,7 +3093,10 @@ class Keeper:
                 )
                 for i, c in enumerate(chunk_dicts)
             ]
-            raw_parts = analyzer.analyze(analysis_chunks, guide_context)
+            raw_parts = analyzer.analyze(
+                analysis_chunks, guide_context,
+                prompt_override=analysis_prompt,
+            )
             if tag_specs and raw_parts:
                 try:
                     classifier.classify(raw_parts, tag_specs)
@@ -3038,6 +3107,7 @@ class Keeper:
             proc_result = process_analyze(
                 chunk_dicts, guide_context, tag_specs,
                 analyzer_provider=analyzer_provider,
+                prompt_override=analysis_prompt,
                 classifier_provider=analyzer_provider,
             )
 
@@ -3501,6 +3571,13 @@ class Keeper:
                     context = self._gather_context(item.id, user_tags)
                     if context:
                         meta["context"] = context
+                # Resolve prompt from .prompt/summarize/* docs
+                try:
+                    prompt = self._resolve_prompt_doc("summarize", doc.tags)
+                    if prompt:
+                        meta["system_prompt_override"] = prompt
+                except Exception:
+                    pass  # Remote falls back to its default
 
         elif item.task_type == "analyze":
             doc = self._document_store.get(item.collection, item.id)
@@ -3522,6 +3599,13 @@ class Keeper:
                     meta["tag_specs"] = specs
             except Exception as e:
                 logger.warning("Could not load tag specs for delegation: %s", e)
+            # Resolve prompt from .prompt/analyze/* docs
+            try:
+                prompt = self._resolve_prompt_doc("analyze", doc.tags)
+                if prompt:
+                    meta["prompt_override"] = prompt
+            except Exception:
+                pass  # Remote falls back to its default
             content = ""  # content is in chunks, not top-level
 
         try:
@@ -3724,6 +3808,13 @@ class Keeper:
             logger.info("Skipping summary for deleted doc: %s", item.id)
             return
 
+        # Resolve summarization prompt from .prompt/summarize/* docs
+        summarize_prompt = None
+        try:
+            summarize_prompt = self._resolve_prompt_doc("summarize", doc.tags)
+        except Exception as e:
+            logger.debug("Summarize prompt doc resolution failed: %s", e)
+
         context = None
         user_tags = filter_non_system_tags(doc.tags)
         if user_tags:
@@ -3732,6 +3823,7 @@ class Keeper:
         result = process_summarize(
             item.content, context=context,
             summarization_provider=self._get_summarization_provider(),
+            system_prompt_override=summarize_prompt,
         )
         self.apply_result(item.id, item.collection, result)
 

@@ -44,6 +44,15 @@ Key distinctions:
 
 Only assign status when act is commitment, request, or offer. Assertions, assessments, and declarations do not have lifecycle status.
 
+## Injection
+
+This document feeds into analysis in two ways:
+
+1. **Guide context** — when `analyze --tags act` is used, the full text of this doc is prepended to the analysis prompt as context for decomposition.
+2. **Classification** — because `_constrained: true`, the `## Prompt` sections (here and in value sub-docs like `.tag/act/commitment`) are assembled by `TagClassifier` into a classification system prompt. Each analyzed part is classified against this taxonomy and tagged if confidence exceeds the threshold.
+
+To customize classification behavior, edit the `## Prompt` section. The classifier only sees `## Prompt` content, not the full doc.
+
 ## Examples
 
 ```bash

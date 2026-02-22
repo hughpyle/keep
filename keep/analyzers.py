@@ -63,72 +63,10 @@ def _parse_parts(text: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Prompt registry — available for development/evals, not exposed in config
+# Default analysis prompt — fallback when no .prompt/analyze/* doc matches
 # ---------------------------------------------------------------------------
 
-PROMPTS = {
-    "structural": """You are a document analysis assistant. You will receive a conversation thread wrapped in <content> tags. A portion is marked with <analyze> tags — decompose ONLY that portion into meaningful parts.
-
-Write one summary per line. Each summary should be 1-2 sentences capturing a coherent unit of meaning (a topic, decision, or exchange).
-
-Rules:
-- Only summarize content inside <analyze> tags
-- One summary per line, no numbering, no bullet points
-- If nothing is noteworthy, write: EMPTY""",
-
-    "temporal": """You are analyzing the evolution of a conversation over time. You will receive dated entries wrapped in <content> tags. A portion is marked with <analyze> tags — analyze ONLY that portion.
-
-For each significant development, write one line capturing WHAT CHANGED and WHY IT MATTERS. Focus on:
-- Decisions made or reversed ("Chose X over Y because...")
-- Commitments given or fulfilled ("Committed to X" / "Delivered X")
-- Breakdowns — where assumptions were revealed ("Expected X but found Y")
-- Themes that persist across entries ("Authentication remains the focus")
-- Turning points where direction shifted
-
-Write one observation per line. Each should name the change and its significance.
-
-Rules:
-- Only analyze content inside <analyze> tags
-- Use surrounding content for context but don't summarize it
-- One observation per line, no numbering, no bullet points
-- Prefer "X changed to Y" over "X was discussed"
-- If nothing is noteworthy, write: EMPTY""",
-
-    "temporal-v2": """Analyze the evolution of a conversation. Entries are dated and wrapped in <content> tags. Only analyze content inside <analyze> tags.
-
-Write ONE LINE per significant development. DO NOT repeat or echo the original text. Synthesize.
-
-Good: "Decision reversed: mtime dropped in favor of birthtime for created_at"
-Bad: "User prompt: Actually no. We updated the interface..."
-
-Focus on: decisions, reversals, commitments fulfilled, breakdowns, persistent themes, turning points.
-
-Rules:
-- One observation per line, no numbering, no bullets
-- Never copy input text — always synthesize in your own words
-- Skip routine exchanges (greetings, task notifications)
-- If nothing noteworthy: EMPTY""",
-
-    "temporal-v3": """Analyze the evolution of a conversation. Entries are dated and wrapped in <content> tags. Only analyze content inside <analyze> tags.
-
-Write ONE LINE per significant development. Synthesize — do not echo or quote the original text.
-
-Good: "Decision reversed: mtime dropped in favor of birthtime for created_at"
-Good: "Commitment fulfilled: reindex merged into pending queue as planned"
-Bad: "User prompt: Actually no. We updated the interface..."
-Bad: "Here are the summaries:"
-
-Focus on: decisions made, decisions reversed, commitments given or fulfilled, breakdowns (expected X but found Y), persistent themes, turning points.
-
-Rules:
-- One observation per line, no numbering, no bullets, no preamble
-- Never copy input text — always synthesize in your own words
-- Never include XML tags (<analyze>, </analyze>, <content>, etc.) in your output
-- Skip routine exchanges (greetings, acknowledgments, "ok great")
-- Be specific: name the actual thing, not abstract categories
-- If nothing noteworthy: EMPTY""",
-
-    "temporal-v4": """Analyze the evolution of a conversation. Entries are dated and wrapped in <content> tags. Only analyze content inside <analyze> tags.
+DEFAULT_ANALYSIS_PROMPT = """Analyze the evolution of a conversation. Entries are dated and wrapped in <content> tags. Only analyze content inside <analyze> tags.
 
 Write ONE LINE per significant development. Each line should describe what specifically changed or was decided, in plain language.
 
@@ -139,39 +77,7 @@ Rules:
 - Do not start lines with category labels like "Decision:", "Theme:", "Turning point:"
 - Do not include XML tags in your output
 - Skip greetings, acknowledgments, and routine exchanges
-- If nothing noteworthy: EMPTY""",
-
-    "commitments": """You are analyzing a conversation for speech acts and commitments. You will receive dated entries wrapped in <content> tags. A portion is marked with <analyze> tags — analyze ONLY that portion.
-
-Identify each speech act — requests, promises, assertions, declarations — and track their lifecycle:
-- OPEN: commitment made but not yet fulfilled
-- FULFILLED: promise kept, request satisfied
-- WITHDRAWN: commitment explicitly abandoned
-- BROKEN: promise not kept (breakdown)
-
-Write one line per speech act found. Format: "[status] Actor committed/requested/declared: description"
-
-Rules:
-- Only analyze content inside <analyze> tags
-- One speech act per line, no numbering
-- Skip procedural exchanges (greetings, acknowledgments)
-- If no speech acts found, write: EMPTY""",
-    "conversation": """Extract facts about the USER from this conversation. IGNORE all assistant/bot responses.
-
-Write one complete sentence per fact. Include dates, names, amounts, and context exactly as stated.
-Example: "User spent $15 on a car wash on February 3rd."
-Example: "User's grandmother is 75 years old and still energetic."
-
-No preamble, no numbering. If no user facts found: EMPTY""",
-    "conversation-v2": """Extract key facts from this conversation. Include facts stated by BOTH the user AND the assistant.
-
-One sentence per fact. Be specific: include names, numbers, dates, places.
-Only extract facts from the conversation below. Do NOT repeat these instructions.
-
-No preamble, no numbering. If no facts: EMPTY""",
-}
-
-DEFAULT_PROMPT = "auto"
+- If nothing noteworthy: EMPTY"""
 
 
 # ---------------------------------------------------------------------------
@@ -268,57 +174,41 @@ class SlidingWindowAnalyzer:
         provider=None,
         context_budget: int = 12000,
         target_ratio: float = 0.6,
-        prompt: str = DEFAULT_PROMPT,
+        prompt: str | None = None,
     ):
         """
         Args:
             provider: A SummarizationProvider with generate() support.
             context_budget: Total token budget per window.
             target_ratio: Fraction of budget allocated to target chunks (vs context).
-            prompt: Prompt key from PROMPTS registry, or "auto" (default) to
-                detect content type and select prompt per call.
+            prompt: Fixed prompt text to use. If None, uses DEFAULT_ANALYSIS_PROMPT
+                (override with prompt_override in analyze()).
         """
         self._provider = provider
         self._context_budget = context_budget
         self._target_ratio = target_ratio
-        if prompt != "auto" and prompt not in PROMPTS:
-            raise ValueError(f"Unknown prompt: {prompt!r}. Choose from: {list(PROMPTS.keys())}")
-        self._auto_prompt = (prompt == "auto")
-        self._fixed_prompt = None if self._auto_prompt else PROMPTS[prompt]
-        self._prompt_name = prompt
+        self._fixed_prompt = prompt
 
-    @staticmethod
-    def _detect_prompt(chunks: list[AnalysisChunk]) -> str:
-        """Auto-detect the best prompt based on content type."""
-        from .providers.base import _is_conversation
-        sample = ""
-        for chunk in chunks:
-            sample += chunk.content
-            if len(sample) >= 5000:
-                break
-        if _is_conversation(sample):
-            return "conversation-v2"
-        return "temporal-v4"
-
-    def _resolve_prompt(self, chunks: list[AnalysisChunk]) -> str:
+    def _resolve_prompt(self, prompt_override: str | None = None) -> str:
         """Return the system prompt text for this analysis call."""
-        if not self._auto_prompt:
+        if prompt_override:
+            return prompt_override
+        if self._fixed_prompt:
             return self._fixed_prompt
-        detected = self._detect_prompt(chunks)
-        logger.info("Auto-detected analysis prompt: %s", detected)
-        return PROMPTS[detected]
+        return DEFAULT_ANALYSIS_PROMPT
 
     def analyze(
         self,
         chunks: Iterable[AnalysisChunk],
         guide_context: str = "",
+        prompt_override: str | None = None,
     ) -> list[dict]:
         """Decompose content chunks into parts using sliding windows."""
         chunk_list = list(chunks)
         if not chunk_list:
             return []
 
-        system_prompt = self._resolve_prompt(chunk_list)
+        system_prompt = self._resolve_prompt(prompt_override)
 
         total_tokens = sum(_estimate_tokens(c.content) for c in chunk_list)
 
@@ -623,6 +513,12 @@ _PROMPT_SECTION_RE = re.compile(
 )
 
 
+def extract_prompt_section(content: str) -> str:
+    """Extract ## Prompt section from document content, if present."""
+    m = _PROMPT_SECTION_RE.search(content)
+    return m.group(1).strip() if m else ""
+
+
 class TagClassifier:
     """
     Data-driven tag classification for analyzed parts.
@@ -652,8 +548,7 @@ class TagClassifier:
     @staticmethod
     def _extract_prompt_section(content: str) -> str:
         """Extract ## Prompt section from document content, if present."""
-        m = _PROMPT_SECTION_RE.search(content)
-        return m.group(1).strip() if m else ""
+        return extract_prompt_section(content)
 
     def load_specs(self, keeper) -> list[dict]:
         """

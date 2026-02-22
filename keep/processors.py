@@ -62,14 +62,53 @@ class ProcessorResult:
     parts: list | None = None             # analyze: PartInfo list (Phase 2)
 
 
+def _llm_summarize(
+    content: str,
+    provider,
+    *,
+    context: str | None = None,
+    system_prompt_override: str | None = None,
+) -> str | None:
+    """Build prompts and call provider.generate().  Returns None for non-LLM providers."""
+    from .providers.base import (
+        build_summarization_prompt,
+        SUMMARIZATION_SYSTEM_PROMPT,
+        strip_summary_preamble,
+    )
+
+    gen = getattr(provider, "generate", None)
+    if gen is None:
+        return None
+
+    truncated = content[:50000] if len(content) > 50000 else content
+    user_prompt = build_summarization_prompt(truncated, context)
+    system = system_prompt_override or SUMMARIZATION_SYSTEM_PROMPT
+    if context and not system_prompt_override:
+        system = (
+            "You are a helpful assistant that summarizes content. "
+            "Follow the instructions in the user message."
+        )
+    result = gen(system, user_prompt)
+    if result is None:
+        return None
+    return strip_summary_preamble(result)
+
+
 def process_summarize(
     content: str,
     *,
     context: str | None = None,
     summarization_provider,
+    system_prompt_override: str | None = None,
 ) -> ProcessorResult:
     """Summarize content.  Pure function — no store access."""
-    summary = summarization_provider.summarize(content, context=context)
+    summary = _llm_summarize(
+        content, summarization_provider,
+        context=context, system_prompt_override=system_prompt_override,
+    )
+    if summary is None:
+        # Non-LLM fallback (truncate, first_paragraph)
+        summary = summarization_provider.summarize(content, context=context)
     return ProcessorResult(task_type="summarize", summary=summary)
 
 
@@ -128,7 +167,9 @@ def process_ocr(
     if len(full_content) <= max_summary_length:
         summary = full_content
     elif summarization_provider:
-        summary = summarization_provider.summarize(full_content, context=context)
+        summary = _llm_summarize(full_content, summarization_provider, context=context)
+        if summary is None:
+            summary = summarization_provider.summarize(full_content, context=context)
     else:
         summary = full_content[:max_summary_length] + "..."
 
@@ -148,6 +189,7 @@ def process_analyze(
     *,
     analyzer_provider=None,
     classifier_provider=None,
+    prompt_override: str | None = None,
 ) -> ProcessorResult:
     """Analyze + classify content into parts.  Pure function — no store access.
 
@@ -158,6 +200,7 @@ def process_analyze(
         analyzer_provider: SummarizationProvider for the analyzer LLM.
         classifier_provider: SummarizationProvider for the classifier LLM
             (defaults to analyzer_provider if not set).
+        prompt_override: Analysis prompt text from .prompt/analyze/* docs.
 
     Returns:
         ProcessorResult with parts=[{"summary": str, "content": str, "tags": dict}, ...]
@@ -177,7 +220,9 @@ def process_analyze(
 
     # Run analyzer
     analyzer = SlidingWindowAnalyzer(provider=analyzer_provider)
-    raw_parts = analyzer.analyze(analysis_chunks, guide_context)
+    raw_parts = analyzer.analyze(
+        analysis_chunks, guide_context, prompt_override=prompt_override,
+    )
 
     # Run classifier if tag specs provided
     if tag_specs and raw_parts:

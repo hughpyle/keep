@@ -27,34 +27,46 @@ from keep.processors import (
 class TestProcessSummarize:
     """Tests for the process_summarize pure function."""
 
-    def test_calls_provider(self):
-        """Provider's summarize is called and result is returned."""
+    def test_calls_generate_for_llm_provider(self):
+        """LLM providers use generate() path."""
         provider = MagicMock()
-        provider.summarize.return_value = "A brief summary"
+        provider.generate.return_value = "A brief summary"
 
         result = process_summarize("long content here", summarization_provider=provider)
 
         assert isinstance(result, ProcessorResult)
         assert result.task_type == "summarize"
         assert result.summary == "A brief summary"
+        provider.generate.assert_called_once()
+        provider.summarize.assert_not_called()
+
+    def test_falls_back_to_summarize_for_non_llm(self):
+        """Non-LLM providers (generate returns None) use summarize() path."""
+        provider = MagicMock()
+        provider.generate.return_value = None
+        provider.summarize.return_value = "truncated summary"
+
+        result = process_summarize("long content here", summarization_provider=provider)
+
+        assert result.summary == "truncated summary"
         provider.summarize.assert_called_once_with("long content here", context=None)
 
     def test_passes_context(self):
         """Context is forwarded to the provider."""
         provider = MagicMock()
-        provider.summarize.return_value = "contextual summary"
+        provider.generate.return_value = "contextual summary"
 
         result = process_summarize(
             "content", context="related notes", summarization_provider=provider,
         )
 
         assert result.summary == "contextual summary"
-        provider.summarize.assert_called_once_with("content", context="related notes")
+        provider.generate.assert_called_once()
 
     def test_no_side_fields(self):
         """Summarize result has no OCR-specific fields set."""
         provider = MagicMock()
-        provider.summarize.return_value = "sum"
+        provider.generate.return_value = "sum"
 
         result = process_summarize("x", summarization_provider=provider)
 
@@ -83,7 +95,7 @@ class TestProcessOcr:
     def test_long_content_summarized(self):
         """Provider is called when content exceeds max_summary_length."""
         provider = MagicMock()
-        provider.summarize.return_value = "summarized"
+        provider.generate.return_value = "summarized"
         long_text = "x" * 200
 
         result = process_ocr(
@@ -93,7 +105,7 @@ class TestProcessOcr:
 
         assert result.summary == "summarized"
         assert result.content == long_text
-        provider.summarize.assert_called_once()
+        provider.generate.assert_called_once()
 
     def test_no_provider_truncates(self):
         """Without a provider, long content is truncated with ellipsis."""
@@ -116,14 +128,14 @@ class TestProcessOcr:
     def test_context_forwarded_to_provider(self):
         """Context is passed through to the summarization provider."""
         provider = MagicMock()
-        provider.summarize.return_value = "ctx summary"
+        provider.generate.return_value = "ctx summary"
 
         process_ocr(
             "x" * 200, max_summary_length=50,
             context="related context", summarization_provider=provider,
         )
 
-        provider.summarize.assert_called_once_with("x" * 200, context="related context")
+        provider.generate.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

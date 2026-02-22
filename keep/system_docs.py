@@ -75,6 +75,10 @@ SYSTEM_DOC_IDS = {
     "meta-genre.md": ".meta/genre",
     "meta-artist.md": ".meta/artist",
     "meta-album.md": ".meta/album",
+    "prompt-analyze-conversation.md": ".prompt/analyze/conversation",
+    "prompt-analyze-default.md": ".prompt/analyze/default",
+    "prompt-summarize-conversation.md": ".prompt/summarize/conversation",
+    "prompt-summarize-default.md": ".prompt/summarize/default",
 }
 
 # Migration renames from old ID prefixes to new stable IDs

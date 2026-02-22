@@ -22,6 +22,14 @@ The `topic` tag marks an item's subject area. Topics are persistent themes that 
 
 Use `topic` alone for knowledge that transcends any single project. Use both together for knowledge that's specific to a project but also relevant to a broader subject.
 
+## Injection
+
+When `analyze --tags topic` is used, the full text of this doc is prepended to the analysis prompt as guide context for decomposition. This tag is unconstrained — values are free-form and not validated against sub-docs.
+
+## Prompt
+
+Identify the subject area or theme. Use short, lowercase, hyphenated names. A topic is a persistent theme that spans projects (e.g., `auth`, `testing`, `performance`, `devops`). Prefer existing topics over creating new ones.
+
 ## Examples
 
 ```bash

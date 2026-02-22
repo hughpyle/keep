@@ -5,6 +5,7 @@ These define the interfaces that concrete providers must implement.
 Using Protocol for structural subtyping - no explicit inheritance required.
 """
 
+import json
 import re
 from dataclasses import dataclass
 from collections.abc import Iterable
@@ -162,15 +163,6 @@ Bad: "This document describes..." or "The main purpose is..."
 
 Include what it does, key features, and why someone might find it useful."""
 
-# Conversation-specific system prompt — preserves temporal anchors and user-stated facts
-CONVERSATION_SYSTEM_PROMPT = """Summarize this conversation in under 300 words.
-
-Preserve ALL specific dates, times, names, locations, numbers, and factual claims stated by the user.
-
-Focus on: what the user said happened, what was decided, what preferences or facts were stated. Preserve the chronological order of events.
-
-Begin with the topic discussed — not "This conversation is about..." or "The user discusses..."."""
-
 _SPEAKER_RE = re.compile(
     r"^(?:User|Assistant|Human|AI|System)\s*:",
     re.MULTILINE | re.IGNORECASE,
@@ -180,13 +172,6 @@ _SPEAKER_RE = re.compile(
 def _is_conversation(content: str) -> bool:
     """Detect if content looks like a conversation transcript."""
     return len(_SPEAKER_RE.findall(content[:5000])) >= 4
-
-
-def get_summarization_system_prompt(content: str) -> str:
-    """Select the appropriate system prompt based on content type."""
-    if _is_conversation(content):
-        return CONVERSATION_SYSTEM_PROMPT
-    return SUMMARIZATION_SYSTEM_PROMPT
 
 
 def build_summarization_prompt(content: str, context: str | None = None) -> str:
@@ -456,6 +441,37 @@ class AnalyzerProvider(Protocol):
 # -----------------------------------------------------------------------------
 # Tagging
 # -----------------------------------------------------------------------------
+
+# Shared system prompt for all LLM-based tagging providers
+TAGGING_SYSTEM_PROMPT = """Analyze the document and generate relevant tags as a JSON object.
+
+Generate tags for these categories when applicable:
+- content_type: The type of content (e.g., "documentation", "code", "article", "config")
+- language: Programming language if code (e.g., "python", "javascript")
+- domain: Subject domain (e.g., "authentication", "database", "api", "testing")
+- framework: Framework or library if relevant (e.g., "react", "django", "fastapi")
+
+Only include tags that clearly apply. Values should be lowercase.
+
+Respond with a JSON object only, no explanation."""
+
+
+def parse_tag_json(text: str | None) -> dict[str, str]:
+    """Parse JSON tags from LLM response, handling common quirks."""
+    if not text:
+        return {}
+    text = text.strip()
+    # Strip markdown code fences
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3].strip()
+    try:
+        tags = json.loads(text)
+        return {str(k): str(v) for k, v in tags.items()}
+    except (json.JSONDecodeError, AttributeError):
+        return {}
+
 
 @runtime_checkable
 class TaggingProvider(Protocol):
