@@ -375,10 +375,13 @@ class Keeper:
             self._config: StoreConfig = config
             self._store_path = config.path if config.path else Path(".")
         else:
-            # Resolve config and store paths from filesystem
+            # Resolve config and store paths from filesystem.
+            # KEEP_CONFIG takes priority for config dir; otherwise
+            # store_path doubles as config dir (backwards compat).
+            explicit_config = os.environ.get("KEEP_CONFIG")
             if store_path is not None:
                 self._store_path = Path(store_path).resolve()
-                config_dir = self._store_path
+                config_dir = Path(explicit_config).expanduser().resolve() if explicit_config else self._store_path
             else:
                 config_dir = get_config_dir()
 
