@@ -711,6 +711,29 @@ class DocumentStore:
             accessed_at=now,
         )
 
+    def delete_version(self, collection: str, id: str, version: int) -> bool:
+        """
+        Delete a specific archived version by version number.
+
+        Other versions are unaffected; gaps in version numbering are
+        handled naturally by offset-based queries.
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+            version: Internal version number (from VersionInfo.version)
+
+        Returns:
+            True if the version existed and was deleted
+        """
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM document_versions"
+                " WHERE id = ? AND collection = ? AND version = ?",
+                (id, collection, version),
+            )
+            return cursor.rowcount > 0
+
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         """
         Delete a document record and optionally its version history.
