@@ -180,8 +180,9 @@ def _install_claude_code_hooks(settings_file: Path) -> bool:
     if settings_file.exists():
         try:
             settings = json.loads(settings_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            settings = {}
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Cannot parse %s, skipping hook install: %s", settings_file, e)
+            return False
 
     existing_hooks = settings.get("hooks", {})
 
