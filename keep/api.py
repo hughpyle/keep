@@ -2883,6 +2883,14 @@ class Keeper:
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
+        # Deferred system doc migration (normally runs on first _upsert)
+        if self._needs_sysdoc_migration:
+            self._needs_sysdoc_migration = False
+            try:
+                self._migrate_system_documents()
+            except Exception as e:
+                logger.warning("System doc migration deferred: %s", e)
+
         # Validate inputs
         validate_id(id)
         if tags:
