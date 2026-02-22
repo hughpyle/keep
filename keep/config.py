@@ -45,6 +45,11 @@ def get_tool_directory() -> Path:
     return pkg_path
 
 
+# Providers that indicate "nothing good found" — not persisted to keep.toml.
+# When load_config() sees these (or missing sections), it re-detects.
+_FALLBACK_PROVIDERS = frozenset({"truncate"})
+
+
 @dataclass
 class ProviderConfig:
     """Configuration for a single provider."""
@@ -433,7 +438,11 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
 
 def create_default_config(config_dir: Path, store_path: Optional[Path] = None) -> StoreConfig:
     """
-    Create a new config with auto-detected defaults.
+    Create a new config with minimal defaults.
+
+    Fallback providers (truncate, None) are not persisted to keep.toml.
+    On next load, load_config() re-detects if better options are available.
+    Real providers (mlx, ollama, voyage, etc.) are persisted once detected.
 
     Args:
         config_dir: Directory where keep.toml will be saved
@@ -554,6 +563,25 @@ def load_config(config_dir: Path) -> StoreConfig:
     embedding_config = parse_provider(data["embedding"]) if "embedding" in data else None
     summarization_config = parse_provider(data.get("summarization", {"name": "truncate"}))
 
+    # Auto-heal: re-detect if key providers are missing or fallback.
+    # This recovers from first-run in constrained environments.
+    _need_redetect = (
+        "embedding" not in data or
+        "summarization" not in data or
+        summarization_config.name in _FALLBACK_PROVIDERS
+    )
+    if _need_redetect:
+        try:
+            detected = detect_default_providers()
+            if "embedding" not in data and detected["embedding"] is not None:
+                embedding_config = detected["embedding"]
+            if "summarization" not in data or summarization_config.name in _FALLBACK_PROVIDERS:
+                det_summ = detected["summarization"]
+                if det_summ and det_summ.name not in _FALLBACK_PROVIDERS:
+                    summarization_config = det_summ
+        except Exception:
+            pass  # re-detection is best-effort; don't block config loading
+
     # KEEP_LOCAL_ONLY=1 overrides remote providers to None/fallback
     if os.environ.get("KEEP_LOCAL_ONLY"):
         _REMOTE_PROVIDERS = {"voyage", "openai", "gemini", "anthropic"}
@@ -643,10 +671,10 @@ def save_config(config: StoreConfig) -> None:
         "store": store_section,
     }
 
-    # Only include providers if they're configured
+    # Persist real providers; skip fallbacks so load_config() re-detects
     if config.embedding:
         data["embedding"] = provider_to_dict(config.embedding)
-    if config.summarization:
+    if config.summarization and config.summarization.name not in _FALLBACK_PROVIDERS:
         data["summarization"] = provider_to_dict(config.summarization)
     if config.document:
         data["document"] = provider_to_dict(config.document)

@@ -583,7 +583,7 @@ class Keeper:
                     "  API-based:  export VOYAGE_API_KEY=...  (or OPENAI_API_KEY, GEMINI_API_KEY)\n"
                     "  Local:      pip install 'keep-skill[local]'\n"
                     "\n"
-                    "Read-only operations (get, list, find --text) work without embeddings."
+                    "Read-only operations (get, list, find --fulltext) work without embeddings."
                 )
             registry = get_registry()
             base_provider = registry.create_embedding(
@@ -1751,12 +1751,18 @@ class Keeper:
 
         else:
             # Semantic mode (default): embed query, search by similarity
-            embedding = self._get_embedding_provider().embed(query)
-            fetch_limit = limit * 3 if self._decay_half_life_days > 0 else limit * 2
-            results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit, where=where)
+            # Fall back to fulltext if no embedding provider configured
+            if self._config.embedding is None:
+                fetch_limit = limit * 3
+                results = self._store.query_fulltext(chroma_coll, query, limit=fetch_limit, where=where)
+                items = [r.to_item() for r in results]
+            else:
+                embedding = self._get_embedding_provider().embed(query)
+                fetch_limit = limit * 3 if self._decay_half_life_days > 0 else limit * 2
+                results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit, where=where)
 
-            items = [r.to_item() for r in results]
-            items = self._apply_recency_decay(items)
+                items = [r.to_item() for r in results]
+                items = self._apply_recency_decay(items)
 
         # Apply common filters
         if since is not None or until is not None:
