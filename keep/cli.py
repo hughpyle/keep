@@ -2690,10 +2690,10 @@ def main():
         raise SystemExit(130)  # Standard exit code for Ctrl+C
     except Exception as e:
         # Log full traceback to file, show clean message to user
-        from .errors import log_exception, ERROR_LOG_PATH
-        log_exception(e, context="keep CLI")
+        from .errors import log_exception
+        log_path = log_exception(e, context="keep CLI")
         typer.echo(f"Error: {e}", err=True)
-        typer.echo(f"Details logged to {ERROR_LOG_PATH}", err=True)
+        typer.echo(f"Details logged to {log_path}", err=True)
         raise SystemExit(1)
 
 

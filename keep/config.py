@@ -275,21 +275,24 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         platform.machine() == "arm64"
     )
 
-    # Check for API keys
-    has_anthropic_key = bool(
+    # KEEP_LOCAL_ONLY=1 suppresses remote API provider auto-detection
+    local_only = bool(os.environ.get("KEEP_LOCAL_ONLY"))
+
+    # Check for API keys (skipped in local-only mode)
+    has_anthropic_key = not local_only and bool(
         os.environ.get("ANTHROPIC_API_KEY") or
         os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     )
-    has_openai_key = bool(
+    has_openai_key = not local_only and bool(
         os.environ.get("KEEP_OPENAI_API_KEY") or
         os.environ.get("OPENAI_API_KEY")
     )
-    has_gemini_key = bool(
+    has_gemini_key = not local_only and bool(
         os.environ.get("GEMINI_API_KEY") or
         os.environ.get("GOOGLE_API_KEY") or
         os.environ.get("GOOGLE_CLOUD_PROJECT")
     )
-    has_voyage_key = bool(os.environ.get("VOYAGE_API_KEY"))
+    has_voyage_key = not local_only and bool(os.environ.get("VOYAGE_API_KEY"))
 
     # Check for Ollama (lazy — only probed when no API key covers both)
     _ollama_info: dict | None = None
