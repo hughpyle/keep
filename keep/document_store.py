@@ -1318,6 +1318,7 @@ class DocumentStore:
         collection: str,
         limit: int = 10,
         order_by: str = "updated",
+        offset: int = 0,
     ) -> list[DocumentRecord]:
         """
         List recent documents ordered by timestamp.
@@ -1326,6 +1327,7 @@ class DocumentStore:
             collection: Collection name
             limit: Maximum number to return
             order_by: Sort column - "updated" (default) or "accessed"
+            offset: Number of rows to skip (for pagination)
 
         Returns:
             List of DocumentRecords, most recent first
@@ -1339,8 +1341,8 @@ class DocumentStore:
             FROM documents
             WHERE collection = ?
             ORDER BY {order_col} DESC
-            LIMIT ?
-        """, (collection, limit))
+            LIMIT ? OFFSET ?
+        """, (collection, limit, offset))
 
         return [
             DocumentRecord(
@@ -1361,6 +1363,7 @@ class DocumentStore:
         collection: str,
         limit: int = 10,
         order_by: str = "updated",
+        offset: int = 0,
     ) -> list[DocumentRecord]:
         """
         List recent documents including archived versions.
@@ -1389,8 +1392,8 @@ class DocumentStore:
             WHERE dv.collection = ?
 
             ORDER BY sort_ts DESC
-            LIMIT ?
-        """, (collection, collection, limit))
+            LIMIT ? OFFSET ?
+        """, (collection, collection, limit, offset))
 
         records = []
         for row in cursor:
@@ -1436,6 +1439,8 @@ class DocumentStore:
         self,
         collection: str,
         prefix: str,
+        limit: int = 0,
+        offset: int = 0,
     ) -> list[DocumentRecord]:
         """
         Query documents by ID prefix.
@@ -1443,18 +1448,30 @@ class DocumentStore:
         Args:
             collection: Collection name
             prefix: ID prefix to match (e.g., ".")
+            limit: Max results (0 = unlimited)
+            offset: Number of rows to skip (for pagination)
 
         Returns:
             List of matching DocumentRecords
         """
         # Escape LIKE wildcards in the prefix to prevent injection
         escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        cursor = self._conn.execute("""
+        sql = """
             SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ? AND id LIKE ? ESCAPE '\\'
             ORDER BY id
-        """, (collection, f"{escaped}%"))
+        """
+        params: tuple = (collection, f"{escaped}%")
+        if limit > 0:
+            sql += " LIMIT ?"
+            params += (limit,)
+        if offset > 0:
+            if limit == 0:
+                sql += " LIMIT -1"  # SQLite requires LIMIT before OFFSET
+            sql += " OFFSET ?"
+            params += (offset,)
+        cursor = self._conn.execute(sql, params)
 
         results = []
         for row in cursor:
@@ -1474,6 +1491,8 @@ class DocumentStore:
         self,
         collection: str,
         pattern: str,
+        limit: int = 0,
+        offset: int = 0,
     ) -> list[DocumentRecord]:
         """
         Query documents by ID glob pattern.
@@ -1483,6 +1502,8 @@ class DocumentStore:
         Args:
             collection: Collection name
             pattern: Glob pattern (e.g., "session-*", "*auth*")
+            limit: Max results (0 = unlimited)
+            offset: Number of rows to skip (for pagination)
 
         Returns:
             List of matching DocumentRecords
@@ -1490,12 +1511,22 @@ class DocumentStore:
         # Escape SQL LIKE special chars first, then convert glob to LIKE
         escaped = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like_pattern = escaped.replace("*", "%").replace("?", "_")
-        cursor = self._conn.execute("""
+        sql = """
             SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ? AND id LIKE ? ESCAPE '\\'
             ORDER BY id
-        """, (collection, like_pattern))
+        """
+        params: tuple = (collection, like_pattern)
+        if limit > 0:
+            sql += " LIMIT ?"
+            params += (limit,)
+        if offset > 0:
+            if limit == 0:
+                sql += " LIMIT -1"
+            sql += " OFFSET ?"
+            params += (offset,)
+        cursor = self._conn.execute(sql, params)
 
         results = []
         for row in cursor:
@@ -1736,6 +1767,7 @@ class DocumentStore:
         limit: int = 100,
         since_date: Optional[str] = None,
         until_date: Optional[str] = None,
+        offset: int = 0,
     ) -> list[DocumentRecord]:
         """
         Find documents that have a specific tag key (any value).
@@ -1746,6 +1778,7 @@ class DocumentStore:
             limit: Maximum results
             since_date: Only include items updated on or after this date (YYYY-MM-DD)
             until_date: Only include items updated before this date (YYYY-MM-DD)
+            offset: Number of rows to skip (for pagination)
 
         Returns:
             List of matching DocumentRecords
@@ -1773,6 +1806,9 @@ class DocumentStore:
 
         sql += "ORDER BY updated_at DESC\nLIMIT ?"
         params.append(limit)
+        if offset > 0:
+            sql += " OFFSET ?"
+            params.append(offset)
 
         cursor = self._conn.execute(sql, params)
 

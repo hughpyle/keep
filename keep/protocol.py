@@ -294,6 +294,7 @@ class VectorStoreProtocol(Protocol):
         collection: str,
         where: dict[str, Any],
         limit: int = 100,
+        offset: int = 0,
     ) -> list[StoreResult]: ...
 
     def query_fulltext(
@@ -445,11 +446,13 @@ class DocumentStoreProtocol(Protocol):
         collection: str,
         limit: int = 10,
         order_by: str = "updated",
+        offset: int = 0,
     ) -> list[DocumentRecord]: ...
 
     def list_recent_with_history(
         self, collection: str, limit: int = 10,
         order_by: str = "updated",
+        offset: int = 0,
     ) -> list[DocumentRecord]: ...
 
     def count(self, collection: str) -> int: ...
@@ -457,11 +460,13 @@ class DocumentStoreProtocol(Protocol):
     def count_all(self) -> int: ...
 
     def query_by_id_prefix(
-        self, collection: str, prefix: str
+        self, collection: str, prefix: str, limit: int = 0,
+        offset: int = 0,
     ) -> list[DocumentRecord]: ...
 
     def query_by_id_glob(
-        self, collection: str, pattern: str
+        self, collection: str, pattern: str, limit: int = 0,
+        offset: int = 0,
     ) -> list[DocumentRecord]: ...
 
     def list_distinct_tag_keys(self, collection: str) -> list[str]: ...
@@ -474,6 +479,7 @@ class DocumentStoreProtocol(Protocol):
         self, collection: str, key: str,
         limit: int = 100, since_date: Optional[str] = None,
         until_date: Optional[str] = None,
+        offset: int = 0,
     ) -> list[DocumentRecord]: ...
 
     # -- Version extraction (for move) --

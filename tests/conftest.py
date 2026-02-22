@@ -137,7 +137,7 @@ class MockChromaStore:
                 break
         return results
 
-    def query_metadata(self, collection: str, where: dict, limit: int = 100) -> list:
+    def query_metadata(self, collection: str, where: dict, limit: int = 100, offset: int = 0) -> list:
         from keep.store import StoreResult
         if collection not in self._data:
             return []
@@ -145,9 +145,7 @@ class MockChromaStore:
         for id, rec in list(self._data[collection].items()):
             if self._match_where(rec["tags"], where):
                 results.append(StoreResult(id=id, summary=rec["summary"], tags=rec["tags"]))
-            if len(results) >= limit:
-                break
-        return results
+        return results[offset:offset + limit]
 
     def query_fulltext(self, collection: str, query: str, limit: int = 10,
                       where: dict = None) -> list:

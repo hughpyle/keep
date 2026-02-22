@@ -581,23 +581,26 @@ class ChromaStore:
         collection: str,
         where: dict[str, Any],
         limit: int = 100,
+        offset: int = 0,
     ) -> list[StoreResult]:
         """
         Query by metadata filter (tag query).
-        
+
         Args:
             collection: Collection name
             where: Chroma where clause for metadata filtering
             limit: Maximum results to return
-            
+            offset: Number of results to skip (for pagination)
+
         Returns:
             List of matching results (no particular order)
         """
         coll = self._get_collection(collection)
-        
+
         result = coll.get(
             where=where,
             limit=limit,
+            offset=offset,
             include=["documents", "metadatas"],
         )
         
