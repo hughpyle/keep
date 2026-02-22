@@ -1270,10 +1270,13 @@ class Keeper:
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
-        # Deferred init tasks (run on first write when embeddings are available)
+        # Deferred init tasks (best-effort — don't block user writes)
         if self._needs_sysdoc_migration:
             self._needs_sysdoc_migration = False  # Clear before call (migration calls remember → _upsert)
-            self._migrate_system_documents()
+            try:
+                self._migrate_system_documents()
+            except Exception as e:
+                logger.warning("System doc migration deferred: %s", e)
 
         # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
         existing_tags = {}

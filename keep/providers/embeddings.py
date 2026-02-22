@@ -407,6 +407,13 @@ class VoyageEmbedding:
                     backoff = min(backoff * 2, self.MAX_BACKOFF)
                     continue
 
+                # Auth errors — fail immediately, don't retry
+                if response.status_code in (401, 403):
+                    raise RuntimeError(
+                        f"Voyage AI API authentication failed ({response.status_code}).\n"
+                        "Check your VOYAGE_API_KEY environment variable."
+                    )
+
                 response.raise_for_status()
                 return response.json()
 
