@@ -49,7 +49,7 @@ keep put "learning"          # Capture insight
 """
 
 # Bump this when hook definitions change — triggers re-install for existing users
-HOOKS_VERSION = 8
+HOOKS_VERSION = 9
 
 # Hook definitions for Claude Code
 CLAUDE_CODE_HOOKS = {
@@ -94,6 +94,7 @@ TOOL_CONFIGS = {
     "claude_code": ".claude",
     "codex": ".codex",
     "kiro": ".kiro",
+    "openclaw": ".openclaw",
 }
 
 
@@ -279,6 +280,50 @@ def install_kiro(config_dir: Path) -> list[str]:
     return actions
 
 
+def _upgrade_openclaw_plugin(plugin_dir: Path) -> bool:
+    """
+    Copy plugin files from package data to an existing plugin directory.
+
+    Only overwrites files that ship with keep (index.ts, package.json,
+    openclaw.plugin.json). Never creates directories or touches other
+    plugins' files.
+
+    Returns True if any file was written.
+    """
+    source_dir = Path(__file__).parent / "data" / "openclaw-plugin"
+    wrote = False
+    for src in source_dir.iterdir():
+        if src.is_file():
+            dst = plugin_dir / src.name
+            new_content = src.read_text(encoding="utf-8")
+            # Skip write if content is identical
+            if dst.exists() and dst.read_text(encoding="utf-8") == new_content:
+                continue
+            dst.write_text(new_content, encoding="utf-8")
+            wrote = True
+    return wrote
+
+
+def install_openclaw(config_dir: Path) -> list[str]:
+    """
+    Auto-upgrade keep plugin for OpenClaw.
+
+    Only upgrades if the plugin is already installed (plugin_dir exists).
+    Initial install still requires: openclaw plugins install -l $(keep config openclaw-plugin)
+
+    Returns list of actions taken.
+    """
+    actions = []
+
+    # Auto-upgrade plugin files only if already installed
+    plugin_dir = config_dir / "extensions" / "keep"
+    if plugin_dir.is_dir():
+        if _upgrade_openclaw_plugin(plugin_dir):
+            actions.append("plugin")
+
+    return actions
+
+
 def _check_cwd_agents_md() -> None:
     """
     Install protocol block into AGENTS.md in cwd if present.
@@ -322,6 +367,7 @@ def check_and_install(config: "StoreConfig") -> None:
         "claude_code": install_claude_code,
         "codex": install_codex,
         "kiro": install_kiro,
+        "openclaw": install_openclaw,
     }
 
     for key, tool_dir in new_tools.items():

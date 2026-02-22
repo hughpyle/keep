@@ -2,9 +2,9 @@
  * keep — OpenClaw plugin
  *
  * Hooks:
- *   before_agent_start  → inject `keep now` context
- *   after_agent_stop    → update intentions
+ *   before_prompt_build → prompt-aware context injection
  *   after_compaction    → index workspace memory files into keep
+ *   session_end         → archive session versions from now
  *
  * The after_compaction hook uses `keep put` with file-stat fast-path:
  * unchanged files (same mtime+size) are skipped without reading.
@@ -54,25 +54,27 @@ export default function register(api: any) {
     return;
   }
 
-  // Agent start: inject current intentions + similar context
+  // Before prompt build: update intentions with user prompt, injecting prompt-aware context.
+  // The update itself returns context (similar items, meta), so one call does both.
   api.on(
-    "before_agent_start",
-    async (_event: any, _ctx: any) => {
-      const now = runKeep("now -n 10");
+    "before_prompt_build",
+    async (event: any, ctx: any) => {
+      const sid = ctx?.sessionId || ctx?.sessionKey;
+      const sessionTag = sid ? `-t session=${sid}` : "";
+
+      let now: string | null;
+      if (event.prompt) {
+        const truncated = event.prompt.slice(0, 500);
+        // Update + get context in one call (set_now outputs context with similar/meta)
+        now = runKeep(`now -n 10 ${sessionTag}`, `User prompt: ${truncated}`);
+      } else {
+        now = runKeep("now -n 10");
+      }
       if (!now) return;
 
       return {
         prependContext: `\`keep now\`:\n${now}`,
       };
-    },
-    { priority: 10 },
-  );
-
-  // Agent stop: update intentions
-  api.on(
-    "after_agent_stop",
-    async (_event: any, _ctx: any) => {
-      runKeep("now 'Session ended'");
     },
     { priority: 10 },
   );
@@ -111,7 +113,20 @@ export default function register(api: any) {
     { priority: 20 },
   );
 
+  // Session end: archive this session's versions out of now.
+  // Moves versions tagged with this session ID to their own item,
+  // keeping now clean for the next session.
+  api.on(
+    "session_end",
+    async (event: any, ctx: any) => {
+      const key = ctx?.sessionId || ctx?.sessionKey;
+      if (!key) return;
+      runKeepLong(`move "session-${key}" -t session=${key}`);
+    },
+    { priority: 10 },
+  );
+
   api.logger?.info(
-    "[keep] Registered hooks: before_agent_start, after_agent_stop, after_compaction",
+    "[keep] Registered hooks: before_prompt_build, after_compaction, session_end",
   );
 }
