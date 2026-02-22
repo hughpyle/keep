@@ -551,14 +551,26 @@ def load_config(config_dir: Path) -> StoreConfig:
     if backend_params and not isinstance(backend_params, dict):
         raise ValueError("store.backend_params must be a table/dict")
 
+    embedding_config = parse_provider(data["embedding"]) if "embedding" in data else None
+    summarization_config = parse_provider(data.get("summarization", {"name": "truncate"}))
+
+    # KEEP_LOCAL_ONLY=1 overrides remote providers to None/fallback
+    if os.environ.get("KEEP_LOCAL_ONLY"):
+        _REMOTE_PROVIDERS = {"voyage", "openai", "gemini", "anthropic"}
+        if embedding_config and embedding_config.name in _REMOTE_PROVIDERS:
+            embedding_config = None
+        if summarization_config and summarization_config.name in _REMOTE_PROVIDERS:
+            summarization_config = ProviderConfig("truncate")
+        remote = None
+
     return StoreConfig(
         path=actual_store,
         config_dir=config_dir,
         store_path=store_path_str,
         version=version,
         created=data.get("store", {}).get("created", ""),
-        embedding=parse_provider(data["embedding"]) if "embedding" in data else None,
-        summarization=parse_provider(data.get("summarization", {"name": "truncate"})),
+        embedding=embedding_config,
+        summarization=summarization_config,
         document=parse_provider(data.get("document", {"name": "composite"})),
         media=media_config,
         analyzer=analyzer_config,
