@@ -297,7 +297,7 @@ class SlidingWindowAnalyzer:
             if len(sample) >= 5000:
                 break
         if _is_conversation(sample):
-            return "conversation"
+            return "conversation-v2"
         return "temporal-v4"
 
     def _resolve_prompt(self, chunks: list[AnalysisChunk]) -> str:
