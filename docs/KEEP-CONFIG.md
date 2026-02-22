@@ -49,7 +49,7 @@ version = 2
 max_summary_length = 1000
 
 [embedding]
-name = "ollama"                        # or "voyage", "openai", "mlx", "sentence_transformers"
+name = "ollama"                        # or "voyage", "openai", "mlx", "sentence-transformers"
 model = "nomic-embed-text"
 
 [summarization]

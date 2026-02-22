@@ -38,14 +38,6 @@ def configure_quiet_mode(quiet: bool = True):
         # Suppress Python warnings (including deprecation warnings)
         warnings.filterwarnings("ignore")
         
-        # Suppress MLX verbosity if available
-        try:
-            import mlx.core as mx
-            # MLX doesn't have a global verbosity setting currently,
-            # but we can redirect stderr if needed
-        except ImportError:
-            pass
-        
         # Configure Python logging to be less verbose
         import logging
         logging.getLogger("transformers").setLevel(logging.ERROR)
