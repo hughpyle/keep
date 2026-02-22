@@ -1,4 +1,13 @@
 
+* openclaw:  message:received / message:sent?
+
+* Investigate the session-id claw thing
+
+* Investigate the analysis-run thing
+
+* Filter-strict versus not
+    - "session id" (ok to bleed through) versus "user id" (not ok to bleed through)
+
 * different summarizers/classifiers
 
 * CLAP / LAION-AI for audio similarity (512d vec)
@@ -249,3 +258,4 @@ x `context` text alongside summaries? (no, summary is good now)
 x check for CLI compatibility with windows (WLS should work but no plan to validate at this stage)
 . tag-by-model ("auto-tag") in the analysis process (based on any constrained tags)
 . filter noisy tags from parts-classification: meta/foo/provisional
+. Prompts as notes
