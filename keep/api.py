@@ -1381,22 +1381,27 @@ class Keeper:
             return _record_to_item(result, changed=not content_unchanged)
 
         # Local mode: compute embedding synchronously
-        if content_unchanged:
-            embedding = self._store.get_embedding(chroma_coll, id)
-            if embedding is None:
-                embedding = self._try_dedup_embedding(
-                    doc_coll, chroma_coll, new_hash, id, content,
-                )
-            if embedding is None:
-                embedding = self._get_embedding_provider().embed(content)
-        else:
-            embedding = self._try_dedup_embedding(doc_coll, chroma_coll, new_hash, id, content)
-            if embedding is None:
-                embedding = self._get_embedding_provider().embed(content)
+        # If no embedding provider, write to document store only (data is safe;
+        # embeddings are filled in by reconciliation when a provider appears).
+        _has_embeddings = self._config.embedding is not None
+        embedding = None
+        if _has_embeddings:
+            if content_unchanged:
+                embedding = self._store.get_embedding(chroma_coll, id)
+                if embedding is None:
+                    embedding = self._try_dedup_embedding(
+                        doc_coll, chroma_coll, new_hash, id, content,
+                    )
+                if embedding is None:
+                    embedding = self._get_embedding_provider().embed(content)
+            else:
+                embedding = self._try_dedup_embedding(doc_coll, chroma_coll, new_hash, id, content)
+                if embedding is None:
+                    embedding = self._get_embedding_provider().embed(content)
 
         # Save old embedding before ChromaDB upsert overwrites it (for version archival)
         old_embedding = None
-        if existing_doc is not None and not content_unchanged:
+        if _has_embeddings and existing_doc is not None and not content_unchanged:
             old_embedding = self._store.get_embedding(chroma_coll, id)
 
         # Dual-write: document store (canonical) + ChromaDB (embedding index)
@@ -1410,28 +1415,29 @@ class Keeper:
             created_at=created_at,
         )
 
-        self._store.upsert(
-            collection=chroma_coll,
-            id=id,
-            embedding=embedding,
-            summary=final_summary,
-            tags=casefold_tags_for_index(merged_tags),
-        )
+        if _has_embeddings:
+            self._store.upsert(
+                collection=chroma_coll,
+                id=id,
+                embedding=embedding,
+                summary=final_summary,
+                tags=casefold_tags_for_index(merged_tags),
+            )
 
-        # If content changed and we archived a version, also store versioned embedding
-        if existing_doc is not None and content_changed:
-            max_ver = self._document_store.max_version(doc_coll, id)
-            if max_ver > 0:
-                if old_embedding is None:
-                    old_embedding = self._get_embedding_provider().embed(existing_doc.summary)
-                self._store.upsert_version(
-                    collection=chroma_coll,
-                    id=id,
-                    version=max_ver,
-                    embedding=old_embedding,
-                    summary=existing_doc.summary,
-                    tags=casefold_tags_for_index(existing_doc.tags),
-                )
+            # If content changed and we archived a version, also store versioned embedding
+            if existing_doc is not None and content_changed:
+                max_ver = self._document_store.max_version(doc_coll, id)
+                if max_ver > 0:
+                    if old_embedding is None:
+                        old_embedding = self._get_embedding_provider().embed(existing_doc.summary)
+                    self._store.upsert_version(
+                        collection=chroma_coll,
+                        id=id,
+                        version=max_ver,
+                        embedding=old_embedding,
+                        summary=existing_doc.summary,
+                        tags=casefold_tags_for_index(existing_doc.tags),
+                    )
 
         # Spawn background processor if needed (local only — uses filesystem locks)
         if summary is None and len(content) > max_len and (not content_unchanged or tags_changed or force):
