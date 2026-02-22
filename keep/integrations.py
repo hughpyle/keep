@@ -49,7 +49,7 @@ keep put "learning"          # Capture insight
 """
 
 # Bump this when hook definitions change — triggers re-install for existing users
-HOOKS_VERSION = 9
+HOOKS_VERSION = 10
 
 # Hook definitions for Claude Code
 CLAUDE_CODE_HOOKS = {
