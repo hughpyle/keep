@@ -1436,6 +1436,7 @@ class DocumentStore:
         self,
         collection: str,
         prefix: str,
+        limit: int = 0,
     ) -> list[DocumentRecord]:
         """
         Query documents by ID prefix.
@@ -1443,18 +1444,24 @@ class DocumentStore:
         Args:
             collection: Collection name
             prefix: ID prefix to match (e.g., ".")
+            limit: Max results (0 = unlimited)
 
         Returns:
             List of matching DocumentRecords
         """
         # Escape LIKE wildcards in the prefix to prevent injection
         escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        cursor = self._conn.execute("""
+        sql = """
             SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ? AND id LIKE ? ESCAPE '\\'
             ORDER BY id
-        """, (collection, f"{escaped}%"))
+        """
+        params: tuple = (collection, f"{escaped}%")
+        if limit > 0:
+            sql += " LIMIT ?"
+            params += (limit,)
+        cursor = self._conn.execute(sql, params)
 
         results = []
         for row in cursor:
@@ -1474,6 +1481,7 @@ class DocumentStore:
         self,
         collection: str,
         pattern: str,
+        limit: int = 0,
     ) -> list[DocumentRecord]:
         """
         Query documents by ID glob pattern.
@@ -1483,6 +1491,7 @@ class DocumentStore:
         Args:
             collection: Collection name
             pattern: Glob pattern (e.g., "session-*", "*auth*")
+            limit: Max results (0 = unlimited)
 
         Returns:
             List of matching DocumentRecords
@@ -1490,12 +1499,17 @@ class DocumentStore:
         # Escape SQL LIKE special chars first, then convert glob to LIKE
         escaped = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like_pattern = escaped.replace("*", "%").replace("?", "_")
-        cursor = self._conn.execute("""
+        sql = """
             SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ? AND id LIKE ? ESCAPE '\\'
             ORDER BY id
-        """, (collection, like_pattern))
+        """
+        params: tuple = (collection, like_pattern)
+        if limit > 0:
+            sql += " LIMIT ?"
+            params += (limit,)
+        cursor = self._conn.execute(sql, params)
 
         results = []
         for row in cursor:

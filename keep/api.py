@@ -3223,10 +3223,10 @@ class Keeper:
         elif prefix is not None:
             # ID pattern query — glob if pattern contains * or ?, else prefix.
             if "*" in prefix or "?" in prefix:
-                records = self._document_store.query_by_id_glob(doc_coll, prefix)
+                records = self._document_store.query_by_id_glob(doc_coll, prefix, limit=fetch_limit)
             else:
                 # Prefix match — also finds children (e.g. ".tag" finds ".tag/foo").
-                records = self._document_store.query_by_id_prefix(doc_coll, prefix)
+                records = self._document_store.query_by_id_prefix(doc_coll, prefix, limit=fetch_limit)
             items = [_record_to_item(rec) for rec in records]
 
         else:
