@@ -3283,14 +3283,12 @@ class Keeper:
                 validate_tag_key(k)
 
         # ------------------------------------------------------------------
-        # Paginated fetch-and-filter: fetches pages of results, applies
-        # post-filters, and accumulates until we have `limit` results or
-        # the data source is exhausted.
+        # Fetch-and-filter loop: keeps fetching in growing batches until
+        # we have at least `limit` results after post-filtering, or the
+        # data source is exhausted.
         # ------------------------------------------------------------------
-        page_size = min(limit * 3, 200)
-        max_rows = max(limit * 20, 200)
-        offset = 0
-        items: list[Item] = []
+        max_fetch = max(limit * 20, 200)
+        fetch_limit = min(limit * 3, max_fetch)
 
         while True:
             # --------------------------------------------------------------
@@ -3303,17 +3301,15 @@ class Keeper:
                     where = where_conditions[0]
                 else:
                     where = {"$and": where_conditions}
-                results = self._store.query_metadata(
-                    chroma_coll, where, limit=page_size, offset=offset,
-                )
+                results = self._store.query_metadata(chroma_coll, where, limit=fetch_limit)
                 # Enrich from SQLite for original-case tag values
-                batch = []
+                items = []
                 for r in results:
                     doc = self._document_store.get(doc_coll, r.id)
                     if doc:
-                        batch.append(_record_to_item(doc))
+                        items.append(_record_to_item(doc))
                     else:
-                        batch.append(r.to_item())
+                        items.append(r.to_item())
                 raw_count = len(results)
 
             elif tag_keys:
@@ -3322,70 +3318,64 @@ class Keeper:
                 since_date = _parse_date_param(since) if since else None
                 until_date = _parse_date_param(until) if until else None
                 docs = self._document_store.query_by_tag_key(
-                    doc_coll, tag_keys[0], limit=page_size,
+                    doc_coll, tag_keys[0], limit=fetch_limit,
                     since_date=since_date, until_date=until_date,
-                    offset=offset,
                 )
-                batch = [_record_to_item(d) for d in docs]
+                items = [_record_to_item(d) for d in docs]
                 raw_count = len(docs)
                 # Post-filter additional key-only tags
                 for extra_key in tag_keys[1:]:
-                    batch = [i for i in batch if extra_key in i.tags]
+                    items = [i for i in items if extra_key in i.tags]
 
             elif prefix is not None:
                 # ID pattern query — glob if pattern contains * or ?, else prefix.
                 if "*" in prefix or "?" in prefix:
-                    records = self._document_store.query_by_id_glob(
-                        doc_coll, prefix, limit=page_size, offset=offset,
-                    )
+                    records = self._document_store.query_by_id_glob(doc_coll, prefix, limit=fetch_limit)
                 else:
                     # Prefix match — also finds children (e.g. ".tag" finds ".tag/foo").
-                    records = self._document_store.query_by_id_prefix(
-                        doc_coll, prefix, limit=page_size, offset=offset,
-                    )
-                batch = [_record_to_item(rec) for rec in records]
+                    records = self._document_store.query_by_id_prefix(doc_coll, prefix, limit=fetch_limit)
+                items = [_record_to_item(rec) for rec in records]
                 raw_count = len(records)
 
             else:
                 # Default: recent items
                 if include_history:
                     records = self._document_store.list_recent_with_history(
-                        doc_coll, page_size, order_by=order_by, offset=offset,
+                        doc_coll, fetch_limit, order_by=order_by,
                     )
                 else:
                     records = self._document_store.list_recent(
-                        doc_coll, page_size, order_by=order_by, offset=offset,
+                        doc_coll, fetch_limit, order_by=order_by,
                     )
-                batch = [_record_to_item(rec) for rec in records]
+                items = [_record_to_item(rec) for rec in records]
                 raw_count = len(records)
 
             # --------------------------------------------------------------
-            # Post-filters (apply remaining predicates to this page)
+            # Post-filters (apply remaining predicates)
             # --------------------------------------------------------------
 
             # Prefix filter (if primary query wasn't prefix-based)
             if prefix is not None and tags:
-                batch = [i for i in batch if i.id.startswith(prefix)]
+                items = [i for i in items if i.id.startswith(prefix)]
 
             # Tag-key filter (if primary query was something else)
             if tag_keys and tags:
                 for k in tag_keys:
-                    batch = [i for i in batch if k in i.tags]
+                    items = [i for i in items if k in i.tags]
 
             # Date filter (skip if already applied in SQL via tag_keys path)
             if (since is not None or until is not None) and not tag_keys:
-                batch = _filter_by_date(batch, since=since, until=until)
+                items = _filter_by_date(items, since=since, until=until)
 
             # Hidden filter (prefix queries always include hidden)
             if not include_hidden and prefix is None:
-                batch = [i for i in batch if not _is_hidden(i)]
-
-            items.extend(batch)
-            offset += raw_count
+                items = [i for i in items if not _is_hidden(i)]
 
             # Enough results, or data source exhausted?
-            if len(items) >= limit or raw_count < page_size or offset >= max_rows:
+            if len(items) >= limit or raw_count < fetch_limit or fetch_limit >= max_fetch:
                 break
+            # Widen the fetch and retry
+            fetch_limit = min(fetch_limit * 2, max_fetch)
 
         return items[:limit]
 
