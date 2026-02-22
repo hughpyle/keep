@@ -52,6 +52,7 @@ class PendingSummary:
     attempts: int = 0
     task_type: str = "summarize"
     metadata: dict = field(default_factory=dict)
+    delegated_at: str | None = None
 
 
 class PendingSummaryQueue:
@@ -441,7 +442,7 @@ class PendingSummaryQueue:
         with self._lock:
             cursor = self._conn.execute("""
                 SELECT id, collection, content, queued_at, attempts,
-                       task_type, metadata, remote_task_id
+                       task_type, metadata, remote_task_id, delegated_at
                 FROM pending_summaries
                 WHERE status = 'delegated'
                 ORDER BY delegated_at ASC
@@ -463,6 +464,7 @@ class PendingSummaryQueue:
                     attempts=row[4],
                     task_type=row[5] or "summarize",
                     metadata=meta,
+                    delegated_at=row[8],
                 ))
         return items
 

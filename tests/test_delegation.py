@@ -1,6 +1,7 @@
 """Integration tests for task delegation in process_pending()."""
 
 import tempfile
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -394,10 +395,152 @@ class TestPollDelegated:
         result = {"processed": 0, "failed": 0}
         kp._poll_delegated(result)
 
-        # No crashes, task still delegated
+        # No crashes, task still delegated (not stale yet)
         assert result["processed"] == 0
         assert result["failed"] == 0
         assert queue.count_delegated() == 1
+
+        queue.close()
+        kp.close()
+
+    def test_not_found_reverts_to_pending(self, mock_providers, tmp_path):
+        """Task that disappeared from server is reverted to pending."""
+        from keep import Keeper
+
+        kp = Keeper(store_path=tmp_path)
+
+        queue = PendingSummaryQueue(tmp_path / "pending.db")
+        kp._pending_queue = queue
+
+        queue.enqueue("doc1", "default", "content")
+        queue.dequeue(limit=1)
+        queue.mark_delegated("doc1", "default", "summarize", "rt-gone")
+
+        mock_tc = MagicMock(spec=TaskClient)
+        mock_tc.poll.return_value = {
+            "status": "not_found",
+            "result": None,
+            "error": "Task not found",
+            "task_type": "summarize",
+        }
+        kp._task_client = mock_tc
+
+        result = {"processed": 0, "failed": 0}
+        kp._poll_delegated(result)
+
+        assert result["failed"] == 1
+        assert queue.count_delegated() == 0
+        # Should be back in pending for local processing
+        assert queue.count() == 1
+
+        queue.close()
+        kp.close()
+
+    def test_stale_delegation_reverts(self, mock_providers, tmp_path):
+        """Delegation older than threshold is reverted to pending."""
+        from keep import Keeper
+
+        kp = Keeper(store_path=tmp_path)
+
+        queue = PendingSummaryQueue(tmp_path / "pending.db")
+        kp._pending_queue = queue
+
+        queue.enqueue("doc1", "default", "content")
+        queue.dequeue(limit=1)
+        queue.mark_delegated("doc1", "default", "summarize", "rt-stale")
+
+        # Backdate the delegated_at to 2 hours ago
+        two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        queue._conn.execute(
+            "UPDATE pending_summaries SET delegated_at = ? WHERE id = ?",
+            (two_hours_ago, "doc1"),
+        )
+        queue._conn.commit()
+
+        mock_tc = MagicMock(spec=TaskClient)
+        mock_tc.poll.return_value = {
+            "status": "processing",  # still processing but too old
+            "result": None,
+            "error": None,
+            "task_type": "summarize",
+        }
+        kp._task_client = mock_tc
+
+        result = {"processed": 0, "failed": 0}
+        kp._poll_delegated(result)
+
+        assert result["failed"] == 1
+        assert queue.count_delegated() == 0
+        assert queue.count() == 1  # back in pending
+
+        queue.close()
+        kp.close()
+
+    def test_fresh_delegation_not_reverted(self, mock_providers, tmp_path):
+        """Recent delegation that's still processing is left alone."""
+        from keep import Keeper
+
+        kp = Keeper(store_path=tmp_path)
+
+        queue = PendingSummaryQueue(tmp_path / "pending.db")
+        kp._pending_queue = queue
+
+        queue.enqueue("doc1", "default", "content")
+        queue.dequeue(limit=1)
+        queue.mark_delegated("doc1", "default", "summarize", "rt-fresh")
+
+        mock_tc = MagicMock(spec=TaskClient)
+        mock_tc.poll.return_value = {
+            "status": "processing",
+            "result": None,
+            "error": None,
+            "task_type": "summarize",
+        }
+        kp._task_client = mock_tc
+
+        result = {"processed": 0, "failed": 0}
+        kp._poll_delegated(result)
+
+        # Fresh delegation should stay delegated
+        assert result["processed"] == 0
+        assert result["failed"] == 0
+        assert queue.count_delegated() == 1
+
+        queue.close()
+        kp.close()
+
+    def test_stale_poll_error_reverts(self, mock_providers, tmp_path):
+        """Poll failure + stale delegation = revert to local."""
+        from keep import Keeper
+
+        kp = Keeper(store_path=tmp_path)
+
+        queue = PendingSummaryQueue(tmp_path / "pending.db")
+        kp._pending_queue = queue
+
+        queue.enqueue("doc1", "default", "content")
+        queue.dequeue(limit=1)
+        queue.mark_delegated("doc1", "default", "summarize", "rt-unreachable")
+
+        # Backdate
+        two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        queue._conn.execute(
+            "UPDATE pending_summaries SET delegated_at = ? WHERE id = ?",
+            (two_hours_ago, "doc1"),
+        )
+        queue._conn.commit()
+
+        mock_tc = MagicMock(spec=TaskClient)
+        mock_tc.poll.side_effect = TaskClientError("Connection refused")
+        kp._task_client = mock_tc
+
+        result = {"processed": 0, "failed": 0}
+        kp._poll_delegated(result)
+
+        # Stale + unreachable = revert
+        assert result["failed"] == 1
+        assert queue.count_delegated() == 0
+        assert queue.count() == 1
 
         queue.close()
         kp.close()

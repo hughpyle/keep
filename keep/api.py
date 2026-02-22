@@ -3492,6 +3492,9 @@ class Keeper:
             item.task_type, item.id, remote_task_id,
         )
 
+    # Max time a task can stay delegated before falling back to local
+    DELEGATION_STALE_SECONDS = 3600  # 1 hour
+
     def _poll_delegated(self, result: dict) -> None:
         """Poll for results of delegated tasks and apply them."""
         from .processors import ProcessorResult
@@ -3500,6 +3503,8 @@ class Keeper:
         delegated = self._pending_queue.list_delegated()
         if not delegated:
             return
+
+        now = datetime.now(timezone.utc)
 
         for item in delegated:
             remote_task_id = item.metadata.get("_remote_task_id")
@@ -3510,6 +3515,10 @@ class Keeper:
                 resp = self._task_client.poll(remote_task_id)
             except TaskClientError as e:
                 logger.warning("Poll failed for %s: %s", remote_task_id, e)
+                # Check staleness even on poll failure
+                if self._is_delegation_stale(item, now):
+                    self._revert_stale_delegation(item, result,
+                                                  "Poll unreachable and delegation stale")
                 continue
 
             if resp["status"] == "completed":
@@ -3548,7 +3557,41 @@ class Keeper:
                     "Delegated %s %s failed: %s",
                     item.task_type, item.id, error,
                 )
-            # else: still queued/processing — skip, poll again next cycle
+
+            elif resp["status"] == "not_found":
+                # Task disappeared from server (cleanup, bug, etc.)
+                # Revert to pending for local processing
+                self._revert_stale_delegation(item, result,
+                                              "Remote task not found")
+
+            else:
+                # Still queued/processing — check staleness
+                if self._is_delegation_stale(item, now):
+                    self._revert_stale_delegation(item, result,
+                                                  "Delegation stale (>1h)")
+
+    def _is_delegation_stale(self, item, now) -> bool:
+        """Check if a delegated item has exceeded the staleness threshold."""
+        if not item.delegated_at:
+            return False
+        try:
+            delegated_time = datetime.fromisoformat(item.delegated_at)
+            age = (now - delegated_time).total_seconds()
+            return age > self.DELEGATION_STALE_SECONDS
+        except (ValueError, TypeError):
+            return False
+
+    def _revert_stale_delegation(self, item, result: dict, reason: str) -> None:
+        """Revert a delegated item to pending for local processing."""
+        self._pending_queue.fail(
+            item.id, item.collection, item.task_type,
+            error=f"Delegation reverted: {reason}",
+        )
+        result["failed"] = result.get("failed", 0) + 1
+        logger.warning(
+            "Delegated %s %s reverted to local: %s",
+            item.task_type, item.id, reason,
+        )
 
     def apply_result(self, item_id, collection, result, *, existing_tags=None):
         """Apply a ProcessorResult to the local store."""
