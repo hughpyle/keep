@@ -6,6 +6,7 @@ mapping, return formatting, and edge cases for all 8 tools.
 """
 
 import asyncio
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -550,3 +551,108 @@ class TestSerialization:
         find_start = call_order.index("find_start")
         find_end = call_order.index("find_end")
         assert (put_end < find_start) or (find_end < put_start)
+
+
+# ---------------------------------------------------------------------------
+# Startup hints: _check_mcp_setup
+# ---------------------------------------------------------------------------
+
+class TestCheckMcpSetup:
+
+    def test_no_tools_detected(self, tmp_path, capsys, monkeypatch):
+        """No hints when no tool config dirs exist."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        assert capsys.readouterr().err == ""
+
+    def test_claude_code_not_configured(self, tmp_path, capsys, monkeypatch):
+        """Hint shown when ~/.claude exists but mcpServers.keep missing."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        (tmp_path / ".claude").mkdir()
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        err = capsys.readouterr().err
+        assert "Claude Code" in err
+        assert "mcpServers" in err
+
+    def test_claude_code_already_configured(self, tmp_path, capsys, monkeypatch):
+        """No hint when ~/.claude/settings.json has mcpServers.keep."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        import json
+        (claude_dir / "settings.json").write_text(json.dumps({
+            "mcpServers": {"keep": {"command": "keep", "args": ["mcp"]}}
+        }))
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        assert "Claude Code" not in capsys.readouterr().err
+
+    def test_kiro_not_configured(self, tmp_path, capsys, monkeypatch):
+        """Hint shown when ~/.kiro exists but mcpServers.keep missing."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        (tmp_path / ".kiro").mkdir()
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        err = capsys.readouterr().err
+        assert "Kiro" in err
+
+    def test_kiro_already_configured(self, tmp_path, capsys, monkeypatch):
+        """No hint when ~/.kiro/settings/mcp.json has mcpServers.keep."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        kiro_dir = tmp_path / ".kiro" / "settings"
+        kiro_dir.mkdir(parents=True)
+        import json
+        (kiro_dir / "mcp.json").write_text(json.dumps({
+            "mcpServers": {"keep": {"command": "keep", "args": ["mcp"]}}
+        }))
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        assert "Kiro" not in capsys.readouterr().err
+
+    def test_codex_not_configured(self, tmp_path, capsys, monkeypatch):
+        """Hint shown when ~/.codex exists but mcp_servers.keep missing."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        (tmp_path / ".codex").mkdir()
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        err = capsys.readouterr().err
+        assert "Codex" in err
+        assert "mcp_servers.keep" in err
+
+    def test_codex_already_configured(self, tmp_path, capsys, monkeypatch):
+        """No hint when ~/.codex/config.toml has [mcp_servers.keep]."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text(
+            '[mcp_servers.keep]\ncommand = "keep"\nargs = ["mcp"]\n'
+        )
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        assert "Codex" not in capsys.readouterr().err
+
+    def test_multiple_tools_detected(self, tmp_path, capsys, monkeypatch):
+        """Hints for all unconfigured tools in one message."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".kiro").mkdir()
+        (tmp_path / ".codex").mkdir()
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        err = capsys.readouterr().err
+        assert "Claude Code" in err
+        assert "Kiro" in err
+        assert "Codex" in err
+
+    def test_corrupt_settings_json_ignored(self, tmp_path, capsys, monkeypatch):
+        """Corrupt JSON doesn't crash, just shows hint."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "settings.json").write_text("not json{{{")
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        err = capsys.readouterr().err
+        assert "Claude Code" in err  # hint still shown

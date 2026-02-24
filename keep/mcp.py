@@ -5,9 +5,8 @@ Exposes Keeper operations as MCP tools so local AI agents (Claude Code, etc.)
 get full reflective memory capability without HTTP infrastructure.
 
 Usage:
-    python -m keep.mcp              # stdio server
-    keep mcp                        # via CLI
-    claude --mcp-server keep="python -m keep.mcp"   # Claude Code integration
+    keep mcp                        # stdio server (via CLI)
+    claude --mcp-server keep="keep mcp"   # Claude Code integration
 
 All Keeper calls are serialized through a single asyncio.Lock.
 ChromaDB cross-process safety is handled at the store layer.
@@ -400,11 +399,84 @@ def _expand_prompt(result) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Startup hints
+# ---------------------------------------------------------------------------
+
+def _check_mcp_setup():
+    """Print setup hints for detected tools missing keep MCP config."""
+    import json
+    import sys
+
+    home = Path.home()
+    hints: list[str] = []
+
+    # Claude Code: ~/.claude/settings.json → mcpServers.keep
+    claude_dir = home / ".claude"
+    if claude_dir.is_dir():
+        configured = False
+        settings = claude_dir / "settings.json"
+        if settings.exists():
+            try:
+                data = json.loads(settings.read_text(encoding="utf-8"))
+                configured = "keep" in data.get("mcpServers", {})
+            except (json.JSONDecodeError, OSError):
+                pass
+        if not configured:
+            hints.append(
+                'Claude Code  ~/.claude/settings.json\n'
+                '    "mcpServers": { "keep": { "command": "keep", "args": ["mcp"] } }'
+            )
+
+    # Kiro: ~/.kiro/settings/mcp.json → mcpServers.keep
+    kiro_dir = home / ".kiro"
+    if kiro_dir.is_dir():
+        configured = False
+        mcp_json = kiro_dir / "settings" / "mcp.json"
+        if mcp_json.exists():
+            try:
+                data = json.loads(mcp_json.read_text(encoding="utf-8"))
+                configured = "keep" in data.get("mcpServers", {})
+            except (json.JSONDecodeError, OSError):
+                pass
+        if not configured:
+            hints.append(
+                'Kiro         ~/.kiro/settings/mcp.json\n'
+                '    "mcpServers": { "keep": { "command": "keep", "args": ["mcp"] } }'
+            )
+
+    # Codex: ~/.codex/config.toml → [mcp_servers.keep]
+    codex_dir = home / ".codex"
+    if codex_dir.is_dir():
+        configured = False
+        config_toml = codex_dir / "config.toml"
+        if config_toml.exists():
+            try:
+                content = config_toml.read_text(encoding="utf-8")
+                configured = "mcp_servers.keep" in content
+            except OSError:
+                pass
+        if not configured:
+            hints.append(
+                'Codex        ~/.codex/config.toml\n'
+                '    [mcp_servers.keep]\n'
+                '    command = "keep"\n'
+                '    args = ["mcp"]'
+            )
+
+    if hints:
+        print("keep: MCP server not configured for:", file=sys.stderr)
+        for hint in hints:
+            print(f"  {hint}", file=sys.stderr)
+        print(file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main():
     """Run the MCP stdio server."""
+    _check_mcp_setup()
     mcp.run(transport="stdio")
 
 

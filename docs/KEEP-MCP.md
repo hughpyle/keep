@@ -7,24 +7,40 @@ Exposes keep's reflective memory as MCP tools, so any MCP-compatible agent gets 
 ## Quick Start
 
 ```bash
-# Claude Code
-claude --mcp-server keep="python -m keep.mcp"
-
-# Or add to Claude Code settings (~/.claude.json)
-{
-  "mcpServers": {
-    "keep": { "command": "python", "args": ["-m", "keep.mcp"] }
-  }
-}
-```
-
-```bash
-# CLI
 keep mcp                    # Start stdio server
 keep mcp --store ~/mystore  # Custom store path
+```
 
-# Direct
-python -m keep.mcp          # Same as keep mcp
+On first startup, `keep mcp` detects installed tools and prints the config snippet needed. You can also configure manually:
+
+### Claude Code
+
+```bash
+claude --mcp-server keep="keep mcp"
+```
+
+Or add to `~/.claude/settings.json`:
+
+```json
+{ "mcpServers": { "keep": { "command": "keep", "args": ["mcp"] } } }
+```
+
+### Kiro
+
+Add to `~/.kiro/settings/mcp.json`:
+
+```json
+{ "mcpServers": { "keep": { "command": "keep", "args": ["mcp"] } } }
+```
+
+### Codex
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.keep]
+command = "keep"
+args = ["mcp"]
 ```
 
 The server respects the `KEEP_STORE_PATH` environment variable for store location.
