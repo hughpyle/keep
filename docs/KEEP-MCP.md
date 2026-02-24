@@ -148,6 +148,10 @@ The prompt tools provide the *when* and *why*; the other tools provide the *how*
 
 All Keeper calls are serialized through a single `asyncio.Lock`. This is safe for the local SQLite + ChromaDB stores. Cross-process safety (multiple agents sharing a store) is handled at the store layer.
 
+## Local vs Hosted
+
+If you use [keepnotes.ai](https://keepnotes.ai), the hosted service provides the same 9 tools over streamable-http. **Use one or the other, not both** — the tools share the same names (`keep_put`, `keep_find`, etc.), so installing both MCP servers would give the agent duplicate tools and unpredictable routing.
+
 ## See Also
 
 - [KEEP-PROMPT.md](KEEP-PROMPT.md) — Agent prompts with context injection
