@@ -1,4 +1,9 @@
 
+* blog: the unreasonable "as if";
+    experience building software with agents as mirrors;
+
+* prompt: select by model (match `_model=`, inject that in)
+
 * openclaw:  message:received / message:sent?
 
 * Investigate the session-id claw thing
@@ -7,8 +12,6 @@
 
 * Filter-strict versus not
     - "session id" (ok to bleed through) versus "user id" (not ok to bleed through)
-
-* different summarizers/classifiers
 
 * CLAP / LAION-AI for audio similarity (512d vec)
 
@@ -33,11 +36,6 @@
     https://developers.openai.com/codex/config-advanced/#notifications
     Notification - can just log the user prompts for the turn (better than nothing)
     "We are actively working on designing a hooks system" (https://github.com/openai/codex/pull/11067#issuecomment-3866360949)
-
-* need to make sure the tagging instructions are as clear as poss
-    - reference `keep get .tag/act` directly
-
-* can `keep config` return error status if there's no correct configuration yet?
 
 * `keep reflect --something` that helps trigger "hourly reflection"?
     (different "reflect docs" would do that, but... do we want mmore than one?)
