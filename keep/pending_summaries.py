@@ -167,17 +167,22 @@ class PendingSummaryQueue:
             self._conn.commit()
             return  # Full recreate already has all columns
 
-        # Incremental migration: add status/claimed columns
+        # Incremental migration: add columns if missing.
+        # Use try/except to handle races where another process adds the
+        # column between our column check and the ALTER TABLE.
+        def _add_column(col: str, typedef: str = "TEXT") -> None:
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE pending_summaries ADD COLUMN {col} {typedef}"
+                )
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e):
+                    raise
+
         if "status" not in columns:
-            self._conn.execute(
-                "ALTER TABLE pending_summaries ADD COLUMN status TEXT DEFAULT 'pending'"
-            )
-            self._conn.execute(
-                "ALTER TABLE pending_summaries ADD COLUMN claimed_by TEXT"
-            )
-            self._conn.execute(
-                "ALTER TABLE pending_summaries ADD COLUMN claimed_at TEXT"
-            )
+            _add_column("status", "TEXT DEFAULT 'pending'")
+            _add_column("claimed_by")
+            _add_column("claimed_at")
             self._conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_status
                 ON pending_summaries(status)
@@ -186,22 +191,14 @@ class PendingSummaryQueue:
 
         # Add error tracking and retry backoff columns
         if "last_error" not in columns:
-            self._conn.execute(
-                "ALTER TABLE pending_summaries ADD COLUMN last_error TEXT"
-            )
-            self._conn.execute(
-                "ALTER TABLE pending_summaries ADD COLUMN retry_after TEXT"
-            )
+            _add_column("last_error")
+            _add_column("retry_after")
             self._conn.commit()
 
         # Add delegation tracking columns (Phase 3)
         if "remote_task_id" not in columns:
-            self._conn.execute(
-                "ALTER TABLE pending_summaries ADD COLUMN remote_task_id TEXT"
-            )
-            self._conn.execute(
-                "ALTER TABLE pending_summaries ADD COLUMN delegated_at TEXT"
-            )
+            _add_column("remote_task_id")
+            _add_column("delegated_at")
             self._conn.commit()
 
     def _recover_stale_claims(self) -> int:
