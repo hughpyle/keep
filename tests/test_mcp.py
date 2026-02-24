@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from keep.types import Item, ItemContext, SimilarRef, PartRef, VersionRef
+from keep.types import Item, ItemContext, PromptResult, PromptInfo, SimilarRef, PartRef, VersionRef
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +426,85 @@ class TestKeepMove:
         result = await keep_move("dest", source_id="nonexistent")
         assert result.startswith("Error: ")
         assert "not found" in result
+
+
+# ---------------------------------------------------------------------------
+# keep_prompt
+# ---------------------------------------------------------------------------
+
+class TestKeepPrompt:
+
+    @pytest.mark.asyncio
+    async def test_prompt_list_when_no_name(self, mock_keeper):
+        from keep.mcp import keep_prompt
+        mock_keeper.list_prompts.return_value = [
+            PromptInfo(name="reflect", summary="Reflection practice"),
+            PromptInfo(name="session-start", summary="Session context"),
+        ]
+        result = await keep_prompt()
+        assert "reflect" in result
+        assert "session-start" in result
+        assert "Reflection practice" in result
+
+    @pytest.mark.asyncio
+    async def test_prompt_list_empty(self, mock_keeper):
+        from keep.mcp import keep_prompt
+        mock_keeper.list_prompts.return_value = []
+        result = await keep_prompt()
+        assert result == "No agent prompts available."
+
+    @pytest.mark.asyncio
+    async def test_prompt_not_found(self, mock_keeper):
+        from keep.mcp import keep_prompt
+        mock_keeper.render_prompt.return_value = None
+        result = await keep_prompt(name="nonexistent")
+        assert result == "Prompt not found: nonexistent"
+
+    @pytest.mark.asyncio
+    async def test_prompt_renders_with_context(self, mock_keeper):
+        from keep.mcp import keep_prompt
+        ctx = _make_context(_make_item(id="now", summary="Working on MCP"))
+        mock_keeper.render_prompt.return_value = PromptResult(
+            context=ctx,
+            search_results=None,
+            prompt="Reflect on:\n\n{get}\n\nDo the thing.",
+        )
+        result = await keep_prompt(name="reflect")
+        assert "now" in result
+        assert "Do the thing." in result
+        assert "{get}" not in result
+
+    @pytest.mark.asyncio
+    async def test_prompt_renders_with_find(self, mock_keeper):
+        from keep.mcp import keep_prompt
+        mock_keeper.render_prompt.return_value = PromptResult(
+            context=None,
+            search_results=[
+                _make_item(id="%abc", summary="A learning", score=0.85,
+                           tags={"_updated_date": "2026-02-20"}),
+            ],
+            prompt="Context:\n\n{get}\n{find}\n\nReflect.",
+        )
+        result = await keep_prompt(name="reflect", text="learnings")
+        assert "%abc" in result
+        assert "(0.85)" in result
+        assert "A learning" in result
+        assert "{find}" not in result
+
+    @pytest.mark.asyncio
+    async def test_prompt_passes_params(self, mock_keeper):
+        from keep.mcp import keep_prompt
+        mock_keeper.render_prompt.return_value = PromptResult(
+            context=None, search_results=None, prompt="Hello",
+        )
+        await keep_prompt(
+            name="reflect", text="query", id="my-id",
+            tags={"project": "x"}, since="P7D", until="2026-02-20", limit=3,
+        )
+        mock_keeper.render_prompt.assert_called_once_with(
+            "reflect", "query", id="my-id",
+            since="P7D", until="2026-02-20", tags={"project": "x"}, limit=3,
+        )
 
 
 # ---------------------------------------------------------------------------

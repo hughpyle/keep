@@ -320,6 +320,85 @@ async def keep_move(
     return f"Moved to: {item.id}"
 
 
+@mcp.tool(
+    description=(
+        "Render an agent prompt with context injected from memory. "
+        "Returns actionable instructions for reflection, session start, etc. "
+        "Call with no name to list available prompts."
+    ),
+    annotations=_READ_ONLY,
+)
+async def keep_prompt(
+    name: Annotated[Optional[str], Field(
+        description='Prompt name (e.g. "reflect", "session-start"). Omit to list available prompts.',
+    )] = None,
+    text: Annotated[Optional[str], Field(
+        description="Optional search query for additional context injection.",
+    )] = None,
+    id: Annotated[Optional[str], Field(
+        description='Item ID for context (default: "now").',
+    )] = None,
+    tags: Annotated[Optional[dict[str, str]], Field(
+        description="Filter search context by tags.",
+    )] = None,
+    since: Annotated[Optional[str], Field(
+        description="Only include items updated since this value (ISO duration or date).",
+    )] = None,
+    until: Annotated[Optional[str], Field(
+        description="Only include items updated before this value (ISO duration or date).",
+    )] = None,
+    limit: Annotated[int, Field(
+        description="Max search results for context.",
+    )] = 5,
+) -> str:
+    """Render an agent prompt with injected context."""
+    async with _lock:
+        keeper = _get_keeper()
+
+        if not name:
+            prompts = keeper.list_prompts()
+            if not prompts:
+                return "No agent prompts available."
+            lines = [f"- {p.name:20s} {p.summary}" for p in prompts]
+            return "\n".join(lines)
+
+        result = keeper.render_prompt(
+            name, text, id=id, since=since, until=until, tags=tags, limit=limit,
+        )
+
+    if result is None:
+        return f"Prompt not found: {name}"
+
+    return _expand_prompt(result)
+
+
+def _expand_prompt(result) -> str:
+    """Expand {get} and {find} placeholders in a PromptResult."""
+    output = result.prompt
+
+    if result.context:
+        get_rendered = render_context(result.context)
+    else:
+        get_rendered = ""
+    output = output.replace("{get}", get_rendered)
+
+    if result.search_results:
+        lines = []
+        for item in result.search_results:
+            score = f" ({item.score:.2f})" if item.score is not None else ""
+            date = item.tags.get("_updated_date", "")
+            lines.append(f"- {item.id}{score}  {date}  {item.summary}")
+        find_rendered = "\n".join(lines)
+    else:
+        find_rendered = ""
+    output = output.replace("{find}", find_rendered)
+
+    while "\n\n\n" in output:
+        output = output.replace("\n\n\n", "\n\n")
+
+    return output.strip()
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
