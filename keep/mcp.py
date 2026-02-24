@@ -474,8 +474,20 @@ def _check_mcp_setup():
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _check_integrations():
+    """Run hook/integration upgrades (same as other CLI commands)."""
+    try:
+        keeper = _get_keeper()
+        if keeper.config:
+            from .integrations import check_and_install
+            check_and_install(keeper.config)
+    except Exception:
+        pass  # Never block MCP startup
+
+
 def main():
     """Run the MCP stdio server."""
+    _check_integrations()
     _check_mcp_setup()
     mcp.run(transport="stdio")
 
