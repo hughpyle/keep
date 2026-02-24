@@ -79,6 +79,9 @@ SYSTEM_DOC_IDS = {
     "prompt-analyze-default.md": ".prompt/analyze/default",
     "prompt-summarize-conversation.md": ".prompt/summarize/conversation",
     "prompt-summarize-default.md": ".prompt/summarize/default",
+    "prompt-agent-reflect.md": ".prompt/agent/reflect",
+    "prompt-agent-session-start.md": ".prompt/agent/session-start",
+    "prompt-agent-subagent-start.md": ".prompt/agent/subagent-start",
 }
 
 # Migration renames from old ID prefixes to new stable IDs

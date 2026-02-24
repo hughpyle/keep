@@ -16,7 +16,7 @@
 | `keep config` | Show configuration and paths | [KEEP-CONFIG.md](KEEP-CONFIG.md) |
 | `keep move` | Move versions into a named item (`-t` or `--only` required) | [KEEP-MOVE.md](KEEP-MOVE.md) |
 | `keep analyze` | Decompose a note into structural parts | [KEEP-ANALYZE.md](KEEP-ANALYZE.md) |
-| `keep reflect` | Structured reflection practice | [KEEP-NOW.md](KEEP-NOW.md#keep-reflect) |
+| `keep prompt` | Render agent prompt with context | [KEEP-PROMPT.md](KEEP-PROMPT.md) |
 | `keep del` | Remove item or revert to previous version | — |
 | `keep tag-update` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
 | `keep data export` | Export store to JSON for backup or migration | [KEEP-DATA.md](KEEP-DATA.md) |
@@ -97,7 +97,8 @@ diff <(keep get doc:1) <(keep get "doc:1@V{1}")      # Diff current vs previous
 # Current intentions
 keep now                              # Show current intentions
 keep now "What's important now"       # Update intentions
-keep reflect                          # Structured reflection practice
+keep prompt reflect                   # Structured reflection practice
+keep prompt reflect "auth flow"       # Reflect with search context
 keep move "name" -t project=foo       # Move matching versions from now
 keep move "name" --only               # Move just the current version
 keep move "name" --from "source" -t X # Reorganize between items

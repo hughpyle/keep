@@ -19,7 +19,7 @@ keep now "Debugging auth flow"
 keep now -V 1                    # Previous intentions
 
 # Instructions for reflection
-keep reflect
+keep prompt reflect
 ```
 
 ---
@@ -44,7 +44,7 @@ Backed by ChromaDB for vectors, SQLite for metadata and versions.
 
 ### The Practice
 
-keep is designed as a skill for AI agents — a practice, not just a tool. The [skill instructions](SKILL.md) teach agents to reflect before, during, and after action: check intentions, recognize commitments, capture learnings, notice breakdowns. `keep reflect` guides a structured reflection; `keep now` tracks current intentions and surfaces what's relevant.
+keep is designed as a skill for AI agents — a practice, not just a tool. The [skill instructions](SKILL.md) teach agents to reflect before, during, and after action: check intentions, recognize commitments, capture learnings, notice breakdowns. `keep prompt reflect` guides a structured reflection ([details](docs/KEEP-PROMPT.md)); `keep now` tracks current intentions and surfaces what's relevant.
 
 This works because the tool and the skill reinforce each other. The tool stores and retrieves; the skill says *when* and *why*. An agent that uses both develops *skillful action* across sessions — not just recall, but looking before acting, and a deep review of outcomes afterwards.
 

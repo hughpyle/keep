@@ -1365,19 +1365,121 @@ def _find_now_version_by_tags(kp, tags: list[str], *, scope: Optional[str] = Non
     return None
 
 
-@app.command()
-def reflect():
-    """Print the reflection practice guide."""
-    # Installed package (copied by hatch force-include)
-    reflect_path = Path(__file__).parent / "data" / "reflect.md"
-    if not reflect_path.exists():
-        # Development fallback: read from repo root
-        reflect_path = Path(__file__).parent.parent / "commands" / "reflect.md"
-    if reflect_path.exists():
-        typer.echo(reflect_path.read_text())
+def _expand_prompt(result: "PromptResult", kp) -> str:
+    """Expand {get} and {find} placeholders in a prompt template."""
+    output = result.prompt
+
+    # Expand {get} with rendered context
+    if result.context:
+        get_rendered = render_context(result.context)
     else:
-        typer.echo("Reflection practice not found.", err=True)
+        get_rendered = ""
+    output = output.replace("{get}", get_rendered)
+
+    # Expand {find} with formatted search results
+    if result.search_results:
+        find_rendered = _format_items(result.search_results, keeper=kp)
+    else:
+        find_rendered = ""
+    output = output.replace("{find}", find_rendered)
+
+    # Clean up blank lines from empty expansions
+    while "\n\n\n" in output:
+        output = output.replace("\n\n\n", "\n\n")
+
+    return output.strip()
+
+
+@app.command()
+def prompt(
+    name: Annotated[str, typer.Argument(
+        help="Prompt name (e.g. 'reflect')"
+    )] = "",
+    text: Annotated[Optional[str], typer.Argument(
+        help="Optional text for context search"
+    )] = None,
+    list_prompts: Annotated[bool, typer.Option(
+        "--list", "-l",
+        help="List available agent prompts"
+    )] = False,
+    id: Annotated[Optional[str], typer.Option(
+        "--id",
+        help="Item ID for {get} context (default: 'now')"
+    )] = None,
+    tag: Annotated[Optional[list[str]], typer.Option(
+        "--tag", "-t",
+        help="Filter context by tag (key=value, repeatable)"
+    )] = None,
+    since: SinceOption = None,
+    until: UntilOption = None,
+    limit: LimitOption = 5,
+    store: StoreOption = None,
+):
+    """Render an agent prompt with injected context.
+
+    \b
+    The prompt doc may contain {get} and {find} placeholders:
+      {get}  — expanded with context for --id (default: now)
+      {find} — expanded with search results for the text argument
+
+    \b
+    Examples:
+        keep prompt --list                        # List available prompts
+        keep prompt reflect                       # Reflect on current work
+        keep prompt reflect "auth flow"           # Reflect with search context
+        keep prompt reflect --id %abc123          # Context from specific item
+        keep prompt reflect --since P7D           # Recent context only
+        keep prompt reflect --tag project=myapp   # Scoped to project
+    """
+    kp = _get_keeper(store)
+
+    if list_prompts or not name:
+        prompts = kp.list_prompts()
+        if not prompts:
+            typer.echo("No agent prompts available.", err=True)
+            raise typer.Exit(1)
+        for p in prompts:
+            typer.echo(f"{p.name:20s} {p.summary}")
+        return
+
+    tags_dict = _parse_tags(tag) if tag else None
+    result = kp.render_prompt(
+        name, text, id=id, since=since, until=until, tags=tags_dict, limit=limit,
+    )
+    if result is None:
+        typer.echo(f"Prompt not found: {name}", err=True)
         raise typer.Exit(1)
+
+    typer.echo(_expand_prompt(result, kp))
+
+
+@app.command(hidden=True)
+def reflect(
+    text: Annotated[Optional[str], typer.Argument(
+        help="Optional text for context search"
+    )] = None,
+    id: Annotated[Optional[str], typer.Option(
+        "--id",
+        help="Item ID for {get} context (default: 'now')"
+    )] = None,
+    store: StoreOption = None,
+):
+    """Reflect on current actions (alias for 'keep prompt reflect')."""
+    kp = _get_keeper(store)
+    result = kp.render_prompt("reflect", text, id=id)
+    if result is None:
+        # Fallback to static file for backwards compat
+        reflect_path = Path(__file__).parent / "data" / "reflect.md"
+        if not reflect_path.exists():
+            reflect_path = Path(__file__).parent.parent / "commands" / "reflect.md"
+        if reflect_path.exists():
+            typer.echo(reflect_path.read_text())
+        else:
+            typer.echo("Reflection practice not found.", err=True)
+            raise typer.Exit(1)
+        return
+
+    typer.echo(_expand_prompt(result, kp))
 
 
 @app.command()

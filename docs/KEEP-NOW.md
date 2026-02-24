@@ -78,16 +78,21 @@ keep move "quick-note" --only              # Move just the current version
 
 Moving to an existing name appends incrementally. Use `--from` to reorganize between items. See [KEEP-MOVE.md](KEEP-MOVE.md) for details.
 
-## keep reflect
+## keep prompt reflect
 
 Deep structured reflection practice. Guides you through gathering context, examining actions, and updating intentions.
 
 ```bash
-keep reflect
+keep prompt reflect                       # Reflect on current work
+keep prompt reflect "auth flow"           # Reflect with search context
+keep prompt reflect --since P7D           # With time filter
 ```
+
+See [KEEP-PROMPT.md](KEEP-PROMPT.md) for full prompt options including `--id`, `--tag`, `--since`, `--until`.
 
 ## See Also
 
+- [KEEP-PROMPT.md](KEEP-PROMPT.md) — Agent prompts with context injection
 - [KEEP-MOVE.md](KEEP-MOVE.md) — Move now history into named items
 - [TAGGING.md](TAGGING.md) — Tag system and speech-act tracking
 - [VERSIONING.md](VERSIONING.md) — Version history and navigation

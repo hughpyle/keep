@@ -33,10 +33,10 @@ The practice must survive across sessions. `keep` auto-installs a Protocol Block
 
 *Your actions have consequences. Context is fleeting. Pay attention to what is being asked.*
 
-**The practice is `keep reflect`.** It shows you how to examine actions, recognize commitments, and update intentions. Run it. Follow the steps. Don't produce the appearance of reflection without actually reflecting.
+**The practice is `keep prompt reflect`.** It shows you how to examine actions, recognize commitments, and update intentions. Run it. Follow the steps. Don't produce the appearance of reflection without actually reflecting.
 
 \`\`\`bash
-keep reflect                 # The practice
+keep prompt reflect              # The practice
 keep now                     # Current intentions
 keep find "topic"            # What do I know?
 keep now "what's true now"   # Update intentions
@@ -86,7 +86,7 @@ Tag speech acts with `act` and `status` to track commitments and requests.
 
 ### The Practice
 
-The practice is `keep reflect`. It guides you through:
+The practice is `keep prompt reflect` ([details](docs/KEEP-PROMPT.md)). It guides you through:
 1. **Gathering** — see what is, before analyzing
 2. **The Mirror** — did this action lead to harm? Name it honestly.
 3. **The Conversation** — what kind of conversation is this? What commitments are open?
@@ -94,7 +94,7 @@ The practice is `keep reflect`. It guides you through:
 5. **Updating** — capture learnings, update intentions
 
 ```bash
-keep reflect
+keep prompt reflect
 ```
 
 Don't produce the appearance of reflection without actually reflecting.
