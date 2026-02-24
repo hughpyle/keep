@@ -2701,6 +2701,19 @@ def doctor(
     typer.echo()
 
 
+@app.command()
+def mcp(
+    store: StoreOption = None,
+):
+    """Start MCP stdio server for AI agent integration."""
+    if store is not None:
+        os.environ["KEEP_STORE_PATH"] = str(store)
+    elif _get_store_override() is not None:
+        os.environ["KEEP_STORE_PATH"] = str(_get_store_override())
+    from .mcp import main as mcp_main
+    mcp_main()
+
+
 # -----------------------------------------------------------------------------
 
 def main():
