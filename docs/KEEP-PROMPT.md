@@ -67,6 +67,7 @@ keep reflect --id %abc123                 # Same as: keep prompt reflect --id %a
 
 ## See Also
 
+- [KEEP-MCP.md](KEEP-MCP.md) — MCP server (`keep_prompt` tool)
 - [KEEP-NOW.md](KEEP-NOW.md) — Current intentions
 - [AGENT-GUIDE.md](AGENT-GUIDE.md) — Working session patterns
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

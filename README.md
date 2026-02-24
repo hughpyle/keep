@@ -58,6 +58,7 @@ The skill instructions and hooks install into your agent's configuration automat
 |-------|-------------|
 | **Skill prompt** | Always in system prompt — guides reflection, breakdown capture, document indexing |
 | **Hooks** | Inject `keep now -n 10` context at session start, prompt submit, and session end |
+| **MCP** | [Stdio server](docs/KEEP-MCP.md) with 9 tools — any MCP-compatible agent gets full memory |
 | **LangChain** | [LangGraph BaseStore](docs/LANGCHAIN-INTEGRATION.md), retriever, tools, and middleware |
 | **Daily cron** | Scheduled deep reflection in an isolated session ([OpenClaw cron](SKILL.md#openclaw-integration)) |
 
@@ -155,6 +156,7 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples
 - **[docs/META-TAGS.md](docs/META-TAGS.md)** — Tag descriptions, constrained values, and contextual queries
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Working session patterns
 - **[docs/LANGCHAIN-INTEGRATION.md](docs/LANGCHAIN-INTEGRATION.md)** — LangChain/LangGraph integration
+- **[docs/KEEP-MCP.md](docs/KEEP-MCP.md)** — MCP server for AI agent integration
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — How it works under the hood
 - **[SKILL.md](SKILL.md)** — The reflective practice (for AI agents)
 

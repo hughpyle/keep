@@ -17,6 +17,7 @@
 | `keep move` | Move versions into a named item (`-t` or `--only` required) | [KEEP-MOVE.md](KEEP-MOVE.md) |
 | `keep analyze` | Decompose a note into structural parts | [KEEP-ANALYZE.md](KEEP-ANALYZE.md) |
 | `keep prompt` | Render agent prompt with context | [KEEP-PROMPT.md](KEEP-PROMPT.md) |
+| `keep mcp` | Start MCP stdio server for AI agents | [KEEP-MCP.md](KEEP-MCP.md) |
 | `keep del` | Remove item or revert to previous version | — |
 | `keep tag-update` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
 | `keep data export` | Export store to JSON for backup or migration | [KEEP-DATA.md](KEEP-DATA.md) |
