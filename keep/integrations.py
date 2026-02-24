@@ -49,7 +49,7 @@ keep put "learning"          # Capture insight
 """
 
 # Bump this when hook definitions change — triggers re-install for existing users
-HOOKS_VERSION = 10
+HOOKS_VERSION = 11
 
 # Hook definitions for Claude Code
 CLAUDE_CODE_HOOKS = {
@@ -58,7 +58,7 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "keep get now -n 10 </dev/null 2>/dev/null || true",
+                    "command": "keep prompt session-start </dev/null 2>/dev/null || true",
                     "statusMessage": "Reflecting...",
                 }
             ],
@@ -80,7 +80,7 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "keep get now </dev/null 2>/dev/null || true",
+                    "command": "keep prompt subagent-start </dev/null 2>/dev/null || true",
                     "statusMessage": "Loading context...",
                 }
             ],
@@ -148,10 +148,10 @@ def _install_protocol_block(target_file: Path) -> bool:
 
 
 def _is_keep_hook_group(hook_group: dict) -> bool:
-    """Check if a hook group belongs to keep (contains 'keep now' or 'keep reflect')."""
+    """Check if a hook group belongs to keep (contains 'keep now' or 'keep prompt')."""
     for hook in hook_group.get("hooks", []):
         cmd = hook.get("command", "") if isinstance(hook, dict) else ""
-        if "keep now" in cmd or "keep get" in cmd or "keep reflect" in cmd:
+        if "keep now" in cmd or "keep get" in cmd or "keep reflect" in cmd or "keep prompt" in cmd:
             return True
     return False
 

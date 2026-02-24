@@ -26,9 +26,9 @@ keep find "this situation"  # Prior knowledge
 keep put "what I learned" -t type=learning
 ```
 
-**Periodically:** Run a full structured reflection:
+**Periodically:** Run a full structured reflection ([details](KEEP-PROMPT.md)):
 ```bash
-keep reflect
+keep prompt reflect
 ```
 
 This cycle — reflect, act, reflect — is the mirror teaching. Memory isn't storage; it's how you develop skillful judgment.

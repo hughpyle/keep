@@ -355,3 +355,28 @@ class ItemContext:
             item=item, similar=similar, meta=meta,
             parts=parts, prev=prev, next=nxt, **d,
         )
+
+
+# ---------------------------------------------------------------------------
+# PromptResult — rendered agent prompt with injected context
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PromptResult:
+    """Rendered agent prompt with context injection.
+
+    The ``prompt`` field is a template that may contain ``{get}`` and
+    ``{find}`` placeholders.  The CLI/MCP renderer expands these with
+    the rendered ``context`` and ``search_results``.
+    """
+    context: ItemContext | None           # from get_context(id) — default "now"
+    search_results: list[Item] | None     # from find(query=text, ...) when text given
+    prompt: str                            # the ## Prompt section (may contain {get}/{find})
+
+
+@dataclass(frozen=True)
+class PromptInfo:
+    """Summary info for an available agent prompt."""
+    name: str            # e.g. "reflect"
+    summary: str         # first line of doc body

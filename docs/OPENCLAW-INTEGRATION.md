@@ -8,7 +8,7 @@ OpenClaw writes memory files (markdown) which are a solid foundation for long-te
 
 1. **Context injection** (`before_agent_start`) — at the start of every agent turn, keep injects current intentions, similar notes, and open commitments. The agent starts each turn knowing what matters.
 2. **Episodic knowledge** (`after_compaction`) — when OpenClaw compacts context, keep indexes the memory files and turns them into searchable, tagged, versioned knowledge. Not just "what was said" but the structure within it.
-3. **Reflection** (cron with `keep reflect`) — a nightly review that asks: did the outcomes match the intentions? What patterns are forming? What could we do better? This is the learning loop that flat files can't provide.
+3. **Reflection** (cron with `keep prompt reflect`) — a nightly review that asks: did the outcomes match the intentions? What patterns are forming? What could we do better? This is the learning loop that flat files can't provide.
 
 ---
 
@@ -68,14 +68,12 @@ openclaw cron add \
   --agent-turn "Daily memory sync and reflection.
 
 1. Index memory files with analysis: run \`keep put /path/to/workspace/memory/ --analyze\`
-2. Review recent work: \`keep list --since P1D\` and \`keep now --history\`
-3. What patterns are forming? What commitments are still open? What did you learn?
-4. Update MEMORY.md and \`keep now\` with what matters.
+2. Reflect: run \`keep prompt reflect\` and follow the practice.
 
 This is the deeper review — not just what happened, but what it means."
 ```
 
-This runs nightly in an isolated session. The `--analyze` flag finds themes within each document; with v0.42.4+'s smart skip, unchanged files cost nothing.
+This runs nightly in an isolated session. Step 1 indexes workspace memory files — the `--analyze` flag finds themes within each document; with v0.42.4+'s smart skip, unchanged files cost nothing. Step 2 renders the reflection prompt with current context injected, guiding the agent through the full practice.
 
 **Three-layer integration:**
 

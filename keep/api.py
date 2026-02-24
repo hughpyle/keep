@@ -184,6 +184,7 @@ from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, SimilarRef, MetaRef, VersionRef, PartRef,
+    PromptResult, PromptInfo,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
     SYSTEM_TAG_PREFIX, local_date,
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
@@ -1998,6 +1999,99 @@ class Keeper:
             prev=prev_refs,
             next=next_refs,
         )
+
+    # ------------------------------------------------------------------
+    # Agent prompts
+    # ------------------------------------------------------------------
+
+    def render_prompt(
+        self,
+        name: str,
+        text: Optional[str] = None,
+        *,
+        id: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        tags: Optional[dict[str, str]] = None,
+        limit: int = 5,
+    ) -> Optional[PromptResult]:
+        """Render an agent prompt doc with injected context.
+
+        Reads ``.prompt/agent/{name}`` from the store, extracts the
+        ``## Prompt`` section, and assembles context.  The prompt text
+        may contain ``{get}`` and ``{find}`` placeholders — the caller
+        expands them with the rendered context and search results.
+
+        Args:
+            name: Prompt name (e.g. "reflect")
+            text: Optional similarity key for search context
+            id: Item ID for ``{get}`` context (default: "now")
+            since: Time filter (ISO duration or date)
+            until: Upper-bound time filter (ISO duration or date)
+            tags: Tag filter for search results
+            limit: Max search results
+
+        Returns:
+            PromptResult with context, search_results, and prompt template,
+            or None if the prompt doc doesn't exist.
+        """
+        from .analyzers import extract_prompt_section
+
+        doc_id = f".prompt/agent/{name}"
+        doc = self.get(doc_id)
+        if doc is None:
+            return None
+
+        prompt_body = extract_prompt_section(doc.summary)
+        if not prompt_body:
+            # Fall back to full content if no ## Prompt section
+            prompt_body = doc.summary
+
+        # Context: get_context for the target item (default "now")
+        context_id = id or "now"
+        ctx = self.get_context(context_id)
+
+        # Search: find similar items with available filters
+        search_results = None
+        if text:
+            search_results = self.find(
+                query=text, tags=tags, since=since, until=until, limit=limit,
+            )
+        elif tags or since or until:
+            search_results = self.find(
+                similar_to=context_id, tags=tags, since=since, until=until,
+                limit=limit,
+            )
+
+        return PromptResult(
+            context=ctx,
+            search_results=search_results,
+            prompt=prompt_body,
+        )
+
+    def list_prompts(self) -> list[PromptInfo]:
+        """List available agent prompt docs.
+
+        Returns:
+            List of PromptInfo with name and summary for each
+            ``.prompt/agent/*`` doc in the store.
+        """
+        prefix = ".prompt/agent/"
+        items = self.list_items(
+            prefix=prefix, include_hidden=True, limit=100,
+        )
+        result = []
+        for item in items:
+            name = item.id[len(prefix):]
+            # Find first non-empty, non-heading line as description
+            summary = ""
+            for line in (item.summary or "").split("\n"):
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    summary = line
+                    break
+            result.append(PromptInfo(name=name, summary=summary))
+        return result
 
     def get_similar_for_display(
         self,
