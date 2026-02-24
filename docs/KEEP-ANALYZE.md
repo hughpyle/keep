@@ -190,9 +190,14 @@ kp.tag_part("doc:1", 1, tags={"topic": "oauth2"})  # Update tag
 kp.tag_part("doc:1", 1, tags={"topic": ""})         # Remove tag
 ```
 
+## Custom analysis prompts
+
+The LLM prompt used for analysis is configurable. Create a `.prompt/analyze/*` document whose match rules target specific tags, and its `## Prompt` section replaces the default system prompt for matching documents. See [Prompt overrides](META-TAGS.md#prompt-overrides-prompt) in the meta-tags guide.
+
 ## See Also
 
 - [VERSIONING.md](VERSIONING.md) — Versions (temporal) vs parts (structural)
 - [KEEP-GET.md](KEEP-GET.md) — Retrieving items and parts
 - [KEEP-FIND.md](KEEP-FIND.md) — Search results include parts
+- [META-TAGS.md](META-TAGS.md) — Tag descriptions, prompt overrides
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

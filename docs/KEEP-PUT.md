@@ -47,6 +47,8 @@ Same content = same ID = enables versioning through tag changes.
 - **Long content**: truncated placeholder stored immediately, real summary generated in background by `keep pending`
 - **`--summary` provided**: used as-is, skips auto-summarization
 
+The LLM prompt used for summarization is configurable. Create a `.prompt/summarize/*` document whose match rules target specific tags, and its `## Prompt` section replaces the default summarization prompt for matching documents. See [Prompt overrides](META-TAGS.md#prompt-overrides-prompt) in the meta-tags guide.
+
 ## Tag suggestions
 
 The `--suggest-tags` flag shows tags from similar existing items, helping maintain consistent tagging:
@@ -116,4 +118,5 @@ keep put "file:///path/to/design.pdf" -t type=reference -t topic=architecture
 - [TAGGING.md](TAGGING.md) — Tag system, merge order, speech acts
 - [VERSIONING.md](VERSIONING.md) — How versioning works
 - [KEEP-GET.md](KEEP-GET.md) — Retrieve indexed documents
+- [META-TAGS.md](META-TAGS.md) — Tag descriptions, prompt overrides
 - [REFERENCE.md](REFERENCE.md) — Quick reference index
