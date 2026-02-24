@@ -186,7 +186,7 @@ from .types import (
     Item, ItemContext, SimilarRef, MetaRef, VersionRef, PartRef,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
     SYSTEM_TAG_PREFIX, local_date,
-    parse_utc_timestamp, validate_tag_key, validate_id, is_part_id,
+    parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     MAX_TAG_VALUE_LENGTH,
 )
 
@@ -1581,7 +1581,7 @@ class Keeper:
 
         if uri is not None:
             # URI mode: fetch document, extract content, store
-            validate_id(uri)
+            uri = normalize_id(uri)
 
             # Fast path for local files: skip expensive read if stat unchanged
             is_file_uri = uri.startswith("file://") or uri.startswith("/")
@@ -1691,7 +1691,7 @@ class Keeper:
                 timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
                 id = f"mem:{timestamp}"
             else:
-                validate_id(id)
+                id = normalize_id(id)
 
             return self._upsert(
                 id, content,
@@ -1798,6 +1798,7 @@ class Keeper:
 
         if similar_to:
             # Similar-to mode: use stored embedding from existing item
+            similar_to = normalize_id(similar_to)
             item = self._store.get(chroma_coll, similar_to)
             if item is None:
                 raise KeyError(f"Item not found: {similar_to}")
@@ -2361,7 +2362,7 @@ class Keeper:
         Reads from document store (canonical), falls back to vector store for legacy data.
         Touches accessed_at on successful retrieval.
         """
-        validate_id(id)
+        id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
@@ -2412,7 +2413,7 @@ class Keeper:
         Returns:
             Item if found, None if version doesn't exist
         """
-        validate_id(id)
+        id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
 
         if offset == 0:
@@ -2448,7 +2449,7 @@ class Keeper:
         Returns:
             List of VersionInfo, newest archived first
         """
-        validate_id(id)
+        id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
         return self._document_store.list_versions(doc_coll, id, limit)
 
@@ -2476,7 +2477,7 @@ class Keeper:
         """
         Check if an item exists in the store.
         """
-        validate_id(id)
+        id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
         # Check document store first, then ChromaDB
@@ -2498,7 +2499,7 @@ class Keeper:
         Returns:
             True if item existed and was deleted.
         """
-        validate_id(id)
+        id = normalize_id(id)
         if is_part_id(id):
             raise ValueError(
                 f"Cannot delete part directly: {id!r}. "
@@ -2517,7 +2518,7 @@ class Keeper:
 
         Returns the restored item, or None if the item was fully deleted.
         """
-        validate_id(id)
+        id = normalize_id(id)
         if is_part_id(id):
             raise ValueError(
                 f"Cannot revert part directly: {id!r}. "
@@ -2574,7 +2575,7 @@ class Keeper:
 
         Returns True if the version was found and deleted.
         """
-        validate_id(id)
+        id = normalize_id(id)
         if offset < 1:
             raise ValueError("Use revert() to delete the current version (offset 0)")
         doc_coll = self._resolve_doc_collection()
@@ -2690,8 +2691,8 @@ class Keeper:
         """
         if not name:
             raise ValueError("Name cannot be empty")
-        validate_id(name)
-        validate_id(source_id)
+        name = normalize_id(name)
+        source_id = normalize_id(source_id)
         if is_part_id(name):
             raise ValueError(
                 f"Cannot move to a part ID: {name!r}. "
@@ -2892,7 +2893,7 @@ class Keeper:
                 logger.warning("System doc migration deferred: %s", e)
 
         # Validate inputs
-        validate_id(id)
+        id = normalize_id(id)
         if tags:
             tags = self._validate_write_tags(tags)
 
@@ -2951,7 +2952,7 @@ class Keeper:
         Returns:
             Updated PartInfo if found, None if part doesn't exist
         """
-        validate_id(id)
+        id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
@@ -3068,7 +3069,7 @@ class Keeper:
         """
         from .processors import ProcessorResult, process_analyze
 
-        validate_id(id)
+        id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
 
         # Get the document
@@ -3425,7 +3426,7 @@ class Keeper:
         Returns:
             True if enqueued, False if skipped (parts already current)
         """
-        validate_id(id)
+        id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
         doc = self._document_store.get(doc_coll, id)
         if doc is None:

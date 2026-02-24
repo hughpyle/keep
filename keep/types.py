@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
 
 # System tag prefix - tags starting with this are managed by the system
@@ -88,6 +89,105 @@ def validate_id(id: str) -> None:
         raise ValueError(f"ID must be 1-{MAX_ID_LENGTH} characters")
     if _ID_BLOCKED_RE.search(id):
         raise ValueError(f"ID contains invalid characters: {id!r}")
+
+
+# ---------------------------------------------------------------------------
+# URI normalization — RFC 3986 §6.2.2 syntax-based normalization
+# ---------------------------------------------------------------------------
+
+_UNRESERVED = frozenset(
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
+)
+_DEFAULT_PORTS = {'http': 80, 'https': 443}
+
+
+def _decode_unreserved(s: str) -> str:
+    """Decode percent-encoded unreserved characters (RFC 3986 §2.3).
+
+    Only decodes %XX where the decoded char is unreserved (letters, digits,
+    ``-._~``). Reserved percent-encodings are kept with uppercase hex digits.
+    """
+    if '%' not in s:
+        return s
+    result: list[str] = []
+    i = 0
+    while i < len(s):
+        if s[i] == '%' and i + 2 < len(s):
+            hex_str = s[i + 1:i + 3]
+            try:
+                char = chr(int(hex_str, 16))
+                if char in _UNRESERVED:
+                    result.append(char)
+                else:
+                    result.append(f'%{hex_str.upper()}')
+                i += 3
+                continue
+            except ValueError:
+                pass
+        result.append(s[i])
+        i += 1
+    return ''.join(result)
+
+
+def _resolve_dot_segments(path: str) -> str:
+    """Remove dot segments from a URI path (RFC 3986 §5.2.4)."""
+    segments = path.split('/')
+    output: list[str] = []
+    for seg in segments:
+        if seg == '.':
+            continue
+        elif seg == '..':
+            if output and output[-1] != '':
+                output.pop()
+        else:
+            output.append(seg)
+    resolved = '/'.join(output)
+    if path.startswith('/') and not resolved.startswith('/'):
+        resolved = '/' + resolved
+    return resolved
+
+
+def _normalize_http_uri(uri: str) -> str:
+    """RFC 3986 §6.2.2 syntax-based normalization for HTTP/HTTPS URIs."""
+    parsed = urlparse(uri)
+
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or '').lower()
+
+    port = parsed.port
+    if port and port == _DEFAULT_PORTS.get(scheme):
+        port = None
+    netloc = f'{host}:{port}' if port else host
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo += f':{parsed.password}'
+        netloc = f'{userinfo}@{netloc}'
+
+    path = _resolve_dot_segments(_decode_unreserved(parsed.path))
+    if not path:
+        path = '/'
+
+    query = _decode_unreserved(parsed.query)
+    fragment = _decode_unreserved(parsed.fragment)
+
+    return urlunparse((scheme, netloc, path, parsed.params, query, fragment))
+
+
+def normalize_id(id: str) -> str:
+    """Validate and normalize a document ID.
+
+    For HTTP/HTTPS URIs, applies RFC 3986 §6.2.2 safe normalizations
+    so that equivalent URIs map to the same document ID.
+    For all other IDs, validates only.
+
+    Returns the (possibly normalized) ID.
+    Raises ValueError for invalid IDs.
+    """
+    validate_id(id)
+    if id[:8].lower().startswith(('http://', 'https://')):
+        id = _normalize_http_uri(id)
+    return id
 
 
 def casefold_tags(tags: dict[str, str]) -> dict[str, str]:
