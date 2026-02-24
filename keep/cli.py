@@ -1468,16 +1468,8 @@ def reflect(
     kp = _get_keeper(store)
     result = kp.render_prompt("reflect", text, id=id)
     if result is None:
-        # Fallback to static file for backwards compat
-        reflect_path = Path(__file__).parent / "data" / "reflect.md"
-        if not reflect_path.exists():
-            reflect_path = Path(__file__).parent.parent / "commands" / "reflect.md"
-        if reflect_path.exists():
-            typer.echo(reflect_path.read_text())
-        else:
-            typer.echo("Reflection practice not found.", err=True)
-            raise typer.Exit(1)
-        return
+        typer.echo("Prompt 'reflect' not found. Is the store initialized?", err=True)
+        raise typer.Exit(1)
 
     typer.echo(_expand_prompt(result, kp))
 

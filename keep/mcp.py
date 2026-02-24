@@ -487,6 +487,13 @@ def _check_integrations():
 
 def main():
     """Run the MCP stdio server."""
+    import signal
+    import sys
+    # anyio's stdin reader uses abandon_on_cancel=False, which shields the
+    # blocking readline from task cancellation.  The first Ctrl+C only cancels
+    # the task (which can't take effect), so install our own handler.
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(130))
+
     _check_integrations()
     _check_mcp_setup()
     mcp.run(transport="stdio")

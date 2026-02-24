@@ -88,14 +88,12 @@ packages = ["keep"]
 "SKILL.md" = "keep/SKILL.md"
 "README.md" = "keep/README.md"
 "docs" = "keep/docs"
-"commands/reflect.md" = "keep/data/reflect.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
     "/keep",
     "/keep/data/kiro-hooks",
     "/docs",
-    "/commands/reflect.md",
     "/SKILL.md",
     "/README.md",
     "/LICENSE",
