@@ -167,6 +167,58 @@ class PendingSummaryQueue:
             self._conn.commit()
             return  # Full recreate already has all columns
 
+        # Check if task_type is in the primary key.
+        # Earlier migrations added the column but not always the PK fix.
+        pk_sql = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='pending_summaries'"
+        ).fetchone()[0]
+        if "task_type" in columns and "PRIMARY KEY (id, collection)" in pk_sql and "task_type)" not in pk_sql:
+            # task_type column exists but isn't in PK — recreate table
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS pending_summaries_new (
+                    id TEXT NOT NULL,
+                    collection TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    queued_at TEXT NOT NULL,
+                    attempts INTEGER DEFAULT 0,
+                    task_type TEXT DEFAULT 'summarize',
+                    metadata TEXT DEFAULT '{}',
+                    status TEXT DEFAULT 'pending',
+                    claimed_by TEXT,
+                    claimed_at TEXT,
+                    last_error TEXT,
+                    retry_after TEXT,
+                    remote_task_id TEXT,
+                    delegated_at TEXT,
+                    PRIMARY KEY (id, collection, task_type)
+                )
+            """)
+            # Copy data — pick only columns that exist in both tables
+            copy_cols = sorted(columns & {
+                "id", "collection", "content", "queued_at", "attempts",
+                "task_type", "metadata", "status", "claimed_by", "claimed_at",
+                "last_error", "retry_after", "remote_task_id", "delegated_at",
+            })
+            cols = ", ".join(copy_cols)
+            self._conn.execute(f"""
+                INSERT OR IGNORE INTO pending_summaries_new ({cols})
+                SELECT {cols} FROM pending_summaries
+            """)
+            self._conn.execute("DROP TABLE pending_summaries")
+            self._conn.execute(
+                "ALTER TABLE pending_summaries_new RENAME TO pending_summaries"
+            )
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_queued_at
+                ON pending_summaries(queued_at)
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_status
+                ON pending_summaries(status)
+            """)
+            self._conn.commit()
+            return  # Full recreate — all columns present
+
         # Incremental migration: add columns if missing.
         # Use try/except to handle races where another process adds the
         # column between our column check and the ALTER TABLE.
