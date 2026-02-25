@@ -654,16 +654,14 @@ def _filter_by_tags(items: list, tags: list[str]) -> list:
 
 
 def _parse_frontmatter(text: str) -> tuple[str, dict[str, str]]:
-    """Parse YAML frontmatter from text, return (content, tags)."""
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) >= 3:
-            import yaml
-            frontmatter = yaml.safe_load(parts[1])
-            content = parts[2].lstrip("\n")
-            tags = frontmatter.get("tags", {}) if frontmatter else {}
-            return content, {k: str(v) for k, v in tags.items()}
-    return text, {}
+    """Parse YAML frontmatter from text, return (content, tags).
+
+    Extracts all scalar frontmatter values as tags, plus values from
+    a ``tags`` dict.  Keys starting with ``_`` are skipped (system reserved).
+    Non-scalar values (lists, nested dicts) are dropped except ``tags`` dict.
+    """
+    from .api import _extract_markdown_frontmatter
+    return _extract_markdown_frontmatter(text)
 
 
 # -----------------------------------------------------------------------------
@@ -982,7 +980,7 @@ def _put_store(
             typer.echo("Error: --summary cannot be used with stdin input (original content would be lost)", err=True)
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
             raise typer.Exit(1)
-        max_len = kp.config.max_summary_length
+        max_len = kp.config.max_inline_length
         is_system_doc = id and id.startswith(".")
         if not is_system_doc and len(content) > max_len:
             typer.echo(f"Error: stdin content too long to store inline ({len(content)} chars, max {max_len})", err=True)
@@ -1051,7 +1049,7 @@ def _put_store(
             typer.echo("Error: --summary cannot be used with inline text (original content would be lost)", err=True)
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
             raise typer.Exit(1)
-        max_len = kp.config.max_summary_length
+        max_len = kp.config.max_inline_length
         is_system_doc = id and id.startswith(".")
         if not is_system_doc and len(source) > max_len:
             typer.echo(f"Error: inline text too long to store ({len(source)} chars, max {max_len})", err=True)

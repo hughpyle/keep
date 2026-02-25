@@ -136,6 +136,11 @@ class StoreConfig:
     # Maximum length for summaries (used for smart remember and validation)
     max_summary_length: int = 2000
 
+    # Maximum length for inline content (CLI put with text or stdin).
+    # Content longer than this must be stored as a file (keep put file://...).
+    # Default 2000; increase for benchmarks or bulk ingestion of larger documents.
+    max_inline_length: int = 2000
+
     # Maximum file size in bytes for document fetching (default 100MB)
     max_file_size: int = 100_000_000
 
@@ -524,6 +529,12 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse max_summary_length (default 2000)
     max_summary_length = data.get("store", {}).get("max_summary_length", 2000)
 
+    # Parse max_inline_length (default 2000; falls back to max_summary_length for compat)
+    max_inline_length = data.get("store", {}).get(
+        "max_inline_length",
+        max_summary_length,  # backward compat: if not set, use max_summary_length
+    )
+
     # Parse max_file_size (default 100MB)
     max_file_size = data.get("store", {}).get("max_file_size", 100_000_000)
 
@@ -608,6 +619,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         required_tags=required_tags,
         namespace_keys=namespace_keys,
         max_summary_length=max_summary_length,
+        max_inline_length=max_inline_length,
         max_file_size=max_file_size,
         system_docs_version=system_docs_version,
         integrations=integrations,
@@ -655,6 +667,9 @@ def save_config(config: StoreConfig) -> None:
     # Only write max_summary_length if not default
     if config.max_summary_length != 2000:
         store_section["max_summary_length"] = config.max_summary_length
+    # Only write max_inline_length if not default (and differs from max_summary_length)
+    if config.max_inline_length != config.max_summary_length:
+        store_section["max_inline_length"] = config.max_inline_length
     # Only write max_file_size if not default
     if config.max_file_size != 100_000_000:
         store_section["max_file_size"] = config.max_file_size

@@ -221,6 +221,65 @@ _META_CONTEXT_KEY = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*)=$')
 # Pattern for prerequisite lines: key=* (item must have this tag)
 _META_PREREQ_KEY = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*)=\*$')
 
+# Markdown extensions that may contain YAML frontmatter
+_MARKDOWN_EXTENSIONS = {".md", ".markdown", ".mdx"}
+
+
+def _extract_markdown_frontmatter(content: str) -> tuple[str, dict[str, str]]:
+    """
+    Extract YAML frontmatter from markdown content.
+
+    Returns (body, tags) where:
+    - body: content with frontmatter stripped
+    - tags: all scalar frontmatter values as string tags, plus
+            values from a ``tags`` dict if present.
+            Keys starting with ``_`` are skipped (reserved for system tags).
+            Non-scalar values (lists, nested dicts) are dropped,
+            except for the ``tags`` key which is expected to be a dict.
+    """
+    if not content.startswith("---"):
+        return content, {}
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return content, {}
+
+    try:
+        import yaml
+        frontmatter = yaml.safe_load(parts[1])
+    except Exception:
+        return content, {}
+
+    body = parts[2].lstrip("\n")
+    if not isinstance(frontmatter, dict):
+        return body, {}
+
+    tags: dict[str, str] = {}
+
+    for key, value in frontmatter.items():
+        key_str = str(key)
+        # Skip system-reserved keys
+        if key_str.startswith("_"):
+            continue
+
+        if key_str == "tags" and isinstance(value, dict):
+            # Obsidian/keep-style tags dict: {topic: foo, project: bar}
+            for tk, tv in value.items():
+                tk_str = str(tk)
+                if tk_str.startswith("_"):
+                    continue
+                if isinstance(tv, (str, int, float, bool)):
+                    tags[tk_str] = str(tv)
+        elif isinstance(value, (str, int, float, bool)):
+            # Top-level scalar: title, author, date, etc. → tag
+            tags[key_str] = str(value)
+        elif hasattr(value, "isoformat"):
+            # datetime.date / datetime.datetime (YAML auto-parses dates)
+            tags[key_str] = value.isoformat()
+        # else: lists, nested dicts, None → drop silently
+
+    return body, tags
+
 
 def _parse_meta_doc(content: str) -> tuple[list[dict[str, str]], list[str], list[str]]:
     """
@@ -1613,6 +1672,20 @@ class Keeper:
                     pass  # Fall through to normal fetch
 
             doc = self._document_provider.fetch(uri)
+
+            # Extract frontmatter from markdown files
+            _uri_lower = uri.lower()
+            _is_markdown = any(_uri_lower.endswith(ext) for ext in _MARKDOWN_EXTENSIONS)
+            if _is_markdown and doc.content:
+                body, fm_tags = _extract_markdown_frontmatter(doc.content)
+                if body != doc.content or fm_tags:
+                    doc = Document(
+                        uri=doc.uri,
+                        content=body,
+                        content_type=doc.content_type,
+                        metadata=doc.metadata,
+                        tags={**(doc.tags or {}), **fm_tags},
+                    )
 
             # Merge provider-extracted tags with user tags (user wins on collision)
             merged_tags: dict[str, str] | None = None
