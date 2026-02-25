@@ -80,7 +80,11 @@ def validate_tag_key(key: str) -> None:
     if not key or len(key) > MAX_TAG_KEY_LENGTH:
         raise ValueError(f"Tag key must be 1-{MAX_TAG_KEY_LENGTH} characters: {key!r}")
     if not _TAG_KEY_RE.match(key):
-        raise ValueError(f"Tag key contains invalid characters (allowed: a-z, 0-9, _, -): {key!r}")
+        msg = f"Tag key contains invalid characters (allowed: a-z, 0-9, _, -): {key!r}"
+        if ":" in key:
+            parts = key.split(":", 1)
+            msg += f". Use separate key and value: tags={{'{parts[0]}': '{parts[1]}'}}"
+        raise ValueError(msg)
 
 
 def validate_id(id: str) -> None:

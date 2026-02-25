@@ -16,10 +16,12 @@ class SentenceTransformerEmbedding:
     Requires: pip install sentence-transformers
     """
 
-    def __init__(self, model: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model: str = "all-MiniLM-L6-v2", trust_remote_code: bool = False):
         """
         Args:
             model: Model name from sentence-transformers hub
+            trust_remote_code: Allow models with custom code (e.g. nomic-embed-text-v1.5).
+                Disabled by default for security — only enable for models you trust.
         """
         try:
             from sentence_transformers import SentenceTransformer
@@ -48,14 +50,10 @@ class SentenceTransformerEmbedding:
             logging.getLogger(__name__).info("Downloading embedding model '%s' (first use)...", model)
             print(f"Downloading embedding model '{model}' (first use)...", file=sys.stderr)
 
-        try:
-            self._model = SentenceTransformer(model, local_files_only=local_only, trust_remote_code=True)
-        except (ValueError, OSError):
-            # local_files_only can fail if cache is stale or incomplete; retry with download
-            if local_only:
-                self._model = SentenceTransformer(model, local_files_only=False, trust_remote_code=True)
-            else:
-                raise
+        self._model = SentenceTransformer(
+            model, local_files_only=local_only,
+            trust_remote_code=trust_remote_code,
+        )
     
     @property
     def dimension(self) -> int:
