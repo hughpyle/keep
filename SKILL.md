@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.65.4
+version: 0.66.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -94,6 +94,11 @@ Work is commitment management (Winograd & Flores). Recognizing conversation stru
 For detailed conversation analysis — commitment loops, breakdowns, moods, trust:
 ```
 keep_prompt(name="conversation")
+```
+
+To answer questions using retrieved memory context:
+```
+keep_prompt(name="query", text="what do I know about auth?")
 ```
 
 Tag speech acts with `act` and `status` to track commitments and requests.

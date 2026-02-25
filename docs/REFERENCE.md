@@ -38,9 +38,10 @@ keep -v <cmd>            # Enable debug logging to stderr
 Three output formats, consistent across all commands:
 
 ### Default: Summary Lines
-One line per item: `id date summary`
+One line per item: `id date summary` (search results include score: `id (score) date summary`)
 ```
 %a1b2c3d4         2026-01-14 URI detection should use proper scheme validation...
+%e5f6a7b8         (0.89) 2026-01-14 OAuth2 token refresh pattern...
 file:///path/doc  2026-01-15 Document about authentication patterns...
 ```
 
@@ -100,6 +101,8 @@ keep now                              # Show current intentions
 keep now "What's important now"       # Update intentions
 keep prompt reflect                   # Structured reflection practice
 keep prompt reflect "auth flow"       # Reflect with search context
+keep prompt query "what do I know about auth?"  # Answer from memory context
+keep prompt conversation              # Conversation analysis
 keep move "name" -t project=foo       # Move matching versions from now
 keep move "name" --only               # Move just the current version
 keep move "name" --from "source" -t X # Reorganize between items

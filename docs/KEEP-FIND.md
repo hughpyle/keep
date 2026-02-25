@@ -66,6 +66,17 @@ keep find "auth" --until 2026-02-01    # Before specific date
 keep find "auth" --since P30D --until P7D  # Between 30 and 7 days ago
 ```
 
+## Output format
+
+Results are displayed as summary lines with similarity score and date:
+
+```
+%a1b2c3d4         (0.89) 2026-01-14 OAuth2 token refresh pattern...
+%e5f6a7b8         (0.82) 2026-01-13 Token handling and session management...
+```
+
+Dates reflect when the item was created. Use `--full` for complete frontmatter with tags, similar items, and version navigation.
+
 ## Including archived versions
 
 ```bash

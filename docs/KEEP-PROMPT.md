@@ -32,8 +32,11 @@ Prompt docs may contain placeholders that are expanded at render time:
 |-------------|------------|
 | `{get}` | Full context for `--id` target (default: `now`) — YAML frontmatter with similar items, meta sections, version history |
 | `{find}` | Search results for the text argument — summary lines matching the query with optional tag/time filters |
+| `{text}` | Raw query text passed as the text argument |
+| `{since}` | The `--since` filter value (ISO duration or date), empty if not given |
+| `{until}` | The `--until` filter value (ISO duration or date), empty if not given |
 
-When no text argument is given, `{find}` expands to empty. When no `--id` is given, `{get}` shows the `now` document context.
+When no text argument is given, `{find}` and `{text}` expand to empty. When no `--id` is given, `{get}` shows the `now` document context.
 
 ## Prompt docs
 
@@ -44,6 +47,8 @@ Bundled prompts, loaded on first use:
 | Prompt | ID | Purpose |
 |--------|----|---------|
 | `reflect` | `.prompt/agent/reflect` | Full structured reflection practice |
+| `conversation` | `.prompt/agent/conversation` | Conversation analysis — commitments, breakdowns, moods |
+| `query` | `.prompt/agent/query` | Answer questions using retrieved memory context |
 | `session-start` | `.prompt/agent/session-start` | Context injection at session start |
 | `subagent-start` | `.prompt/agent/subagent-start` | Context injection for subagent initialization |
 
