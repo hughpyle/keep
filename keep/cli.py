@@ -344,18 +344,21 @@ def _format_summary_line(item: Item, id_width: int = 0) -> str:
     # Pad ID for column alignment
     padded_id = versioned_id.ljust(id_width) if id_width else versioned_id
 
+    # Score (when available from find results)
+    score_str = f" ({item.score:.2f})" if item.score is not None else ""
+
     # Get date in local timezone
-    date = local_date(item.tags.get("_updated") or item.tags.get("_created", ""))
+    date = local_date(item.tags.get("_created") or item.tags.get("_updated", ""))
 
     # Truncate summary to fit terminal width, collapse newlines
     cols = _output_width()
-    prefix_len = len(padded_id) + 1 + len(date) + 1  # "id date "
+    prefix_len = len(padded_id) + len(score_str) + 1 + len(date) + 1  # "id (score) date "
     max_summary = max(cols - prefix_len, 20)
     summary = item.summary.replace("\n", " ")
     if len(summary) > max_summary:
         summary = summary[:max_summary - 3].rsplit(" ", 1)[0] + "..."
 
-    return f"{padded_id} {date} {summary}"
+    return f"{padded_id}{score_str} {date} {summary}"
 
 
 def _format_versioned_id(item: Item) -> str:
@@ -507,6 +510,8 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None) -> str:
                 "summary": item.summary,
                 "tags": _filter_display_tags(item.tags),
                 "score": item.score,
+                "created": item.created,
+                "updated": item.updated,
             }
             for item in items
         ], indent=2)
@@ -1398,8 +1403,8 @@ def _find_now_version_by_tags(kp, tags: list[str], *, scope: Optional[str] = Non
     return None
 
 
-def _expand_prompt(result: "PromptResult", kp) -> str:
-    """Expand {get} and {find} placeholders in a prompt template."""
+def expand_prompt(result: "PromptResult", kp=None) -> str:
+    """Expand {get}, {find}, {text}, {since}, {until} placeholders in a prompt template."""
     output = result.prompt
 
     # Expand {get} with rendered context
@@ -1415,6 +1420,11 @@ def _expand_prompt(result: "PromptResult", kp) -> str:
     else:
         find_rendered = ""
     output = output.replace("{find}", find_rendered)
+
+    # Expand {text}, {since}, {until} with raw filter values
+    output = output.replace("{text}", result.text or "")
+    output = output.replace("{since}", result.since or "")
+    output = output.replace("{until}", result.until or "")
 
     # Clean up blank lines from empty expansions
     while "\n\n\n" in output:
@@ -1483,7 +1493,26 @@ def prompt(
         typer.echo(f"Prompt not found: {name}", err=True)
         raise typer.Exit(1)
 
-    typer.echo(_expand_prompt(result, kp))
+    if _get_json_output():
+        items = result.search_results or []
+        out = {
+            "prompt": expand_prompt(result, kp),
+            "context": result.context.to_dict() if result.context else None,
+            "results": [
+                {
+                    "id": item.id,
+                    "summary": item.summary,
+                    "tags": _filter_display_tags(item.tags),
+                    "score": item.score,
+                    "created": item.created,
+                    "updated": item.updated,
+                }
+                for item in items
+            ],
+        }
+        typer.echo(json.dumps(out, indent=2))
+    else:
+        typer.echo(expand_prompt(result, kp))
 
 
 @app.command(hidden=True)
@@ -1504,7 +1533,7 @@ def reflect(
         typer.echo("Prompt 'reflect' not found. Is the store initialized?", err=True)
         raise typer.Exit(1)
 
-    typer.echo(_expand_prompt(result, kp))
+    typer.echo(expand_prompt(result, kp))
 
 
 @app.command()

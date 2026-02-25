@@ -21,7 +21,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from .api import Keeper
-from .cli import render_context
+from .cli import render_context, expand_prompt
 
 # ---------------------------------------------------------------------------
 # Server setup
@@ -368,34 +368,7 @@ async def keep_prompt(
     if result is None:
         return f"Prompt not found: {name}"
 
-    return _expand_prompt(result)
-
-
-def _expand_prompt(result) -> str:
-    """Expand {get} and {find} placeholders in a PromptResult."""
-    output = result.prompt
-
-    if result.context:
-        get_rendered = render_context(result.context)
-    else:
-        get_rendered = ""
-    output = output.replace("{get}", get_rendered)
-
-    if result.search_results:
-        lines = []
-        for item in result.search_results:
-            score = f" ({item.score:.2f})" if item.score is not None else ""
-            date = item.tags.get("_updated_date", "")
-            lines.append(f"- {item.id}{score}  {date}  {item.summary}")
-        find_rendered = "\n".join(lines)
-    else:
-        find_rendered = ""
-    output = output.replace("{find}", find_rendered)
-
-    while "\n\n\n" in output:
-        output = output.replace("\n\n\n", "\n\n")
-
-    return output.strip()
+    return expand_prompt(result)
 
 
 # ---------------------------------------------------------------------------

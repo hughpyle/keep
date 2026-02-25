@@ -83,6 +83,7 @@ SYSTEM_DOC_IDS = {
     "prompt-agent-conversation.md": ".prompt/agent/conversation",
     "prompt-agent-session-start.md": ".prompt/agent/session-start",
     "prompt-agent-subagent-start.md": ".prompt/agent/subagent-start",
+    "prompt-agent-query.md": ".prompt/agent/query",
 }
 
 # Migration renames from old ID prefixes to new stable IDs

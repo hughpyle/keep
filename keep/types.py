@@ -371,13 +371,17 @@ class ItemContext:
 class PromptResult:
     """Rendered agent prompt with context injection.
 
-    The ``prompt`` field is a template that may contain ``{get}`` and
-    ``{find}`` placeholders.  The CLI/MCP renderer expands these with
-    the rendered ``context`` and ``search_results``.
+    The ``prompt`` field is a template that may contain ``{get}``,
+    ``{find}``, ``{text}``, ``{since}``, and ``{until}`` placeholders.
+    The CLI/MCP renderer expands these with the rendered context,
+    search results, and filter values.
     """
     context: ItemContext | None           # from get_context(id) — default "now"
     search_results: list[Item] | None     # from find(query=text, ...) when text given
-    prompt: str                            # the ## Prompt section (may contain {get}/{find})
+    prompt: str                            # the ## Prompt section (may contain placeholders)
+    text: str | None = None               # raw query text passed to render_prompt()
+    since: str | None = None              # since filter value
+    until: str | None = None              # until filter value
 
 
 @dataclass(frozen=True)

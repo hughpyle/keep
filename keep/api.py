@@ -1969,8 +1969,14 @@ class Keeper:
             enriched = []
             for item in final:
                 doc = self._document_store.get(doc_coll, item.id)
+                # Version-reference IDs (@v{N}) don't have their own head
+                # record — fall back to the base document for timestamps.
+                if not doc and "@" in item.id:
+                    base_id = item.id.split("@")[0]
+                    doc = self._document_store.get(doc_coll, base_id)
                 if doc:
-                    tags = dict(doc.tags)
+                    enriched_item = _record_to_item(doc, score=item.score)
+                    tags = enriched_item.tags
                     # Preserve _focus_part from uplift
                     focus = item.tags.get("_focus_part")
                     if focus:
@@ -2133,6 +2139,8 @@ class Keeper:
 
         # Context: get_context for the target item (default "now")
         context_id = id or "now"
+        if context_id == "now":
+            self.get_now()  # ensure now exists (auto-creates from bundled doc)
         ctx = self.get_context(context_id)
 
         # Search: find similar items with available filters
@@ -2151,6 +2159,9 @@ class Keeper:
             context=ctx,
             search_results=search_results,
             prompt=prompt_body,
+            text=text,
+            since=since,
+            until=until,
         )
 
     def list_prompts(self) -> list[PromptInfo]:

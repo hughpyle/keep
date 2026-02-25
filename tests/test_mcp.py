@@ -482,13 +482,15 @@ class TestKeepPrompt:
             context=None,
             search_results=[
                 _make_item(id="%abc", summary="A learning", score=0.85,
-                           tags={"_updated_date": "2026-02-20"}),
+                           tags={"_created": "2026-02-20T10:00:00",
+                                 "_updated": "2026-02-20T10:00:00",
+                                 "_updated_date": "2026-02-20"}),
             ],
             prompt="Context:\n\n{get}\n{find}\n\nReflect.",
         )
         result = await keep_prompt(name="reflect", text="learnings")
         assert "%abc" in result
-        assert "(0.85)" in result
+        assert "2026-02-20" in result
         assert "A learning" in result
         assert "{find}" not in result
 
@@ -506,6 +508,39 @@ class TestKeepPrompt:
             "reflect", "query", id="my-id",
             since="P7D", until="2026-02-20", tags={"project": "x"}, limit=3,
         )
+
+    @pytest.mark.asyncio
+    async def test_prompt_expands_text_since_until(self, mock_keeper):
+        from keep.mcp import keep_prompt
+        mock_keeper.render_prompt.return_value = PromptResult(
+            context=None,
+            search_results=None,
+            prompt="Q: {text}\nSince: {since}\nUntil: {until}",
+            text="what happened",
+            since="P7D",
+            until="2026-02-20",
+        )
+        result = await keep_prompt(name="query", text="what happened")
+        assert "Q: what happened" in result
+        assert "Since: P7D" in result
+        assert "Until: 2026-02-20" in result
+        assert "{text}" not in result
+
+    @pytest.mark.asyncio
+    async def test_prompt_find_shows_created_date(self, mock_keeper):
+        from keep.mcp import keep_prompt
+        mock_keeper.render_prompt.return_value = PromptResult(
+            context=None,
+            search_results=[
+                _make_item(id="%abc", summary="Old memory", score=0.9,
+                           tags={"_created": "2023-10-15T12:00:00",
+                                 "_updated_date": "2026-02-20"}),
+            ],
+            prompt="{find}",
+        )
+        result = await keep_prompt(name="query", text="test")
+        assert "2023-10-15" in result
+        assert "%abc" in result
 
 
 # ---------------------------------------------------------------------------
