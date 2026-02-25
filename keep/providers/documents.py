@@ -731,10 +731,80 @@ class FileDocumentProvider:
             raise IOError(f"Failed to extract text from HTML {path}: {e}")
 
 
+def _is_binary_content_type(content_type: str) -> bool:
+    """Check if a content type represents binary data that can't be decoded as text."""
+    if content_type.startswith(("image/", "audio/", "video/")):
+        return True
+    binary_types = {
+        "application/octet-stream",
+        "application/zip",
+        "application/gzip",
+        "application/x-tar",
+        "application/vnd.apple.pages",
+        "application/vnd.apple.keynote",
+        "application/vnd.apple.numbers",
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+        "application/wasm",
+    }
+    return content_type in binary_types
+
+
+# Content types that FileDocumentProvider can extract text from.
+# Maps content-type (or URL suffix) → file extension for temp file.
+_EXTRACTABLE_TYPES: dict[str, str] = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+}
+
+_EXTRACTABLE_SUFFIXES: dict[str, str] = {
+    "pdf": ".pdf",
+    "docx": ".docx",
+    "pptx": ".pptx",
+}
+
+
+def _is_extractable_binary(content_type: str, url_suffix: str) -> bool:
+    """Check if this binary type can be extracted via FileDocumentProvider."""
+    return content_type in _EXTRACTABLE_TYPES or url_suffix in _EXTRACTABLE_SUFFIXES
+
+
+def _extract_via_file_provider(
+    data: bytes, uri: str, content_type: str, url_suffix: str,
+) -> tuple[str, str]:
+    """Write bytes to a temp file and extract text using FileDocumentProvider.
+
+    Uses a temp file inside the user's home directory so that
+    FileDocumentProvider's path-traversal guard is satisfied.
+    The temp file is deleted after extraction.
+
+    Returns (extracted_content, content_type).
+    """
+    import tempfile
+
+    ext = _EXTRACTABLE_TYPES.get(content_type) or _EXTRACTABLE_SUFFIXES.get(url_suffix, "")
+
+    # Write inside home dir to satisfy FileDocumentProvider's path guard.
+    tmp_dir = Path.home() / ".cache" / "keep"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(
+        suffix=ext, dir=tmp_dir, delete=True,
+    ) as tmp:
+        tmp.write(data)
+        tmp.flush()
+
+        provider = FileDocumentProvider()
+        doc = provider.fetch(tmp.name)
+        return doc.content, doc.content_type
+
+
 class HttpDocumentProvider:
     """
     Fetches documents from HTTP/HTTPS URLs.
-    
+
     Requires the `requests` library (optional dependency).
     """
     
@@ -851,22 +921,39 @@ class HttpDocumentProvider:
                     chunks.append(chunk)
                 raw = b"".join(chunks)
 
-                # Decode using the response's detected encoding
-                encoding = resp.encoding or "utf-8"
-                content = raw.decode(encoding, errors="replace")
-
                 # Get content type
                 content_type = resp.headers.get("content-type", "text/plain")
                 if ";" in content_type:
                     content_type = content_type.split(";")[0].strip()
 
-                # Extract text from HTML content
+                # Detect content type from URL suffix as fallback
+                url_suffix = uri.lower().rsplit("?", 1)[0].rsplit(".", 1)[-1]
+
+                # Extract content based on type
                 if content_type == "text/html":
+                    encoding = resp.encoding or "utf-8"
+                    content = raw.decode(encoding, errors="replace")
                     try:
                         content = extract_html_text(content)
                     except ImportError:
-                        # Graceful fallback: use raw HTML if bs4 not installed
                         pass
+                elif _is_extractable_binary(content_type, url_suffix):
+                    # Binary type with text extraction support —
+                    # write to temp file and use FileDocumentProvider
+                    content, content_type = _extract_via_file_provider(
+                        raw, uri, content_type, url_suffix,
+                    )
+                elif _is_binary_content_type(content_type):
+                    # Binary type we can't extract text from —
+                    # return a placeholder instead of decoded garbage
+                    size_kb = len(raw) / 1024
+                    content = (
+                        f"[Remote binary document: {uri}, "
+                        f"type={content_type}, {size_kb:.0f}KB]"
+                    )
+                else:
+                    encoding = resp.encoding or "utf-8"
+                    content = raw.decode(encoding, errors="replace")
 
                 return Document(
                     uri=uri,
