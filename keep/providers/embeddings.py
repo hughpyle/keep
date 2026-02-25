@@ -48,7 +48,14 @@ class SentenceTransformerEmbedding:
             logging.getLogger(__name__).info("Downloading embedding model '%s' (first use)...", model)
             print(f"Downloading embedding model '{model}' (first use)...", file=sys.stderr)
 
-        self._model = SentenceTransformer(model, local_files_only=local_only)
+        try:
+            self._model = SentenceTransformer(model, local_files_only=local_only, trust_remote_code=True)
+        except (ValueError, OSError):
+            # local_files_only can fail if cache is stale or incomplete; retry with download
+            if local_only:
+                self._model = SentenceTransformer(model, local_files_only=False, trust_remote_code=True)
+            else:
+                raise
     
     @property
     def dimension(self) -> int:
