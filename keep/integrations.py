@@ -42,6 +42,8 @@ keep_put(content="https://example.com/doc", tags={"topic": "X"})      # Index im
 keep_get(id=".tag/act")                                                # Speech-act tag reference
 ```
 
+**No MCP?** Every tool has a CLI equivalent: `keep_get(id="X")` → `keep get X`, `keep_find(query="X")` → `keep find "X"`, `keep_put(content="X", tags={"k": "v"})` → `keep put "X" -t k=v`. Use Bash to run them.
+
 **Protocol:** Reflect using `keep` tools — before, during, and after action. Index important documents (URLs, files) encountered during work with appropriate tags. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
 """
 

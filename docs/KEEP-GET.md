@@ -16,11 +16,11 @@ keep get "ID@V{1}"                    # Same as -V 1 (version identifier syntax)
 | Option | Description |
 |--------|-------------|
 | `-V`, `--version N` | Get specific version (0=current, 1=previous) |
-| `-H`, `--history` | List all versions (default 10, use `-n` to override) |
+| `-H`, `--history` | Expand version history in frontmatter (default 10, use `-n` to override) |
 | `-S`, `--similar` | List similar items (default 10) |
 | `-M`, `--meta` | List meta items |
 | `-R`, `--resolve QUERY` | Inline meta query (meta-tag syntax, repeatable) |
-| `-P`, `--parts` | List structural parts (from `analyze`) |
+| `-P`, `--parts` | Expand all parts in frontmatter (from `analyze`) |
 | `-t`, `--tag KEY=VALUE` | Require tag (error if item doesn't match) |
 | `-n`, `--limit N` | Max items for --history, --similar, --meta (default 10) |
 | `-s`, `--store PATH` | Override store directory |
@@ -66,13 +66,16 @@ Parts include prev/next navigation and part-specific similar items.
 ## Display modes
 
 ```bash
+keep get ID --history                 # Frontmatter with all versions expanded
+keep get ID --history -n 20           # Show 20 versions
+keep get ID --parts                   # Frontmatter with all parts expanded
 keep get ID --similar                 # Show similar items
 keep get ID --similar -n 20           # Show 20 similar items
 keep get ID --meta                    # Show meta items
 keep get ID --meta -n 5              # Show 5 meta items per section
-keep get ID --history                # List all versions
-keep get ID --parts                  # List structural parts
 ```
+
+The `--history` and `--parts` flags expand the `prev:` and `parts:` sections of the normal frontmatter output. Use `--ids` to get flat IDs for piping: `keep --ids get ID --parts | xargs keep get`.
 
 ## Tag filtering
 

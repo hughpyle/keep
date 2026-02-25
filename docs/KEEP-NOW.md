@@ -19,7 +19,7 @@ echo "piped content" | keep now       # Set from stdin
 |--------|-------------|
 | `--reset` | Reset to default from system |
 | `-V`, `--version N` | Get specific version (0=current, 1=previous) |
-| `-H`, `--history` | List all versions |
+| `-H`, `--history` | Expand version history in frontmatter |
 | `-t`, `--tag KEY=VALUE` | Set tag (with content) or filter (without content) |
 | `-n`, `--limit N` | Max similar/meta items to show (default 3) |
 | `--scope SCOPE` | Scope for multi-user isolation (e.g. user ID) |

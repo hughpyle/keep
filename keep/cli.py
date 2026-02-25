@@ -32,7 +32,7 @@ _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 
 from .api import Keeper, _text_content_id
 from .config import get_tool_directory
-from .types import Item, ItemContext, PartRef, local_date
+from .types import Item, ItemContext, PartRef, VersionRef, local_date
 from .logging_config import configure_quiet_mode, enable_debug_mode
 
 # Maximum number of files to index from a directory at once
@@ -269,7 +269,9 @@ def _render_frontmatter(ctx: ItemContext) -> str:
     # Parts manifest
     if ctx.parts:
         total = len(ctx.parts)
-        if ctx.focus_part is not None:
+        if ctx.expand_parts:
+            visible = ctx.parts  # --parts: show all
+        elif ctx.focus_part is not None:
             visible = [p for p in ctx.parts if abs(p.part_num - ctx.focus_part) <= 1]
         elif total <= 3:
             visible = ctx.parts
@@ -279,7 +281,7 @@ def _render_frontmatter(ctx: ItemContext) -> str:
         id_width = max(len(s) for s in part_ids)
         label = "parts:" if ctx.focus_part is None else f"parts: # {total} total, showing around @P{{{ctx.focus_part}}}"
         lines.append(label)
-        if ctx.focus_part is not None or total <= 3:
+        if ctx.expand_parts or ctx.focus_part is not None or total <= 3:
             for part, pid in zip(visible, part_ids):
                 marker = " *" if ctx.focus_part is not None and part.part_num == ctx.focus_part else ""
                 prefix_len = 4 + id_width + 1 + len(marker)
@@ -1263,10 +1265,29 @@ def now(
 
     # Handle history listing
     if history:
-        versions = kp.list_versions(doc_id, limit=limit)
-        current = kp.get(doc_id)
-        items = _versions_to_items(doc_id, current, versions)
-        typer.echo(_format_items(items, as_json=_get_json_output()))
+        # --ids: flat list for piping
+        if _get_ids_output():
+            versions = kp.list_versions(doc_id, limit=limit)
+            current = kp.get(doc_id)
+            items = _versions_to_items(doc_id, current, versions)
+            typer.echo(_format_items(items))
+            return
+        # Default: expanded frontmatter with all versions
+        ctx = kp.get_context(doc_id)
+        if ctx is None:
+            typer.echo("Not found", err=True)
+            raise typer.Exit(1)
+        all_versions = kp.list_versions(doc_id, limit=limit)
+        ctx.prev = [
+            VersionRef(
+                offset=i + 1,
+                date=local_date(v.tags.get("_created") or v.created_at or ""),
+                summary=v.summary,
+            )
+            for i, v in enumerate(all_versions)
+        ]
+        ctx.next = []
+        typer.echo(render_context(ctx, as_json=_get_json_output()))
         return
 
     # Handle version retrieval
@@ -1815,12 +1836,18 @@ def _get_one(
     # Dispatch to sub-mode handlers
     if part_from_id is not None:
         return _get_part_direct(kp, actual_id, part_from_id)
-    if history:
+
+    # --history / --parts with --ids: flat list for piping
+    if _get_ids_output() and history:
         versions = kp.list_versions(actual_id, limit=limit)
         current = kp.get(actual_id)
-        return _format_items(_versions_to_items(actual_id, current, versions), as_json=_get_json_output())
-    if show_parts:
-        return _get_parts_list(kp, actual_id)
+        return _format_items(_versions_to_items(actual_id, current, versions))
+    if _get_ids_output() and show_parts:
+        part_list = kp.list_parts(actual_id)
+        if not part_list:
+            return f"No parts for {actual_id}. Use 'keep analyze {actual_id}' to create parts."
+        return _format_items(_parts_to_items(actual_id, None, part_list))
+
     if similar:
         return _get_similar_list(kp, actual_id, limit)
     if meta:
@@ -1828,7 +1855,7 @@ def _get_one(
     if resolve:
         return _get_resolve_list(kp, actual_id, resolve, limit)
 
-    # Default: full context view
+    # Default + --history + --parts: frontmatter with expanded sections
     offset = effective_version if effective_version is not None else 0
     ctx = kp.get_context(actual_id, version=offset if offset > 0 else None)
     if ctx is None:
@@ -1837,6 +1864,28 @@ def _get_one(
         else:
             typer.echo(f"Not found: {actual_id}", err=True)
         return None
+
+    # Expand parts section: show all parts without windowing
+    if show_parts:
+        all_parts = kp.list_parts(actual_id)
+        if not all_parts:
+            typer.echo(f"No parts for {actual_id}. Use 'keep analyze {actual_id}' to create parts.", err=True)
+            return None
+        ctx.parts = [PartRef(part_num=p.part_num, summary=p.summary, tags=dict(p.tags)) for p in all_parts]
+        ctx.expand_parts = True
+
+    # Expand history: show all versions in prev section
+    if history:
+        all_versions = kp.list_versions(actual_id, limit=limit)
+        ctx.prev = [
+            VersionRef(
+                offset=i + 1,
+                date=local_date(v.tags.get("_created") or v.created_at or ""),
+                summary=v.summary,
+            )
+            for i, v in enumerate(all_versions)
+        ]
+        ctx.next = []  # full history replaces navigation
 
     if tag:
         filtered = _filter_by_tags([ctx.item], tag)

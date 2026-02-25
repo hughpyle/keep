@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.65.1
+version: 0.65.2
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -45,6 +45,8 @@ keep_put(content="I will do Y", tags={"act": "commitment", "status": "open"})  #
 keep_put(content="https://example.com/doc", tags={"topic": "X"})      # Index important documents
 keep_get(id=".tag/act")                                                # Speech-act tag reference
 \`\`\`
+
+**No MCP?** Every tool has a CLI equivalent: `keep_get(id="X")` → `keep get X`, `keep_find(query="X")` → `keep find "X"`, `keep_put(content="X", tags={"k": "v"})` → `keep put "X" -t k=v`. Use Bash to run them.
 
 **Protocol:** Reflect using `keep` tools — before, during, and after action. Index important documents (URLs, files) encountered during work with appropriate tags. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
 
@@ -118,7 +120,7 @@ keep_move(name="design-log", only=True)                     # Move just the tip 
 ```
 Moving clears matched versions from now, making room for what's next. Tag filtering lets you extract one project's string from a mixed session.
 
-> **CLI equivalents** (`keep now`, `keep find`, `keep put`, etc.) are available for hooks and terminal use. See [docs/REFERENCE.md](docs/REFERENCE.md).
+> **No MCP?** Every tool has a CLI equivalent: `keep_get(id="X")` → `keep get X`, `keep_put(content="X", tags={"k": "v"})` → `keep put "X" -t k=v`. Use Bash to run them. See [docs/REFERENCE.md](docs/REFERENCE.md).
 
 **Breakdowns are valuable.** When the normal flow is interrupted — an assumption has been revealed. The breakdown is where learning happens.
 

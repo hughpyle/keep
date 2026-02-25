@@ -335,6 +335,7 @@ class ItemContext:
     meta: dict[str, list[MetaRef]] = field(default_factory=dict)
     parts: list[PartRef] = field(default_factory=list)
     focus_part: int | None = None
+    expand_parts: bool = False            # show all parts (no windowing)
     prev: list[VersionRef] = field(default_factory=list)
     next: list[VersionRef] = field(default_factory=list)
 
