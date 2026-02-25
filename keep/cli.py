@@ -983,7 +983,8 @@ def _put_store(
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
             raise typer.Exit(1)
         max_len = kp.config.max_summary_length
-        if len(content) > max_len:
+        is_system_doc = id and id.startswith(".")
+        if not is_system_doc and len(content) > max_len:
             typer.echo(f"Error: stdin content too long to store inline ({len(content)} chars, max {max_len})", err=True)
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
             raise typer.Exit(1)
@@ -1040,10 +1041,10 @@ def _put_store(
     elif resolved_path is not None and resolved_path.is_file():
         # File mode: bare file path → normalize to file:// URI
         file_uri = f"file://{resolved_path}"
-        return kp.put(uri=file_uri, tags=parsed_tags or None, summary=summary, force=force)
+        return kp.put(uri=file_uri, id=id or None, tags=parsed_tags or None, summary=summary, force=force)
     elif source and _URI_SCHEME_PATTERN.match(source):
-        # URI mode: fetch from URI (ID is the URI itself)
-        return kp.put(uri=source, tags=parsed_tags or None, summary=summary, force=force)
+        # URI mode: fetch from URI (--id overrides the document ID)
+        return kp.put(uri=source, id=id or None, tags=parsed_tags or None, summary=summary, force=force)
     elif source:
         # Text mode: inline content (no :// in source)
         if summary is not None:
@@ -1051,7 +1052,8 @@ def _put_store(
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
             raise typer.Exit(1)
         max_len = kp.config.max_summary_length
-        if len(source) > max_len:
+        is_system_doc = id and id.startswith(".")
+        if not is_system_doc and len(source) > max_len:
             typer.echo(f"Error: inline text too long to store ({len(source)} chars, max {max_len})", err=True)
             typer.echo("Hint: write to a file first, then: keep put file:///path/to/file", err=True)
             raise typer.Exit(1)

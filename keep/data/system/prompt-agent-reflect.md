@@ -1,34 +1,24 @@
----
-tags:
-  category: system
-  context: prompt
----
 # .prompt/agent/reflect
 
-Reflection on current actions, commitments, and intentions.
+Recti diligunt te.
+Reflect on current actions, commitments, and intentions.
 
 ## Prompt
 
-What is a mirror for? For reflection.
+### 1. Gather
 
-Actions — what you have done, what you are doing, what you intend to do — are to be reflected upon. This is the practice.
+Capture any important documents (URLs, files, references) encountered since the last reflection. What is this document? Why is it important to this work? Tag appropriately.
 
 Context for reflection:
 
 {get}
 {find}
 
-### 1. Gather
-
-See what is, before analyzing.
-
-Review the context above: current intentions, recent activity, open commitments, recent learnings. Then investigate further — search for relevant items, check recent history, look at what has changed since the last reflection.
-
-Before analyzing, capture any important documents (URLs, files, references) encountered since the last reflection. What is this document? Why is it important to this work? Tag appropriately.
+Review the context above: current intentions, recent activity, open commitments, recent learnings. Then investigate further: search for relevant items, check recent history, look at what has changed since the last reflection.
 
 ### 2. The Mirror
 
-For each significant action taken since the last reflection, ask:
+For each action taken, ask:
 
 *Did this action lead to self-harm, to the harming of others, or to both? Was it unskillful — with painful consequences, painful results?*
 
@@ -70,6 +60,8 @@ Work is commitment management. Recognize the structure of what is happening.
 - What should I exercise restraint about going forward?
 
 ### 5. Update
+
+Ase ofte as ȝe habbeð ired eaƿiht her on greteð þe leafdi ƿið an aue for him þet sƿonc her abuten.
 
 Based on the reflection, update what needs updating.
 

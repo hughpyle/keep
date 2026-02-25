@@ -1387,8 +1387,9 @@ class Keeper:
 
         # Determine summary
         max_len = self._config.max_summary_length
+        is_system_doc = id.startswith(".")
         if summary is not None:
-            if len(summary) > max_len:
+            if not is_system_doc and len(summary) > max_len:
                 import warnings
                 warnings.warn(
                     f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
@@ -1397,6 +1398,10 @@ class Keeper:
                 )
                 summary = summary[:max_len]
             final_summary = summary
+        elif is_system_doc:
+            # System docs (.prompt/*, .tag/*, .meta/*) store full content
+            # as the summary — they are authored content, not items to summarize.
+            final_summary = content
         elif content_unchanged and tags_changed:
             logger.debug("Tags changed, queueing re-summarization for %s", id)
             final_summary = existing_doc.summary
@@ -1583,6 +1588,8 @@ class Keeper:
         if uri is not None:
             # URI mode: fetch document, extract content, store
             uri = normalize_id(uri)
+            # When --id is provided, use it as the document ID; otherwise the URI is the ID
+            doc_id = normalize_id(id) if id else uri
 
             # Fast path for local files: skip expensive read if stat unchanged
             is_file_uri = uri.startswith("file://") or uri.startswith("/")
@@ -1591,7 +1598,7 @@ class Keeper:
                     fpath = Path(uri.removeprefix("file://")).resolve()
                     st = fpath.stat()
                     doc_coll = self._resolve_doc_collection()
-                    existing = self._document_store.get(doc_coll, uri)
+                    existing = self._document_store.get(doc_coll, doc_id)
                     if (existing
                             and existing.tags.get("_file_mtime_ns") == str(st.st_mtime_ns)
                             and existing.tags.get("_file_size") == str(st.st_size)):
@@ -1600,7 +1607,7 @@ class Keeper:
                                 existing.tags,
                                 {**filter_non_system_tags(existing.tags),
                                  **casefold_tags(tags)}):
-                            logger.debug("File stat unchanged, skipping read for %s", uri)
+                            logger.debug("File stat unchanged, skipping read for %s", doc_id)
                             return _record_to_item(existing, changed=False)
                 except OSError:
                     pass  # Fall through to normal fetch
@@ -1658,8 +1665,12 @@ class Keeper:
                         birthtime, tz=timezone.utc
                     ).isoformat()
 
+            # Store source URI as system tag when using custom ID
+            if doc_id != uri:
+                system_tags["_source_uri"] = uri
+
             result = self._upsert(
-                uri, doc.content,
+                doc_id, doc.content,
                 tags=merged_tags, summary=summary,
                 system_tags=system_tags,
                 created_at=created_at,
@@ -1671,7 +1682,7 @@ class Keeper:
             if ocr_pages and self._config.content_extractor:
                 doc_coll = self._resolve_doc_collection()
                 self._pending_queue.enqueue(
-                    uri, doc_coll, "",
+                    doc_id, doc_coll, "",
                     task_type="ocr",
                     metadata={
                         "uri": uri,
