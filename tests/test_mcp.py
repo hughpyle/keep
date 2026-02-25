@@ -574,15 +574,14 @@ class TestCheckMcpSetup:
         _check_mcp_setup()
         err = capsys.readouterr().err
         assert "Claude Code" in err
-        assert "mcpServers" in err
+        assert "claude mcp add" in err
 
     def test_claude_code_already_configured(self, tmp_path, capsys, monkeypatch):
-        """No hint when ~/.claude/settings.json has mcpServers.keep."""
+        """No hint when ~/.claude.json has mcpServers.keep."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
+        (tmp_path / ".claude").mkdir()
         import json
-        (claude_dir / "settings.json").write_text(json.dumps({
+        (tmp_path / ".claude.json").write_text(json.dumps({
             "mcpServers": {"keep": {"command": "keep", "args": ["mcp"]}}
         }))
         from keep.mcp import _check_mcp_setup
@@ -597,6 +596,7 @@ class TestCheckMcpSetup:
         _check_mcp_setup()
         err = capsys.readouterr().err
         assert "Kiro" in err
+        assert "kiro-cli mcp add" in err
 
     def test_kiro_already_configured(self, tmp_path, capsys, monkeypatch):
         """No hint when ~/.kiro/settings/mcp.json has mcpServers.keep."""
@@ -619,7 +619,7 @@ class TestCheckMcpSetup:
         _check_mcp_setup()
         err = capsys.readouterr().err
         assert "Codex" in err
-        assert "mcp_servers.keep" in err
+        assert "codex mcp add" in err
 
     def test_codex_already_configured(self, tmp_path, capsys, monkeypatch):
         """No hint when ~/.codex/config.toml has [mcp_servers.keep]."""
@@ -632,6 +632,39 @@ class TestCheckMcpSetup:
         from keep.mcp import _check_mcp_setup
         _check_mcp_setup()
         assert "Codex" not in capsys.readouterr().err
+
+    def test_vscode_not_configured(self, tmp_path, capsys, monkeypatch):
+        """Hint shown when VS Code user dir exists but mcp.json missing."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        import platform
+        if platform.system() == "Darwin":
+            vscode_dir = tmp_path / "Library" / "Application Support" / "Code"
+        else:
+            vscode_dir = tmp_path / ".config" / "Code"
+        vscode_dir.mkdir(parents=True)
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        err = capsys.readouterr().err
+        assert "VS Code" in err
+        assert "code --add-mcp" in err
+
+    def test_vscode_already_configured(self, tmp_path, capsys, monkeypatch):
+        """No hint when VS Code mcp.json has servers.keep."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        import platform
+        if platform.system() == "Darwin":
+            vscode_dir = tmp_path / "Library" / "Application Support" / "Code"
+        else:
+            vscode_dir = tmp_path / ".config" / "Code"
+        user_dir = vscode_dir / "User"
+        user_dir.mkdir(parents=True)
+        import json
+        (user_dir / "mcp.json").write_text(json.dumps({
+            "servers": {"keep": {"command": "keep", "args": ["mcp"]}}
+        }))
+        from keep.mcp import _check_mcp_setup
+        _check_mcp_setup()
+        assert "VS Code" not in capsys.readouterr().err
 
     def test_multiple_tools_detected(self, tmp_path, capsys, monkeypatch):
         """Hints for all unconfigured tools in one message."""
@@ -649,9 +682,8 @@ class TestCheckMcpSetup:
     def test_corrupt_settings_json_ignored(self, tmp_path, capsys, monkeypatch):
         """Corrupt JSON doesn't crash, just shows hint."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir()
-        (claude_dir / "settings.json").write_text("not json{{{")
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".claude.json").write_text("not json{{{")
         from keep.mcp import _check_mcp_setup
         _check_mcp_setup()
         err = capsys.readouterr().err

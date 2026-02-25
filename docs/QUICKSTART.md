@@ -214,10 +214,10 @@ On first use, `keep` detects coding tools and installs hooks into their configur
 
 | Tool | What happens |
 |------|-------------|
-| **Claude Code** | Reflective practice prompt in `CLAUDE.md`, session hooks in `settings.json` |
-| **VS Code Copilot** | Reads Claude Code hooks automatically |
-| **Kiro** | Practice prompt + agent hooks |
-| **OpenAI Codex** | Practice prompt in `AGENTS.md` |
+| **Claude Code** | Practice prompt + session hooks. MCP: `claude mcp add --scope user keep -- keep mcp` |
+| **VS Code Copilot** | MCP: `code --add-mcp '{"name":"keep","command":"keep","args":["mcp"]}'` |
+| **Kiro** | Practice prompt + agent hooks. MCP: `kiro-cli mcp add --name keep --scope global -- keep mcp` |
+| **OpenAI Codex** | Practice prompt in `AGENTS.md`. MCP: `codex mcp add keep -- keep mcp` |
 | **OpenClaw** | Practice prompt + [plugin](OPENCLAW-INTEGRATION.md) |
 
 Hooks inject `keep now` context at key moments (session start, prompt submit) so the agent always has current intentions and relevant context.

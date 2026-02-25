@@ -3,7 +3,9 @@
 Patterns for using the reflective memory store effectively in working sessions.
 
 For the practice (why and when), see [../SKILL.md](../SKILL.md).
-For CLI reference, see [REFERENCE.md](REFERENCE.md). Be sure you understand the [output format](OUTPUT.md) — every item surfaces similar items and meta sections you can navigate with `keep get`.
+For CLI reference, see [REFERENCE.md](REFERENCE.md). Be sure you understand the [output format](OUTPUT.md) — every item surfaces similar items and meta sections you can navigate with `keep_get`.
+
+> **Note:** Examples below use MCP tool-call notation (the primary interface for agents). CLI equivalents (`keep now`, `keep find`, etc.) are available for hooks and terminal use — see [REFERENCE.md](REFERENCE.md).
 
 ---
 
@@ -14,21 +16,21 @@ This guide assumes familiarity with the reflective practice in [SKILL.md](../SKI
 **Reflect before acting:** Check your current work context and intentions.
 - What kind of conversation is this? (Action? Possibility? Clarification?)
 - What do I already know?
-```bash
-keep now                    # Current intentions
-keep find "this situation"  # Prior knowledge
+```
+keep_get(id="now")                    # Current intentions
+keep_find(query="this situation")     # Prior knowledge
 ```
 
 **While acting:** Is this leading to harm? If yes: give it up.
 
 **Reflect after acting:** What happened? What did I learn?
-```bash
-keep put "what I learned" -t type=learning
+```
+keep_put(content="what I learned", tags={"type": "learning"})
 ```
 
 **Periodically:** Run a full structured reflection ([details](KEEP-PROMPT.md)):
-```bash
-keep prompt reflect
+```
+keep_prompt(name="reflect")
 ```
 
 This cycle — reflect, act, reflect — is the mirror teaching. Memory isn't storage; it's how you develop skillful judgment.
@@ -39,21 +41,21 @@ This cycle — reflect, act, reflect — is the mirror teaching. Memory isn't st
 
 Use the nowdoc as a scratchpad to track where you are in the work. This isn't enforced structure — it's a convention that helps you (and future agents) maintain perspective.
 
-```bash
+```
 # 1. Starting work — check context and intentions
-keep now                                    # What am I working on?
+keep_get(id="now")                                          # What am I working on?
 
 # 2. Update context as work evolves (tag by project and topic)
-keep now "Diagnosing flaky test in auth module" -t project=myapp -t topic=testing
-keep now "Found timing issue" -t project=myapp
+keep_now(content="Diagnosing flaky test in auth module", tags={"project": "myapp", "topic": "testing"})
+keep_now(content="Found timing issue", tags={"project": "myapp"})
 
 # 3. Check previous context if needed
-keep now -V 1                               # Previous version
-keep now --history                          # List all versions
-keep now -t project=myapp                   # Find recent now with project tag
+keep_get(id="now", version=1)                               # Previous version
+keep_now(history=True)                                      # List all versions
+keep_now(tags={"project": "myapp"})                         # Find recent now with project tag
 
 # 4. Record learnings (cross-project knowledge uses topic only)
-keep put "Flaky timing fix: mock time instead of real assertions" -t topic=testing -t type=learning
+keep_put(content="Flaky timing fix: mock time instead of real assertions", tags={"topic": "testing", "type": "learning"})
 ```
 
 **Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first. All updates create version history automatically.
@@ -63,16 +65,16 @@ keep put "Flaky timing fix: mock time instead of real assertions" -t topic=testi
 ## Agent Handoff
 
 **Starting a session:**
-```bash
-keep now                              # Current intentions with version history
-keep now --history                    # How intentions evolved
-keep find "recent work" --since P1D   # Last 24 hours
+```
+keep_get(id="now")                                # Current intentions with version history
+keep_now(history=True)                            # How intentions evolved
+keep_find(query="recent work", since="P1D")       # Last 24 hours
 ```
 
 **Ending a session:**
-```bash
-keep now "Completed OAuth2 flow. Token refresh working. Next: add tests." -t topic=auth
-keep move "auth-string" -t project=myapp  # Archive this string of work
+```
+keep_now(content="Completed OAuth2 flow. Token refresh working. Next: add tests.", tags={"topic": "auth"})
+keep_move(name="auth-string", tags={"project": "myapp"})  # Archive this string of work
 ```
 
 ---
@@ -82,30 +84,30 @@ keep move "auth-string" -t project=myapp  # Archive this string of work
 As you work, `keep now` accumulates a string of versions — a trace of how intentions evolved. `keep move` lets you name and archive that string, making room for what's next. It requires `-t` (tag filter) or `--only` (tip only) to prevent accidental grab-all moves.
 
 **Snapshot before pivoting.** When the conversation shifts topic, move what you have so far before moving on:
-```bash
-keep move "auth-string" -t project=myapp     # Archive the auth string
-keep now "Starting on database migration"    # Fresh context for new work
+```
+keep_move(name="auth-string", tags={"project": "myapp"})     # Archive the auth string
+keep_now(content="Starting on database migration")            # Fresh context for new work
 ```
 
 **Incremental archival.** Move to the same name repeatedly — versions append, building a running log across sessions:
-```bash
+```
 # Session 1
-keep move "design-log" -t project=myapp
+keep_move(name="design-log", tags={"project": "myapp"})
 # Session 2 (more work on same project)
-keep move "design-log" -t project=myapp      # Appends new versions
+keep_move(name="design-log", tags={"project": "myapp"})      # Appends new versions
 ```
 
 **End-of-session archive.** When a string of work is complete:
-```bash
-keep move "auth-string" -t project=myapp
+```
+keep_move(name="auth-string", tags={"project": "myapp"})
 ```
 
 **Tag-filtered extraction.** When a session mixes multiple projects, extract just the string you want:
-```bash
-keep move "frontend-work" -t project=frontend   # Leaves backend versions in now
+```
+keep_move(name="frontend-work", tags={"project": "frontend"})   # Leaves backend versions in now
 ```
 
-The moved item is a full versioned document — browse with `keep get name --history`, navigate with `-V 1`, `-V 2`, etc.
+The moved item is a full versioned document — browse with `keep_get(id="name")`, navigate with `version=1`, `version=2`, etc.
 
 ---
 
@@ -113,9 +115,9 @@ The moved item is a full versioned document — browse with `keep get name --his
 
 Whenever you encounter documents important to the task, index them:
 
-```bash
-keep put "https://docs.example.com/auth" -t topic=auth -t project=myapp
-keep put "file:///path/to/design.pdf" -t type=reference -t topic=architecture
+```
+keep_put(content="https://docs.example.com/auth", tags={"topic": "auth", "project": "myapp"})
+keep_put(content="file:///path/to/design.pdf", tags={"type": "reference", "topic": "architecture"})
 ```
 
 Ask: what is this? Why is it important? Tag appropriately. Documents indexed during work become navigable knowledge.
@@ -126,8 +128,8 @@ Ask: what is this? Why is it important? Tag appropriately. Documents indexed dur
 
 When the normal flow is interrupted — expected response doesn't come, ambiguity surfaces — an assumption has been revealed. **First:** complete the immediate conversation. **Then record:**
 
-```bash
-keep put "Assumed user wanted full rewrite. Actually: minimal patch." -t type=breakdown
+```
+keep_put(content="Assumed user wanted full rewrite. Actually: minimal patch.", tags={"type": "breakdown"})
 ```
 
 Breakdowns are how agents learn.
@@ -138,18 +140,18 @@ Breakdowns are how agents learn.
 
 Use speech-act tags to make the commitment structure of work visible:
 
-```bash
+```
 # Track promises
-keep put "I'll fix the auth bug" -t act=commitment -t status=open -t project=myapp
+keep_put(content="I'll fix the auth bug", tags={"act": "commitment", "status": "open", "project": "myapp"})
 
 # Track requests
-keep put "Please review the PR" -t act=request -t status=open
+keep_put(content="Please review the PR", tags={"act": "request", "status": "open"})
 
 # Query open work
-keep list -t act=commitment -t status=open
+keep_list(tags={"act": "commitment", "status": "open"})
 
 # Close the loop
-keep tag-update ID --tag status=fulfilled
+keep_tag_update(id="ID", tags={"status": "fulfilled"})
 ```
 
 See [TAGGING.md](TAGGING.md#speech-act-tags) for the full speech-act framework.
@@ -171,7 +173,7 @@ The full original document is not stored. Summaries are contextual — tags shap
 
 ## System Documents
 
-Bundled system docs provide patterns and conventions, accessible via `keep get`:
+Bundled system docs provide patterns and conventions, accessible via `keep_get`:
 
 | ID | What it provides |
 |----|------------------|

@@ -11,36 +11,30 @@ keep mcp                    # Start stdio server
 keep mcp --store ~/mystore  # Custom store path
 ```
 
-On first startup, `keep mcp` detects installed tools and prints the config snippet needed. You can also configure manually:
+On first startup, `keep mcp` detects installed tools and prints setup hints if not yet configured.
 
 ### Claude Code
 
 ```bash
-claude --mcp-server keep="keep mcp"
-```
-
-Or add to `~/.claude/settings.json`:
-
-```json
-{ "mcpServers": { "keep": { "command": "keep", "args": ["mcp"] } } }
+claude mcp add --scope user keep -- keep mcp
 ```
 
 ### Kiro
 
-Add to `~/.kiro/settings/mcp.json`:
-
-```json
-{ "mcpServers": { "keep": { "command": "keep", "args": ["mcp"] } } }
+```bash
+kiro-cli mcp add --name keep --scope global -- keep mcp
 ```
 
 ### Codex
 
-Add to `~/.codex/config.toml`:
+```bash
+codex mcp add keep -- keep mcp
+```
 
-```toml
-[mcp_servers.keep]
-command = "keep"
-args = ["mcp"]
+### VS Code
+
+```bash
+code --add-mcp '{"name":"keep","command":"keep","args":["mcp"]}'
 ```
 
 The server respects the `KEEP_STORE_PATH` environment variable for store location.

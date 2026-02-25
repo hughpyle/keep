@@ -9,6 +9,9 @@ Context for resuming work at session start.
 
 ## Prompt
 
+Review this context, and investigate if necessary:
+
 {get}
 
-Review the context above. Note any open commitments and recent learnings. If the previous session ended mid-task, pick up where it left off.
+Note any open commitments and recent learnings. If the previous session ended mid-task, pick up where it left off.
+Reflect regularly during this work.

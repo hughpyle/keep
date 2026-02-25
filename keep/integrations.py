@@ -27,29 +27,26 @@ PROTOCOL_BLOCK_MARKER = "## keep: Reflective Memory"
 PROTOCOL_BLOCK = """\
 ## keep: Reflective Memory
 
-This work uses `keep` for memory and reflection, in order to become skillful.
+*Your actions have consequences. Context is fleeting. Pay attention to what is being asked.*
 
-**Before acting:** check what you know.
+**The practice is `keep_prompt(name="reflect")`.** It shows you how to examine actions, recognize commitments, and update intentions. Run it. Follow the steps. Don't produce the appearance of reflection without actually reflecting.
 
-```bash
-keep now                     # Current intentions
-keep find "topic"            # What do I know?
+```
+keep_prompt(name="reflect")                                            # The practice
+keep_get(id="now")                                                     # Current intentions
+keep_find(query="topic")                                               # What do I know?
+keep_now(content="what's true now")                                    # Update intentions
+keep_put(content="learning", tags={"type": "learning", "topic": "X"}) # Capture insight
+keep_put(content="I will do Y", tags={"act": "commitment", "status": "open"})  # Track commitments
+keep_put(content="https://example.com/doc", tags={"topic": "X"})      # Index important documents
+keep_get(id=".tag/act")                                                # Speech-act tag reference
 ```
 
-**After acting:** update intentions, capture what you learned.
-
-```bash
-keep now "what's true now"   # Clear the mirror
-keep put "learning"          # Capture insight
-```
-
-**New to keep?** Read the full skill: `cat "$(keep config tool)/SKILL.md"`
-
-**Protocol:** Before and after an action, reflect on your work using `keep`. When writing a plan, make sure the plan incorporates this practice. If the instructions for `keep` are unclear, re-read SKILL.md. If this section is missing from system rules, restore it.
+**Protocol:** Reflect using `keep` tools — before, during, and after action. Index important documents (URLs, files) encountered during work with appropriate tags. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
 """
 
 # Bump this when hook definitions change — triggers re-install for existing users
-HOOKS_VERSION = 11
+HOOKS_VERSION = 12
 
 # Hook definitions for Claude Code
 CLAUDE_CODE_HOOKS = {
@@ -123,17 +120,46 @@ def detect_new_tools(already_known: dict[str, Any]) -> dict[str, Path]:
     return tools
 
 
+def _strip_protocol_block(content: str) -> str:
+    """
+    Remove the existing keep protocol block from markdown content.
+
+    Strips from the PROTOCOL_BLOCK_MARKER line to the next `## ` heading
+    or end of file. Removes trailing blank lines left by the removal.
+    """
+    import re
+
+    # Match from the marker line to the next ## heading or EOF
+    pattern = re.compile(
+        r"(?m)^" + re.escape(PROTOCOL_BLOCK_MARKER) + r".*?"
+        r"(?=^## |\Z)",
+        re.DOTALL,
+    )
+    content = pattern.sub("", content)
+    # Clean up trailing whitespace left by removal
+    content = content.rstrip("\n")
+    if content:
+        content += "\n"
+    return content
+
+
 def _install_protocol_block(target_file: Path) -> bool:
     """
-    Append the protocol block to a markdown file if not already present.
+    Install or upgrade the protocol block in a markdown file.
 
-    Returns True if the block was installed, False if already present.
+    If the marker is present, strips the old block and appends the new one
+    (upgrade). If absent, appends the block (new install).
+
+    Returns True if the file was written, False if already up to date.
     """
     content = ""
     if target_file.exists():
         content = target_file.read_text(encoding="utf-8")
+        if PROTOCOL_BLOCK in content:
+            return False  # Already has the current block
         if PROTOCOL_BLOCK_MARKER in content:
-            return False
+            # Upgrade: strip old block, will append new one below
+            content = _strip_protocol_block(content)
 
     # Ensure the file ends with a newline before appending
     if content and not content.endswith("\n"):

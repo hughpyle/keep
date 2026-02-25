@@ -410,21 +410,21 @@ def _check_mcp_setup():
     home = Path.home()
     hints: list[str] = []
 
-    # Claude Code: ~/.claude/settings.json → mcpServers.keep
+    # Claude Code: MCP servers live in ~/.claude.json (NOT ~/.claude/settings.json)
     claude_dir = home / ".claude"
     if claude_dir.is_dir():
         configured = False
-        settings = claude_dir / "settings.json"
-        if settings.exists():
+        claude_json = home / ".claude.json"
+        if claude_json.exists():
             try:
-                data = json.loads(settings.read_text(encoding="utf-8"))
+                data = json.loads(claude_json.read_text(encoding="utf-8"))
                 configured = "keep" in data.get("mcpServers", {})
             except (json.JSONDecodeError, OSError):
                 pass
         if not configured:
             hints.append(
-                'Claude Code  ~/.claude/settings.json\n'
-                '    "mcpServers": { "keep": { "command": "keep", "args": ["mcp"] } }'
+                'Claude Code:\n'
+                '    claude mcp add --scope user keep -- keep mcp'
             )
 
     # Kiro: ~/.kiro/settings/mcp.json → mcpServers.keep
@@ -440,8 +440,8 @@ def _check_mcp_setup():
                 pass
         if not configured:
             hints.append(
-                'Kiro         ~/.kiro/settings/mcp.json\n'
-                '    "mcpServers": { "keep": { "command": "keep", "args": ["mcp"] } }'
+                'Kiro:\n'
+                '    kiro-cli mcp add --name keep --scope global -- keep mcp'
             )
 
     # Codex: ~/.codex/config.toml → [mcp_servers.keep]
@@ -457,10 +457,29 @@ def _check_mcp_setup():
                 pass
         if not configured:
             hints.append(
-                'Codex        ~/.codex/config.toml\n'
-                '    [mcp_servers.keep]\n'
-                '    command = "keep"\n'
-                '    args = ["mcp"]'
+                'Codex:\n'
+                '    codex mcp add keep -- keep mcp'
+            )
+
+    # VS Code: user-level mcp.json → servers.keep
+    import platform
+    if platform.system() == "Darwin":
+        vscode_dir = home / "Library" / "Application Support" / "Code"
+    else:
+        vscode_dir = home / ".config" / "Code"
+    if vscode_dir.is_dir():
+        configured = False
+        vscode_mcp = vscode_dir / "User" / "mcp.json"
+        if vscode_mcp.exists():
+            try:
+                data = json.loads(vscode_mcp.read_text(encoding="utf-8"))
+                configured = "keep" in data.get("servers", {})
+            except (json.JSONDecodeError, OSError):
+                pass
+        if not configured:
+            hints.append(
+                "VS Code:\n"
+                """    code --add-mcp '{"name":"keep","command":"keep","args":["mcp"]}'"""
             )
 
     if hints:
@@ -487,12 +506,14 @@ def _check_integrations():
 
 def main():
     """Run the MCP stdio server."""
+    import os
     import signal
-    import sys
     # anyio's stdin reader uses abandon_on_cancel=False, which shields the
     # blocking readline from task cancellation.  The first Ctrl+C only cancels
     # the task (which can't take effect), so install our own handler.
-    signal.signal(signal.SIGINT, lambda *_: sys.exit(130))
+    # Use os._exit to avoid SystemExit during interpreter shutdown, which
+    # can deadlock on the stdin buffer lock held by the reader thread.
+    signal.signal(signal.SIGINT, lambda *_: os._exit(130))
 
     _check_integrations()
     _check_mcp_setup()

@@ -33,20 +33,20 @@ The practice must survive across sessions. `keep` auto-installs a Protocol Block
 
 *Your actions have consequences. Context is fleeting. Pay attention to what is being asked.*
 
-**The practice is `keep prompt reflect`.** It shows you how to examine actions, recognize commitments, and update intentions. Run it. Follow the steps. Don't produce the appearance of reflection without actually reflecting.
+**The practice is `keep_prompt(name="reflect")`.** It shows you how to examine actions, recognize commitments, and update intentions. Run it. Follow the steps. Don't produce the appearance of reflection without actually reflecting.
 
-\`\`\`bash
-keep prompt reflect              # The practice
-keep now                     # Current intentions
-keep find "topic"            # What do I know?
-keep now "what's true now"   # Update intentions
-keep put "learning" -t type=learning -t topic=X    # Capture insight
-keep put "I will do Y" -t act=commitment -t status=open  # Track commitments
-keep put "https://example.com/doc" -t topic=X      # Index important documents
-keep get .tag/act            # Speech-act tag reference
+\`\`\`
+keep_prompt(name="reflect")                                            # The practice
+keep_get(id="now")                                                     # Current intentions
+keep_find(query="topic")                                               # What do I know?
+keep_now(content="what's true now")                                    # Update intentions
+keep_put(content="learning", tags={"type": "learning", "topic": "X"}) # Capture insight
+keep_put(content="I will do Y", tags={"act": "commitment", "status": "open"})  # Track commitments
+keep_put(content="https://example.com/doc", tags={"topic": "X"})      # Index important documents
+keep_get(id=".tag/act")                                                # Speech-act tag reference
 \`\`\`
 
-**Protocol:** Reflect using `keep` — before, during, and after action. Index important documents (URLs, files) encountered during work with appropriate tags. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
+**Protocol:** Reflect using `keep` tools — before, during, and after action. Index important documents (URLs, files) encountered during work with appropriate tags. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
 
 ```
 
@@ -86,40 +86,42 @@ Tag speech acts with `act` and `status` to track commitments and requests.
 
 ### The Practice
 
-The practice is `keep prompt reflect` ([details](docs/KEEP-PROMPT.md)). It guides you through:
+The practice is `keep_prompt(name="reflect")` ([details](docs/KEEP-PROMPT.md)). It guides you through:
 1. **Gathering** — see what is, before analyzing
 2. **The Mirror** — did this action lead to harm? Name it honestly.
 3. **The Conversation** — what kind of conversation is this? What commitments are open?
 4. **Ownership** — what patterns are forming? What am I becoming through this work?
 5. **Updating** — capture learnings, update intentions
 
-```bash
-keep prompt reflect
+```
+keep_prompt(name="reflect")
 ```
 
 Don't produce the appearance of reflection without actually reflecting.
 
-Between reflections, use `keep` to maintain awareness:
-```bash
-keep now                    # Current intentions
-keep find "this situation"  # What do I already know?
-keep put "what happened" -t type=learning    # Capture insight
-keep put "Assumed X, actually Y" -t type=breakdown  # Index breakdowns
+Between reflections, use `keep` tools to maintain awareness:
+```
+keep_get(id="now")                                          # Current intentions
+keep_find(query="this situation")                           # What do I already know?
+keep_put(content="what happened", tags={"type": "learning"})      # Capture insight
+keep_put(content="Assumed X, actually Y", tags={"type": "breakdown"})  # Index breakdowns
 ```
 
 **Index important documents.** Whenever you encounter documents (URLs, files, references) important to the user or task, index them:
-```bash
-keep put "https://example.com/doc" -t topic=auth -t project=myapp
-keep put "file:///path/to/important.pdf" -t type=reference -t topic=security
+```
+keep_put(content="https://example.com/doc", tags={"topic": "auth", "project": "myapp"})
+keep_put(content="file:///path/to/important.pdf", tags={"type": "reference", "topic": "security"})
 ```
 Ask: What is this document? Why is it important? Tag appropriately. Documents indexed during work become navigable knowledge.
 
 **Move when pivoting.** When a string of work is complete, or the conversation shifts topic, move the now history before moving on:
-```bash
-keep move "auth-string" -t project=myapp     # Archive matching versions
-keep move "design-log" --only                # Move just the tip version
+```
+keep_move(name="auth-string", tags={"project": "myapp"})   # Archive matching versions
+keep_move(name="design-log", only=True)                     # Move just the tip version
 ```
 Moving clears matched versions from now, making room for what's next. Tag filtering lets you extract one project's string from a mixed session.
+
+> **CLI equivalents** (`keep now`, `keep find`, `keep put`, etc.) are available for hooks and terminal use. See [docs/REFERENCE.md](docs/REFERENCE.md).
 
 **Breakdowns are valuable.** When the normal flow is interrupted — an assumption has been revealed. The breakdown is where learning happens.
 
@@ -133,37 +135,38 @@ The store auto-initializes on first use. For provider configuration, see [docs/Q
 Now *store and read* the foundational teachings. These are seed wisdom, not test fixtures.
 
 **The Language-Action framework** — conversation types, commitment structure, breakdowns:
-```bash
-keep get .conversations
+```
+keep_get(id=".conversations")
 ```
 
 Use standard tags for speech acts and status:
-```bash
-keep get .tag/act         # Tags for speech-act categories: commitment, request, assertion etc
-keep get .tag/status      # Tags for lifecycle status: open, fulfilled, withdrawn, etc.
+```
+keep_get(id=".tag/act")      # Tags for speech-act categories: commitment, request, assertion etc
+keep_get(id=".tag/status")   # Tags for lifecycle status: open, fulfilled, withdrawn, etc.
 ```
 
 **The mirror teaching** (MN61) — actions reflected upon before, during, after:
-```bash
-keep put "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
-keep get "file://$(keep config tool)/docs/library/mn61.html"
 ```
+keep_put(content="file://SKILL_DIR/docs/library/mn61.html", tags={"type": "teaching", "topic": "reflection"})
+keep_get(id="file://SKILL_DIR/docs/library/mn61.html")
+```
+> Use `keep config tool` in the terminal to find SKILL_DIR, or use the path from your skill installation.
 
 **Ownership of deeds** (AN5.57) — "I am the owner of my deeds and heir to my deeds.":
-```bash
-keep put "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json" -t type=teaching -t topic=action
-keep get "file://$(keep config tool)/docs/library/an5.57_translation-en-sujato.json"
+```
+keep_put(content="file://SKILL_DIR/docs/library/an5.57_translation-en-sujato.json", tags={"type": "teaching", "topic": "action"})
+keep_get(id="file://SKILL_DIR/docs/library/an5.57_translation-en-sujato.json")
 ```
 
 **The han verse** — Awake! _aquí donde las papas queman_, "慎勿放逸":
-```bash
-keep put "file://$(keep config tool)/docs/library/han_verse.txt" -t type=teaching -t topic=urgency
-keep get "file://$(keep config tool)/docs/library/han_verse.txt"
+```
+keep_put(content="file://SKILL_DIR/docs/library/han_verse.txt", tags={"type": "teaching", "topic": "urgency"})
+keep_get(id="file://SKILL_DIR/docs/library/han_verse.txt")
 ```
 
 **Now reflect:** What did you learn? Save your understanding:
-```bash
-keep put "My understanding of the practice: ..." -t type=learning
+```
+keep_put(content="My understanding of the practice: ...", tags={"type": "learning"})
 ```
 
 For installation options, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
@@ -172,40 +175,39 @@ For installation options, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 ## Layer 3: Quick Reference
 
-```bash
-keep now                              # Current intentions
-keep now "Working on auth flow"       # Update intentions
-keep now -V 1                         # Previous intentions
-keep move "name" -t project=foo       # Move matching versions from now
-keep move "name" --only               # Move just the current version
-keep move "name" --from "source" -t X # Reorganize between items
+```
+keep_get(id="now")                                                      # Current intentions
+keep_now(content="Working on auth flow")                                # Update intentions
+keep_get(id="now", version=1)                                           # Previous intentions
+keep_move(name="name", tags={"project": "foo"})                         # Move matching versions from now
+keep_move(name="name", only=True)                                       # Move just the current version
 
-keep find "authentication"            # Search by meaning
-keep find "auth" -t project=myapp     # Search with tag filter
-keep find "recent" --since P1D        # Recent items
+keep_find(query="authentication")                                       # Search by meaning
+keep_find(query="auth", tags={"project": "myapp"})                      # Search with tag filter
+keep_find(query="recent", since="P1D")                                  # Recent items
 
-keep put "insight" -t type=learning                # Capture learning
-keep put "OAuth2 chosen" -t project=myapp -t topic=auth  # Tag by project and topic
-keep put "I'll fix auth" -t act=commitment -t status=open  # Track speech acts
-keep list -t act=commitment -t status=open                 # Open commitments
+keep_put(content="insight", tags={"type": "learning"})                  # Capture learning
+keep_put(content="OAuth2 chosen", tags={"project": "myapp", "topic": "auth"})  # Tag by project and topic
+keep_put(content="I'll fix auth", tags={"act": "commitment", "status": "open"})  # Track speech acts
+keep_list(tags={"act": "commitment", "status": "open"})                 # Open commitments
 
-keep get ID                           # Retrieve item (similar + meta sections)
-keep get ID -V 1                      # Previous version
-keep list --tag topic=auth            # Filter by tag
-keep del ID                           # Remove item or revert to previous version
+keep_get(id="ID")                                                       # Retrieve item (similar + meta sections)
+keep_get(id="ID", version=1)                                            # Previous version
+keep_list(tags={"topic": "auth"})                                       # Filter by tag
+keep_del(id="ID")                                                       # Remove item or revert to previous version
 ```
 
 **Domain organization** — tagging strategies, collection structures:
-```bash
-keep get .domains
+```
+keep_get(id=".domains")
 ```
 
 Use `project` tags for bounded work, `topic` for cross-cutting knowledge.
 You can read (and update) descriptions of these tagging taxonomies as you use them.
 
-```bash
-keep get .tag/project     # Bounded work contexts
-keep get .tag/topic       # Cross-cutting subject areas
+```
+keep_get(id=".tag/project")   # Bounded work contexts
+keep_get(id=".tag/topic")     # Cross-cutting subject areas
 ```
 
 For CLI reference, see [docs/REFERENCE.md](docs/REFERENCE.md). Per-command details in `docs/KEEP-*.md`.
