@@ -15,30 +15,14 @@
 
 * CLAP / LAION-AI for audio similarity (512d vec)
 
-* ids for the OpenAPI and MCP don't really match the CLI (better match with keeper)
-
 * strengthen the practice: write a file with your findings; then store it.
 
 * Content-based dedup, for summarization?
-
-* URIs: What's safe to normalize?
-  RFC 3986 §6.2.2 defines "syntax-based normalization" that's always safe:
-    - Scheme/host case — always case-insensitive (HTTPS://EXAMPLE.COM → https://example.com)
-    - Percent-encoding of unreserved chars — %41 → A (unreserved chars should not be encoded)
-    - Port normalization — :443 on https, :80 on http are default, can be dropped
-    - Path segment normalization — /./../a → /a (dot segments)
-    - Empty path — https://example.com → https://example.com/
-
-* Maybe the metadoc should say how many results to produce by default?
-    (e.g. closures: 10, learnings: 3)
 
 * Codex hooks
     https://developers.openai.com/codex/config-advanced/#notifications
     Notification - can just log the user prompts for the turn (better than nothing)
     "We are actively working on designing a hooks system" (https://github.com/openai/codex/pull/11067#issuecomment-3866360949)
-
-* `keep reflect --something` that helps trigger "hourly reflection"?
-    (different "reflect docs" would do that, but... do we want mmore than one?)
 
 * lectio
     - encourage "deep reflection" on items that were important

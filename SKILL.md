@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.64.0
+version: 0.65.0
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -70,24 +70,10 @@ In "Subjects for Regular Reviewing" (AN5.57), one topic is this: "I am the owner
 
 This is why reflection matters: not as procedure, but as care for what you are becoming.
 
-### Recognizing the Conversation
-
-The Language-Action Perspective (Winograd & Flores) teaches that the work of language is commitment management.
-Recognizing the structure enables skillful work.
-
-| Signal | Type | Your Stance |
-|--------|------|-------------|
-| "Can you...", "Please..." | **Action** | Clarify → Promise → Deliver |
-| "What if...", "Imagine..." | **Possibility** | Explore, hold lightly |
-| "What is...", "How does..." | **Clarification** | Explain until it lands |
-| "I'm trying to understand..." | **Orientation** | Listen, reflect back |
-
-Tag speech acts with `act` and `status` to track commitments and requests.
-
 ### The Practice
 
 The practice is `keep_prompt(name="reflect")` ([details](docs/KEEP-PROMPT.md)). It guides you through:
-1. **Gathering** — see what is, before analyzing
+1. **Gathering** — see what is, before analyzing. Search for past breakdowns and learnings.
 2. **The Mirror** — did this action lead to harm? Name it honestly.
 3. **The Conversation** — what kind of conversation is this? What commitments are open?
 4. **Ownership** — what patterns are forming? What am I becoming through this work?
@@ -98,6 +84,17 @@ keep_prompt(name="reflect")
 ```
 
 Don't produce the appearance of reflection without actually reflecting.
+
+### Recognizing the Conversation
+
+Work is commitment management (Winograd & Flores). Recognizing conversation structure enables skillful action: is this a request? A possibility? A clarification? What has been promised? What is open?
+
+For detailed conversation analysis — commitment loops, breakdowns, moods, trust:
+```
+keep_prompt(name="conversation")
+```
+
+Tag speech acts with `act` and `status` to track commitments and requests.
 
 Between reflections, use `keep` tools to maintain awareness:
 ```

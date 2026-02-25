@@ -80,6 +80,7 @@ SYSTEM_DOC_IDS = {
     "prompt-summarize-conversation.md": ".prompt/summarize/conversation",
     "prompt-summarize-default.md": ".prompt/summarize/default",
     "prompt-agent-reflect.md": ".prompt/agent/reflect",
+    "prompt-agent-conversation.md": ".prompt/agent/conversation",
     "prompt-agent-session-start.md": ".prompt/agent/session-start",
     "prompt-agent-subagent-start.md": ".prompt/agent/subagent-start",
 }
