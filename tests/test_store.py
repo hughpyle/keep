@@ -217,28 +217,6 @@ class TestMetadataQueries:
 # Fulltext Queries
 # -----------------------------------------------------------------------------
 
-class TestFulltextQueries:
-    """Tests for full-text search on summaries."""
-    
-    def test_query_fulltext_substring(self, store, sample_embedding):
-        """Fulltext search finds substring matches."""
-        store.upsert("test", "doc:1", sample_embedding, "Installation guide for Python", {})
-        store.upsert("test", "doc:2", sample_embedding, "API reference documentation", {})
-        
-        results = store.query_fulltext("test", "Python")
-        
-        assert len(results) == 1
-        assert results[0].id == "doc:1"
-    
-    def test_query_fulltext_no_match(self, store, sample_embedding):
-        """Fulltext search returns empty for no matches."""
-        store.upsert("test", "doc:1", sample_embedding, "Hello world", {})
-        
-        results = store.query_fulltext("test", "nonexistent")
-        
-        assert len(results) == 0
-
-
 # -----------------------------------------------------------------------------
 # Collection Management
 # -----------------------------------------------------------------------------

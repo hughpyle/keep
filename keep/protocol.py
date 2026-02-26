@@ -77,12 +77,12 @@ class KeeperProtocol(Protocol):
         *,
         tags: Optional[dict[str, str]] = None,
         similar_to: Optional[str] = None,
-        fulltext: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
         until: Optional[str] = None,
         include_self: bool = False,
         include_hidden: bool = False,
+        deep: bool = False,
     ) -> list[Item]: ...
 
     def get_similar_for_display(
@@ -295,14 +295,6 @@ class VectorStoreProtocol(Protocol):
         where: dict[str, Any],
         limit: int = 100,
         offset: int = 0,
-    ) -> list[StoreResult]: ...
-
-    def query_fulltext(
-        self,
-        collection: str,
-        query: str,
-        limit: int = 10,
-        where: Optional[dict[str, Any]] = None,
     ) -> list[StoreResult]: ...
 
     # -- Collection management --

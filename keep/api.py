@@ -690,7 +690,8 @@ class Keeper:
                     "  API-based:  export VOYAGE_API_KEY=...  (or OPENAI_API_KEY, GEMINI_API_KEY)\n"
                     "  Local:      pip install 'keep-skill[local]'\n"
                     "\n"
-                    "Read-only operations (get, list, find --fulltext) work without embeddings."
+                    "Read-only operations (get, list, find) work without embeddings.\n"
+                    "Find uses full-text search when no embedding provider is configured."
                 )
             registry = get_registry()
             base_provider = registry.create_embedding(
@@ -1518,7 +1519,7 @@ class Keeper:
 
         # Cloud mode: defer embedding to background worker for faster response.
         # The doc store write happens immediately; the note is findable by
-        # tags/fulltext/ID right away. Similarity search works once the
+        # tags/FTS/ID right away. Similarity search works once the
         # background worker computes and stores the embedding.
         if not self._is_local:
             result, content_changed = self._document_store.upsert(
@@ -1879,9 +1880,54 @@ class Keeper:
         
         return decayed_items
 
+    @staticmethod
+    def _rrf_fuse(
+        semantic_items: list[Item],
+        fts_items: list[Item],
+        k: int = 60,
+        fts_weight: float = 2.0,
+    ) -> list[Item]:
+        """
+        Fuse two ranked lists using weighted Reciprocal Rank Fusion.
+
+        score(d) = 1/(k + rank_sem) + fts_weight/(k + rank_fts)
+
+        FTS gets a higher weight because keyword matches signal entity-level
+        relevance that semantic similarity can miss (e.g., "Max" the dog vs
+        "How old is Luna?" which is semantically similar but wrong entity).
+
+        Scores are normalized to [0, 1] where 1.0 = rank 1 in both lists.
+        """
+        scores: dict[str, float] = {}
+        items_by_id: dict[str, Item] = {}
+
+        for rank, item in enumerate(semantic_items, start=1):
+            scores[item.id] = scores.get(item.id, 0) + 1 / (k + rank)
+            items_by_id[item.id] = item  # prefer semantic item (has tags)
+
+        for rank, item in enumerate(fts_items, start=1):
+            scores[item.id] = scores.get(item.id, 0) + fts_weight / (k + rank)
+            if item.id not in items_by_id:
+                items_by_id[item.id] = item
+
+        # Theoretical max: rank 1 in both lists
+        max_score = (1.0 + fts_weight) / (k + 1)
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+        result = []
+        for item_id, rrf_score in ranked:
+            source = items_by_id[item_id]
+            result.append(Item(
+                id=source.id,
+                summary=source.summary,
+                tags=source.tags,
+                score=round(rrf_score / max_score, 4),
+            ))
+        return result
+
     def _deep_tag_follow(self, primary_items, chroma_coll, doc_coll, *,
                          embedding=None, top_k=10,
-                         per_tag_fetch=1000, max_per_group=30):
+                         per_tag_fetch=1000, max_per_group=5):
         """Follow tags from primary results to discover bridge documents.
 
         Per-tag queries use ``query_embedding`` when an embedding is provided,
@@ -2042,7 +2088,6 @@ class Keeper:
         *,
         tags: Optional[dict[str, str]] = None,
         similar_to: Optional[str] = None,
-        fulltext: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -2051,38 +2096,41 @@ class Keeper:
         deep: bool = False,
     ) -> list[Item]:
         """
-        Find items by semantic similarity, full-text search, or similarity to an existing note.
+        Find items by hybrid search (semantic + FTS5) or similarity to an existing note.
+
+        When an embedding provider is configured, runs both semantic and full-text
+        search and fuses results with Reciprocal Rank Fusion (RRF). Falls back to
+        FTS-only when no embedding provider is available.
 
         Exactly one of `query` or `similar_to` must be provided.
 
         Args:
-            query: Search query text (semantic by default, fulltext if fulltext=True)
+            query: Search query text
             tags: Optional tag filter — only return items matching all specified tags
             similar_to: Find items similar to this note ID
-            fulltext: Use full-text search instead of semantic similarity (only with query)
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
             until: Only include items updated before (ISO duration like P3D, or date)
             include_self: Include the queried item in results (only with similar_to)
             include_hidden: Include system notes (dot-prefix IDs)
+            deep: Follow tags from results to discover related items
         """
         if query and similar_to:
             raise ValueError("Specify either query or similar_to, not both")
         if not query and not similar_to:
             raise ValueError("Specify either query or similar_to")
-        if fulltext and similar_to:
-            raise ValueError("fulltext cannot be used with similar_to")
 
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
 
-        embedding = None  # Set in semantic/similar_to branches; None for fulltext
+        embedding = None  # Set in semantic/similar_to branches
 
         # Build where clause from tags filter
         where = None
+        casefolded_tags: Optional[dict[str, str]] = None
         if tags:
-            casefolded = {k.casefold(): v.casefold() for k, v in tags.items()}
-            conditions = [{k: v} for k, v in casefolded.items()]
+            casefolded_tags = {k.casefold(): v.casefold() for k, v in tags.items()}
+            conditions = [{k: v} for k, v in casefolded_tags.items()]
             where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
         if similar_to:
@@ -2106,28 +2154,40 @@ class Keeper:
             items = [r.to_item() for r in results]
             items = self._apply_recency_decay(items)
 
-        elif fulltext:
-            # Full-text mode: text matching
-            fetch_limit = limit * 3
-            results = self._store.query_fulltext(chroma_coll, query, limit=fetch_limit, where=where)
-            items = [r.to_item() for r in results]
+        elif self._config.embedding is not None:
+            # Hybrid search: semantic + FTS5, fused with RRF.
+            # Each list over-fetches independently so RRF can discover
+            # items that rank well in one signal but poorly in the other.
+            embedding = self._get_embedding_provider().embed(query)
+            sem_fetch = max(limit * 10, 200)
+            fts_fetch = max(limit * 10, 100)
+            if deep:
+                sem_fetch = max(sem_fetch, 30)
+
+            sem_results = self._store.query_embedding(
+                chroma_coll, embedding, limit=sem_fetch, where=where,
+            )
+            sem_items = [r.to_item() for r in sem_results]
+            sem_items = self._apply_recency_decay(sem_items)
+
+            fts_rows = self._document_store.query_fts(
+                doc_coll, query, limit=fts_fetch, tags=casefolded_tags,
+            )
+            fts_items = [Item(id=r[0], summary=r[1]) for r in fts_rows]
+
+            if fts_items:
+                items = self._rrf_fuse(sem_items, fts_items)
+            else:
+                # FTS unavailable or no matches — use semantic results as-is
+                items = sem_items
 
         else:
-            # Semantic mode (default): embed query, search by similarity
-            # Fall back to fulltext if no embedding provider configured
-            if self._config.embedding is None:
-                fetch_limit = limit * 3
-                results = self._store.query_fulltext(chroma_coll, query, limit=fetch_limit, where=where)
-                items = [r.to_item() for r in results]
-            else:
-                embedding = self._get_embedding_provider().embed(query)
-                fetch_limit = limit * 3 if self._decay_half_life_days > 0 else limit * 2
-                if deep:
-                    fetch_limit = max(fetch_limit, 30)  # Ensure enough primaries for deep tag-follow
-                results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit, where=where)
-
-                items = [r.to_item() for r in results]
-                items = self._apply_recency_decay(items)
+            # No embedding provider — FTS only
+            fetch_limit = limit * 3
+            fts_rows = self._document_store.query_fts(
+                doc_coll, query, limit=fetch_limit, tags=casefolded_tags,
+            )
+            items = [Item(id=r[0], summary=r[1]) for r in fts_rows]
 
         # Deep tag-following: discover bridge documents via shared tags
         deep_groups: dict[str, list[Item]] = {}
@@ -2163,6 +2223,11 @@ class Keeper:
             if is_part_id(item.id):
                 parent_id = item.tags.get("_base_id", item.id.split("@")[0])
                 part_num = item.tags.get("_part_num")
+                # FTS-originated items lack tags — parse part_num from ID
+                if not part_num:
+                    suffix = item.id.rsplit("@p", 1)
+                    if len(suffix) == 2 and suffix[1].isdigit():
+                        part_num = suffix[1]
                 if parent_id in seen_parents:
                     # Already have this parent — skip (first hit had higher score)
                     continue
@@ -2192,7 +2257,12 @@ class Keeper:
         # Only exclude deep items that appear in the FINAL primary results
         # (top limit), not the full over-fetched pool.
         if deep_groups:
-            final_ids = {i.id for i in items[:limit]}
+            final_ids = set()
+            for i in items[:limit]:
+                final_ids.add(i.id)
+                # Include parent ID so version hits match deep group keys
+                if "@" in i.id:
+                    final_ids.add(i.id.split("@")[0])
             remapped: dict[str, dict[str, Item]] = {}
             for source_id, group in deep_groups.items():
                 # Uplift the group key (source primary) to parent
@@ -2217,8 +2287,9 @@ class Keeper:
                                 bucket[deep_parent_id] = item
                         else:
                             bucket[deep_parent_id] = item
+            max_deep_per_group = 5
             deep_groups = {
-                pid: sorted(bucket.values(), key=lambda x: x.score or 0, reverse=True)
+                pid: sorted(bucket.values(), key=lambda x: x.score or 0, reverse=True)[:max_deep_per_group]
                 for pid, bucket in remapped.items()
                 if pid in final_ids
             }

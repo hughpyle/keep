@@ -260,23 +260,23 @@ class RemoteKeeper:
         *,
         tags: Optional[dict[str, str]] = None,
         similar_to: Optional[str] = None,
-        fulltext: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
         until: Optional[str] = None,
         include_self: bool = False,
         include_hidden: bool = False,
+        deep: bool = False,
     ) -> list[Item]:
         resp = self._post("/v1/search", json={
             "query": query,
             "similar_to": similar_to,
             "tags": tags,
-            "fulltext": fulltext or None,
             "limit": limit,
             "since": since,
             "until": until,
             "include_self": include_self or None,
             "include_hidden": include_hidden or None,
+            "deep": deep or None,
         })
         return self._to_items(resp)
 

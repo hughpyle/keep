@@ -751,49 +751,6 @@ class ChromaStore:
         
         return results
     
-    def query_fulltext(
-        self,
-        collection: str,
-        query: str,
-        limit: int = 10,
-        where: dict[str, Any] | None = None,
-    ) -> list[StoreResult]:
-        """
-        Query by full-text search on document content (summaries).
-
-        Args:
-            collection: Collection name
-            query: Text to search for
-            limit: Maximum results to return
-            where: Optional metadata filter (Chroma where clause)
-
-        Returns:
-            List of matching results
-        """
-        self._check_freshness()
-        coll = self._get_collection(collection)
-
-        # Chroma's where_document does substring matching
-        get_params = {
-            "where_document": {"$contains": query},
-            "limit": limit,
-            "include": ["documents", "metadatas"],
-        }
-        if where:
-            get_params["where"] = where
-
-        result = coll.get(**get_params)
-
-        results = []
-        for i, id in enumerate(result["ids"]):
-            results.append(StoreResult(
-                id=id,
-                summary=result["documents"][i] or "",
-                tags=self._metadata_to_tags(result["metadatas"][i]),
-            ))
-
-        return results
-    
     # -------------------------------------------------------------------------
     # Collection Management
     # -------------------------------------------------------------------------

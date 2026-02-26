@@ -147,17 +147,6 @@ class MockChromaStore:
                 results.append(StoreResult(id=id, summary=rec["summary"], tags=rec["tags"]))
         return results[offset:offset + limit]
 
-    def query_fulltext(self, collection: str, query: str, limit: int = 10,
-                      where: dict = None) -> list:
-        from keep.store import StoreResult
-        if collection not in self._data:
-            return []
-        results = []
-        for id, rec in self._data[collection].items():
-            if query.lower() in rec["summary"].lower() and self._match_where(rec["tags"], where):
-                results.append(StoreResult(id=id, summary=rec["summary"], tags=rec["tags"]))
-        return results[:limit]
-
     def list_collections(self) -> list[str]:
         return list(self._data.keys()) or ["default"]
 
@@ -437,6 +426,43 @@ class MockDocumentStore:
 
     def touch(self, collection: str, id: str) -> None:
         pass
+
+    def query_fts(self, collection: str, query: str, limit: int = 10,
+                  tags: dict = None) -> list[tuple[str, str, float]]:
+        """Mock FTS5 search — case-insensitive OR-token matching on summaries + parts."""
+        tokens = [t.lower() for t in query.split()]
+        if not tokens:
+            return []
+        results = []
+        # Search document summaries
+        for id, rec in self._data.get(collection, {}).items():
+            summary_lower = rec["summary"].lower()
+            if not any(t in summary_lower for t in tokens):
+                continue
+            if tags:
+                rec_tags = rec.get("tags", {})
+                if not all(rec_tags.get(k) == v for k, v in tags.items()):
+                    continue
+            results.append((id, rec["summary"], -1.0))
+        # Search parts (summary + content)
+        for key, parts in self._parts.items():
+            # key format: _parts:{collection}:{id}
+            parts_coll = key.split(":", 2)[1] if ":" in key else ""
+            parts_id = key.split(":", 2)[2] if key.count(":") >= 2 else ""
+            if parts_coll != collection:
+                continue
+            for part in parts:
+                text = (part.summary + " " + part.content).lower()
+                if any(t in text for t in tokens):
+                    if tags:
+                        if not all(part.tags.get(k) == v for k, v in tags.items()):
+                            continue
+                    results.append((f"{parts_id}@p{part.part_num}", part.summary, -1.0))
+        return results[:limit]
+
+    @property
+    def _fts_available(self) -> bool:
+        return True
 
     def query_by_id_prefix(self, collection: str, prefix: str) -> list:
         if collection not in self._data:

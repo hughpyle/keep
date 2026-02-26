@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 
 @dataclass
@@ -96,6 +96,8 @@ class DocumentStore:
         self._db_path = store_path
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = threading.Lock()
+        self._fts_available = False
+        self._stopwords: Optional[frozenset[str]] = None
         try:
             self._init_db()
         except sqlite3.DatabaseError as e:
@@ -133,6 +135,17 @@ class DocumentStore:
         # Run schema migrations (serialized across processes)
         self._migrate_schema()
 
+        # Detect FTS5 availability (tables may already exist from prior migration).
+        # All three FTS tables must exist for full hybrid search.
+        if not self._fts_available:
+            try:
+                self._conn.execute("SELECT 1 FROM documents_fts LIMIT 0")
+                self._conn.execute("SELECT 1 FROM parts_fts LIMIT 0")
+                self._conn.execute("SELECT 1 FROM versions_fts LIMIT 0")
+                self._fts_available = True
+            except sqlite3.OperationalError:
+                pass  # Tables don't exist or FTS5 not available
+
         # Quick integrity check for existing databases
         result = self._conn.execute("PRAGMA quick_check").fetchone()
         if result[0] != "ok":
@@ -150,6 +163,8 @@ class DocumentStore:
         - Version 1 → 2: Add accessed_at column
         - Version 2 → 3: One-time hash truncation, indexes
         - Version 3 → 4: Create document_parts table
+        - Version 6 → 7: FTS5 index + triggers (documents)
+        - Version 7 → 8: FTS5 indexes + triggers (parts, versions)
         """
         current_version = self._conn.execute(
             "PRAGMA user_version"
@@ -288,6 +303,130 @@ class DocumentStore:
                     self._conn.execute(
                         "ALTER TABLE documents ADD COLUMN content_hash_full TEXT"
                     )
+
+            if current_version < 7:
+                # FTS5 full-text search index on document summaries
+                try:
+                    self._conn.execute("""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
+                        USING fts5(
+                            summary,
+                            content='documents',
+                            content_rowid='rowid',
+                            tokenize='porter unicode61'
+                        )
+                    """)
+                    # Triggers: INSERT OR REPLACE fires DELETE then INSERT,
+                    # so both triggers cover the upsert case.
+                    self._conn.execute("""
+                        CREATE TRIGGER IF NOT EXISTS documents_fts_ai
+                        AFTER INSERT ON documents BEGIN
+                            INSERT INTO documents_fts(rowid, summary)
+                            VALUES (new.rowid, new.summary);
+                        END
+                    """)
+                    self._conn.execute("""
+                        CREATE TRIGGER IF NOT EXISTS documents_fts_ad
+                        AFTER DELETE ON documents BEGIN
+                            INSERT INTO documents_fts(documents_fts, rowid, summary)
+                            VALUES('delete', old.rowid, old.summary);
+                        END
+                    """)
+                    self._conn.execute("""
+                        CREATE TRIGGER IF NOT EXISTS documents_fts_au
+                        AFTER UPDATE OF summary ON documents BEGIN
+                            INSERT INTO documents_fts(documents_fts, rowid, summary)
+                            VALUES('delete', old.rowid, old.summary);
+                            INSERT INTO documents_fts(rowid, summary)
+                            VALUES (new.rowid, new.summary);
+                        END
+                    """)
+                    self._conn.execute(
+                        "INSERT INTO documents_fts(documents_fts) VALUES('rebuild')"
+                    )
+                    self._fts_available = True
+                except sqlite3.OperationalError:
+                    logger.info("FTS5 not available, full-text search disabled")
+
+            if current_version < 8:
+                # FTS5 indexes for parts (summary + content) and versions
+                try:
+                    # --- Parts FTS ---
+                    self._conn.execute("""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts
+                        USING fts5(
+                            summary, content,
+                            content='document_parts',
+                            content_rowid='rowid',
+                            tokenize='porter unicode61'
+                        )
+                    """)
+                    self._conn.execute("""
+                        CREATE TRIGGER IF NOT EXISTS parts_fts_ai
+                        AFTER INSERT ON document_parts BEGIN
+                            INSERT INTO parts_fts(rowid, summary, content)
+                            VALUES (new.rowid, new.summary, new.content);
+                        END
+                    """)
+                    self._conn.execute("""
+                        CREATE TRIGGER IF NOT EXISTS parts_fts_ad
+                        AFTER DELETE ON document_parts BEGIN
+                            INSERT INTO parts_fts(parts_fts, rowid, summary, content)
+                            VALUES('delete', old.rowid, old.summary, old.content);
+                        END
+                    """)
+                    self._conn.execute("""
+                        CREATE TRIGGER IF NOT EXISTS parts_fts_au
+                        AFTER UPDATE OF summary, content ON document_parts BEGIN
+                            INSERT INTO parts_fts(parts_fts, rowid, summary, content)
+                            VALUES('delete', old.rowid, old.summary, old.content);
+                            INSERT INTO parts_fts(rowid, summary, content)
+                            VALUES (new.rowid, new.summary, new.content);
+                        END
+                    """)
+                    self._conn.execute(
+                        "INSERT INTO parts_fts(parts_fts) VALUES('rebuild')"
+                    )
+
+                    # --- Versions FTS ---
+                    self._conn.execute("""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS versions_fts
+                        USING fts5(
+                            summary,
+                            content='document_versions',
+                            content_rowid='rowid',
+                            tokenize='porter unicode61'
+                        )
+                    """)
+                    self._conn.execute("""
+                        CREATE TRIGGER IF NOT EXISTS versions_fts_ai
+                        AFTER INSERT ON document_versions BEGIN
+                            INSERT INTO versions_fts(rowid, summary)
+                            VALUES (new.rowid, new.summary);
+                        END
+                    """)
+                    self._conn.execute("""
+                        CREATE TRIGGER IF NOT EXISTS versions_fts_ad
+                        AFTER DELETE ON document_versions BEGIN
+                            INSERT INTO versions_fts(versions_fts, rowid, summary)
+                            VALUES('delete', old.rowid, old.summary);
+                        END
+                    """)
+                    self._conn.execute("""
+                        CREATE TRIGGER IF NOT EXISTS versions_fts_au
+                        AFTER UPDATE OF summary ON document_versions BEGIN
+                            INSERT INTO versions_fts(versions_fts, rowid, summary)
+                            VALUES('delete', old.rowid, old.summary);
+                            INSERT INTO versions_fts(rowid, summary)
+                            VALUES (new.rowid, new.summary);
+                        END
+                    """)
+                    self._conn.execute(
+                        "INSERT INTO versions_fts(versions_fts) VALUES('rebuild')"
+                    )
+                    self._fts_available = True
+                except sqlite3.OperationalError:
+                    logger.info("FTS5 not available, full-text search disabled")
 
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
@@ -1509,6 +1648,138 @@ class DocumentStore:
                 accessed_at=row["accessed_at"],
             ))
         return results
+
+    def _get_stopwords(self) -> frozenset[str]:
+        """Load stopwords, checking for a `.stopwords` override in the store."""
+        if self._stopwords is not None:
+            return self._stopwords
+        # Check for user override in the store
+        try:
+            row = self._conn.execute(
+                "SELECT summary FROM documents WHERE id = '.stopwords' LIMIT 1"
+            ).fetchone()
+            if row and row[0].strip():
+                words = set()
+                for line in row[0].splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        words.add(line.lower())
+                self._stopwords = frozenset(words)
+                return self._stopwords
+        except Exception:
+            pass
+        # Fall back to bundled stop list
+        from importlib.resources import files
+        stop_text = (
+            files("keep.data.system").joinpath("stop.md").read_text()
+        )
+        words = set()
+        in_frontmatter = False
+        for line in stop_text.splitlines():
+            stripped = line.strip()
+            if stripped == "---":
+                in_frontmatter = not in_frontmatter
+                continue
+            if in_frontmatter:
+                continue
+            if stripped and not stripped.startswith("#"):
+                words.add(stripped.lower())
+        self._stopwords = frozenset(words)
+        return self._stopwords
+
+    def query_fts(
+        self,
+        collection: str,
+        query: str,
+        limit: int = 10,
+        tags: Optional[dict[str, str]] = None,
+    ) -> list[tuple[str, str, float]]:
+        """
+        Full-text search using FTS5 indexes (documents + parts).
+
+        Searches both document summaries and part summaries/content.
+        Part results are returned with ``id@p{N}`` IDs so the caller's
+        part-to-parent uplift logic can merge them.
+
+        Args:
+            collection: Collection name
+            query: Natural-language search query
+            limit: Max results
+            tags: Optional tag filter — only return items matching all tags
+                  (keys and values should be casefolded)
+
+        Returns:
+            List of (id, summary, bm25_rank) tuples ordered by relevance.
+            bm25_rank is negative (more negative = better match).
+            Returns empty list if FTS5 is not available.
+        """
+        if not self._fts_available:
+            return []
+        # Tokenize query, strip stopwords, join with OR.
+        # Each token is quoted to prevent FTS5 syntax issues.
+        stopwords = self._get_stopwords()
+        tokens = [t for t in query.split() if t.lower() not in stopwords]
+        if not tokens:
+            return []
+        fts_query = " OR ".join(f'"{t}"' for t in tokens)
+
+        # --- Search documents ---
+        doc_sql = """
+            SELECT d.id, d.summary, f.rank
+            FROM documents_fts f
+            JOIN documents d ON d.rowid = f.rowid
+            WHERE documents_fts MATCH ?
+            AND d.collection = ?
+        """
+        doc_params: list[Any] = [fts_query, collection]
+        if tags:
+            for k, v in tags.items():
+                doc_sql += " AND json_extract(d.tags_json, ?) = ?"
+                doc_params.extend([f"$.{k}", v])
+        doc_sql += " ORDER BY f.rank LIMIT ?"
+        doc_params.append(limit)
+        doc_rows = self._conn.execute(doc_sql, doc_params).fetchall()
+
+        # --- Search parts (summary + content) ---
+        part_sql = """
+            SELECT p.id || '@p' || p.part_num, p.summary, f.rank
+            FROM parts_fts f
+            JOIN document_parts p ON p.rowid = f.rowid
+            WHERE parts_fts MATCH ?
+            AND p.collection = ?
+        """
+        part_params: list[Any] = [fts_query, collection]
+        if tags:
+            for k, v in tags.items():
+                part_sql += " AND json_extract(p.tags_json, ?) = ?"
+                part_params.extend([f"$.{k}", v])
+        part_sql += " ORDER BY f.rank LIMIT ?"
+        part_params.append(limit)
+        part_rows = self._conn.execute(part_sql, part_params).fetchall()
+
+        # --- Search versions ---
+        ver_sql = """
+            SELECT v.id || '@v' || v.version, v.summary, f.rank
+            FROM versions_fts f
+            JOIN document_versions v ON v.rowid = f.rowid
+            WHERE versions_fts MATCH ?
+            AND v.collection = ?
+        """
+        ver_params: list[Any] = [fts_query, collection]
+        if tags:
+            for k, v in tags.items():
+                ver_sql += " AND json_extract(v.tags_json, ?) = ?"
+                ver_params.extend([f"$.{k}", v])
+        ver_sql += " ORDER BY f.rank LIMIT ?"
+        ver_params.append(limit)
+        ver_rows = self._conn.execute(ver_sql, ver_params).fetchall()
+
+        # Merge by BM25 rank (more negative = better), take top `limit`
+        combined = [(row[0], row[1], row[2]) for row in doc_rows]
+        combined.extend((row[0], row[1], row[2]) for row in part_rows)
+        combined.extend((row[0], row[1], row[2]) for row in ver_rows)
+        combined.sort(key=lambda r: r[2])  # sort by rank ascending (best first)
+        return combined[:limit]
 
     def query_by_id_glob(
         self,

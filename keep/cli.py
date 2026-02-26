@@ -541,7 +541,8 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None, show_ta
         result = []
         for item in items:
             d = _item_dict(item)
-            group = deep_groups.get(item.id, [])
+            _pid = item.id.split("@")[0] if "@" in item.id else item.id
+            group = deep_groups.get(item.id, []) or deep_groups.get(_pid, [])
             if group:
                 d["deep"] = [_item_dict(di) for di in group]
             result.append(d)
@@ -581,7 +582,8 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None, show_ta
         lines = []
         for item in items:
             lines.append(_format_summary_line(item, id_width, show_tags=show_tags))
-            for deep_item in deep_groups.get(item.id, []):
+            parent_id = item.id.split("@")[0] if "@" in item.id else item.id
+            for deep_item in deep_groups.get(item.id, []) or deep_groups.get(parent_id, []):
                 deep_line = _format_summary_line(deep_item, id_width, show_tags=show_tags)
                 lines.append("  " + deep_line.replace("\n", "\n  "))
         return "\n".join(lines)
@@ -743,10 +745,6 @@ def find(
     include_self: Annotated[bool, typer.Option(
         help="Include the queried note (only with --id)"
     )] = False,
-    text: Annotated[bool, typer.Option(
-        "--text",
-        help="Use full-text search instead of semantic similarity"
-    )] = False,
     tag: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Filter by tag (key or key=value, repeatable)"
@@ -773,12 +771,11 @@ def find(
     )] = False,
 ):
     """
-    Find notes by semantic similarity (default) or full-text search.
+    Find notes by hybrid search (semantic + full-text) or similarity.
 
     \b
     Examples:
-        keep find "authentication"              # Semantic search
-        keep find "auth" --text                 # Full-text search
+        keep find "authentication"              # Hybrid search
         keep find --id file:///path/to/doc.md   # Find similar notes
         keep find "auth" -t project=myapp       # Search + filter by tag
         keep find "auth" --history              # Include versions
@@ -788,9 +785,6 @@ def find(
         raise typer.Exit(1)
     if not id and not query:
         typer.echo("Error: Specify a query or --id", err=True)
-        raise typer.Exit(1)
-    if id and text:
-        typer.echo("Error: --text cannot be used with --id", err=True)
         raise typer.Exit(1)
 
     kp = _get_keeper(store)
@@ -805,7 +799,7 @@ def find(
     if id:
         results = kp.find(similar_to=id, limit=search_limit, since=since, until=until, include_self=include_self, include_hidden=show_all, deep=deep)
     else:
-        results = kp.find(query, fulltext=text, limit=search_limit, since=since, until=until, include_hidden=show_all, deep=deep)
+        results = kp.find(query, limit=search_limit, since=since, until=until, include_hidden=show_all, deep=deep)
 
     # Post-filter by tags if specified
     deep_groups = getattr(results, "deep_groups", {})
@@ -824,22 +818,6 @@ def find(
         results = FindResults(expanded, deep_groups={})
 
     typer.echo(_format_items(results, as_json=_get_json_output(), keeper=kp, show_tags=show_tags))
-
-
-@app.command(hidden=True)
-def search(
-    query: Annotated[str, typer.Argument(default=..., help="Full-text search query")],
-    store: StoreOption = None,
-    limit: LimitOption = 10,
-    since: SinceOption = None,
-    until: UntilOption = None,
-):
-    """
-    Search note summaries using full-text search (alias for find --text).
-    """
-    kp = _get_keeper(store)
-    results = kp.find(query, fulltext=True, limit=limit, since=since, until=until)
-    typer.echo(_format_items(results, as_json=_get_json_output(), keeper=kp))
 
 
 @app.command("list")

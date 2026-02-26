@@ -61,9 +61,9 @@ class TestFindTagsFilter:
         results = kp.find("pets", tags={"user": "charlie"})
         assert len(results) == 0
 
-    def test_find_fulltext_with_tags(self, kp):
-        """find() fulltext mode also respects tags filter."""
-        results = kp.find("cats", fulltext=True, tags={"user": "alice"})
+    def test_find_hybrid_with_tags(self, kp):
+        """find() hybrid search also respects tags filter."""
+        results = kp.find("cats", tags={"user": "alice"})
         ids = {r.id for r in results}
         assert "alice:pets" in ids
         assert "bob:pets" not in ids

@@ -164,7 +164,6 @@ class TestFreshnessReload:
         # Multiple reads without external epoch changes
         store.get("test", "doc:1")
         store.exists("test", "doc:1")
-        store.query_fulltext("test", "Test")
 
         assert store._client is old_client
 
