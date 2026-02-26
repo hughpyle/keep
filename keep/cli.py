@@ -541,8 +541,8 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None, show_ta
         result = []
         for item in items:
             d = _item_dict(item)
-            _pid = item.id.split("@")[0] if "@" in item.id else item.id
-            group = deep_groups.get(item.id, []) or deep_groups.get(_pid, [])
+            parent_id = item.id.split("@")[0] if "@" in item.id else item.id
+            group = deep_groups.get(parent_id, []) or deep_groups.get(item.id, [])
             if group:
                 d["deep"] = [_item_dict(di) for di in group]
             result.append(d)
@@ -583,7 +583,7 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None, show_ta
         for item in items:
             lines.append(_format_summary_line(item, id_width, show_tags=show_tags))
             parent_id = item.id.split("@")[0] if "@" in item.id else item.id
-            for deep_item in deep_groups.get(item.id, []) or deep_groups.get(parent_id, []):
+            for deep_item in deep_groups.get(parent_id, []) or deep_groups.get(item.id, []):
                 deep_line = _format_summary_line(deep_item, id_width, show_tags=show_tags)
                 lines.append("  " + deep_line.replace("\n", "\n  "))
         return "\n".join(lines)

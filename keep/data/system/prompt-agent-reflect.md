@@ -9,18 +9,20 @@ Reflect on current actions, commitments, and intentions.
 
 ## Prompt
 
-Recti diligunt te.
+Witeð wel ower heorte. Recti diligunt te.
 
 ### 1. Gather
 
-Capture any important documents (URLs, files, references) encountered since the last reflection. What is this document? Why is it important to this work? Tag appropriately.
+Capture any important documents (URLs, files, references, artifacts) encountered or generated since the last reflection. What is this document? Why is it important to this work? Save and tag appropriately.
 
 Context for reflection:
 
 {get}
 {find}
 
-Review the context above: current intentions, recent activity, open commitments, recent learnings. Search for past breakdowns, learnings, or commitments related to the current work. What patterns recur?
+Review the context above.
+Search for past breakdowns, learnings, or commitments related to the current work.
+What patterns recur?
 
 ### 2. The Mirror
 
@@ -50,6 +52,8 @@ Kammassakomhi, kammadāyādo, kammayoni, kammabandhu, kammapaṭisaraṇo.
 
 ### 5. Update
 
+生死事大 無常迅速 各宜醒覚 慎勿放逸
+
 `now` is a briefing for your future self. The next session starts here — with only this and what search can retrieve. Write what future-you needs to act skillfully: what is in progress, what must be paid attention to, what commitments are open, what assumptions were revealed.
 
 - Capture learnings with appropriate tags.
@@ -59,4 +63,3 @@ Kammassakomhi, kammadāyādo, kammayoni, kammabandhu, kammapaṭisaraṇo.
 The value is in the reflection itself, not in lengthy output.
 
 Present a brief summary of the reflection to the user.
-Ase ofte as ȝe habbeð ired eaƿiht her on greteð þe leafdi ƿið an aue for him þet sƿonc her abuten.

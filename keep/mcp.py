@@ -177,8 +177,8 @@ async def keep_find(
     lines = []
     for item in items:
         lines.extend(_format_item(item))
-        _pid = item.id.split("@")[0] if "@" in item.id else item.id
-        for deep_item in deep_groups.get(item.id, []) or deep_groups.get(_pid, []):
+        parent_id = item.id.split("@")[0] if "@" in item.id else item.id
+        for deep_item in deep_groups.get(parent_id, []) or deep_groups.get(item.id, []):
             lines.extend(_format_item(deep_item, indent="  "))
     return "\n".join(lines)
 

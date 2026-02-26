@@ -1721,7 +1721,12 @@ class DocumentStore:
         tokens = [t for t in query.split() if t.lower() not in stopwords]
         if not tokens:
             return []
-        fts_query = " OR ".join(f'"{t}"' for t in tokens)
+        # Strip characters that are special in FTS5 query syntax
+        safe = [t.replace('"', '').replace("'", "") for t in tokens]
+        safe = [t for t in safe if t]
+        if not safe:
+            return []
+        fts_query = " OR ".join(f'"{t}"' for t in safe)
 
         # --- Search documents ---
         doc_sql = """
@@ -1734,7 +1739,7 @@ class DocumentStore:
         doc_params: list[Any] = [fts_query, collection]
         if tags:
             for k, v in tags.items():
-                doc_sql += " AND json_extract(d.tags_json, ?) = ?"
+                doc_sql += " AND LOWER(json_extract(d.tags_json, ?)) = ?"
                 doc_params.extend([f"$.{k}", v])
         doc_sql += " ORDER BY f.rank LIMIT ?"
         doc_params.append(limit)
@@ -1751,7 +1756,7 @@ class DocumentStore:
         part_params: list[Any] = [fts_query, collection]
         if tags:
             for k, v in tags.items():
-                part_sql += " AND json_extract(p.tags_json, ?) = ?"
+                part_sql += " AND LOWER(json_extract(p.tags_json, ?)) = ?"
                 part_params.extend([f"$.{k}", v])
         part_sql += " ORDER BY f.rank LIMIT ?"
         part_params.append(limit)
@@ -1768,7 +1773,7 @@ class DocumentStore:
         ver_params: list[Any] = [fts_query, collection]
         if tags:
             for k, v in tags.items():
-                ver_sql += " AND json_extract(v.tags_json, ?) = ?"
+                ver_sql += " AND LOWER(json_extract(v.tags_json, ?)) = ?"
                 ver_params.extend([f"$.{k}", v])
         ver_sql += " ORDER BY f.rank LIMIT ?"
         ver_params.append(limit)
