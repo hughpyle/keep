@@ -15,8 +15,9 @@ perform additional searches, or examine version history to
 build a complete answer.
 
 Context:
-{find:deep}
+{find:deep:8000}
 
 Question: {text}
 
-If the answer cannot be determined from the available context, say so.
+Answer based on what's available. Make reasonable inferences from the context,
+but clearly mark any uncertainty. If the context is insufficient, say so.

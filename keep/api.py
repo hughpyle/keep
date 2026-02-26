@@ -2694,8 +2694,9 @@ class Keeper:
         since: Optional[str] = None,
         until: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
-        limit: int = 5,
+        limit: int = 10,
         deep: bool = False,
+        token_budget: int = 4000,
     ) -> Optional[PromptResult]:
         """Render an agent prompt doc with injected context.
 
@@ -2715,6 +2716,7 @@ class Keeper:
             tags: Tag filter for search results
             limit: Max search results
             deep: Follow tags from results to discover related items
+            token_budget: Token budget for {find} context rendering
 
         Returns:
             PromptResult with context, search_results, and prompt template,
@@ -2738,21 +2740,26 @@ class Keeper:
             self.get_now()  # ensure now exists (auto-creates from bundled doc)
         ctx = self.get_context(context_id)
 
-        # {find:deep} in the template forces deep search
-        if "{find:deep}" in prompt_body:
+        # {find:deep} or {find:deep:N} in the template forces deep search
+        if "{find:deep" in prompt_body:
             deep = True
+
+        # Ensure retrieval limit is high enough to fill the token budget.
+        # Per-item cost varies: ~50 tokens without deep, ~200 with deep groups.
+        tokens_per_item = 200 if deep else 50
+        fetch_limit = min(200, max(limit, token_budget // tokens_per_item))
 
         # Search: find similar items with available filters
         search_results = None
         if text:
             search_results = self.find(
-                query=text, tags=tags, since=since, until=until, limit=limit,
+                query=text, tags=tags, since=since, until=until, limit=fetch_limit,
                 deep=deep,
             )
         elif tags or since or until:
             search_results = self.find(
                 similar_to=context_id, tags=tags, since=since, until=until,
-                limit=limit, deep=deep,
+                limit=fetch_limit, deep=deep,
             )
 
         return PromptResult(
@@ -2762,6 +2769,7 @@ class Keeper:
             text=text,
             since=since,
             until=until,
+            token_budget=token_budget,
         )
 
     def list_prompts(self) -> list[PromptInfo]:

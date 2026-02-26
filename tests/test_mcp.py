@@ -185,25 +185,25 @@ class TestKeepFind:
             _make_item(id="prefs", summary="UI preferences", score=0.71,
                        tags={"_updated_date": "2026-02-18"}),
         ]
+        mock_keeper.list_parts.return_value = []
+        mock_keeper.list_versions.return_value = []
         result = await keep_find("preferences")
-        lines = result.split("\n")
-        assert len(lines) == 2
-        assert "%a1b2" in lines[0]
-        assert "(0.82)" in lines[0]
-        assert "Dark mode preference" in lines[0]
-        assert "prefs" in lines[1]
-        assert "(0.71)" in lines[1]
+        assert "%a1b2" in result
+        assert "(0.82)" in result
+        assert "Dark mode preference" in result
+        assert "prefs" in result
+        assert "(0.71)" in result
 
     @pytest.mark.asyncio
     async def test_find_passes_params(self, mock_keeper):
         from keep.mcp import keep_find
         mock_keeper.find.return_value = []
         await keep_find(
-            "query", tags={"topic": "x"}, limit=5,
+            "query", tags={"topic": "x"},
             since="P3D", until="2026-02-20",
         )
         mock_keeper.find.assert_called_once_with(
-            "query", tags={"topic": "x"}, limit=5,
+            "query", tags={"topic": "x"}, limit=80,  # 4000 // 50
             since="P3D", until="2026-02-20", deep=False,
         )
 
@@ -213,6 +213,8 @@ class TestKeepFind:
         mock_keeper.find.return_value = [
             _make_item(id="x", summary="No score item", score=None),
         ]
+        mock_keeper.list_parts.return_value = []
+        mock_keeper.list_versions.return_value = []
         result = await keep_find("test")
         assert "(0." not in result
         assert "- x" in result
@@ -502,12 +504,12 @@ class TestKeepPrompt:
         )
         await keep_prompt(
             name="reflect", text="query", id="my-id",
-            tags={"project": "x"}, since="P7D", until="2026-02-20", limit=3,
+            tags={"project": "x"}, since="P7D", until="2026-02-20",
         )
         mock_keeper.render_prompt.assert_called_once_with(
             "reflect", "query", id="my-id",
-            since="P7D", until="2026-02-20", tags={"project": "x"}, limit=3,
-            deep=False,
+            since="P7D", until="2026-02-20", tags={"project": "x"},
+            deep=False, token_budget=4000,
         )
 
     @pytest.mark.asyncio
@@ -528,7 +530,7 @@ class TestKeepPrompt:
         assert "{text}" not in result
 
     @pytest.mark.asyncio
-    async def test_prompt_find_shows_created_date(self, mock_keeper):
+    async def test_prompt_find_shows_date(self, mock_keeper):
         from keep.mcp import keep_prompt
         mock_keeper.render_prompt.return_value = PromptResult(
             context=None,
@@ -540,7 +542,7 @@ class TestKeepPrompt:
             prompt="{find}",
         )
         result = await keep_prompt(name="query", text="test")
-        assert "2023-10-15" in result
+        assert "2026-02-20" in result
         assert "%abc" in result
 
 

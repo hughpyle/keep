@@ -395,6 +395,7 @@ class PromptResult:
     text: str | None = None               # raw query text passed to render_prompt()
     since: str | None = None              # since filter value
     until: str | None = None              # until filter value
+    token_budget: int = 4000             # token budget for {find} context rendering
 
 
 @dataclass(frozen=True)

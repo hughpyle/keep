@@ -21,7 +21,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from .api import Keeper
-from .cli import render_context, expand_prompt
+from .cli import render_context, render_find_context, expand_prompt
 
 # ---------------------------------------------------------------------------
 # Server setup
@@ -133,9 +133,6 @@ async def keep_find(
     tags: Annotated[Optional[dict[str, str]], Field(
         description="Filter results by tags (all must match).",
     )] = None,
-    limit: Annotated[int, Field(
-        description="Max results to return.",
-    )] = 10,
     since: Annotated[Optional[str], Field(
         description="Only items updated since this value (ISO duration like P3D, or date like 2026-01-15).",
     )] = None,
@@ -148,39 +145,22 @@ async def keep_find(
     show_tags: Annotated[bool, Field(
         description="Show non-system tags for each result.",
     )] = False,
+    token_budget: Annotated[int, Field(
+        description="Token budget for results context (default: 4000).",
+    )] = 4000,
 ) -> str:
     """Search memory."""
     async with _lock:
         keeper = _get_keeper()
+        # Derive retrieval limit from token budget
+        tokens_per_item = 200 if deep else 50
+        limit = min(200, max(10, token_budget // tokens_per_item))
         items = keeper.find(query, tags=tags, limit=limit, since=since, until=until, deep=deep)
 
-    if not items:
-        return "No results found."
+        if not items:
+            return "No results found."
 
-    deep_groups = getattr(items, "deep_groups", {})
-
-    def _format_item(item, indent=""):
-        from .types import SYSTEM_TAG_PREFIX
-        score = f" ({item.score:.2f})" if item.score is not None else ""
-        date = item.tags.get("_updated_date", "")
-        parts = [f"{indent}- {item.id}{score}  {date}  {item.summary}"]
-        focus_summary = item.tags.get("_focus_summary")
-        if focus_summary:
-            parts.append(f"{indent}  > {focus_summary}")
-        if show_tags:
-            user_tags = {k: v for k, v in item.tags.items() if not k.startswith(SYSTEM_TAG_PREFIX)}
-            if user_tags:
-                pairs = ", ".join(f"{k}: {v}" for k, v in sorted(user_tags.items()))
-                parts.append(f"{indent}  {{{pairs}}}")
-        return parts
-
-    lines = []
-    for item in items:
-        lines.extend(_format_item(item))
-        parent_id = item.id.split("@")[0] if "@" in item.id else item.id
-        for deep_item in deep_groups.get(parent_id, []) or deep_groups.get(item.id, []):
-            lines.extend(_format_item(deep_item, indent="  "))
-    return "\n".join(lines)
+        return render_find_context(items, keeper=keeper, token_budget=token_budget, show_tags=show_tags)
 
 
 @mcp.tool(
@@ -370,12 +350,12 @@ async def keep_prompt(
     until: Annotated[Optional[str], Field(
         description="Only include items updated before this value (ISO duration or date).",
     )] = None,
-    limit: Annotated[int, Field(
-        description="Max search results for context.",
-    )] = 5,
     deep: Annotated[bool, Field(
         description="Follow tags from results to discover related items.",
     )] = False,
+    token_budget: Annotated[int, Field(
+        description="Token budget for search results context (default: 4000).",
+    )] = 4000,
 ) -> str:
     """Render an agent prompt with injected context."""
     async with _lock:
@@ -389,14 +369,14 @@ async def keep_prompt(
             return "\n".join(lines)
 
         result = keeper.render_prompt(
-            name, text, id=id, since=since, until=until, tags=tags, limit=limit,
-            deep=deep,
+            name, text, id=id, since=since, until=until, tags=tags,
+            deep=deep, token_budget=token_budget,
         )
 
-    if result is None:
-        return f"Prompt not found: {name}"
+        if result is None:
+            return f"Prompt not found: {name}"
 
-    return expand_prompt(result)
+        return expand_prompt(result, kp=keeper)
 
 
 # ---------------------------------------------------------------------------
