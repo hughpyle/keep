@@ -589,9 +589,9 @@ class Keeper:
                 logger.warning("Failed to initialize TaskClient: %s", e)
 
         # System doc migration deferred to first write (needs embeddings)
-        from .config import SYSTEM_DOCS_VERSION
+        from .system_docs import _bundled_docs_hash
         self._needs_sysdoc_migration = (
-            self._config.system_docs_version < SYSTEM_DOCS_VERSION
+            self._config.system_docs_hash != _bundled_docs_hash()
         )
 
     def _apply_file_size_limit(self, provider: DocumentProvider) -> None:

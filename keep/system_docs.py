@@ -132,6 +132,20 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[-10:]
 
 
+def _bundled_docs_hash() -> str:
+    """Composite hash of all bundled system doc files.
+
+    Computed from sorted filenames + content so any change to any
+    bundled doc produces a different hash.  Used as a gate to skip
+    the per-file migration scan when nothing has changed.
+    """
+    h = hashlib.sha256()
+    for path in sorted(SYSTEM_DOC_DIR.glob("*.md")):
+        h.update(path.name.encode("utf-8"))
+        h.update(path.read_bytes())
+    return h.hexdigest()[-10:]
+
+
 def migrate_system_documents(keeper: "Keeper") -> dict:
     """
     Migrate system documents to stable IDs and current version.
@@ -149,12 +163,13 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
     Returns:
         Dict with migration stats: created, migrated, skipped, cleaned
     """
-    from .config import SYSTEM_DOCS_VERSION, save_config
+    from .config import save_config
     from .types import casefold_tags_for_index
 
     stats = {"created": 0, "migrated": 0, "skipped": 0, "cleaned": 0}
 
-    if keeper._config.system_docs_version >= SYSTEM_DOCS_VERSION:
+    current_hash = _bundled_docs_hash()
+    if keeper._config.system_docs_hash == current_hash:
         return stats
 
     filename_to_id = {name: doc_id for name, doc_id in SYSTEM_DOC_IDS.items()}
@@ -290,7 +305,7 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
         except FileNotFoundError:
             pass
 
-    keeper._config.system_docs_version = SYSTEM_DOCS_VERSION
+    keeper._config.system_docs_hash = current_hash
     save_config(keeper._config)
 
     n_enqueued = stats["created"] + stats["migrated"]
@@ -314,7 +329,7 @@ def reset_system_documents(keeper: "Keeper") -> dict:
     Returns:
         Dict with stats: reset count
     """
-    from .config import SYSTEM_DOCS_VERSION, save_config
+    from .config import save_config
 
     stats = {"reset": 0}
     doc_coll = keeper._resolve_doc_collection()
@@ -343,7 +358,7 @@ def reset_system_documents(keeper: "Keeper") -> dict:
         except FileNotFoundError:
             logger.warning("System doc file not found: %s", path)
 
-    keeper._config.system_docs_version = SYSTEM_DOCS_VERSION
+    keeper._config.system_docs_hash = _bundled_docs_hash()
     save_config(keeper._config)
 
     return stats

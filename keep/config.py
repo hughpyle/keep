@@ -20,7 +20,7 @@ import tomli_w
 
 CONFIG_FILENAME = "keep.toml"
 CONFIG_VERSION = 3  # Bumped for document versioning support
-SYSTEM_DOCS_VERSION = 20  # Increment when bundled system docs content changes
+SYSTEM_DOCS_VERSION = 20  # Legacy — kept for backward-compat reading of old configs
 
 
 def get_tool_directory() -> Path:
@@ -144,8 +144,8 @@ class StoreConfig:
     # Maximum file size in bytes for document fetching (default 100MB)
     max_file_size: int = 100_000_000
 
-    # System docs version (tracks which bundled docs have been applied to this store)
-    system_docs_version: int = 0
+    # Composite hash of bundled system docs (auto-computed, replaces manual version)
+    system_docs_hash: str = ""
 
     # Tool integrations tracking (presence of key = handled, value = installed or skipped)
     integrations: dict[str, Any] = field(default_factory=dict)
@@ -538,8 +538,10 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse max_file_size (default 100MB)
     max_file_size = data.get("store", {}).get("max_file_size", 100_000_000)
 
-    # Parse system_docs_version (default 0 for stores that predate this feature)
-    system_docs_version = data.get("store", {}).get("system_docs_version", 0)
+    # Parse system_docs_hash (replaces legacy system_docs_version integer).
+    # Backward compat: if old integer version exists but no hash, set hash to ""
+    # so migration runs and computes the real hash.
+    system_docs_hash = data.get("store", {}).get("system_docs_hash", "")
 
     # Parse integrations section (presence = handled)
     integrations = data.get("integrations", {})
@@ -621,7 +623,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         max_summary_length=max_summary_length,
         max_inline_length=max_inline_length,
         max_file_size=max_file_size,
-        system_docs_version=system_docs_version,
+        system_docs_hash=system_docs_hash,
         integrations=integrations,
         remote=remote,
         backend=backend,
@@ -673,9 +675,9 @@ def save_config(config: StoreConfig) -> None:
     # Only write max_file_size if not default
     if config.max_file_size != 100_000_000:
         store_section["max_file_size"] = config.max_file_size
-    # Write system_docs_version if set (tracks migration state)
-    if config.system_docs_version > 0:
-        store_section["system_docs_version"] = config.system_docs_version
+    # Write system_docs_hash if set (tracks migration state)
+    if config.system_docs_hash:
+        store_section["system_docs_hash"] = config.system_docs_hash
     # Only write backend if not default
     if config.backend != "local":
         store_section["backend"] = config.backend

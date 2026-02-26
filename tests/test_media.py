@@ -175,8 +175,8 @@ def _make_mock_doc(uri, content, content_type, tags=None):
 
 def _keeper_skip_migration(kp):
     """Skip system docs migration for test Keepers."""
-    from keep.config import SYSTEM_DOCS_VERSION
-    kp._config.system_docs_version = SYSTEM_DOCS_VERSION
+    from keep.system_docs import _bundled_docs_hash
+    kp._config.system_docs_hash = _bundled_docs_hash()
     kp._needs_sysdoc_migration = False
 
 
