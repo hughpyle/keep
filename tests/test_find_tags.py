@@ -73,3 +73,91 @@ class TestFindTagsFilter:
         results_none = kp.find("pets", tags=None)
         results_default = kp.find("pets")
         assert {r.id for r in results_none} == {r.id for r in results_default}
+
+
+class TestFindSinceFilter:
+    """Regression tests: find() with since= must not drop items whose
+    ChromaDB metadata lacks _updated_date (version refs, legacy items)."""
+
+    def test_find_since_returns_recent_items(self, kp):
+        """find(since='P1D') includes items stored today."""
+        results = kp.find("cats and dogs", since="P1D")
+        assert any(r.id == "alice:pets" for r in results)
+
+    def test_find_since_includes_versioned_items(self, mock_providers, tmp_path):
+        """find(since='P1D') includes items even when only version
+        embeddings are in ChromaDB (whose metadata lacks _updated_date)."""
+        kp = Keeper(store_path=tmp_path)
+        kp._get_embedding_provider()
+        kp.put("Alpha content about animals", id="test:ver")
+        kp.put("Beta content about animals", id="test:ver")
+
+        results = kp.find("animals", since="P1D")
+        assert any(r.id == "test:ver" for r in results)
+
+    def test_find_similar_to_with_since(self, mock_providers, tmp_path):
+        """find(similar_to=..., since='P1D') returns recently-updated matches."""
+        kp = Keeper(store_path=tmp_path)
+        kp._get_embedding_provider()
+        kp.put("Reference doc about weather", id="test:ref")
+        kp.put("Similar doc about climate", id="test:sim")
+
+        results = kp.find(similar_to="test:ref", since="P1D")
+        assert any(r.id == "test:sim" for r in results)
+
+    def test_find_until_excludes_recent(self, mock_providers, tmp_path):
+        """find(until=<yesterday>) excludes items stored today."""
+        kp = Keeper(store_path=tmp_path)
+        kp._get_embedding_provider()
+        kp.put("Today doc about planets", id="test:today")
+
+        # until=yesterday should exclude items created today
+        from datetime import datetime, timedelta, timezone
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        results = kp.find("planets", until=yesterday)
+        assert not any(r.id == "test:today" for r in results)
+
+    def test_find_until_includes_older(self, mock_providers, tmp_path):
+        """find(until=<tomorrow>) includes items stored today."""
+        kp = Keeper(store_path=tmp_path)
+        kp._get_embedding_provider()
+        kp.put("Today doc about galaxies", id="test:gal")
+
+        from datetime import datetime, timedelta, timezone
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        results = kp.find("galaxies", until=tomorrow)
+        assert any(r.id == "test:gal" for r in results)
+
+    def test_find_since_and_until_combined(self, mock_providers, tmp_path):
+        """find(since=..., until=...) applies both bounds."""
+        kp = Keeper(store_path=tmp_path)
+        kp._get_embedding_provider()
+        kp.put("Bounded doc about oceans", id="test:ocean")
+
+        from datetime import datetime, timedelta, timezone
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        # Window that includes today
+        results = kp.find("oceans", since=yesterday, until=tomorrow)
+        assert any(r.id == "test:ocean" for r in results)
+        # Window that excludes today (past)
+        last_week = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+        two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+        results = kp.find("oceans", since=last_week, until=two_days_ago)
+        assert not any(r.id == "test:ocean" for r in results)
+
+    def test_find_mixed_items_with_and_without_updated_date(self, mock_providers, tmp_path):
+        """find(since=...) handles a mix of items where some have
+        _updated_date in ChromaDB and some don't (e.g. head vs version)."""
+        kp = Keeper(store_path=tmp_path)
+        kp._get_embedding_provider()
+        # head item — ChromaDB will have _updated_date
+        kp.put("Fresh doc about rivers", id="test:fresh")
+        # versioned item — version entry in ChromaDB lacks _updated_date
+        kp.put("First draft about rivers and streams", id="test:versioned")
+        kp.put("Second draft about rivers and streams", id="test:versioned")
+
+        results = kp.find("rivers", since="P1D")
+        ids = {r.id for r in results}
+        assert "test:fresh" in ids
+        assert "test:versioned" in ids

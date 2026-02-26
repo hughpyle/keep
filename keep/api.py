@@ -112,6 +112,37 @@ def _filter_by_date(
     return result
 
 
+def _enrich_updated_date(items: list, doc_store, doc_coll: str) -> None:
+    """Fill in missing _updated_date tags from SQLite for date filtering.
+
+    Version references (``id@v{N}``) stored in ChromaDB often lack
+    ``_updated_date`` because the tag is synthesized by ``_record_to_item``
+    from the SQLite ``updated_at`` column rather than stored in the raw
+    tags dict.  Without enrichment, ``_filter_by_date`` defaults to
+    ``"0000-00-00"`` and drops them.
+
+    Uses a single batch lookup (``get_many``) to avoid N+1 queries.
+    """
+    # Collect unique base IDs that need enrichment
+    needs: dict[str, list] = {}  # base_id → [items needing it]
+    for item in items:
+        if "_updated_date" in item.tags:
+            continue
+        base_id = item.tags.get("_base_id",
+                                item.id.split("@")[0] if "@" in item.id else item.id)
+        needs.setdefault(base_id, []).append(item)
+    if not needs:
+        return
+    # Single batch fetch
+    docs = doc_store.get_many(doc_coll, list(needs.keys()))
+    for base_id, waiting in needs.items():
+        doc = docs.get(base_id)
+        if doc and doc.updated_at:
+            date = doc.updated_at[:10]
+            for item in waiting:
+                item.tags["_updated_date"] = date
+
+
 def _is_hidden(item) -> bool:
     """System notes (dot-prefix IDs like .conversations) are hidden by default."""
     base_id = item.tags.get("_base_id", item.id)
@@ -2107,6 +2138,12 @@ class Keeper:
 
         # Apply common filters
         if since is not None or until is not None:
+            # Enrich _updated_date from SQLite for items missing it
+            # (e.g. version refs whose ChromaDB metadata lacks the tag)
+            all_items = list(items)
+            for g in deep_groups.values():
+                all_items.extend(g)
+            _enrich_updated_date(all_items, self._document_store, doc_coll)
             items = _filter_by_date(items, since=since, until=until)
             deep_groups = {pid: _filter_by_date(g, since=since, until=until)
                           for pid, g in deep_groups.items()}

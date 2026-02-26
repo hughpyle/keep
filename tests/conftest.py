@@ -299,6 +299,14 @@ class MockDocumentStore:
             return None
         return self._make_record(collection, id, self._data[collection][id])
 
+    def get_many(self, collection: str, ids: list[str]) -> dict:
+        result = {}
+        for id in ids:
+            rec = self.get(collection, id)
+            if rec is not None:
+                result[id] = rec
+        return result
+
     def exists(self, collection: str, id: str) -> bool:
         return collection in self._data and id in self._data[collection]
 

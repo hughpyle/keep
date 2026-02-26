@@ -152,6 +152,17 @@ class TestKeeperFind:
 
         assert len(results) <= 2
 
+    def test_find_since_includes_versioned_items(self, keeper: Keeper) -> None:
+        """find() with since should not drop items whose ChromaDB entry
+        lacks _updated_date (e.g. version refs). Regression test for the
+        bug where _filter_by_date ran before SQLite enrichment."""
+        keeper.put("Alpha content about dogs and cats.", id="test:alpha")
+        # Update to create a version
+        keeper.put("Beta content about dogs and cats.", id="test:alpha")
+
+        results = keeper.find("dogs and cats", since="P1D")
+        assert any(r.id == "test:alpha" for r in results)
+
 
 class TestKeeperUpdate:
     """Keeper update (tag merge) behavior."""
