@@ -142,20 +142,43 @@ async def keep_find(
     until: Annotated[Optional[str], Field(
         description="Only items updated before this value (ISO duration or date).",
     )] = None,
+    deep: Annotated[bool, Field(
+        description="Follow tags from results to discover related items.",
+    )] = False,
+    show_tags: Annotated[bool, Field(
+        description="Show non-system tags for each result.",
+    )] = False,
 ) -> str:
     """Search memory."""
     async with _lock:
         keeper = _get_keeper()
-        items = keeper.find(query, tags=tags, limit=limit, since=since, until=until)
+        items = keeper.find(query, tags=tags, limit=limit, since=since, until=until, deep=deep)
 
     if not items:
         return "No results found."
 
-    lines = []
-    for item in items:
+    deep_groups = getattr(items, "deep_groups", {})
+
+    def _format_item(item, indent=""):
+        from .types import SYSTEM_TAG_PREFIX
         score = f" ({item.score:.2f})" if item.score is not None else ""
         date = item.tags.get("_updated_date", "")
-        lines.append(f"- {item.id}{score}  {date}  {item.summary}")
+        parts = [f"{indent}- {item.id}{score}  {date}  {item.summary}"]
+        focus_summary = item.tags.get("_focus_summary")
+        if focus_summary:
+            parts.append(f"{indent}  > {focus_summary}")
+        if show_tags:
+            user_tags = {k: v for k, v in item.tags.items() if not k.startswith(SYSTEM_TAG_PREFIX)}
+            if user_tags:
+                pairs = ", ".join(f"{k}: {v}" for k, v in sorted(user_tags.items()))
+                parts.append(f"{indent}  {{{pairs}}}")
+        return parts
+
+    lines = []
+    for item in items:
+        lines.extend(_format_item(item))
+        for deep_item in deep_groups.get(item.id, []):
+            lines.extend(_format_item(deep_item, indent="  "))
     return "\n".join(lines)
 
 
@@ -349,6 +372,9 @@ async def keep_prompt(
     limit: Annotated[int, Field(
         description="Max search results for context.",
     )] = 5,
+    deep: Annotated[bool, Field(
+        description="Follow tags from results to discover related items.",
+    )] = False,
 ) -> str:
     """Render an agent prompt with injected context."""
     async with _lock:
@@ -363,6 +389,7 @@ async def keep_prompt(
 
         result = keeper.render_prompt(
             name, text, id=id, since=since, until=until, tags=tags, limit=limit,
+            deep=deep,
         )
 
     if result is None:

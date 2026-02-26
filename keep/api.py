@@ -192,6 +192,19 @@ from .types import (
 )
 
 
+class FindResults(list):
+    """List of Items with optional deep-follow groups.
+
+    Subclasses list for backward compatibility.  When ``deep=True`` is
+    used, ``deep_groups`` maps each primary item ID to the bridge items
+    discovered via its tags.
+    """
+
+    def __init__(self, items, deep_groups=None):
+        super().__init__(items)
+        self.deep_groups: dict[str, list[Item]] = deep_groups or {}
+
+
 # Default max length for truncated placeholder summaries
 TRUNCATE_LENGTH = 500
 
@@ -1834,7 +1847,164 @@ class Keeper:
         decayed_items.sort(key=lambda x: x.score if x.score is not None else 0, reverse=True)
         
         return decayed_items
-    
+
+    def _deep_tag_follow(self, primary_items, chroma_coll, doc_coll, *,
+                         embedding=None, top_k=10,
+                         per_tag_fetch=1000, max_per_group=30):
+        """Follow tags from primary results to discover bridge documents.
+
+        Per-tag queries use ``query_embedding`` when an embedding is provided,
+        giving each candidate a semantic similarity score that serves as a
+        tiebreaker within the same tag-overlap tier.  Falls back to
+        ``query_metadata`` (no semantic ranking) when no embedding is given.
+
+        Versions and parts are collapsed to their parent document during
+        collection so a single popular document doesn't consume all slots.
+
+        Args:
+            embedding: Query embedding for semantic tiebreaking (optional).
+            top_k: Number of top primary items to collect tags from.
+            per_tag_fetch: Max raw items to fetch per tag query.
+            max_per_group: Max deep items to show per primary.
+
+        Returns:
+            dict mapping primary item ID to list of deep-discovered Items,
+            sorted by (tag-overlap, semantic similarity) within each group.
+        """
+        # 1. Collect non-system tag pairs, tracking which primary has each
+        tag_to_sources: dict[tuple[str, str], set[str]] = {}
+        for item in primary_items[:top_k]:
+            for k, v in item.tags.items():
+                if not k.startswith(SYSTEM_TAG_PREFIX):
+                    tag_to_sources.setdefault((k, v), set()).add(item.id)
+        if not tag_to_sources:
+            return {}
+        # Drop tag pairs shared by ALL top primaries (non-distinctive)
+        n_primaries = len(primary_items[:top_k])
+        if n_primaries > 1:
+            tag_to_sources = {
+                tp: sids for tp, sids in tag_to_sources.items()
+                if len(sids) < n_primaries
+            }
+        if not tag_to_sources:
+            return {}
+
+        # 1b. Compute IDF weights for tag-overlap scoring
+        import math
+        total_docs = max(self._document_store.count(doc_coll), 1)
+        pair_counts = self._document_store.tag_pair_counts(doc_coll)
+        idf: dict[tuple[str, str], float] = {}
+        for (k, v), df in pair_counts.items():
+            idf[(k.casefold(), v.casefold())] = math.log(total_docs / df)
+
+        # 2. Metadata-only queries — find items sharing each tag,
+        #    collapsing versions/parts to parent IDs immediately.
+        #    Only exclude items from the top_k (not the full over-fetched pool)
+        #    so genuine bridge items aren't accidentally excluded.
+        top_ids = {item.id for item in primary_items[:top_k]}
+        top_parents = set()
+        for pid in top_ids:
+            if "@" in pid:
+                top_parents.add(pid.split("@")[0])
+            else:
+                top_parents.add(pid)
+
+        candidates: dict[str, Item] = {}        # parent_id -> Item
+        candidate_tags: dict[str, set] = {}     # parent_id -> matched (k, v)
+        candidate_sources: dict[str, set] = {}  # parent_id -> primary IDs
+        candidate_sem: dict[str, float] = {}    # parent_id -> best semantic score
+
+        for (k, v), source_ids in tag_to_sources.items():
+            if embedding is not None:
+                results = self._store.query_embedding(
+                    chroma_coll, embedding, limit=per_tag_fetch, where={k: v},
+                )
+            else:
+                results = self._store.query_metadata(
+                    chroma_coll, where={k: v}, limit=per_tag_fetch,
+                )
+            seen_parents_this_tag: set[str] = set()
+            for r in results:
+                # Collapse to parent ID
+                raw_id = r.id
+                is_child = "@" in raw_id
+                parent_id = raw_id.split("@")[0] if is_child else raw_id
+                # Skip primaries (both raw and uplifted)
+                if raw_id in top_ids or parent_id in top_parents:
+                    continue
+                # Deduplicate: only count each parent once per tag query
+                if parent_id in seen_parents_this_tag:
+                    continue
+                seen_parents_this_tag.add(parent_id)
+                # Track best semantic score for this parent
+                item_from_r = r.to_item()
+                if item_from_r.score is not None:
+                    prev = candidate_sem.get(parent_id, 0)
+                    candidate_sem[parent_id] = max(prev, item_from_r.score)
+                # Register parent as candidate with head-doc tags
+                if parent_id not in candidates:
+                    head_doc = self._document_store.get(doc_coll, parent_id)
+                    if head_doc:
+                        head_item = _record_to_item(head_doc)
+                        candidates[parent_id] = Item(
+                            id=parent_id, summary=head_item.summary,
+                            tags=head_item.tags, score=0,
+                        )
+                    else:
+                        candidates[parent_id] = Item(
+                            id=parent_id, summary=r.summary, tags=r.tags, score=0,
+                        )
+                candidate_tags.setdefault(parent_id, set()).add((k, v))
+                candidate_sources.setdefault(parent_id, set()).update(source_ids)
+
+        # 3. Assign each candidate to ONE primary (most shared HEAD tags)
+        #    Score uses the candidate's head-doc tags (not version tags)
+        primary_order = {item.id: i for i, item in enumerate(primary_items[:top_k])}
+        # Pre-compute tag set per primary, limited to followed tag pairs
+        followed_keys = set(tag_to_sources.keys())
+        primary_tag_sets: dict[str, set] = {}
+        for item in primary_items[:top_k]:
+            primary_tag_sets[item.id] = {
+                (k, v) for k, v in item.tags.items()
+                if not k.startswith(SYSTEM_TAG_PREFIX)
+                and (k, v) in followed_keys
+            }
+
+        groups: dict[str, list[Item]] = {}
+        for cid, item in candidates.items():
+            # Use the candidate's HEAD doc tags for scoring (casefolded
+            # to match ChromaDB's casefolded primary_tag_sets)
+            head_tags = {
+                (k.casefold(), v.casefold()) for k, v in item.tags.items()
+                if not k.startswith(SYSTEM_TAG_PREFIX)
+            }
+            sources = candidate_sources.get(cid, set())
+
+            def _idf_overlap(tag_set):
+                return sum(idf.get(tp, 0) for tp in head_tags & tag_set)
+
+            # Pick primary with highest IDF-weighted tag overlap
+            best_source = min(
+                sources,
+                key=lambda sid: (
+                    -_idf_overlap(primary_tag_sets.get(sid, set())),
+                    primary_order.get(sid, 999),
+                ),
+            )
+            # Composite score: IDF-weighted tag overlap + semantic tiebreaker
+            overlap = _idf_overlap(primary_tag_sets.get(best_source, set()))
+            sem = candidate_sem.get(cid, 0)
+            scored = Item(id=cid, summary=item.summary,
+                          tags=item.tags, score=overlap + sem)
+            groups.setdefault(best_source, []).append(scored)
+
+        # 4. Sort each group by composite score desc, cap size
+        for source_id in groups:
+            groups[source_id].sort(key=lambda x: x.score or 0, reverse=True)
+            groups[source_id] = groups[source_id][:max_per_group]
+
+        return groups
+
     def find(
         self,
         query: Optional[str] = None,
@@ -1847,6 +2017,7 @@ class Keeper:
         until: Optional[str] = None,
         include_self: bool = False,
         include_hidden: bool = False,
+        deep: bool = False,
     ) -> list[Item]:
         """
         Find items by semantic similarity, full-text search, or similarity to an existing note.
@@ -1874,6 +2045,8 @@ class Keeper:
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
 
+        embedding = None  # Set in semantic/similar_to branches; None for fulltext
+
         # Build where clause from tags filter
         where = None
         if tags:
@@ -1892,6 +2065,8 @@ class Keeper:
             if embedding is None:
                 embedding = self._get_embedding_provider().embed(item.summary)
             actual_limit = (limit + 1 if not include_self else limit) * 3
+            if deep:
+                actual_limit = max(actual_limit, 30)
             results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit, where=where)
 
             if not include_self:
@@ -1916,16 +2091,30 @@ class Keeper:
             else:
                 embedding = self._get_embedding_provider().embed(query)
                 fetch_limit = limit * 3 if self._decay_half_life_days > 0 else limit * 2
+                if deep:
+                    fetch_limit = max(fetch_limit, 30)  # Ensure enough primaries for deep tag-follow
                 results = self._store.query_embedding(chroma_coll, embedding, limit=fetch_limit, where=where)
 
                 items = [r.to_item() for r in results]
                 items = self._apply_recency_decay(items)
 
+        # Deep tag-following: discover bridge documents via shared tags
+        deep_groups: dict[str, list[Item]] = {}
+        if deep and embedding is not None:
+            deep_groups = self._deep_tag_follow(
+                items, chroma_coll, doc_coll, embedding=embedding,
+            )
+
         # Apply common filters
         if since is not None or until is not None:
             items = _filter_by_date(items, since=since, until=until)
+            deep_groups = {pid: _filter_by_date(g, since=since, until=until)
+                          for pid, g in deep_groups.items()}
         if not include_hidden:
             items = [i for i in items if not _is_hidden(i)]
+            deep_groups = {pid: [i for i in g if not _is_hidden(i)]
+                          for pid, g in deep_groups.items()}
+        deep_groups = {pid: g for pid, g in deep_groups.items() if g}
 
         # Part-to-parent uplift: replace part hits with their parent
         # documents, carrying _focus_part so the formatter can window
@@ -1946,6 +2135,7 @@ class Keeper:
                     parent_tags = dict(parent_item.tags)
                     if part_num:
                         parent_tags["_focus_part"] = part_num
+                        parent_tags["_focus_summary"] = item.summary
                     uplifted.append(Item(
                         id=parent_id, summary=parent_item.summary,
                         tags=parent_tags, score=item.score,
@@ -1960,6 +2150,41 @@ class Keeper:
                 uplifted.append(item)
                 seen_parents[item.id] = len(uplifted) - 1
         items = uplifted
+
+        # Remap deep_groups: uplift keys AND items (parts → parents), dedup.
+        # Only exclude deep items that appear in the FINAL primary results
+        # (top limit), not the full over-fetched pool.
+        if deep_groups:
+            final_ids = {i.id for i in items[:limit]}
+            remapped: dict[str, dict[str, Item]] = {}
+            for source_id, group in deep_groups.items():
+                # Uplift the group key (source primary) to parent
+                key_parent = source_id.split("@")[0] if "@" in source_id else source_id
+                bucket = remapped.setdefault(key_parent, {})
+                # Uplift each deep item to its parent too
+                for item in group:
+                    deep_parent_id = item.id.split("@")[0] if "@" in item.id else item.id
+                    # Skip if this deep item IS a final primary result
+                    if deep_parent_id in final_ids:
+                        continue
+                    if deep_parent_id not in bucket or (item.score or 0) > (bucket[deep_parent_id].score or 0):
+                        if "@" in item.id:
+                            parent_doc = self._document_store.get(doc_coll, deep_parent_id)
+                            if parent_doc:
+                                pi = _record_to_item(parent_doc)
+                                bucket[deep_parent_id] = Item(
+                                    id=deep_parent_id, summary=pi.summary,
+                                    tags=pi.tags, score=item.score,
+                                )
+                            else:
+                                bucket[deep_parent_id] = item
+                        else:
+                            bucket[deep_parent_id] = item
+            deep_groups = {
+                pid: sorted(bucket.values(), key=lambda x: x.score or 0, reverse=True)
+                for pid, bucket in remapped.items()
+                if pid in final_ids
+            }
 
         final = items[:limit]
         # Enrich tags from SQLite (ChromaDB stores casefolded values;
@@ -1977,10 +2202,13 @@ class Keeper:
                 if doc:
                     enriched_item = _record_to_item(doc, score=item.score)
                     tags = enriched_item.tags
-                    # Preserve _focus_part from uplift
+                    # Preserve _focus_part and _focus_summary from uplift
                     focus = item.tags.get("_focus_part")
                     if focus:
                         tags["_focus_part"] = focus
+                    focus_summary = item.tags.get("_focus_summary")
+                    if focus_summary:
+                        tags["_focus_summary"] = focus_summary
                     enriched.append(Item(
                         id=item.id, summary=item.summary,
                         tags=tags, score=item.score,
@@ -1988,7 +2216,7 @@ class Keeper:
                 else:
                     enriched.append(item)
             final = enriched
-        return final
+        return FindResults(final, deep_groups=deep_groups)
 
     def get_context(
         self,
@@ -2104,6 +2332,7 @@ class Keeper:
         until: Optional[str] = None,
         tags: Optional[dict[str, str]] = None,
         limit: int = 5,
+        deep: bool = False,
     ) -> Optional[PromptResult]:
         """Render an agent prompt doc with injected context.
 
@@ -2111,6 +2340,8 @@ class Keeper:
         ``## Prompt`` section, and assembles context.  The prompt text
         may contain ``{get}`` and ``{find}`` placeholders — the caller
         expands them with the rendered context and search results.
+        Use ``{find:deep}`` to force deep tag-follow search regardless
+        of the caller's ``deep`` parameter.
 
         Args:
             name: Prompt name (e.g. "reflect")
@@ -2120,6 +2351,7 @@ class Keeper:
             until: Upper-bound time filter (ISO duration or date)
             tags: Tag filter for search results
             limit: Max search results
+            deep: Follow tags from results to discover related items
 
         Returns:
             PromptResult with context, search_results, and prompt template,
@@ -2143,16 +2375,21 @@ class Keeper:
             self.get_now()  # ensure now exists (auto-creates from bundled doc)
         ctx = self.get_context(context_id)
 
+        # {find:deep} in the template forces deep search
+        if "{find:deep}" in prompt_body:
+            deep = True
+
         # Search: find similar items with available filters
         search_results = None
         if text:
             search_results = self.find(
                 query=text, tags=tags, since=since, until=until, limit=limit,
+                deep=deep,
             )
         elif tags or since or until:
             search_results = self.find(
                 similar_to=context_id, tags=tags, since=since, until=until,
-                limit=limit,
+                limit=limit, deep=deep,
             )
 
         return PromptResult(
@@ -3357,18 +3594,76 @@ class Keeper:
             existing_tags=doc_record.tags,
         )
 
+        # Phase 4: Generate vstring overview as @P{0}
+        if len(chunk_dicts) >= 2 and proc_result.parts:
+            overview_provider = analyzer_provider or self._get_summarization_provider()
+            overview = self._generate_vstring_overview(
+                chunk_dicts, overview_provider,
+            )
+            if overview:
+                from .document_store import PartInfo
+                from .types import utc_now
+
+                parent_user_tags = {
+                    k: v for k, v in doc_record.tags.items()
+                    if not k.startswith(SYSTEM_TAG_PREFIX)
+                }
+                now = utc_now()
+                overview_part = PartInfo(
+                    part_num=0,
+                    summary=overview,
+                    tags=dict(parent_user_tags, _part_type="overview"),
+                    content="",
+                    created_at=now,
+                )
+                # SQLite: INSERT OR REPLACE (doesn't touch parts 1..N)
+                self._document_store.upsert_single_part(
+                    doc_coll, id, overview_part,
+                )
+                # ChromaDB: upsert with embedding
+                chroma_coll = self._resolve_chroma_collection()
+                embed = self._get_embedding_provider()
+                embedding = embed.embed(overview)
+                self._store.upsert_part(
+                    chroma_coll, id, 0,
+                    embedding, overview,
+                    casefold_tags_for_index(overview_part.tags),
+                )
+
         return self.list_parts(id)
+
+    def _generate_vstring_overview(self, chunk_dicts, provider):
+        """Summarize assembled version chunks into a one-sentence overview."""
+        from .processors import _llm_summarize
+
+        full_text = "\n".join(c["content"] for c in chunk_dicts)
+        system = (
+            "Summarize the following in one sentence. "
+            "Focus on the most specific, distinctive content — "
+            "names, topics, facts, decisions, or events. "
+            "Avoid generic descriptions."
+        )
+        result = _llm_summarize(full_text, provider, system_prompt_override=system)
+        if result is None and hasattr(provider, "summarize"):
+            # Non-LLM fallback: use summarize() for truncation-based summary
+            try:
+                result = provider.summarize(full_text, max_length=200)
+            except TypeError:
+                result = provider.summarize(full_text)
+        return result
 
     def get_part(self, id: str, part_num: int) -> Optional[Item]:
         """
         Get a specific part of a document.
 
         Returns the part as an Item with _part_num, _base_id, and
-        _total_parts metadata tags.
+        _total_parts metadata tags.  Part 0 is the overview summary
+        (when present); decomposed parts are numbered 1..N.
+        _total_parts counts only decomposed parts (excludes @P{0}).
 
         Args:
             id: Document identifier
-            part_num: Part number (1-indexed)
+            part_num: Part number (0 for overview, 1+ for decomposed parts)
 
         Returns:
             Item if found, None otherwise
@@ -3378,7 +3673,11 @@ class Keeper:
         if part is None:
             return None
 
+        # _total_parts counts decomposed parts only (excludes @P{0} overview)
         total = self._document_store.part_count(doc_coll, id)
+        has_overview = self._document_store.get_part(doc_coll, id, 0) is not None
+        if has_overview:
+            total -= 1
         tags = dict(part.tags)
         tags["_part_num"] = str(part.part_num)
         tags["_base_id"] = id

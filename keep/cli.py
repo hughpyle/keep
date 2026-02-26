@@ -322,12 +322,13 @@ def _render_frontmatter(ctx: ItemContext) -> str:
     return "\n".join(lines)
 
 
-def _format_summary_line(item: Item, id_width: int = 0) -> str:
+def _format_summary_line(item: Item, id_width: int = 0, show_tags: bool = False) -> str:
     """Format item as single summary line: id date summary (with @V{N} only for old versions)
 
     Args:
         item: The item to format
         id_width: Minimum width for ID column (for alignment across items)
+        show_tags: Show non-system tags between date and summary
     """
     # Get version/part-scoped ID
     base_id = item.tags.get("_base_id", item.id)
@@ -358,7 +359,27 @@ def _format_summary_line(item: Item, id_width: int = 0) -> str:
     if len(summary) > max_summary:
         summary = summary[:max_summary - 3].rsplit(" ", 1)[0] + "..."
 
-    return f"{padded_id}{score_str} {date} {summary}"
+    line = f"{padded_id}{score_str} {date} {summary}"
+
+    # Show matched part summary when item was uplifted from a part hit
+    focus_part = item.tags.get("_focus_part")
+    focus_summary = item.tags.get("_focus_summary")
+    if focus_part and focus_summary:
+        focus_text = focus_summary.replace("\n", " ")
+        max_focus = max(cols - 4, 20)  # "  > " prefix
+        if len(focus_text) > max_focus:
+            focus_text = focus_text[:max_focus - 3].rsplit(" ", 1)[0] + "..."
+        line += f"\n  > {focus_text}"
+
+    # Optional non-system tags on a separate line
+    if show_tags:
+        from .types import SYSTEM_TAG_PREFIX
+        user_tags = {k: v for k, v in item.tags.items() if not k.startswith(SYSTEM_TAG_PREFIX)}
+        if user_tags:
+            pairs = ", ".join(f"{k}: {v}" for k, v in sorted(user_tags.items()))
+            line += f"\n  {{{pairs}}}"
+
+    return line
 
 
 def _format_versioned_id(item: Item) -> str:
@@ -491,21 +512,24 @@ def _parts_to_items(doc_id: str, current: Item | None, parts: list) -> list[Item
     return items
 
 
-def _format_items(items: list[Item], as_json: bool = False, keeper=None) -> str:
+def _format_items(items: list[Item], as_json: bool = False, keeper=None, show_tags: bool = False) -> str:
     """Format multiple items for display.
 
     Args:
         keeper: Optional Keeper instance. When provided, items with
                 _focus_part (uplifted from part hits) get their parts
                 manifest loaded and windowed around the hit.
+        show_tags: Show non-system tags in summary lines (used by --deep).
     """
     if _get_ids_output():
         ids = [_format_versioned_id(item) for item in items]
         return json.dumps(ids) if as_json else "\n".join(ids)
 
     if as_json:
-        return json.dumps([
-            {
+        deep_groups = getattr(items, "deep_groups", {})
+
+        def _item_dict(item):
+            return {
                 "id": item.id,
                 "summary": item.summary,
                 "tags": _filter_display_tags(item.tags),
@@ -513,8 +537,15 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None) -> str:
                 "created": item.created,
                 "updated": item.updated,
             }
-            for item in items
-        ], indent=2)
+
+        result = []
+        for item in items:
+            d = _item_dict(item)
+            group = deep_groups.get(item.id, [])
+            if group:
+                d["deep"] = [_item_dict(di) for di in group]
+            result.append(d)
+        return json.dumps(result, indent=2)
 
     if not items:
         return "No results."
@@ -538,9 +569,24 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None) -> str:
         return "\n\n".join(parts)
 
     # Compute ID column width for alignment (capped to avoid long URIs dominating)
-    max_id = max(len(_format_versioned_id(item)) for item in items)
+    all_items = list(items)
+    deep_groups = getattr(items, "deep_groups", {})
+    for group in deep_groups.values():
+        all_items.extend(group)
+    max_id = max(len(_format_versioned_id(item)) for item in all_items)
     id_width = min(max_id, 20)
-    return "\n".join(_format_summary_line(item, id_width) for item in items)
+
+    # Render with nested deep groups
+    if deep_groups:
+        lines = []
+        for item in items:
+            lines.append(_format_summary_line(item, id_width, show_tags=show_tags))
+            for deep_item in deep_groups.get(item.id, []):
+                deep_line = _format_summary_line(deep_item, id_width, show_tags=show_tags)
+                lines.append("  " + deep_line.replace("\n", "\n  "))
+        return "\n".join(lines)
+
+    return "\n".join(_format_summary_line(item, id_width, show_tags=show_tags) for item in items)
 
 
 NO_PROVIDER_ERROR = """
@@ -713,6 +759,14 @@ def find(
         "--history", "-H",
         help="Include versions of matching notes"
     )] = False,
+    deep: Annotated[bool, typer.Option(
+        "--deep", "-D",
+        help="Follow tags from results to discover related items"
+    )] = False,
+    show_tags: Annotated[bool, typer.Option(
+        "--tags",
+        help="Show non-system tags for each result"
+    )] = False,
     show_all: Annotated[bool, typer.Option(
         "--all", "-a",
         help="Include hidden system notes (IDs starting with '.')"
@@ -741,29 +795,35 @@ def find(
 
     kp = _get_keeper(store)
 
+    # --deep is incompatible with --history (versions replace deep groups)
+    if history and deep:
+        deep = False
+
     # Search with higher limit if filtering, then post-filter
     search_limit = limit * 5 if tag else limit
 
     if id:
-        results = kp.find(similar_to=id, limit=search_limit, since=since, until=until, include_self=include_self, include_hidden=show_all)
+        results = kp.find(similar_to=id, limit=search_limit, since=since, until=until, include_self=include_self, include_hidden=show_all, deep=deep)
     else:
-        results = kp.find(query, fulltext=text, limit=search_limit, since=since, until=until, include_hidden=show_all)
+        results = kp.find(query, fulltext=text, limit=search_limit, since=since, until=until, include_hidden=show_all, deep=deep)
 
     # Post-filter by tags if specified
+    deep_groups = getattr(results, "deep_groups", {})
     if tag:
         results = _filter_by_tags(results, tag)
 
-    results = results[:limit]
+    from .api import FindResults
+    results = FindResults(results[:limit], deep_groups=deep_groups)
 
-    # Expand with versions if requested
+    # Expand with versions if requested (--deep is not supported with --history)
     if history:
         expanded: list[Item] = []
         for item in results:
             versions = kp.list_versions(item.id, limit=limit)
             expanded.extend(_versions_to_items(item.id, item, versions))
-        results = expanded
+        results = FindResults(expanded, deep_groups={})
 
-    typer.echo(_format_items(results, as_json=_get_json_output(), keeper=kp))
+    typer.echo(_format_items(results, as_json=_get_json_output(), keeper=kp, show_tags=show_tags))
 
 
 @app.command(hidden=True)
@@ -1404,7 +1464,7 @@ def _find_now_version_by_tags(kp, tags: list[str], *, scope: Optional[str] = Non
 
 
 def expand_prompt(result: "PromptResult", kp=None) -> str:
-    """Expand {get}, {find}, {text}, {since}, {until} placeholders in a prompt template."""
+    """Expand {get}, {find}, {find:deep}, {text}, {since}, {until} placeholders in a prompt template."""
     output = result.prompt
 
     # Expand {get} with rendered context
@@ -1414,11 +1474,12 @@ def expand_prompt(result: "PromptResult", kp=None) -> str:
         get_rendered = ""
     output = output.replace("{get}", get_rendered)
 
-    # Expand {find} with formatted search results
+    # Expand {find} / {find:deep} with formatted search results
     if result.search_results:
         find_rendered = _format_items(result.search_results, keeper=kp)
     else:
         find_rendered = ""
+    output = output.replace("{find:deep}", find_rendered)
     output = output.replace("{find}", find_rendered)
 
     # Expand {text}, {since}, {until} with raw filter values
@@ -1455,6 +1516,10 @@ def prompt(
     )] = None,
     since: SinceOption = None,
     until: UntilOption = None,
+    deep: Annotated[bool, typer.Option(
+        "--deep", "-D",
+        help="Follow tags from results to discover related items"
+    )] = False,
     limit: LimitOption = 5,
     store: StoreOption = None,
 ):
@@ -1488,6 +1553,7 @@ def prompt(
     tags_dict = _parse_tags(tag) if tag else None
     result = kp.render_prompt(
         name, text, id=id, since=since, until=until, tags=tags_dict, limit=limit,
+        deep=deep,
     )
     if result is None:
         typer.echo(f"Prompt not found: {name}", err=True)

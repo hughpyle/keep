@@ -204,7 +204,7 @@ class TestKeepFind:
         )
         mock_keeper.find.assert_called_once_with(
             "query", tags={"topic": "x"}, limit=5,
-            since="P3D", until="2026-02-20",
+            since="P3D", until="2026-02-20", deep=False,
         )
 
     @pytest.mark.asyncio
@@ -507,6 +507,7 @@ class TestKeepPrompt:
         mock_keeper.render_prompt.assert_called_once_with(
             "reflect", "query", id="my-id",
             since="P7D", until="2026-02-20", tags={"project": "x"}, limit=3,
+            deep=False,
         )
 
     @pytest.mark.asyncio

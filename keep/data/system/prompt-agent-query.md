@@ -15,7 +15,7 @@ perform additional searches, or examine version history to
 build a complete answer.
 
 Context:
-{find}
+{find:deep}
 
 Question: {text}
 

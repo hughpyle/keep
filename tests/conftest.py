@@ -392,6 +392,14 @@ class MockDocumentStore:
                 values.add(rec["tags"][key])
         return sorted(values)
 
+    def tag_pair_counts(self, collection: str) -> dict[tuple[str, str], int]:
+        counts: dict[tuple[str, str], int] = {}
+        for rec in self._data.get(collection, {}).values():
+            for k, v in rec["tags"].items():
+                if not k.startswith("_"):
+                    counts[(k, v)] = counts.get((k, v), 0) + 1
+        return counts
+
     def max_version(self, collection: str, id: str) -> int:
         return 0
 
@@ -440,6 +448,16 @@ class MockDocumentStore:
         key = f"_parts:{collection}:{id}"
         self._parts[key] = parts
         return len(parts)
+
+    def upsert_single_part(self, collection: str, id: str, part) -> None:
+        key = f"_parts:{collection}:{id}"
+        parts = self._parts.setdefault(key, [])
+        # Replace existing part with same part_num, or append
+        for i, p in enumerate(parts):
+            if p.part_num == part.part_num:
+                parts[i] = part
+                return
+        parts.append(part)
 
     def get_part(self, collection: str, id: str, part_num: int):
         key = f"_parts:{collection}:{id}"

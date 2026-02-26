@@ -241,3 +241,4 @@ x check for CLI compatibility with windows (WLS should work but no plan to valid
 . tag-by-model ("auto-tag") in the analysis process (based on any constrained tags)
 . filter noisy tags from parts-classification: meta/foo/provisional
 . Prompts as notes
+. "deep query" prompt

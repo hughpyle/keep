@@ -1618,6 +1618,34 @@ class DocumentStore:
 
         return len(parts)
 
+    def upsert_single_part(
+        self,
+        collection: str,
+        id: str,
+        part: PartInfo,
+    ) -> None:
+        """
+        Insert or replace a single part without affecting other parts.
+
+        Used for adding @P{0} overview after bulk parts are already stored.
+
+        Args:
+            collection: Collection name
+            id: Document identifier
+            part: PartInfo to store
+        """
+        with self._lock:
+            self._conn.execute("""
+                INSERT OR REPLACE INTO document_parts
+                (id, collection, part_num, summary, tags_json, content, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                id, collection, part.part_num, part.summary,
+                json.dumps(part.tags, ensure_ascii=False),
+                part.content, part.created_at,
+            ))
+            self._conn.commit()
+
     def get_part(
         self,
         collection: str,
@@ -1782,6 +1810,20 @@ class DocumentStore:
         """, (key, collection, key))
 
         return [row[0] for row in cursor]
+
+    def tag_pair_counts(self, collection: str) -> dict[tuple[str, str], int]:
+        """Count documents per (key, value) tag pair, excluding system tags.
+
+        Used for IDF weighting in deep tag-follow scoring.
+        """
+        cursor = self._conn.execute("""
+            SELECT j.key, j.value, COUNT(*) as cnt
+            FROM documents, json_each(tags_json) AS j
+            WHERE collection = ?
+              AND j.key NOT LIKE '\\_%' ESCAPE '\\'
+            GROUP BY j.key, j.value
+        """, (collection,))
+        return {(row[0], row[1]): row[2] for row in cursor}
 
     def query_by_tag_key(
         self,
