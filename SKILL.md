@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.67.0
+version: 0.67.1
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -42,13 +42,14 @@ keep_find(query="topic")                                               # What do
 keep_now(content="what's true now")                                    # Update intentions
 keep_put(content="learning", tags={"type": "learning", "topic": "X"}) # Capture insight
 keep_put(content="I will do Y", tags={"act": "commitment", "status": "open"})  # Track commitments
-keep_put(content="https://example.com/doc", tags={"topic": "X"})      # Index important documents
+keep_put(content="https://example.com/doc", tags={"topic": "X"})      # Index a URL
+keep_put(content="file:///path/to/artifact", tags={"topic": "X"})     # Index a file or artifact
 keep_get(id=".tag/act")                                                # Speech-act tag reference
 \`\`\`
 
 **No MCP?** Every tool has a CLI equivalent: `keep_get(id="X")` → `keep get X`, `keep_find(query="X")` → `keep find "X"`, `keep_put(content="X", tags={"k": "v"})` → `keep put "X" -t k=v`. Use Bash to run them.
 
-**Protocol:** Reflect using `keep` tools — before, during, and after action. Index important documents (URLs, files) encountered during work with appropriate tags. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
+**Protocol:** Reflect using `keep` tools — before, during, and after action. Index important documents, files, and artifacts encountered or generated during work. Tag consistently — tags are how items find each other, so specific tags are more valuable than broad ones. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
 
 ```
 

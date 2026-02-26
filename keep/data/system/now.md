@@ -5,27 +5,30 @@ tags:
 ---
 # First time
 
-This is `keep` — a reflective memory skill. You're seeing this because the store is new.
+This is `keep` — reflective memory. You're seeing this because the store is new.
 
-**Start here:** Read the full practice guide. It teaches why and how to reflect before, during, and after action.
-
-```bash
-cat "$(keep config tool)/SKILL.md"
-```
-
-**Then read the foundational teachings** — these are not test data, they are the source material for the practice:
+**Read the foundational teachings.** These are source material, not test data. Read and understand each one.
 
 ```bash
-keep get .conversations
-keep get .domains
-keep put "file://$(keep config tool)/docs/library/mn61.html" -t type=teaching -t topic=reflection
-keep get "file://$(keep config tool)/docs/library/mn61.html"
+SKILL_DIR="$(keep config tool)"
+keep put "file://${SKILL_DIR}/docs/library/mn61.html" -t type=teaching -t topic=reflection
+keep put "file://${SKILL_DIR}/docs/library/an5.57_translation-en-sujato.json" -t type=teaching -t topic=action
+keep put "file://${SKILL_DIR}/docs/library/han_verse.txt" -t type=teaching -t topic=urgency
+keep pending
 ```
 
-**Now update this nowdoc** with your understanding of the practice and your current intentions:
+Now read and understand each one:
 
-```bash
-keep now "My understanding of the practice: ..."
+```
+keep_get(id=".conversations")
+keep_get(id=".tag/act")
+keep_get(id="file://SKILL_DIR/docs/library/mn61.html")
+keep_get(id="file://SKILL_DIR/docs/library/an5.57_translation-en-sujato.json")
+keep_get(id="file://SKILL_DIR/docs/library/han_verse.txt")
 ```
 
-Once you do, this first-time message is replaced by your own working context. From then on, `keep now` is your mirror — check it before acting, update it after.
+**Now reflect.** What did you learn?
+
+```
+keep_prompt(name="reflect")
+```

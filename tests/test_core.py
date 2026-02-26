@@ -259,7 +259,7 @@ class TestNowdoc:
 
         content, tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
         assert len(content) > 0
-        assert "keep now" in content
+        assert "keep_prompt" in content
         # Frontmatter should be parsed into tags
         assert isinstance(tags, dict)
         assert len(tags) > 0  # Has at least one tag from frontmatter

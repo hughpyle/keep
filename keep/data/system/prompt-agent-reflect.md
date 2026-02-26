@@ -50,12 +50,11 @@ Kammassakomhi, kammadāyādo, kammayoni, kammabandhu, kammapaṭisaraṇo.
 
 ### 5. Update
 
-Based on the reflection, update what needs updating.
+`now` is a briefing for your future self. The next session starts here — with only this and what search can retrieve. Write what future-you needs to act skillfully: what is in progress, what must be paid attention to, what commitments are open, what assumptions were revealed.
 
-- If intentions have changed, update them.
-- If there are learnings to capture, capture them with appropriate tags.
-- If commitments need tracking, create or update them with speech-act tags.
-- If a thread of work is complete, or the conversation is pivoting to a new topic, move the history to make room for what's next.
+- Capture learnings with appropriate tags.
+- Track commitments with speech-act tags.
+- If a thread of work is complete or the conversation is shifting, move the history to make room for what's next.
 
 The value is in the reflection itself, not in lengthy output.
 
