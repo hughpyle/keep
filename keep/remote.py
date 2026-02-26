@@ -267,6 +267,7 @@ class RemoteKeeper:
         include_hidden: bool = False,
         deep: bool = False,
     ) -> list[Item]:
+        from .api import FindResults
         resp = self._post("/v1/search", json={
             "query": query,
             "similar_to": similar_to,
@@ -278,7 +279,14 @@ class RemoteKeeper:
             "include_hidden": include_hidden or None,
             "deep": deep or None,
         })
-        return self._to_items(resp)
+        items = self._to_items(resp)
+        # Parse deep groups from API response if present
+        deep_groups: dict[str, list[Item]] = {}
+        for raw_group in resp.get("deep_groups", []):
+            pid = raw_group.get("id", "")
+            if pid and "items" in raw_group:
+                deep_groups[pid] = [self._to_item(i) for i in raw_group["items"]]
+        return FindResults(items, deep_groups=deep_groups)
 
     def get_similar_for_display(
         self,

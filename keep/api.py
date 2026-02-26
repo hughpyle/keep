@@ -2297,20 +2297,16 @@ class Keeper:
         final = items[:limit]
         # Enrich tags from SQLite (ChromaDB stores casefolded values;
         # SQLite has the canonical original-case values for display)
-        if final:
-            self._document_store.touch_many(doc_coll, [i.id for i in final])
+        def _enrich_from_sqlite(items_to_enrich):
             enriched = []
-            for item in final:
+            for item in items_to_enrich:
                 doc = self._document_store.get(doc_coll, item.id)
-                # Version-reference IDs (@v{N}) don't have their own head
-                # record — fall back to the base document for timestamps.
                 if not doc and "@" in item.id:
                     base_id = item.id.split("@")[0]
                     doc = self._document_store.get(doc_coll, base_id)
                 if doc:
                     enriched_item = _record_to_item(doc, score=item.score)
                     tags = enriched_item.tags
-                    # Preserve _focus_part and _focus_summary from uplift
                     focus = item.tags.get("_focus_part")
                     if focus:
                         tags["_focus_part"] = focus
@@ -2323,7 +2319,17 @@ class Keeper:
                     ))
                 else:
                     enriched.append(item)
-            final = enriched
+            return enriched
+
+        if final:
+            self._document_store.touch_many(doc_coll, [i.id for i in final])
+            final = _enrich_from_sqlite(final)
+        # Enrich deep group items too (same casefolded-tag issue)
+        if deep_groups:
+            deep_groups = {
+                pid: _enrich_from_sqlite(group)
+                for pid, group in deep_groups.items()
+            }
         return FindResults(final, deep_groups=deep_groups)
 
     def get_context(
