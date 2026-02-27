@@ -414,6 +414,10 @@ class MockDocumentStore:
     def list_versions(self, collection: str, id: str, limit: int = 10) -> list:
         return []
 
+    def list_versions_around(self, collection: str, id: str,
+                             version: int, radius: int = 2) -> list:
+        return []
+
     def get_version_nav(self, collection: str, id: str,
                         current_version=None, limit: int = 3) -> dict:
         return {"prev": []}

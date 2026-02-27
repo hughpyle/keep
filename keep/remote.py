@@ -497,6 +497,9 @@ class RemoteKeeper:
         version: int,
         radius: int = 2,
     ) -> list[VersionInfo]:
+        # NOTE: requires server-side support for `around` and `radius`
+        # query params.  Older servers will silently ignore them and
+        # return default list_versions output (newest first, limited).
         resp = self._get(
             f"/v1/notes/{self._q(id)}/versions",
             around=version, radius=radius,

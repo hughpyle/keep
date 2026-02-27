@@ -224,7 +224,7 @@ def render_find_context(
 
     Two-pass rendering:
       Pass 1: Lay down summary lines for all items (breadth-first).
-      Pass 2: If enough summaries (>=5) and remaining budget, backfill
+      Pass 2: If enough summaries (>=2) and remaining budget, backfill
               detail (parts, versions, deep items) starting from the
               top-scoring item.
 
@@ -232,12 +232,12 @@ def render_find_context(
     """
     from .types import SYSTEM_TAG_PREFIX
 
-    _MIN_ITEMS_FOR_DETAIL = 5
+    _MIN_ITEMS_FOR_DETAIL = 2
 
     def _tok(text: str) -> int:
         return len(text) // 4
 
-    if not items:
+    if not items or token_budget <= 0:
         return "No results."
 
     deep_groups = getattr(items, "deep_groups", {})
