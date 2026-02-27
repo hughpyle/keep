@@ -2312,6 +2312,141 @@ class Keeper:
 
         return groups
 
+    def _deep_edge_follow(
+        self,
+        primary_items: list[Item],
+        chroma_coll: str,
+        doc_coll: str,
+        *,
+        query: str,
+        embedding: list[float],
+        top_k: int = 10,
+        max_per_group: int = 5,
+    ) -> dict[str, list[Item]]:
+        """Follow inverse edges from primary results to discover related items.
+
+        For each primary, traverses its inverse edges (e.g. speaker→said)
+        to collect candidate source IDs.  Then runs a scoped hybrid search
+        (FTS pre-filter + embedding post-filter + RRF fusion) over only
+        those candidates to surface relevant evidence.
+
+        Args:
+            query: Original search query text (used for FTS pre-filter).
+            embedding: Query embedding vector.
+            top_k: Number of top primary items to follow edges from.
+            max_per_group: Max deep items per primary.
+
+        Returns:
+            dict mapping primary item ID to list of deep-discovered Items,
+            sorted by RRF score within each group.
+        """
+        # 1. Traverse edges for each primary, collect source IDs
+        primary_to_sources: dict[str, set[str]] = {}
+        all_source_ids: set[str] = set()
+        top_ids = set()
+
+        for item in primary_items[:top_k]:
+            parent_id = item.id.split("@")[0] if "@" in item.id else item.id
+            top_ids.add(parent_id)
+            edges = self._document_store.get_inverse_edges(doc_coll, parent_id)
+            if edges:
+                sources = {e[1] for e in edges}  # (inverse, source_id, created)
+                primary_to_sources[parent_id] = sources
+                all_source_ids.update(sources)
+
+        if not all_source_ids:
+            return {}
+
+        # Remove primary IDs themselves from candidate pool
+        all_source_ids -= top_ids
+
+        if not all_source_ids:
+            return {}
+
+        source_list = list(all_source_ids)
+
+        # 2. FTS pre-filter: narrow candidates using cheap text matching
+        fts_fetch = max(len(source_list), 100)
+        fts_rows = self._document_store.query_fts_scoped(
+            doc_coll, query, source_list, limit=fts_fetch,
+        )
+        fts_items = [Item(id=r[0], summary=r[1]) for r in fts_rows]
+
+        # Extract base doc IDs from FTS hits for embedding post-filter
+        fts_hit_ids: set[str] = set()
+        for r in fts_rows:
+            base = r[0].split("@")[0] if "@" in r[0] else r[0]
+            fts_hit_ids.add(base)
+
+        # 3. Embedding search — post-filter to source IDs
+        #    If FTS found hits, narrow embedding to FTS-matched IDs;
+        #    otherwise search all source IDs (semantic-only fallback)
+        filter_ids = fts_hit_ids if fts_hit_ids else all_source_ids
+        sem_fetch = max(len(filter_ids) * 3, 200)
+        sem_results = self._store.query_embedding(
+            chroma_coll, embedding, limit=sem_fetch,
+        )
+        # Post-filter to source IDs (ChromaDB has no ID pre-filter)
+        sem_items = []
+        for r in sem_results:
+            base = r.id.split("@")[0] if "@" in r.id else r.id
+            if base in filter_ids:
+                sem_items.append(r.to_item())
+
+        sem_items = self._apply_recency_decay(sem_items)
+
+        # 4. RRF fuse scoped FTS + embedding results
+        if fts_items and sem_items:
+            fused = self._rrf_fuse(sem_items, fts_items)
+        elif fts_items:
+            fused = fts_items
+        elif sem_items:
+            fused = sem_items
+        else:
+            return {}
+
+        # 5. Collapse to parent IDs, assign to originating primary
+        groups: dict[str, list[Item]] = {}
+        seen_parents: set[str] = set()
+
+        for item in fused:
+            parent_id = item.id.split("@")[0] if "@" in item.id else item.id
+            if parent_id in top_ids or parent_id in seen_parents:
+                continue
+            seen_parents.add(parent_id)
+
+            # Find which primary has an edge to this source
+            best_primary = None
+            for pid, sources in primary_to_sources.items():
+                if parent_id in sources:
+                    if best_primary is None:
+                        best_primary = pid
+                    break  # first match (primaries are rank-ordered)
+
+            if best_primary is None:
+                continue
+
+            # Enrich with head-doc summary/tags from SQLite
+            head_doc = self._document_store.get(doc_coll, parent_id)
+            if head_doc:
+                head_item = _record_to_item(head_doc)
+                scored = Item(
+                    id=parent_id, summary=head_item.summary,
+                    tags=head_item.tags, score=item.score,
+                )
+            else:
+                scored = Item(
+                    id=parent_id, summary=item.summary,
+                    tags=item.tags, score=item.score,
+                )
+            groups.setdefault(best_primary, []).append(scored)
+
+        # 6. Cap per group
+        for pid in groups:
+            groups[pid] = groups[pid][:max_per_group]
+
+        return groups
+
     def find(
         self,
         query: Optional[str] = None,
@@ -2419,12 +2554,22 @@ class Keeper:
             )
             items = [Item(id=r[0], summary=r[1]) for r in fts_rows]
 
-        # Deep tag-following: discover bridge documents via shared tags
+        # Deep follow: prefer edge-following when edges exist in the store,
+        # fall back to tag-following for stores without edges.
         deep_groups: dict[str, list[Item]] = {}
         if deep and embedding is not None:
-            deep_groups = self._deep_tag_follow(
-                items, chroma_coll, doc_coll, embedding=embedding,
-            )
+            if self._document_store.has_edges(doc_coll):
+                # For similar_to mode, use the anchor item's summary as FTS query
+                deep_query = query if query else ""
+                deep_groups = self._deep_edge_follow(
+                    items, chroma_coll, doc_coll,
+                    query=deep_query,
+                    embedding=embedding,
+                )
+            else:
+                deep_groups = self._deep_tag_follow(
+                    items, chroma_coll, doc_coll, embedding=embedding,
+                )
 
         # Apply common filters
         if since is not None or until is not None:

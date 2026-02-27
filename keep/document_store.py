@@ -1746,6 +1746,22 @@ class DocumentStore:
         self._stopwords = frozenset(words)
         return self._stopwords
 
+    def _build_fts_query(self, query: str) -> Optional[str]:
+        """Tokenize a natural-language query into an FTS5 MATCH expression.
+
+        Returns ``None`` when no usable tokens remain after stripping
+        stopwords and special characters.
+        """
+        stopwords = self._get_stopwords()
+        tokens = [t for t in query.split() if t.lower() not in stopwords]
+        if not tokens:
+            return None
+        safe = [t.replace('"', '').replace("'", "") for t in tokens]
+        safe = [t for t in safe if t]
+        if not safe:
+            return None
+        return " OR ".join(f'"{t}"' for t in safe)
+
     def query_fts(
         self,
         collection: str,
@@ -1774,18 +1790,9 @@ class DocumentStore:
         """
         if not self._fts_available:
             return []
-        # Tokenize query, strip stopwords, join with OR.
-        # Each token is quoted to prevent FTS5 syntax issues.
-        stopwords = self._get_stopwords()
-        tokens = [t for t in query.split() if t.lower() not in stopwords]
-        if not tokens:
+        fts_query = self._build_fts_query(query)
+        if fts_query is None:
             return []
-        # Strip characters that are special in FTS5 query syntax
-        safe = [t.replace('"', '').replace("'", "") for t in tokens]
-        safe = [t for t in safe if t]
-        if not safe:
-            return []
-        fts_query = " OR ".join(f'"{t}"' for t in safe)
 
         # --- Search documents ---
         doc_sql = """
@@ -1843,6 +1850,88 @@ class DocumentStore:
         combined.extend((row[0], row[1], row[2]) for row in part_rows)
         combined.extend((row[0], row[1], row[2]) for row in ver_rows)
         combined.sort(key=lambda r: r[2])  # sort by rank ascending (best first)
+        return combined[:limit]
+
+    def query_fts_scoped(
+        self,
+        collection: str,
+        query: str,
+        ids: list[str],
+        limit: int = 10,
+        tags: Optional[dict[str, str]] = None,
+    ) -> list[tuple[str, str, float]]:
+        """Full-text search scoped to a whitelist of base document IDs.
+
+        Same as :meth:`query_fts` but adds ``AND <table>.id IN (...)``
+        to each sub-query so only documents, parts, and versions belonging
+        to *ids* are considered.  Used by edge-following deep search.
+        """
+        if not self._fts_available or not ids:
+            return []
+        fts_query = self._build_fts_query(query)
+        if fts_query is None:
+            return []
+
+        placeholders = ",".join("?" * len(ids))
+
+        # --- Search documents ---
+        doc_sql = f"""
+            SELECT d.id, d.summary, f.rank
+            FROM documents_fts f
+            JOIN documents d ON d.rowid = f.rowid
+            WHERE documents_fts MATCH ?
+            AND d.collection = ?
+            AND d.id IN ({placeholders})
+        """
+        doc_params: list[Any] = [fts_query, collection, *ids]
+        if tags:
+            for k, v in tags.items():
+                doc_sql += " AND LOWER(json_extract(d.tags_json, ?)) = ?"
+                doc_params.extend([f"$.{k}", v])
+        doc_sql += " ORDER BY f.rank LIMIT ?"
+        doc_params.append(limit)
+        doc_rows = self._conn.execute(doc_sql, doc_params).fetchall()
+
+        # --- Search parts ---
+        part_sql = f"""
+            SELECT p.id || '@p' || p.part_num, p.summary, f.rank
+            FROM parts_fts f
+            JOIN document_parts p ON p.rowid = f.rowid
+            WHERE parts_fts MATCH ?
+            AND p.collection = ?
+            AND p.id IN ({placeholders})
+        """
+        part_params: list[Any] = [fts_query, collection, *ids]
+        if tags:
+            for k, v in tags.items():
+                part_sql += " AND LOWER(json_extract(p.tags_json, ?)) = ?"
+                part_params.extend([f"$.{k}", v])
+        part_sql += " ORDER BY f.rank LIMIT ?"
+        part_params.append(limit)
+        part_rows = self._conn.execute(part_sql, part_params).fetchall()
+
+        # --- Search versions ---
+        ver_sql = f"""
+            SELECT v.id || '@v' || v.version, v.summary, f.rank
+            FROM versions_fts f
+            JOIN document_versions v ON v.rowid = f.rowid
+            WHERE versions_fts MATCH ?
+            AND v.collection = ?
+            AND v.id IN ({placeholders})
+        """
+        ver_params: list[Any] = [fts_query, collection, *ids]
+        if tags:
+            for k, v in tags.items():
+                ver_sql += " AND LOWER(json_extract(v.tags_json, ?)) = ?"
+                ver_params.extend([f"$.{k}", v])
+        ver_sql += " ORDER BY f.rank LIMIT ?"
+        ver_params.append(limit)
+        ver_rows = self._conn.execute(ver_sql, ver_params).fetchall()
+
+        combined = [(row[0], row[1], row[2]) for row in doc_rows]
+        combined.extend((row[0], row[1], row[2]) for row in part_rows)
+        combined.extend((row[0], row[1], row[2]) for row in ver_rows)
+        combined.sort(key=lambda r: r[2])
         return combined[:limit]
 
     def query_by_id_glob(
@@ -2452,6 +2541,14 @@ class DocumentStore:
             (collection, target_id),
         ).fetchall()
         return [(r["inverse"], r["source_id"], r["created"]) for r in rows]
+
+    def has_edges(self, collection: str) -> bool:
+        """Return True if *collection* has any edges at all."""
+        row = self._conn.execute(
+            "SELECT 1 FROM edges WHERE collection = ? LIMIT 1",
+            (collection,),
+        ).fetchone()
+        return row is not None
 
     def backfill_exists(self, collection: str, predicate: str) -> bool:
         """Return True if a backfill record exists (pending or completed)."""

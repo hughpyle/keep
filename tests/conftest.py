@@ -464,6 +464,19 @@ class MockDocumentStore:
                     results.append((f"{parts_id}@p{part.part_num}", part.summary, -1.0))
         return results[:limit]
 
+    def query_fts_scoped(self, collection: str, query: str, ids: list[str],
+                         limit: int = 10,
+                         tags: dict = None) -> list[tuple[str, str, float]]:
+        """Mock scoped FTS — delegates to query_fts then filters to ids."""
+        all_results = self.query_fts(collection, query, limit=limit * 3, tags=tags)
+        id_set = set(ids)
+        filtered = []
+        for r in all_results:
+            base = r[0].split("@")[0] if "@" in r[0] else r[0]
+            if base in id_set:
+                filtered.append(r)
+        return filtered[:limit]
+
     @property
     def _fts_available(self) -> bool:
         return True
@@ -610,6 +623,10 @@ class MockDocumentStore:
             items.sort(key=lambda r: r[2], reverse=True)
             ordered.extend(items)
         return ordered
+
+    def has_edges(self, collection: str) -> bool:
+        self.__init_edges()
+        return any(e["collection"] == collection for e in self._edges)
 
     def backfill_exists(self, collection: str, predicate: str) -> bool:
         self.__init_edges()
