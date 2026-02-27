@@ -308,6 +308,8 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
                         keeper._document_store.delete_edges_for_predicate(doc_coll, new_id[5:])
                         keeper._document_store.delete_backfill(doc_coll, new_id[5:])
                     keeper._check_edge_backfill(new_id[5:], new_inverse, doc_coll)
+                    # Materialize the inverse tagdoc synchronously
+                    keeper._ensure_inverse_tagdoc(new_id[5:], new_inverse, doc_coll)
                 elif old_inverse and not new_inverse:
                     # _inverse removed → clean up
                     keeper._document_store.delete_edges_for_predicate(doc_coll, new_id[5:])

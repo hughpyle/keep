@@ -338,3 +338,134 @@ class TestEdgeRefSerialization:
         assert ctx2.edges == ctx.edges
         assert len(ctx2.edges["said"]) == 1
         assert ctx2.edges["said"][0].source_id == "conv1"
+
+
+# ---------------------------------------------------------------------------
+# Inverse tagdoc materialization
+# ---------------------------------------------------------------------------
+
+class TestInverseTagdocMaterialization:
+    """When .tag/speaker has _inverse=said, .tag/said must exist with _inverse=speaker."""
+
+    @pytest.fixture
+    def kp(self, mock_providers, tmp_path):
+        return Keeper(store_path=tmp_path)
+
+    def _get_tagdoc(self, kp, key):
+        """Read a tagdoc from the document store."""
+        doc_coll = kp._resolve_doc_collection()
+        return kp._document_store.get(doc_coll, f".tag/{key}")
+
+    def test_inverse_tagdoc_created(self, kp):
+        """Creating .tag/speaker with _inverse=said also creates .tag/said."""
+        from keep.types import utc_now
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+        old_tags = {}
+        new_tags = {
+            "_inverse": "said",
+            "_created": now,
+            "_updated": now,
+            "category": "system",
+        }
+        kp._process_tagdoc_inverse_change(".tag/speaker", new_tags, old_tags, doc_coll)
+
+        inverse_doc = self._get_tagdoc(kp, "said")
+        assert inverse_doc is not None
+        assert inverse_doc.tags["_inverse"] == "speaker"
+
+    def test_inverse_tagdoc_already_correct(self, kp):
+        """No error when inverse tagdoc already has the right _inverse."""
+        from keep.types import utc_now
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+
+        # Pre-create .tag/said with _inverse=speaker
+        kp._document_store.upsert(
+            doc_coll, ".tag/said", summary="Tag: said",
+            tags={"_inverse": "speaker", "_created": now, "_updated": now},
+        )
+
+        # Creating .tag/speaker with _inverse=said should not error
+        new_tags = {"_inverse": "said", "_created": now, "_updated": now}
+        kp._process_tagdoc_inverse_change(".tag/speaker", new_tags, {}, doc_coll)
+
+        # .tag/said is unchanged
+        inverse_doc = self._get_tagdoc(kp, "said")
+        assert inverse_doc.tags["_inverse"] == "speaker"
+
+    def test_inverse_tagdoc_conflict_raises(self, kp):
+        """Error when inverse tagdoc exists with a different _inverse."""
+        from keep.types import utc_now
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+
+        # Pre-create .tag/said with _inverse=listener (conflicting)
+        kp._document_store.upsert(
+            doc_coll, ".tag/said", summary="Tag: said",
+            tags={"_inverse": "listener", "_created": now, "_updated": now},
+        )
+
+        new_tags = {"_inverse": "said", "_created": now, "_updated": now}
+        with pytest.raises(ValueError, match="Inverse conflict"):
+            kp._process_tagdoc_inverse_change(".tag/speaker", new_tags, {}, doc_coll)
+
+    def test_inverse_tagdoc_added_to_existing_without_inverse(self, kp):
+        """Existing tagdoc without _inverse gets _inverse added."""
+        from keep.types import utc_now
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+
+        # Pre-create .tag/said without _inverse
+        kp._document_store.upsert(
+            doc_coll, ".tag/said", summary="Tag: said",
+            tags={"_created": now, "_updated": now, "category": "system"},
+        )
+
+        new_tags = {"_inverse": "said", "_created": now, "_updated": now}
+        kp._process_tagdoc_inverse_change(".tag/speaker", new_tags, {}, doc_coll)
+
+        inverse_doc = self._get_tagdoc(kp, "said")
+        assert inverse_doc.tags["_inverse"] == "speaker"
+
+    def test_inverse_tagdoc_triggers_backfill(self, kp):
+        """Creating inverse tagdoc also queues backfill for the inverse direction."""
+        from keep.types import utc_now
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+
+        new_tags = {"_inverse": "said", "_created": now, "_updated": now}
+        kp._process_tagdoc_inverse_change(".tag/speaker", new_tags, {}, doc_coll)
+
+        # Backfill should be queued for the inverse direction: predicate=said
+        assert kp._document_store.backfill_exists(doc_coll, "said")
+
+    def test_bidirectional_edges_work(self, kp):
+        """Full flow: tagdoc + inverse tagdoc → edges work in both directions."""
+        from keep.types import utc_now
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+
+        # Create .tag/speaker with _inverse=said (also materializes .tag/said)
+        kp._document_store.upsert(
+            doc_coll, ".tag/speaker", summary="Tag: speaker",
+            tags={"_inverse": "said", "_created": now, "_updated": now, "category": "system"},
+        )
+        kp._ensure_inverse_tagdoc("speaker", "said", doc_coll)
+
+        # Tag a doc with speaker=nate → edge: nate gets said:
+        kp.put(content="Nate said hello", id="conv1", summary="Greeting",
+               tags={"speaker": "nate"})
+
+        ctx_nate = kp.get_context("nate")
+        assert "said" in ctx_nate.edges
+        assert ctx_nate.edges["said"][0].source_id == "conv1"
+
+        # Tag a doc with said=nate → edge: nate gets speaker:
+        kp.put(content="Quote attributed to Nate", id="quote1", summary="A quote",
+               tags={"said": "nate"})
+
+        ctx_nate = kp.get_context("nate")
+        assert "said" in ctx_nate.edges
+        assert "speaker" in ctx_nate.edges
+        assert ctx_nate.edges["speaker"][0].source_id == "quote1"

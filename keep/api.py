@@ -672,6 +672,9 @@ class Keeper:
         Called once at startup (after system doc migration) to catch
         tagdocs that were created outside the normal put() path or
         from a previous version that didn't support edges.
+
+        Also materializes any missing inverse tagdocs for existing
+        stores that were created before inverse materialization existed.
         """
         doc_coll = self._resolve_doc_collection()
         tagdocs = self._document_store.query_by_id_prefix(doc_coll, ".tag/")
@@ -682,6 +685,7 @@ class Keeper:
             inverse = td.tags.get("_inverse")
             if inverse:
                 self._check_edge_backfill(td.id[5:], inverse, doc_coll)
+                self._ensure_inverse_tagdoc(td.id[5:], inverse, doc_coll)
 
     def _get_embedding_provider(self) -> EmbeddingProvider:
         """
@@ -1577,6 +1581,58 @@ class Keeper:
                 self._document_store.delete_edges_for_predicate(doc_coll, predicate)
                 self._document_store.delete_backfill(doc_coll, predicate)
             self._check_edge_backfill(predicate, new_inverse, doc_coll)
+            # Materialize the inverse tagdoc synchronously
+            self._ensure_inverse_tagdoc(predicate, new_inverse, doc_coll)
+
+    def _ensure_inverse_tagdoc(
+        self, predicate: str, inverse: str, doc_coll: str,
+    ) -> None:
+        """Ensure .tag/{inverse} exists with _inverse={predicate}.
+
+        Called synchronously when .tag/{predicate} declares _inverse={inverse}.
+        Creates the inverse tagdoc if missing, or verifies consistency.
+
+        Raises ValueError if .tag/{inverse} already has a different _inverse.
+        """
+        inverse_tagdoc_id = f".tag/{inverse}"
+        existing = self._document_store.get(doc_coll, inverse_tagdoc_id)
+
+        if existing:
+            existing_inverse = existing.tags.get("_inverse")
+            if existing_inverse == predicate:
+                return  # already correct
+            if existing_inverse and existing_inverse != predicate:
+                raise ValueError(
+                    f"Inverse conflict: .tag/{inverse} already declares "
+                    f"_inverse={existing_inverse!r}, cannot set to {predicate!r} "
+                    f"(required by .tag/{predicate} _inverse={inverse})"
+                )
+            # Exists without _inverse → add it
+            tags = dict(existing.tags)
+            tags["_inverse"] = predicate
+            tags["_updated"] = utc_now()
+            self._document_store.upsert(
+                doc_coll, inverse_tagdoc_id,
+                summary=existing.summary, tags=tags,
+            )
+        else:
+            # Create minimal inverse tagdoc
+            now = utc_now()
+            self._document_store.upsert(
+                doc_coll, inverse_tagdoc_id,
+                summary="",
+                tags={
+                    "_inverse": predicate,
+                    "_created": now,
+                    "_updated": now,
+                    "_source": "auto-vivify",
+                    "category": "system",
+                    "context": "tag-description",
+                },
+            )
+
+        # Backfill edges for the inverse direction too
+        self._check_edge_backfill(inverse, predicate, doc_coll)
 
     # -------------------------------------------------------------------------
     # Write Operations

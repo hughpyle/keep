@@ -58,6 +58,10 @@ EOF
 
 Now `contains=item-B` on document A creates an edge, and `get item-B` shows `tags/contents: A`.
 
+### Symmetric tagdocs
+
+When `.tag/contains` declares `_inverse: contents`, keep automatically creates `.tag/contents` with `_inverse: contains` (if it doesn't already exist). This makes the relationship navigable in both directions — tagging with either key creates edges that the other key can resolve. If `.tag/contents` already exists with a different `_inverse`, that's a conflict error.
+
 ### Backfill
 
 When you add `_inverse` to an existing tagdoc, keep automatically backfills edges for all documents already tagged with that key. This runs in the background — edges may take a moment to appear.
