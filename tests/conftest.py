@@ -624,6 +624,22 @@ class MockDocumentStore:
             ordered.extend(items)
         return ordered
 
+    def get_forward_edges(self, collection: str, source_id: str) -> list[tuple[str, str, str]]:
+        self.__init_edges()
+        results = [
+            (e["predicate"], e["target_id"], e["created"])
+            for e in self._edges
+            if e["collection"] == collection and e["source_id"] == source_id
+        ]
+        results.sort(key=lambda r: (r[0], r[2]), reverse=False)
+        from itertools import groupby
+        ordered = []
+        for _, group in groupby(results, key=lambda r: r[0]):
+            items = list(group)
+            items.sort(key=lambda r: r[2], reverse=True)
+            ordered.extend(items)
+        return ordered
+
     def has_edges(self, collection: str) -> bool:
         self.__init_edges()
         return any(e["collection"] == collection for e in self._edges)

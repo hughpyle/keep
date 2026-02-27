@@ -2542,6 +2542,25 @@ class DocumentStore:
         ).fetchall()
         return [(r["inverse"], r["source_id"], r["created"]) for r in rows]
 
+    def get_forward_edges(
+        self, collection: str, source_id: str,
+    ) -> list[tuple[str, str, str]]:
+        """Return forward edges originating from *source_id*.
+
+        Returns list of (predicate, target_id, created) ordered by predicate
+        then created descending.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT predicate, target_id, created
+            FROM edges
+            WHERE collection = ? AND source_id = ?
+            ORDER BY predicate, created DESC
+            """,
+            (collection, source_id),
+        ).fetchall()
+        return [(r["predicate"], r["target_id"], r["created"]) for r in rows]
+
     def has_edges(self, collection: str) -> bool:
         """Return True if *collection* has any edges at all."""
         row = self._conn.execute(

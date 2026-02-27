@@ -2342,7 +2342,13 @@ class Keeper:
             dict mapping primary item ID to list of deep-discovered Items,
             sorted by RRF score within each group.
         """
-        # 1. Traverse edges for each primary, collect source IDs
+        # 1. Traverse edges for each primary, collect candidate IDs.
+        #    Two traversal paths:
+        #    a) Inverse edges: primary is a target → collect sources
+        #       (e.g. entity "Melanie" ← said ← session docs)
+        #    b) Forward + inverse (two-hop): primary is a source →
+        #       follow forward to targets → collect THEIR inverse sources
+        #       (e.g. session → speaker → entity → said → other sessions)
         primary_to_sources: dict[str, set[str]] = {}
         all_source_ids: set[str] = set()
         top_ids = set()
@@ -2350,9 +2356,24 @@ class Keeper:
         for item in primary_items[:top_k]:
             parent_id = item.id.split("@")[0] if "@" in item.id else item.id
             top_ids.add(parent_id)
-            edges = self._document_store.get_inverse_edges(doc_coll, parent_id)
-            if edges:
-                sources = {e[1] for e in edges}  # (inverse, source_id, created)
+            sources: set[str] = set()
+
+            # Path a: inverse edges (primary is target)
+            inv_edges = self._document_store.get_inverse_edges(
+                doc_coll, parent_id)
+            for _inv, src_id, _created in inv_edges:
+                sources.add(src_id)
+
+            # Path b: two-hop via forward edges (primary is source)
+            fwd_edges = self._document_store.get_forward_edges(
+                doc_coll, parent_id)
+            for _pred, target_id, _created in fwd_edges:
+                hop2 = self._document_store.get_inverse_edges(
+                    doc_coll, target_id)
+                for _inv2, src_id2, _created2 in hop2:
+                    sources.add(src_id2)
+
+            if sources:
                 primary_to_sources[parent_id] = sources
                 all_source_ids.update(sources)
 
@@ -2651,11 +2672,13 @@ class Keeper:
         items = uplifted
 
         # Remap deep_groups: uplift keys AND items (parts → parents), dedup.
-        # Only exclude deep items that appear in the FINAL primary results
-        # (top limit), not the full over-fetched pool.
+        # Only exclude deep items that appear in the top primary results
+        # the user will actually see — not the full over-fetched pool
+        # (which may swallow all deep candidates when fetch_limit >> display).
+        _DEEP_EXCLUDE_WINDOW = 10
         if deep_groups:
             final_ids = set()
-            for i in items[:limit]:
+            for i in items[:min(limit, _DEEP_EXCLUDE_WINDOW)]:
                 final_ids.add(i.id)
                 # Include parent ID so version hits match deep group keys
                 if "@" in i.id:
@@ -2915,8 +2938,9 @@ class Keeper:
             deep = True
 
         # Ensure retrieval limit is high enough to fill the token budget.
-        # Per-item cost varies: ~50 tokens without deep, ~200 with deep groups.
-        tokens_per_item = 200 if deep else 50
+        # Deep items are rendered in a separate pass from leftover budget,
+        # so the primary fetch size doesn't need to shrink for deep mode.
+        tokens_per_item = 50
         fetch_limit = min(200, max(limit, token_budget // tokens_per_item))
 
         # Search: find similar items with available filters
