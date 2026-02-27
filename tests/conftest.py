@@ -640,6 +640,15 @@ class MockDocumentStore:
             ordered.extend(items)
         return ordered
 
+    def find_edge_targets(self, collection: str, names: list[str]) -> list[str]:
+        self.__init_edges()
+        lower_names = {n.lower() for n in names}
+        targets = {
+            e["target_id"] for e in self._edges
+            if e["collection"] == collection and e["target_id"].lower() in lower_names
+        }
+        return list(targets)
+
     def has_edges(self, collection: str) -> bool:
         self.__init_edges()
         return any(e["collection"] == collection for e in self._edges)

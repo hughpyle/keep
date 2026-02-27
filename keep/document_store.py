@@ -2561,6 +2561,23 @@ class DocumentStore:
         ).fetchall()
         return [(r["predicate"], r["target_id"], r["created"]) for r in rows]
 
+    def find_edge_targets(
+        self, collection: str, names: list[str],
+    ) -> list[str]:
+        """Return edge target IDs that match any of *names* (case-insensitive).
+
+        Used for entity injection: query tokens are matched against known
+        edge targets to surface entities the user mentioned by name.
+        """
+        if not names:
+            return []
+        lower_names = {n.lower() for n in names}
+        rows = self._conn.execute(
+            "SELECT DISTINCT target_id FROM edges WHERE collection = ?",
+            (collection,),
+        ).fetchall()
+        return [r[0] for r in rows if r[0].lower() in lower_names]
+
     def has_edges(self, collection: str) -> bool:
         """Return True if *collection* has any edges at all."""
         row = self._conn.execute(

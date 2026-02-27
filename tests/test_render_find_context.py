@@ -156,13 +156,13 @@ class TestExpandPromptFindBudget:
 class TestDeepPrimaryCap:
     """Tests for deep_primary_cap — suppressing primaries in favor of deep items."""
 
-    def test_cap_placeholder_syntax(self):
-        """The {find:deep:cap3:8000} syntax should be parsed and expanded."""
+    def test_deep_placeholder_syntax(self):
+        """The {find:deep:8000} syntax should be parsed and expanded."""
         from keep.cli import expand_prompt
         result = PromptResult(
             context=None,
             search_results=[_item(id="a", summary="Test")],
-            prompt="{find:deep:cap3:8000}",
+            prompt="{find:deep:8000}",
             token_budget=4000,
         )
         output = expand_prompt(result)

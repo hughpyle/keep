@@ -273,13 +273,19 @@ def render_find_context(
     # When deep_primary_cap is set, truncate primaries to top N (prefer
     # those with deep groups) and skip pass 2 — budget goes to deep items.
     if deep_primary_cap is not None and deep_groups and len(rendered) > deep_primary_cap:
-        # Sort: items with deep groups first, then by original order
+        # Sort: entities first (query-mentioned), then deep groups, then rest
         has_deep = set()
+        is_entity = set()
         for item, _ in rendered:
             pid = item.id.split("@")[0] if "@" in item.id else item.id
             if pid in deep_groups or item.id in deep_groups:
                 has_deep.add(item.id)
-        rendered.sort(key=lambda t: (t[0].id not in has_deep,))
+            if item.tags.get("_entity"):
+                is_entity.add(item.id)
+        rendered.sort(key=lambda t: (
+            t[0].id not in is_entity,   # entities first
+            t[0].id not in has_deep,    # then items with deep groups
+        ))
         # Reclaim budget from dropped items
         for _, block_lines in rendered[deep_primary_cap:]:
             for line in block_lines:
@@ -1018,7 +1024,9 @@ def find(
     if _get_json_output():
         typer.echo(_format_items(results, as_json=True, keeper=kp, show_tags=show_tags))
     elif token_budget is not None:
-        typer.echo(render_find_context(results, keeper=kp, token_budget=token_budget, show_tags=show_tags))
+        # When deep is active, cap primaries to leave budget for deep items
+        cap = 3 if deep else None
+        typer.echo(render_find_context(results, keeper=kp, token_budget=token_budget, show_tags=show_tags, deep_primary_cap=cap))
     else:
         typer.echo(_format_items(results, keeper=kp, show_tags=show_tags))
 
@@ -1652,8 +1660,6 @@ def expand_prompt(result: "PromptResult", kp=None) -> str:
       {find:deep}           — deep search (handled upstream)
       {find:8000}           — override token budget to 8000
       {find:deep:8000}      — both deep and budget override
-      {find:deep:cap3:8000} — deep with primary cap (suppress primary detail,
-                              favor deep items) and budget override
     """
     output = result.prompt
 
@@ -1665,15 +1671,16 @@ def expand_prompt(result: "PromptResult", kp=None) -> str:
     output = output.replace("{get}", get_rendered)
 
     # Expand {find} variants with token-budgeted context.
-    # Syntax: {find[:deep][:capN][:budget]}
-    _find_re = re.compile(r'\{find(?::deep)?(?::cap(\d+))?(?::(\d+))?\}')
+    # Syntax: {find[:deep][:budget]}
+    # When :deep is present, primary cap is applied automatically.
+    _find_re = re.compile(r'\{find(?::(deep))?(?::(\d+))?\}')
     def _expand_find(m):
         if not result.search_results:
             return ""
-        cap_str = m.group(1)
+        is_deep = m.group(1) is not None
         budget_str = m.group(2)
-        cap = int(cap_str) if cap_str else None
         budget = int(budget_str) if budget_str else result.token_budget
+        cap = 3 if is_deep else None
         return render_find_context(
             result.search_results, keeper=kp,
             token_budget=budget,

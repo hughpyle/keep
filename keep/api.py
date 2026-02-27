@@ -2324,6 +2324,7 @@ class Keeper:
         embedding: list[float],
         top_k: int = 10,
         max_per_group: int = 5,
+        exclude_ids: set[str] | None = None,
     ) -> dict[str, list[Item]]:
         """Follow inverse edges from primary results to discover related items.
 
@@ -2337,6 +2338,8 @@ class Keeper:
             embedding: Query embedding vector.
             top_k: Number of top primary items to follow edges from.
             max_per_group: Max deep items per primary.
+            exclude_ids: IDs to exclude from deep results (e.g. items
+                the user will already see as primaries).
 
         Returns:
             dict mapping primary item ID to list of deep-discovered Items,
@@ -2358,11 +2361,14 @@ class Keeper:
 
         primary_to_sources: dict[str, set[str]] = {}
         all_source_ids: set[str] = set()
-        top_ids = set()
+        # IDs to exclude from deep results: caller-provided exclusion set
+        # (items the user will see as primaries) or fall back to all items
+        top_ids = set(exclude_ids) if exclude_ids is not None else set()
 
         for item in primary_items[:top_k]:
             parent_id = item.id.split("@")[0] if "@" in item.id else item.id
-            top_ids.add(parent_id)
+            if exclude_ids is None:
+                top_ids.add(parent_id)
             sources: set[str] = set()
 
             # Path a: inverse edges (primary is target)
@@ -2385,12 +2391,6 @@ class Keeper:
                 all_source_ids.update(sources)
                 if len(all_source_ids) >= _MAX_CANDIDATES:
                     break
-
-        if not all_source_ids:
-            return {}
-
-        # Remove primary IDs themselves from candidate pool
-        all_source_ids -= top_ids
 
         if not all_source_ids:
             return {}
@@ -2427,6 +2427,10 @@ class Keeper:
 
         sem_items = self._apply_recency_decay(sem_items)
 
+        logger.debug("Deep edge follow: sources=%s fts=%d sem=%d filter=%s top=%s",
+                     all_source_ids, len(fts_items), len(sem_items),
+                     filter_ids, top_ids)
+
         # 4. RRF fuse scoped FTS + embedding results
         if fts_items and sem_items:
             fused = self._rrf_fuse(sem_items, fts_items)
@@ -2443,17 +2447,27 @@ class Keeper:
 
         for item in fused:
             parent_id = item.id.split("@")[0] if "@" in item.id else item.id
-            if parent_id in top_ids or parent_id in seen_parents:
+            if parent_id in seen_parents:
                 continue
-            seen_parents.add(parent_id)
 
-            # Find which primary has an edge to this source
+            # Find which primary has an edge to this source.
+            # Prefer non-excluded primaries (injected entities) so that
+            # edge sources get grouped under the entity rather than a
+            # sibling session that happens to share the same edges.
             best_primary = None
             for pid, sources in primary_to_sources.items():
                 if parent_id in sources:
-                    if best_primary is None:
+                    if pid not in top_ids:
                         best_primary = pid
-                    break  # first match (primaries are rank-ordered)
+                        break  # entity match — best possible
+                    elif best_primary is None:
+                        best_primary = pid  # fallback to excluded primary
+
+            # Skip items that are already visible as primaries, UNLESS
+            # they belong to an entity group (entity not in top_ids).
+            if parent_id in top_ids and (best_primary is None or best_primary in top_ids):
+                continue
+            seen_parents.add(parent_id)
 
             if best_primary is None:
                 continue
@@ -2589,15 +2603,59 @@ class Keeper:
         # Deep follow: prefer edge-following when edges exist in the store,
         # fall back to tag-following for stores without edges.
         deep_groups: dict[str, list[Item]] = {}
+        injected_entity_ids: set[str] = set()
         if deep and embedding is not None:
             if self._document_store.has_edges(doc_coll):
                 # For similar_to mode, use the anchor item's summary as FTS query
                 deep_query = query if query else ""
+
+                # Entity injection: if query mentions known edge targets
+                # by name, inject them as synthetic primaries so their
+                # edges get traversed even if they didn't rank in search.
+                deep_items = list(items)
+                if deep_query:
+                    # Only consider the top display window as "already present"
+                    _ENTITY_WINDOW = 10
+                    top_ids = {(i.id.split("@")[0] if "@" in i.id else i.id)
+                               for i in items[:_ENTITY_WINDOW]}
+                    tokens = deep_query.replace("?", "").replace(",", "").split()
+                    entity_hits = self._document_store.find_edge_targets(doc_coll, tokens)
+                    # Insert at front so entities are within top_k window
+                    inject_pos = 0
+                    for eid in entity_hits:
+                        if eid not in top_ids:
+                            deep_items.insert(inject_pos, Item(id=eid, summary="", tags={}, score=0.5))
+                            injected_entity_ids.add(eid)
+                            inject_pos += 1
+
+                # Exclude only the top display-window items from deep results
+                # (not injected entities or the full over-fetched pool)
+                _DEEP_EXCLUDE_WINDOW = 10
+                exclude = {
+                    (i.id.split("@")[0] if "@" in i.id else i.id)
+                    for i in items[:_DEEP_EXCLUDE_WINDOW]
+                }
                 deep_groups = self._deep_edge_follow(
-                    items, chroma_coll, doc_coll,
+                    deep_items, chroma_coll, doc_coll,
                     query=deep_query,
                     embedding=embedding,
+                    exclude_ids=exclude,
                 )
+                # Inject entities that produced deep groups into the
+                # primary list so they appear as result items and
+                # pass the final_ids filter in the remapping step.
+                if deep_groups:
+                    item_ids = {(i.id.split("@")[0] if "@" in i.id else i.id)
+                                for i in items}
+                    for gk in deep_groups:
+                        if gk not in item_ids:
+                            head = self._document_store.get(doc_coll, gk)
+                            if head:
+                                items.append(_record_to_item(head, score=0.5))
+                            else:
+                                items.append(Item(
+                                    id=gk, summary="", tags={}, score=0.5,
+                                ))
             else:
                 deep_groups = self._deep_tag_follow(
                     items, chroma_coll, doc_coll, embedding=embedding,
@@ -2692,16 +2750,22 @@ class Keeper:
                 # Include parent ID so version hits match deep group keys
                 if "@" in i.id:
                     final_ids.add(i.id.split("@")[0])
+            # Ensure injected entities pass the filter even if they're
+            # beyond the limit window (they were appended, not ranked)
+            final_ids.update(injected_entity_ids & deep_groups.keys())
             remapped: dict[str, dict[str, Item]] = {}
             for source_id, group in deep_groups.items():
                 # Uplift the group key (source primary) to parent
                 key_parent = source_id.split("@")[0] if "@" in source_id else source_id
+                is_entity_group = key_parent in injected_entity_ids
                 bucket = remapped.setdefault(key_parent, {})
                 # Uplift each deep item to its parent too
                 for item in group:
                     deep_parent_id = item.id.split("@")[0] if "@" in item.id else item.id
-                    # Skip if this deep item IS a final primary result
-                    if deep_parent_id in final_ids:
+                    # Skip if this deep item IS a final primary result —
+                    # UNLESS this is an entity group where overlap is
+                    # intentional (deep_primary_cap handles dedup at render)
+                    if deep_parent_id in final_ids and not is_entity_group:
                         continue
                     if deep_parent_id not in bucket or (item.score or 0) > (bucket[deep_parent_id].score or 0):
                         if "@" in item.id:
@@ -2724,6 +2788,39 @@ class Keeper:
             }
 
         final = items[:limit]
+        # Promote injected entities into the final results so their
+        # deep groups can be rendered.  Replace the lowest-scored
+        # non-entity item to stay within the limit.
+        if deep_groups and injected_entity_ids:
+            final_base_ids = {(i.id.split("@")[0] if "@" in i.id else i.id)
+                              for i in final}
+            for eid in injected_entity_ids:
+                if eid in deep_groups and eid not in final_base_ids:
+                    entity_item = next(
+                        (i for i in items if i.id == eid), None)
+                    if entity_item and final:
+                        # Mark as entity so renderer can prioritize
+                        entity_tags = dict(entity_item.tags) if entity_item.tags else {}
+                        entity_tags["_entity"] = "true"
+                        entity_item = Item(
+                            id=entity_item.id, summary=entity_item.summary,
+                            tags=entity_tags, score=entity_item.score,
+                        )
+                        # Replace the lowest-scored item that has no
+                        # deep group (preserve items that do)
+                        worst_idx = None
+                        worst_score = float('inf')
+                        for idx, fi in enumerate(final):
+                            fi_base = fi.id.split("@")[0] if "@" in fi.id else fi.id
+                            if fi_base not in deep_groups and fi.id not in deep_groups:
+                                if (fi.score or 0) < worst_score:
+                                    worst_score = fi.score or 0
+                                    worst_idx = idx
+                        if worst_idx is not None:
+                            final[worst_idx] = entity_item
+                        else:
+                            # All items have deep groups — append anyway
+                            final.append(entity_item)
         # Enrich tags from SQLite (ChromaDB stores casefolded values;
         # SQLite has the canonical original-case values for display)
         def _enrich_from_sqlite(items_to_enrich):
@@ -2745,6 +2842,9 @@ class Keeper:
                     focus_version = item.tags.get("_focus_version")
                     if focus_version:
                         tags["_focus_version"] = focus_version
+                    entity_marker = item.tags.get("_entity")
+                    if entity_marker:
+                        tags["_entity"] = entity_marker
                     enriched.append(Item(
                         id=item.id, summary=item.summary,
                         tags=tags, score=item.score,

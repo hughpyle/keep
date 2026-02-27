@@ -314,6 +314,83 @@ class TestDeepEdgeFollow:
 
 
 # ---------------------------------------------------------------------------
+# Entity injection: query-mentioned edge targets as synthetic primaries
+# ---------------------------------------------------------------------------
+
+class TestEntityInjection:
+    """Entity names in the query should be injected as primaries for deep."""
+
+    def test_entity_injected_when_named_in_query(self, tmp_path, mock_providers):
+        """Query mentioning 'Melanie' should produce deep groups via her edges."""
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        # Set up: entity Melanie with edges from sessions
+        kp._document_store.upsert(doc_coll, ".tag/speaker", summary="",
+                                  tags={"_inverse": "said"})
+        kp._document_store.upsert(doc_coll, "Melanie", summary="",
+                                  tags={"_source": "auto-vivify"})
+        # Melanie doesn't get an embedding — she won't rank in search
+        for i in range(3):
+            doc_id = f"session-{i}"
+            kp._document_store.upsert(doc_coll, doc_id,
+                                      summary=f"Melanie talked about topic {i}",
+                                      tags={"speaker": "Melanie"})
+            kp._document_store.upsert_edge(
+                doc_coll, doc_id, "speaker", "Melanie", "said",
+                f"2024-01-0{i+1}")
+            kp._store.upsert(chroma_coll, doc_id, [float(i) / 10] * 10,
+                              f"Melanie talked about topic {i}",
+                              tags={"speaker": "melanie"})
+
+        # Also add a non-Melanie doc that will rank in embedding search
+        kp._document_store.upsert(doc_coll, "other-doc",
+                                  summary="Someone discussed books",
+                                  tags={})
+        kp._store.upsert(chroma_coll, "other-doc", [0.1] * 10,
+                          "Someone discussed books", tags={})
+
+        # Verify entity injection plumbing
+        tokens = "What did Melanie talk about".split()
+        entity_hits = kp._document_store.find_edge_targets(doc_coll, tokens)
+        assert "Melanie" in entity_hits, f"find_edge_targets returned {entity_hits}"
+        assert kp._document_store.has_edges(doc_coll)
+
+        results = kp.find("What did Melanie talk about?", deep=True, limit=5)
+        deep_groups = getattr(results, "deep_groups", {})
+
+        # Melanie should appear as a deep group key (injected entity)
+        assert "Melanie" in deep_groups, f"deep_groups keys: {list(deep_groups.keys())}, primaries: {[i.id for i in results]}"
+        deep_ids = [i.id for i in deep_groups["Melanie"]]
+        assert any(d.startswith("session-") for d in deep_ids)
+
+    def test_no_injection_without_entity_match(self, tmp_path, mock_providers):
+        """Query not mentioning any entity should not inject anything extra."""
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        kp._document_store.upsert(doc_coll, ".tag/speaker", summary="",
+                                  tags={"_inverse": "said"})
+        kp._document_store.upsert(doc_coll, "Melanie", summary="",
+                                  tags={"_source": "auto-vivify"})
+        kp._document_store.upsert(doc_coll, "session-0",
+                                  summary="A topic discussion",
+                                  tags={"speaker": "Melanie"})
+        kp._document_store.upsert_edge(
+            doc_coll, "session-0", "speaker", "Melanie", "said", "2024-01-01")
+        kp._store.upsert(chroma_coll, "session-0", [0.1] * 10,
+                          "A topic discussion", tags={"speaker": "melanie"})
+
+        results = kp.find("general topic query", deep=True, limit=5)
+        deep_groups = getattr(results, "deep_groups", {})
+
+        # "Melanie" should NOT be a group key (not mentioned in query)
+        assert "Melanie" not in deep_groups
+
+
+# ---------------------------------------------------------------------------
 # find(deep=True) integration — edge vs tag fallback
 # ---------------------------------------------------------------------------
 
