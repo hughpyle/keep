@@ -256,9 +256,10 @@ def render_find_context(
         line = f"- {item.id}"
         if item.score is not None:
             line += f" ({item.score:.2f})"
-        date = item.tags.get("_updated_date", "")
+        date = (item.tags.get("_created") or
+                item.tags.get("_updated", ""))[:10]
         if date:
-            line += f"  {date}"
+            line += f"  [{date}]"
         line += f"  {display_summary}"
         remaining -= _tok(line)
         rendered.append((item, [line]))
@@ -317,11 +318,9 @@ def render_find_context(
                     for v in versions:
                         if remaining <= 0:
                             break
-                        vdate = v.tags.get("_updated_date") or v.tags.get(
-                            "_created", "")
-                        if vdate and "T" in vdate:
-                            vdate = vdate.split("T")[0]
-                        date_part = f"  {vdate}" if vdate else ""
+                        vdate = (v.tags.get("_created") or
+                                v.tags.get("_updated", ""))[:10]
+                        date_part = f"  [{vdate}]" if vdate else ""
                         vl = f"  - @V{{{v.version}}}{date_part}  {v.summary}"
                         block_lines.append(vl)
                         remaining -= _tok(vl)
@@ -337,7 +336,10 @@ def render_find_context(
                 if deep_item.id in seen_deep:
                     continue
                 seen_deep.add(deep_item.id)
-                dl = f"    - {deep_item.id}  {deep_item.summary}"
+                ddate = (deep_item.tags.get("_created") or
+                         deep_item.tags.get("_updated", ""))[:10]
+                ddate_part = f"  [{ddate}]" if ddate else ""
+                dl = f"    - {deep_item.id}{ddate_part}  {deep_item.summary}"
                 block_lines.append(dl)
                 remaining -= _tok(dl)
 

@@ -38,7 +38,8 @@ class TestRenderFindContext:
 
     def test_date_included(self):
         from keep.cli import render_find_context
-        items = [_item(id="a", summary="Dated", tags={"_updated_date": "2026-01-15"})]
+        items = [_item(id="a", summary="Dated",
+                       tags={"_created": "2026-01-15T12:00:00"})]
         result = render_find_context(items)
         assert "2026-01-15" in result
 

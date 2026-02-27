@@ -542,7 +542,7 @@ class TestKeepPrompt:
             prompt="{find}",
         )
         result = await keep_prompt(name="query", text="test")
-        assert "2026-02-20" in result
+        assert "2023-10-15" in result  # _created date, not _updated_date
         assert "%abc" in result
 
 
