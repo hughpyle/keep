@@ -1,4 +1,18 @@
 
+* edge-tags: query-time union
+    One slightly odd behavior:
+        - create foo: inverse bar
+        - tag a bunch of things with foo:X
+        - tag X ecplicitly with bar:Z - you can only do once
+    and, which node gets the "multi-valued-ness" of the implicit inverse?
+        (they both do, really - it really *is* N:N not 1:N, but only halfway)
+
+* clearer distinction of "meta-tags" and "edge-tags": usecase examples
+
+* more edge tags for linking "artifacts" with "notes"
+
+* edge migration over versioning and move
+
 * blog: the unreasonable "as if";
     experience building software with agents as mirrors;
 
