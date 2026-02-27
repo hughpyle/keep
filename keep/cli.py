@@ -674,10 +674,13 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None, show_ta
         deep_groups = getattr(items, "deep_groups", {})
 
         def _item_dict(item):
+            from .types import SYSTEM_TAG_PREFIX
+            user_tags = {k: v for k, v in item.tags.items()
+                         if not k.startswith(SYSTEM_TAG_PREFIX)}
             return {
                 "id": item.id,
                 "summary": item.summary,
-                "tags": _filter_display_tags(item.tags),
+                "tags": user_tags,
                 "score": item.score,
                 "created": item.created,
                 "updated": item.updated,
