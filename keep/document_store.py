@@ -1260,6 +1260,34 @@ class DocumentStore:
 
         return versions
 
+    def list_versions_around(
+        self,
+        collection: str,
+        id: str,
+        version: int,
+        radius: int = 2,
+    ) -> list[VersionInfo]:
+        """Return versions within `radius` of `version`, in chronological order.
+
+        Fetches up to `radius` versions before and after the specified version
+        number, useful for showing surrounding context when a version is hit
+        during search.
+        """
+        cursor = self._conn.execute("""
+            SELECT version, summary, tags_json, content_hash, created_at
+            FROM document_versions
+            WHERE id = ? AND collection = ? AND version BETWEEN ? AND ?
+            ORDER BY version ASC
+        """, (id, collection, version - radius, version + radius))
+
+        return [VersionInfo(
+            version=row["version"],
+            summary=row["summary"],
+            tags=json.loads(row["tags_json"]),
+            created_at=row["created_at"],
+            content_hash=row["content_hash"],
+        ) for row in cursor]
+
     def get_version_nav(
         self,
         collection: str,

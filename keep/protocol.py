@@ -161,6 +161,13 @@ class KeeperProtocol(Protocol):
         limit: int = 10,
     ) -> list[VersionInfo]: ...
 
+    def list_versions_around(
+        self,
+        id: str,
+        version: int,
+        radius: int = 2,
+    ) -> list[VersionInfo]: ...
+
     def get_version_nav(
         self,
         id: str,
@@ -413,6 +420,10 @@ class DocumentStoreProtocol(Protocol):
 
     def list_versions(
         self, collection: str, id: str, limit: int = 10
+    ) -> list[VersionInfo]: ...
+
+    def list_versions_around(
+        self, collection: str, id: str, version: int, radius: int = 2,
     ) -> list[VersionInfo]: ...
 
     def get_version_nav(

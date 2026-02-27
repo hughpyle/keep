@@ -39,12 +39,14 @@ class TestRenderFindContext:
         assert "2026-01-15" in result
 
     def test_focus_summary_rendered(self):
+        """Focus summary replaces parent summary on the primary line."""
         from keep.cli import render_find_context
         items = [_item(id="a", summary="Parent doc",
                        tags={"_updated_date": "2026-02-20",
                              "_focus_summary": "The matching part content"})]
         result = render_find_context(items)
-        assert "> The matching part content" in result
+        assert "The matching part content" in result
+        assert "Parent doc" not in result
 
     def test_budget_limits_items(self):
         """With a very small budget, only the first item should appear."""

@@ -222,10 +222,17 @@ def render_find_context(
 ) -> str:
     """Render find results for prompt injection, filling a token budget.
 
-    Progressive detail per item: summary → focus → tags → parts → versions.
+    Two-pass rendering:
+      Pass 1: Lay down summary lines for all items (breadth-first).
+      Pass 2: If enough summaries (>=5) and remaining budget, backfill
+              detail (parts, versions, deep items) starting from the
+              top-scoring item.
+
     Used by expand_prompt() for {find} expansion and MCP keep_find.
     """
     from .types import SYSTEM_TAG_PREFIX
+
+    _MIN_ITEMS_FOR_DETAIL = 5
 
     def _tok(text: str) -> int:
         return len(text) // 4
@@ -235,88 +242,106 @@ def render_find_context(
 
     deep_groups = getattr(items, "deep_groups", {})
     remaining = token_budget
-    blocks: list[str] = []
-    seen_deep: set[str] = set()  # dedup deep items across primaries
+
+    # Pass 1: summary lines for every item that fits
+    # Each entry: (item, [lines_so_far])
+    rendered: list[tuple["Item", list[str]]] = []
 
     for item in items:
         if remaining <= 0:
             break
 
-        block_lines: list[str] = []
-
-        # Layer 0: summary line (always included if any budget remains)
+        focus = item.tags.get("_focus_summary")
+        display_summary = focus if focus else item.summary
         line = f"- {item.id}"
         if item.score is not None:
             line += f" ({item.score:.2f})"
         date = item.tags.get("_updated_date", "")
         if date:
             line += f"  {date}"
-        line += f"  {item.summary}"
-        block_lines.append(line)
+        line += f"  {display_summary}"
         remaining -= _tok(line)
+        rendered.append((item, [line]))
 
-        # Layer 1: focus summary (from part-uplifted items)
-        focus = item.tags.get("_focus_summary")
-        if focus and remaining > 0:
-            fl = f"  > {focus}"
-            block_lines.append(fl)
-            remaining -= _tok(fl)
+    # Pass 2: backfill detail if we have enough summaries and budget
+    if len(rendered) >= _MIN_ITEMS_FOR_DETAIL and keeper and remaining > 0:
+        seen_deep: set[str] = set()
 
-        # Layer 1b: user tags
-        if show_tags and remaining > 0:
-            user_tags = {k: v for k, v in item.tags.items()
-                         if not k.startswith(SYSTEM_TAG_PREFIX)}
-            if user_tags:
-                pairs = ", ".join(f"{k}: {v}" for k, v in sorted(user_tags.items()))
-                tl = f"  {{{pairs}}}"
-                block_lines.append(tl)
-                remaining -= _tok(tl)
-
-        # Layer 2: part summaries (skip the focused part — already shown above)
-        if keeper and remaining > 30:
-            focus_part = item.tags.get("_focus_part")
-            parts = keeper.list_parts(item.id)
-            other_parts = [p for p in parts
-                           if not focus_part or str(p.part_num) != str(focus_part)]
-            if other_parts:
-                block_lines.append("  Key topics:")
-                remaining -= 4  # "  Key topics:\n"
-                for p in other_parts:
-                    if remaining <= 0:
-                        break
-                    pl = f"  - {p.summary}"
-                    block_lines.append(pl)
-                    remaining -= _tok(pl)
-
-        # Layer 3: version summaries
-        if keeper and remaining > 30:
-            versions = keeper.list_versions(item.id, limit=5)
-            if versions:
-                block_lines.append("  Previous versions:")
-                remaining -= 5
-                for v in reversed(versions):  # chronological (oldest first)
-                    if remaining <= 0:
-                        break
-                    vl = f"  - @V{{{v.version}}} {v.summary}"
-                    block_lines.append(vl)
-                    remaining -= _tok(vl)
-
-        # Deep sub-items under this primary (skip already-rendered ones)
-        parent_id = item.id.split("@")[0] if "@" in item.id else item.id
-        group = deep_groups.get(parent_id, []) or deep_groups.get(item.id, [])
-        for deep_item in group:
+        for item, block_lines in rendered:
             if remaining <= 0:
                 break
-            if deep_item.id in seen_deep:
-                continue
-            seen_deep.add(deep_item.id)
-            dl = f"    - {deep_item.id}  {deep_item.summary}"
-            block_lines.append(dl)
-            remaining -= _tok(dl)
 
-        blocks.append("\n".join(block_lines))
+            # User tags
+            if show_tags and remaining > 0:
+                user_tags = {k: v for k, v in item.tags.items()
+                             if not k.startswith(SYSTEM_TAG_PREFIX)}
+                if user_tags:
+                    pairs = ", ".join(
+                        f"{k}: {v}" for k, v in sorted(user_tags.items()))
+                    tl = f"  {{{pairs}}}"
+                    block_lines.append(tl)
+                    remaining -= _tok(tl)
 
-    return "\n".join(blocks)
+            # Part summaries (skip the focused part — already shown above)
+            if remaining > 30:
+                focus_part = item.tags.get("_focus_part")
+                parts = keeper.list_parts(item.id)
+                other_parts = [
+                    p for p in parts
+                    if not focus_part
+                    or str(p.part_num) != str(focus_part)
+                ]
+                if other_parts:
+                    block_lines.append("  Key topics:")
+                    remaining -= 4
+                    for p in other_parts:
+                        if remaining <= 0:
+                            break
+                        pl = f"  - {p.summary}"
+                        block_lines.append(pl)
+                        remaining -= _tok(pl)
+
+            # Version summaries (surrounding hit or recent)
+            if remaining > 30:
+                focus_version = item.tags.get("_focus_version")
+                if focus_version and focus_version.isdigit():
+                    versions = keeper.list_versions_around(
+                        item.id, int(focus_version), radius=2,
+                    )
+                else:
+                    versions = keeper.list_versions(item.id, limit=5)
+                    versions = list(reversed(versions))
+                if versions:
+                    block_lines.append("  Context:")
+                    remaining -= 4
+                    for v in versions:
+                        if remaining <= 0:
+                            break
+                        vdate = v.tags.get("_updated_date") or v.tags.get(
+                            "_created", "")
+                        if vdate and "T" in vdate:
+                            vdate = vdate.split("T")[0]
+                        date_part = f"  {vdate}" if vdate else ""
+                        vl = f"  - @V{{{v.version}}}{date_part}  {v.summary}"
+                        block_lines.append(vl)
+                        remaining -= _tok(vl)
+
+            # Deep sub-items
+            parent_id = (item.id.split("@")[0]
+                         if "@" in item.id else item.id)
+            group = (deep_groups.get(parent_id, [])
+                     or deep_groups.get(item.id, []))
+            for deep_item in group:
+                if remaining <= 0:
+                    break
+                if deep_item.id in seen_deep:
+                    continue
+                seen_deep.add(deep_item.id)
+                dl = f"    - {deep_item.id}  {deep_item.summary}"
+                block_lines.append(dl)
+                remaining -= _tok(dl)
+
+    return "\n".join("\n".join(lines) for _, lines in rendered)
 
 
 def _render_frontmatter(ctx: ItemContext) -> str:

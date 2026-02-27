@@ -2475,6 +2475,26 @@ class Keeper:
                     seen_parents[parent_id] = len(uplifted) - 1
                 else:
                     uplifted.append(item)  # Parent gone — keep raw part
+            elif "@v" in item.id:
+                # Version hit — uplift to parent, preserving hit version
+                parent_id = item.id.rsplit("@v", 1)[0]
+                version_str = item.id.rsplit("@v", 1)[1]
+                if parent_id in seen_parents:
+                    continue
+                parent_doc = self._document_store.get(doc_coll, parent_id)
+                if parent_doc:
+                    parent_item = _record_to_item(parent_doc)
+                    parent_tags = dict(parent_item.tags)
+                    if version_str.isdigit():
+                        parent_tags["_focus_version"] = version_str
+                        parent_tags["_focus_summary"] = item.summary
+                    uplifted.append(Item(
+                        id=parent_id, summary=parent_item.summary,
+                        tags=parent_tags, score=item.score,
+                    ))
+                    seen_parents[parent_id] = len(uplifted) - 1
+                else:
+                    uplifted.append(item)  # Parent gone — keep raw version
             else:
                 # Regular document — dedup against uplifted parents
                 if item.id in seen_parents:
@@ -2543,6 +2563,9 @@ class Keeper:
                     focus_summary = item.tags.get("_focus_summary")
                     if focus_summary:
                         tags["_focus_summary"] = focus_summary
+                    focus_version = item.tags.get("_focus_version")
+                    if focus_version:
+                        tags["_focus_version"] = focus_version
                     enriched.append(Item(
                         id=item.id, summary=item.summary,
                         tags=tags, score=item.score,
@@ -3249,6 +3272,23 @@ class Keeper:
         id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
         return self._document_store.list_versions(doc_coll, id, limit)
+
+    def list_versions_around(
+        self,
+        id: str,
+        version: int,
+        radius: int = 2,
+    ) -> list[VersionInfo]:
+        """Return versions within `radius` of `version`, in chronological order.
+
+        Useful for showing surrounding context when a specific version was
+        matched during search.
+        """
+        id = normalize_id(id)
+        doc_coll = self._resolve_doc_collection()
+        return self._document_store.list_versions_around(
+            doc_coll, id, version, radius,
+        )
 
     def get_version_nav(
         self,

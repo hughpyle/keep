@@ -491,6 +491,18 @@ class RemoteKeeper:
         resp = self._get(f"/v1/notes/{self._q(id)}/versions", limit=limit)
         return [self._to_version_info(v) for v in resp.get("versions", [])]
 
+    def list_versions_around(
+        self,
+        id: str,
+        version: int,
+        radius: int = 2,
+    ) -> list[VersionInfo]:
+        resp = self._get(
+            f"/v1/notes/{self._q(id)}/versions",
+            around=version, radius=radius,
+        )
+        return [self._to_version_info(v) for v in resp.get("versions", [])]
+
     def get_version_nav(
         self,
         id: str,
