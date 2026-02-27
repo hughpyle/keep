@@ -188,8 +188,8 @@ class TestDeepPrimaryCap:
         # Deep items get budget
         assert "deep-a" in result or "deep-b" in result
 
-    def test_cap_skips_pass2(self):
-        """With deep_primary_cap, pass 2 (parts/versions) should be skipped."""
+    def test_cap_renders_deep_before_detail(self):
+        """With deep_primary_cap, deep items render before parts/versions."""
         from keep.cli import render_find_context
         from keep.api import FindResults
 
@@ -210,11 +210,12 @@ class TestDeepPrimaryCap:
         result = render_find_context(
             results, keeper=keeper, token_budget=5000, deep_primary_cap=3,
         )
-        # Parts should NOT appear (pass 2 skipped)
-        assert "Key topics:" not in result
-        assert "Overview of the topic" not in result
         # Deep items should appear
         assert "deep-x" in result
+        # With remaining budget, parts should also appear
+        assert "Key topics:" in result
+        # Deep items come before parts in the output
+        assert result.index("deep-x") < result.index("Key topics:")
 
     def test_no_cap_without_deep_groups(self):
         """Without deep groups, deep_primary_cap has no effect."""

@@ -292,10 +292,44 @@ def render_find_context(
                 remaining += _tok(line)
         rendered = rendered[:deep_primary_cap]
 
-    # Pass 2: backfill parts + versions (depth on known-relevant docs).
-    # Skipped when deep_primary_cap is set — budget is reserved for deep items.
-    skip_pass2 = deep_primary_cap is not None and deep_groups
-    if not skip_pass2 and len(rendered) >= _MIN_ITEMS_FOR_DETAIL and keeper and remaining > 0:
+    # Pass 2: deep sub-items, ranked by score across all groups.
+    # Runs before detail backfill so deep evidence gets budget priority.
+    if deep_groups and remaining > 0:
+        # Build a flat list of (deep_item, parent_block_lines) ranked by score
+        rendered_map = {}
+        for item, block_lines in rendered:
+            parent_id = (item.id.split("@")[0]
+                         if "@" in item.id else item.id)
+            rendered_map[parent_id] = block_lines
+            rendered_map[item.id] = block_lines
+
+        ranked_deep: list[tuple[float, "Item", list[str]]] = []
+        for group_key, group in deep_groups.items():
+            block_lines = rendered_map.get(group_key)
+            if not block_lines:
+                continue
+            for deep_item in group:
+                ranked_deep.append(
+                    (deep_item.score or 0, deep_item, block_lines))
+        ranked_deep.sort(key=lambda t: t[0], reverse=True)
+
+        seen_deep: set[str] = set()
+        for _score, deep_item, block_lines in ranked_deep:
+            if remaining <= 0:
+                break
+            if deep_item.id in seen_deep:
+                continue
+            seen_deep.add(deep_item.id)
+            ddate = (deep_item.tags.get("_created") or
+                     deep_item.tags.get("_updated", ""))[:10]
+            ddate_part = f"  [{ddate}]" if ddate else ""
+            dl = f"    - {deep_item.id}{ddate_part}  {deep_item.summary}"
+            block_lines.append(dl)
+            remaining -= _tok(dl)
+
+    # Pass 3: backfill parts + versions on remaining budget.
+    # For deep mode this runs after deep items; otherwise after summaries.
+    if len(rendered) >= _MIN_ITEMS_FOR_DETAIL and keeper and remaining > 0:
         for item, block_lines in rendered:
             if remaining <= 0:
                 break
@@ -352,41 +386,6 @@ def render_find_context(
                         vl = f"  - @V{{{v.version}}}{date_part}  {v.summary}"
                         block_lines.append(vl)
                         remaining -= _tok(vl)
-
-    # Pass 3: deep sub-items, ranked by score across all groups.
-    # Added last so they never displace primary detail (parts/versions).
-    if deep_groups and remaining > 0:
-        # Build a flat list of (deep_item, parent_block_lines) ranked by score
-        rendered_map = {}
-        for item, block_lines in rendered:
-            parent_id = (item.id.split("@")[0]
-                         if "@" in item.id else item.id)
-            rendered_map[parent_id] = block_lines
-            rendered_map[item.id] = block_lines
-
-        ranked_deep: list[tuple[float, "Item", list[str]]] = []
-        for group_key, group in deep_groups.items():
-            block_lines = rendered_map.get(group_key)
-            if not block_lines:
-                continue
-            for deep_item in group:
-                ranked_deep.append(
-                    (deep_item.score or 0, deep_item, block_lines))
-        ranked_deep.sort(key=lambda t: t[0], reverse=True)
-
-        seen_deep: set[str] = set()
-        for _score, deep_item, block_lines in ranked_deep:
-            if remaining <= 0:
-                break
-            if deep_item.id in seen_deep:
-                continue
-            seen_deep.add(deep_item.id)
-            ddate = (deep_item.tags.get("_created") or
-                     deep_item.tags.get("_updated", ""))[:10]
-            ddate_part = f"  [{ddate}]" if ddate else ""
-            dl = f"    - {deep_item.id}{ddate_part}  {deep_item.summary}"
-            block_lines.append(dl)
-            remaining -= _tok(dl)
 
     return "\n".join("\n".join(lines) for _, lines in rendered)
 

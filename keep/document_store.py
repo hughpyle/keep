@@ -2562,21 +2562,32 @@ class DocumentStore:
         return [(r["predicate"], r["target_id"], r["created"]) for r in rows]
 
     def find_edge_targets(
-        self, collection: str, names: list[str],
+        self, collection: str, query: str,
     ) -> list[str]:
-        """Return edge target IDs that match any of *names* (case-insensitive).
+        """Return edge target IDs whose names appear in *query*.
 
-        Used for entity injection: query tokens are matched against known
-        edge targets to surface entities the user mentioned by name.
+        Uses word-boundary matching so multi-word names work and
+        partial matches are avoided (e.g. "Sam" won't match "Sample").
+
+        Used for entity injection: surface entities the user mentioned
+        by name so their edges get traversed.
         """
-        if not names:
+        import re
+
+        if not query:
             return []
-        lower_names = {n.lower() for n in names}
+        query_lower = query.lower()
         rows = self._conn.execute(
             "SELECT DISTINCT target_id FROM edges WHERE collection = ?",
             (collection,),
         ).fetchall()
-        return [r[0] for r in rows if r[0].lower() in lower_names]
+        hits = []
+        for (target_id,) in rows:
+            # Word-boundary match: handles punctuation, possessives, etc.
+            pattern = r'\b' + re.escape(target_id.lower()) + r'\b'
+            if re.search(pattern, query_lower):
+                hits.append(target_id)
+        return hits
 
     def has_edges(self, collection: str) -> bool:
         """Return True if *collection* has any edges at all."""

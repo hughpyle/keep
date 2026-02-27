@@ -177,8 +177,8 @@ class TestDeepEdgeFollow:
         assert any(d.startswith("session-") for d in deep_ids)
         assert "unrelated" not in deep_ids
 
-    def test_edge_follow_max_per_group(self, keeper):
-        """Deep groups should be capped at max_per_group."""
+    def test_edge_follow_returns_all_candidates(self, keeper):
+        """Deep groups should return all matching candidates (renderer caps via budget)."""
         doc_coll = keeper._resolve_doc_collection()
         chroma_coll = keeper._resolve_chroma_collection()
 
@@ -189,11 +189,11 @@ class TestDeepEdgeFollow:
         groups = keeper._deep_edge_follow(
             primary, chroma_coll, doc_coll,
             query="topic", embedding=embedding,
-            max_per_group=2,
         )
 
         assert "Melanie" in groups
-        assert len(groups["Melanie"]) <= 2
+        # All 5 sessions should be returned (no per-group cap)
+        assert len(groups["Melanie"]) == 5
 
     def test_edge_follow_no_edges_returns_empty(self, keeper):
         """Primary without edges should produce no groups."""
@@ -352,8 +352,7 @@ class TestEntityInjection:
                           "Someone discussed books", tags={})
 
         # Verify entity injection plumbing
-        tokens = "What did Melanie talk about".split()
-        entity_hits = kp._document_store.find_edge_targets(doc_coll, tokens)
+        entity_hits = kp._document_store.find_edge_targets(doc_coll, "What did Melanie talk about")
         assert "Melanie" in entity_hits, f"find_edge_targets returned {entity_hits}"
         assert kp._document_store.has_edges(doc_coll)
 

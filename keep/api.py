@@ -2323,7 +2323,6 @@ class Keeper:
         query: str,
         embedding: list[float],
         top_k: int = 10,
-        max_per_group: int = 5,
         exclude_ids: set[str] | None = None,
     ) -> dict[str, list[Item]]:
         """Follow inverse edges from primary results to discover related items.
@@ -2333,11 +2332,13 @@ class Keeper:
         (FTS pre-filter + embedding post-filter + RRF fusion) over only
         those candidates to surface relevant evidence.
 
+        Returns all candidates per group — the renderer caps output via
+        token budget.
+
         Args:
             query: Original search query text (used for FTS pre-filter).
             embedding: Query embedding vector.
             top_k: Number of top primary items to follow edges from.
-            max_per_group: Max deep items per primary.
             exclude_ids: IDs to exclude from deep results (e.g. items
                 the user will already see as primaries).
 
@@ -2404,32 +2405,24 @@ class Keeper:
         )
         fts_items = [Item(id=r[0], summary=r[1]) for r in fts_rows]
 
-        # Extract base doc IDs from FTS hits for embedding post-filter
-        fts_hit_ids: set[str] = set()
-        for r in fts_rows:
-            base = r[0].split("@")[0] if "@" in r[0] else r[0]
-            fts_hit_ids.add(base)
-
-        # 3. Embedding search — post-filter to source IDs
-        #    If FTS found hits, narrow embedding to FTS-matched IDs;
-        #    otherwise search all source IDs (semantic-only fallback)
-        filter_ids = fts_hit_ids if fts_hit_ids else all_source_ids
-        sem_fetch = max(len(filter_ids) * 3, 200)
+        # 3. Embedding search — post-filter to ALL edge source IDs.
+        #    Unlike FTS (which is cheap enough to scope), embedding
+        #    search queries the full collection and post-filters.
+        sem_fetch = max(len(all_source_ids) * 3, 200)
         sem_results = self._store.query_embedding(
             chroma_coll, embedding, limit=sem_fetch,
         )
-        # Post-filter to source IDs (ChromaDB has no ID pre-filter)
         sem_items = []
         for r in sem_results:
             base = r.id.split("@")[0] if "@" in r.id else r.id
-            if base in filter_ids:
+            if base in all_source_ids:
                 sem_items.append(r.to_item())
 
         sem_items = self._apply_recency_decay(sem_items)
 
-        logger.debug("Deep edge follow: sources=%s fts=%d sem=%d filter=%s top=%s",
-                     all_source_ids, len(fts_items), len(sem_items),
-                     filter_ids, top_ids)
+        logger.debug("Deep edge follow: sources=%d fts=%d sem=%d top=%s",
+                     len(all_source_ids), len(fts_items), len(sem_items),
+                     top_ids)
 
         # 4. RRF fuse scoped FTS + embedding results
         if fts_items and sem_items:
@@ -2487,10 +2480,6 @@ class Keeper:
                 )
             groups.setdefault(best_primary, []).append(scored)
 
-        # 6. Cap per group
-        for pid in groups:
-            groups[pid] = groups[pid][:max_per_group]
-
         return groups
 
     def find(
@@ -2533,6 +2522,20 @@ class Keeper:
 
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
+
+        # Deep search needs edges (created by tag definitions with
+        # _inverse).  Ensure system-doc migration has run and, if it
+        # enqueued edge-backfill tasks, process them synchronously so
+        # edges are available for this query.
+        if deep and self._needs_sysdoc_migration:
+            self._needs_sysdoc_migration = False
+            try:
+                self._migrate_system_documents()
+                # Drain any edge-backfill tasks that migration enqueued
+                # so edges are ready for this search.
+                self._flush_edge_backfill(doc_coll)
+            except Exception as e:
+                logger.warning("System doc migration deferred: %s", e)
 
         embedding = None  # Set in semantic/similar_to branches
 
@@ -2618,8 +2621,7 @@ class Keeper:
                     _ENTITY_WINDOW = 10
                     top_ids = {(i.id.split("@")[0] if "@" in i.id else i.id)
                                for i in items[:_ENTITY_WINDOW]}
-                    tokens = deep_query.replace("?", "").replace(",", "").split()
-                    entity_hits = self._document_store.find_edge_targets(doc_coll, tokens)
+                    entity_hits = self._document_store.find_edge_targets(doc_coll, deep_query)
                     # Insert at front so entities are within top_k window
                     inject_pos = 0
                     for eid in entity_hits:
@@ -2628,13 +2630,16 @@ class Keeper:
                             injected_entity_ids.add(eid)
                             inject_pos += 1
 
-                # Exclude only the top display-window items from deep results
-                # (not injected entities or the full over-fetched pool)
-                _DEEP_EXCLUDE_WINDOW = 10
-                exclude = {
-                    (i.id.split("@")[0] if "@" in i.id else i.id)
-                    for i in items[:_DEEP_EXCLUDE_WINDOW]
-                }
+                # Exclude only a few top primaries from deep results.
+                # With deep_primary_cap, most primaries get dropped so
+                # they should remain available as deep sub-items.
+                # Entities are never excluded (they're the group hubs).
+                _DEEP_EXCLUDE = 3
+                exclude = set()
+                for i in items[:_DEEP_EXCLUDE]:
+                    pid = i.id.split("@")[0] if "@" in i.id else i.id
+                    if pid not in injected_entity_ids:
+                        exclude.add(pid)
                 deep_groups = self._deep_edge_follow(
                     deep_items, chroma_coll, doc_coll,
                     query=deep_query,
@@ -2780,9 +2785,8 @@ class Keeper:
                                 bucket[deep_parent_id] = item
                         else:
                             bucket[deep_parent_id] = item
-            max_deep_per_group = 5
             deep_groups = {
-                pid: sorted(bucket.values(), key=lambda x: x.score or 0, reverse=True)[:max_deep_per_group]
+                pid: sorted(bucket.values(), key=lambda x: x.score or 0, reverse=True)
                 for pid, bucket in remapped.items()
                 if pid in final_ids
             }
@@ -5144,6 +5148,41 @@ class Keeper:
                 summary=item.content,
                 tags=casefold_tags_for_index(doc.tags),
             )
+
+    def _flush_edge_backfill(self, doc_coll: str) -> None:
+        """Synchronously backfill edges for tag docs with _inverse.
+
+        Called from find(deep=True) after system-doc migration so that
+        newly-created tag definitions produce edges before the search
+        runs.  Finds incomplete backfills and runs them inline.
+        """
+        # Find tag docs with _inverse that haven't been backfilled yet
+        tag_docs = self._document_store.query_by_id_prefix(doc_coll, ".tag/")
+        for td in tag_docs:
+            inverse = td.tags.get("_inverse")
+            if not inverse:
+                continue
+            predicate = td.id[5:]  # strip ".tag/"
+            if "/" in predicate:
+                continue  # sub-tags like .tag/act/commitment
+            if self._document_store.get_backfill_status(doc_coll, predicate):
+                continue
+            # Build a synthetic pending item for the backfill processor
+            from .pending_summaries import PendingSummary
+            synthetic = PendingSummary(
+                id=f"_backfill:{predicate}",
+                collection=doc_coll,
+                content="",
+                queued_at="",
+                attempts=1,
+                task_type="backfill-edges",
+                metadata={"predicate": predicate, "inverse": inverse},
+            )
+            try:
+                logger.info("Inline edge backfill: %s → %s", predicate, inverse)
+                self._process_pending_backfill_edges(synthetic)
+            except Exception as e:
+                logger.warning("Edge backfill failed for %s: %s", predicate, e)
 
     def _process_pending_backfill_edges(self, item) -> None:
         """Process a backfill-edges task: populate edges for all docs with a given tag.

@@ -640,13 +640,20 @@ class MockDocumentStore:
             ordered.extend(items)
         return ordered
 
-    def find_edge_targets(self, collection: str, names: list[str]) -> list[str]:
+    def find_edge_targets(self, collection: str, query: str) -> list[str]:
+        import re
         self.__init_edges()
-        lower_names = {n.lower() for n in names}
-        targets = {
-            e["target_id"] for e in self._edges
-            if e["collection"] == collection and e["target_id"].lower() in lower_names
-        }
+        if not query:
+            return []
+        query_lower = query.lower()
+        targets = set()
+        for e in self._edges:
+            if e["collection"] != collection:
+                continue
+            tid = e["target_id"]
+            pattern = r'\b' + re.escape(tid.lower()) + r'\b'
+            if re.search(pattern, query_lower):
+                targets.add(tid)
         return list(targets)
 
     def has_edges(self, collection: str) -> bool:
