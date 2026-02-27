@@ -219,14 +219,20 @@ def render_find_context(
     keeper=None,
     token_budget: int = 4000,
     show_tags: bool = False,
+    deep_primary_cap: int | None = None,
 ) -> str:
     """Render find results for prompt injection, filling a token budget.
 
-    Two-pass rendering:
+    Three-pass rendering:
       Pass 1: Lay down summary lines for all items (breadth-first).
       Pass 2: If enough summaries (>=2) and remaining budget, backfill
-              detail (parts, versions, deep items) starting from the
-              top-scoring item.
+              detail (parts, versions) starting from the top-scoring item.
+      Pass 3: Deep sub-items ranked by score from leftover budget.
+
+    When *deep_primary_cap* is set and deep groups exist, only the top N
+    primaries are rendered (preferring those with deep groups) and pass 2
+    is skipped — this gives maximum budget to deep-discovered evidence,
+    useful for multi-hop queries.
 
     Used by expand_prompt() for {find} expansion and MCP keep_find.
     """
@@ -264,8 +270,26 @@ def render_find_context(
         remaining -= _tok(line)
         rendered.append((item, [line]))
 
-    # Pass 2: backfill parts + versions (depth on known-relevant docs)
-    if len(rendered) >= _MIN_ITEMS_FOR_DETAIL and keeper and remaining > 0:
+    # When deep_primary_cap is set, truncate primaries to top N (prefer
+    # those with deep groups) and skip pass 2 — budget goes to deep items.
+    if deep_primary_cap is not None and deep_groups and len(rendered) > deep_primary_cap:
+        # Sort: items with deep groups first, then by original order
+        has_deep = set()
+        for item, _ in rendered:
+            pid = item.id.split("@")[0] if "@" in item.id else item.id
+            if pid in deep_groups or item.id in deep_groups:
+                has_deep.add(item.id)
+        rendered.sort(key=lambda t: (t[0].id not in has_deep,))
+        # Reclaim budget from dropped items
+        for _, block_lines in rendered[deep_primary_cap:]:
+            for line in block_lines:
+                remaining += _tok(line)
+        rendered = rendered[:deep_primary_cap]
+
+    # Pass 2: backfill parts + versions (depth on known-relevant docs).
+    # Skipped when deep_primary_cap is set — budget is reserved for deep items.
+    skip_pass2 = deep_primary_cap is not None and deep_groups
+    if not skip_pass2 and len(rendered) >= _MIN_ITEMS_FOR_DETAIL and keeper and remaining > 0:
         for item, block_lines in rendered:
             if remaining <= 0:
                 break
@@ -1624,10 +1648,12 @@ def expand_prompt(result: "PromptResult", kp=None) -> str:
     """Expand {get}, {find}, {find:deep}, {text}, {since}, {until} placeholders in a prompt template.
 
     The {find} placeholder supports optional modifiers:
-      {find}            — use default token budget
-      {find:deep}       — deep search (handled upstream)
-      {find:8000}       — override token budget to 8000
-      {find:deep:8000}  — both deep and budget override
+      {find}                — use default token budget
+      {find:deep}           — deep search (handled upstream)
+      {find:8000}           — override token budget to 8000
+      {find:deep:8000}      — both deep and budget override
+      {find:deep:cap3:8000} — deep with primary cap (suppress primary detail,
+                              favor deep items) and budget override
     """
     output = result.prompt
 
@@ -1639,16 +1665,19 @@ def expand_prompt(result: "PromptResult", kp=None) -> str:
     output = output.replace("{get}", get_rendered)
 
     # Expand {find} variants with token-budgeted context.
-    # Parse budget from placeholder: {find:deep:8000}, {find:8000}, {find:deep}, {find}
-    _find_re = re.compile(r'\{find(?::deep)?(?::(\d+))?\}')
+    # Syntax: {find[:deep][:capN][:budget]}
+    _find_re = re.compile(r'\{find(?::deep)?(?::cap(\d+))?(?::(\d+))?\}')
     def _expand_find(m):
         if not result.search_results:
             return ""
-        budget_str = m.group(1)
+        cap_str = m.group(1)
+        budget_str = m.group(2)
+        cap = int(cap_str) if cap_str else None
         budget = int(budget_str) if budget_str else result.token_budget
         return render_find_context(
             result.search_results, keeper=kp,
             token_budget=budget,
+            deep_primary_cap=cap,
         )
     output = _find_re.sub(_expand_find, output)
 

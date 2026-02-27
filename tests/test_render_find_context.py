@@ -153,6 +153,100 @@ class TestExpandPromptFindBudget:
         assert "{find}" not in output
 
 
+class TestDeepPrimaryCap:
+    """Tests for deep_primary_cap — suppressing primaries in favor of deep items."""
+
+    def test_cap_placeholder_syntax(self):
+        """The {find:deep:cap3:8000} syntax should be parsed and expanded."""
+        from keep.cli import expand_prompt
+        result = PromptResult(
+            context=None,
+            search_results=[_item(id="a", summary="Test")],
+            prompt="{find:deep:cap3:8000}",
+            token_budget=4000,
+        )
+        output = expand_prompt(result)
+        assert "a" in output
+        assert "{find" not in output
+
+    def test_cap_reduces_primaries(self):
+        """With deep_primary_cap=2 and deep groups, only 2 primaries shown."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        items = [_item(id=f"p-{i}", summary=f"Primary {i}") for i in range(5)]
+        deep_groups = {
+            "p-0": [_item(id="deep-a", summary="Deep A", score=0.8)],
+            "p-1": [_item(id="deep-b", summary="Deep B", score=0.7)],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        result = render_find_context(results, token_budget=5000, deep_primary_cap=2)
+        # Only 2 primaries rendered
+        assert "p-0" in result
+        assert "p-1" in result
+        assert "p-4" not in result
+        # Deep items get budget
+        assert "deep-a" in result or "deep-b" in result
+
+    def test_cap_skips_pass2(self):
+        """With deep_primary_cap, pass 2 (parts/versions) should be skipped."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        parts = [
+            PartRef(part_num=0, summary="Overview of the topic"),
+            PartRef(part_num=1, summary="Details and analysis"),
+        ]
+        keeper = MagicMock()
+        keeper.list_parts.return_value = parts
+        keeper.list_versions.return_value = []
+        keeper.list_versions_around.return_value = []
+
+        items = [_item(id=f"doc-{i}", summary=f"Doc {i}") for i in range(5)]
+        deep_groups = {
+            "doc-0": [_item(id="deep-x", summary="Deep X", score=0.9)],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        result = render_find_context(
+            results, keeper=keeper, token_budget=5000, deep_primary_cap=3,
+        )
+        # Parts should NOT appear (pass 2 skipped)
+        assert "Key topics:" not in result
+        assert "Overview of the topic" not in result
+        # Deep items should appear
+        assert "deep-x" in result
+
+    def test_no_cap_without_deep_groups(self):
+        """Without deep groups, deep_primary_cap has no effect."""
+        from keep.cli import render_find_context
+
+        items = [_item(id=f"p-{i}", summary=f"Primary {i}") for i in range(5)]
+        result = render_find_context(items, token_budget=5000, deep_primary_cap=2)
+        # All items should still appear (no deep groups → cap not applied)
+        for i in range(5):
+            assert f"p-{i}" in result
+
+    def test_cap_prefers_items_with_deep_groups(self):
+        """Capped primaries should prefer those that have deep groups."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        items = [
+            _item(id="no-deep-0", summary="No deep 0"),
+            _item(id="no-deep-1", summary="No deep 1"),
+            _item(id="has-deep", summary="Has deep"),
+            _item(id="no-deep-2", summary="No deep 2"),
+        ]
+        deep_groups = {
+            "has-deep": [_item(id="deep-y", summary="Deep Y", score=0.9)],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        result = render_find_context(results, token_budget=5000, deep_primary_cap=2)
+        # "has-deep" should be kept (it has a deep group)
+        assert "has-deep" in result
+        assert "deep-y" in result
+
+
 class TestRenderFindContextDetail:
     """Tests for pass-2 detail rendering (parts, versions, tags, deep)."""
 
