@@ -68,6 +68,7 @@ SYSTEM_DOC_IDS = {
     "tag-status-withdrawn.md": ".tag/status/withdrawn",
     "tag-status-renegotiated.md": ".tag/status/renegotiated",
     "tag-project.md": ".tag/project",
+    "tag-speaker.md": ".tag/speaker",
     "tag-topic.md": ".tag/topic",
     "tag-type.md": ".tag/type",
     "meta-todo.md": ".meta/todo",
@@ -296,6 +297,22 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
                 )
             except Exception as e:
                 logger.debug("Could not enqueue system doc %s for embedding: %s", new_id, e)
+
+            # Activate edge backfill for tagdocs with _inverse
+            if new_id.startswith(".tag/") and "/" not in new_id[5:]:
+                old_inverse = existing_doc.tags.get("_inverse") if existing_doc else None
+                new_inverse = tags.get("_inverse")
+                if new_inverse and new_inverse != old_inverse:
+                    # New or changed _inverse → enqueue backfill
+                    if old_inverse:
+                        keeper._document_store.delete_edges_for_predicate(doc_coll, new_id[5:])
+                        keeper._document_store.delete_backfill(doc_coll, new_id[5:])
+                    keeper._check_edge_backfill(new_id[5:], new_inverse, doc_coll)
+                elif old_inverse and not new_inverse:
+                    # _inverse removed → clean up
+                    keeper._document_store.delete_edges_for_predicate(doc_coll, new_id[5:])
+                    keeper._document_store.delete_backfill(doc_coll, new_id[5:])
+
             if existing_doc:
                 stats["migrated"] += 1
                 logger.info("Updated system doc: %s", new_id)

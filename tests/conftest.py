@@ -530,6 +530,105 @@ class MockDocumentStore:
                 return True
         return False
 
+    # -- Edge methods --
+
+    def __init_edges(self):
+        if not hasattr(self, "_edges"):
+            self._edges: list[dict] = []
+            self._backfills: dict[tuple[str, str], dict] = {}
+
+    def upsert_edge(self, collection: str, source_id: str, predicate: str,
+                    target_id: str, inverse: str, created: str) -> None:
+        self.__init_edges()
+        # Replace existing edge with same PK
+        self._edges = [
+            e for e in self._edges
+            if not (e["source_id"] == source_id and e["collection"] == collection
+                    and e["predicate"] == predicate)
+        ]
+        self._edges.append({
+            "source_id": source_id, "collection": collection,
+            "predicate": predicate, "target_id": target_id,
+            "inverse": inverse, "created": created,
+        })
+
+    def delete_edge(self, collection: str, source_id: str, predicate: str) -> int:
+        self.__init_edges()
+        before = len(self._edges)
+        self._edges = [
+            e for e in self._edges
+            if not (e["source_id"] == source_id and e["collection"] == collection
+                    and e["predicate"] == predicate)
+        ]
+        return before - len(self._edges)
+
+    def delete_edges_for_source(self, collection: str, source_id: str) -> int:
+        self.__init_edges()
+        before = len(self._edges)
+        self._edges = [
+            e for e in self._edges
+            if not (e["collection"] == collection and e["source_id"] == source_id)
+        ]
+        return before - len(self._edges)
+
+    def delete_edges_for_target(self, collection: str, target_id: str) -> int:
+        self.__init_edges()
+        before = len(self._edges)
+        self._edges = [
+            e for e in self._edges
+            if not (e["collection"] == collection and e["target_id"] == target_id)
+        ]
+        return before - len(self._edges)
+
+    def delete_edges_for_predicate(self, collection: str, predicate: str) -> int:
+        self.__init_edges()
+        before = len(self._edges)
+        self._edges = [
+            e for e in self._edges
+            if not (e["collection"] == collection and e["predicate"] == predicate)
+        ]
+        return before - len(self._edges)
+
+    def get_inverse_edges(self, collection: str, target_id: str) -> list[tuple[str, str, str]]:
+        self.__init_edges()
+        results = [
+            (e["inverse"], e["source_id"], e["created"])
+            for e in self._edges
+            if e["collection"] == collection and e["target_id"] == target_id
+        ]
+        # Match real store: ORDER BY inverse ASC, created DESC
+        results.sort(key=lambda r: (r[0], r[2]), reverse=False)
+        # Group by inverse, reverse created within each group
+        from itertools import groupby
+        ordered = []
+        for _, group in groupby(results, key=lambda r: r[0]):
+            items = list(group)
+            items.sort(key=lambda r: r[2], reverse=True)
+            ordered.extend(items)
+        return ordered
+
+    def backfill_exists(self, collection: str, predicate: str) -> bool:
+        self.__init_edges()
+        return (collection, predicate) in self._backfills
+
+    def get_backfill_status(self, collection: str, predicate: str) -> str | None:
+        self.__init_edges()
+        rec = self._backfills.get((collection, predicate))
+        if rec is None:
+            return None
+        return rec.get("completed")
+
+    def upsert_backfill(self, collection: str, predicate: str, inverse: str,
+                        completed: str | None = None) -> None:
+        self.__init_edges()
+        self._backfills[(collection, predicate)] = {
+            "inverse": inverse, "completed": completed,
+        }
+
+    def delete_backfill(self, collection: str, predicate: str) -> None:
+        self.__init_edges()
+        self._backfills.pop((collection, predicate), None)
+
     def close(self) -> None:
         self._data.clear()
 

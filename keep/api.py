@@ -214,10 +214,10 @@ from .providers.base import (
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import PartInfo, VersionInfo
 from .types import (
-    Item, ItemContext, SimilarRef, MetaRef, VersionRef, PartRef,
+    Item, ItemContext, SimilarRef, MetaRef, EdgeRef, VersionRef, PartRef,
     PromptResult, PromptInfo,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
-    SYSTEM_TAG_PREFIX, local_date,
+    SYSTEM_TAG_PREFIX, local_date, utc_now,
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     MAX_TAG_VALUE_LENGTH,
 )
@@ -662,7 +662,26 @@ class Keeper:
     def _migrate_system_documents(self) -> dict:
         """Migrate system documents to stable IDs and current version."""
         from .system_docs import migrate_system_documents
-        return migrate_system_documents(self)
+        result = migrate_system_documents(self)
+        self._scan_tagdoc_backfills()
+        return result
+
+    def _scan_tagdoc_backfills(self) -> None:
+        """Ensure backfill is queued for every tagdoc with _inverse.
+
+        Called once at startup (after system doc migration) to catch
+        tagdocs that were created outside the normal put() path or
+        from a previous version that didn't support edges.
+        """
+        doc_coll = self._resolve_doc_collection()
+        tagdocs = self._document_store.query_by_id_prefix(doc_coll, ".tag/")
+        for td in tagdocs:
+            # Only top-level tagdocs (.tag/KEY, not .tag/KEY/VALUE)
+            if "/" in td.id[5:]:
+                continue
+            inverse = td.tags.get("_inverse")
+            if inverse:
+                self._check_edge_backfill(td.id[5:], inverse, doc_coll)
 
     def _get_embedding_provider(self) -> EmbeddingProvider:
         """
@@ -1413,6 +1432,153 @@ class Keeper:
         return [doc.id[len(prefix):] for doc in docs]
 
     # -------------------------------------------------------------------------
+    # Edge processing (tag-driven relationship edges)
+    # -------------------------------------------------------------------------
+
+    def _process_edge_tags(
+        self,
+        id: str,
+        merged_tags: dict[str, str],
+        existing_tags: dict[str, str],
+        doc_coll: str,
+    ) -> None:
+        """Create/update/delete edges based on tagdoc _inverse declarations.
+
+        For each non-system tag on the document, checks whether the
+        corresponding `.tag/{key}` tagdoc has an `_inverse` value.
+        If so, the tag represents an edge: source=id, target=value,
+        predicate=key, inverse=_inverse value.
+
+        Also handles tag removal: if a key that was an edge-tag is no
+        longer present, the corresponding edge row is deleted.
+        """
+        # System docs never participate as edge sources
+        if id.startswith("."):
+            return
+
+        # Determine which keys to check: union of current and previous
+        current_keys = {
+            k for k in merged_tags if not k.startswith(SYSTEM_TAG_PREFIX) and merged_tags[k]
+        }
+        previous_keys = {
+            k for k in existing_tags if not k.startswith(SYSTEM_TAG_PREFIX) and existing_tags[k]
+        }
+        all_keys = current_keys | previous_keys
+        if not all_keys:
+            return  # no user tags → no edges possible
+
+        # Collect tagdoc lookups (cache within this call)
+        tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
+
+        def _get_tagdoc_tags(key: str) -> Optional[dict[str, str]]:
+            if key not in tagdoc_cache:
+                parent = self._document_store.get(doc_coll, f".tag/{key}")
+                tagdoc_cache[key] = parent.tags if parent else None
+            return tagdoc_cache[key]
+
+        for key in all_keys:
+            td_tags = _get_tagdoc_tags(key)
+            if td_tags is None:
+                continue
+            inverse = td_tags.get("_inverse")
+            if not inverse:
+                continue
+
+            current_value = merged_tags.get(key, "")
+            previous_value = existing_tags.get(key, "")
+
+            # Tag removed → delete the edge for this specific predicate
+            if previous_value and not current_value:
+                self._document_store.delete_edge(doc_coll, id, key)
+
+            # Tag present → upsert edge + auto-vivify target
+            # Skip sysdoc targets (names starting with '.')
+            if current_value and not current_value.startswith("."):
+                target_id = current_value
+                # Auto-vivify: create target as empty doc if it doesn't exist
+                # Only writes to document store — embedding is deferred to
+                # avoid loading the model on the write path.
+                if not self._document_store.exists(doc_coll, target_id):
+                    now = utc_now()
+                    self._document_store.upsert(
+                        doc_coll, target_id,
+                        summary="",
+                        tags={"_created": now, "_updated": now, "_source": "auto-vivify"},
+                    )
+                    self._pending_queue.enqueue(
+                        target_id, doc_coll, target_id,
+                        task_type="reindex",
+                        metadata={"tags": {"_created": now, "_updated": now, "_source": "auto-vivify"}},
+                    )
+
+                created = merged_tags.get("_created") or merged_tags.get("_updated") or utc_now()
+                self._document_store.upsert_edge(
+                    collection=doc_coll,
+                    source_id=id,
+                    predicate=key,
+                    target_id=target_id,
+                    inverse=inverse,
+                    created=created,
+                )
+
+                # Trigger backfill check for this predicate
+                self._check_edge_backfill(key, inverse, doc_coll)
+
+    def _check_edge_backfill(
+        self, predicate: str, inverse: str, doc_coll: str,
+    ) -> None:
+        """Ensure edges are backfilled for a predicate that has _inverse.
+
+        Only enqueues a backfill task if no record exists at all.
+        A pending record (completed=NULL) means a task is already queued.
+        """
+        if self._document_store.backfill_exists(doc_coll, predicate):
+            return  # already pending or completed
+        self._document_store.upsert_backfill(doc_coll, predicate, inverse)
+        self._pending_queue.enqueue(
+            id=f".backfill/{predicate}",
+            collection=doc_coll,
+            content="",
+            task_type="backfill-edges",
+            metadata={"predicate": predicate, "inverse": inverse},
+        )
+
+    def _process_tagdoc_inverse_change(
+        self,
+        id: str,
+        new_tags: dict[str, str],
+        old_tags: dict[str, str],
+        doc_coll: str,
+    ) -> None:
+        """Handle _inverse changes on a .tag/* document.
+
+        Called *before* storage so old_tags reflect the previous state.
+        Detects whether _inverse was added, changed, or removed, and
+        adjusts edges/backfill accordingly.
+        """
+        # Extract predicate from tagdoc ID: .tag/KEY → KEY
+        if not id.startswith(".tag/") or "/" in id[5:]:
+            return  # not a top-level tagdoc
+        predicate = id[5:]
+
+        old_inverse = old_tags.get("_inverse") if old_tags else None
+        new_inverse = new_tags.get("_inverse") if new_tags else None
+
+        if old_inverse == new_inverse:
+            return  # no change
+
+        if old_inverse and not new_inverse:
+            # _inverse removed → clean up all edges and backfill for this predicate
+            self._document_store.delete_edges_for_predicate(doc_coll, predicate)
+            self._document_store.delete_backfill(doc_coll, predicate)
+        elif new_inverse and old_inverse != new_inverse:
+            # _inverse added or changed → delete old edges, enqueue new backfill
+            if old_inverse:
+                self._document_store.delete_edges_for_predicate(doc_coll, predicate)
+                self._document_store.delete_backfill(doc_coll, predicate)
+            self._check_edge_backfill(predicate, new_inverse, doc_coll)
+
+    # -------------------------------------------------------------------------
     # Write Operations
     # -------------------------------------------------------------------------
 
@@ -1574,6 +1740,11 @@ class Keeper:
                 if embedding is None:
                     embedding = self._get_embedding_provider().embed(content)
 
+        # Detect _inverse changes on tagdocs BEFORE storage overwrites old state
+        if id.startswith(".tag/"):
+            old_tagdoc_tags = existing_doc.tags if existing_doc else {}
+            self._process_tagdoc_inverse_change(id, merged_tags, old_tagdoc_tags, doc_coll)
+
         # Save old embedding before ChromaDB upsert overwrites it (for version archival)
         old_embedding = None
         if _has_embeddings and existing_doc is not None and not content_unchanged:
@@ -1613,6 +1784,9 @@ class Keeper:
                         summary=existing_doc.summary,
                         tags=casefold_tags_for_index(existing_doc.tags),
                     )
+
+        # Process tag-driven edges (_inverse on tagdocs)
+        self._process_edge_tags(id, merged_tags, existing_tags, doc_coll)
 
         # Spawn background processor if needed (local only — uses filesystem locks)
         if summary is None and len(content) > max_len and (not content_unchanged or tags_changed or force):
@@ -2422,11 +2596,30 @@ class Keeper:
                     tags=dict(p.tags),
                 ))
 
+        # Inverse edges (only for current version)
+        edge_refs: dict[str, list[EdgeRef]] = {}
+        if offset == 0:
+            doc_coll = self._resolve_doc_collection()
+            raw_edges = self._document_store.get_inverse_edges(doc_coll, id)
+            if raw_edges:
+                # Batch-fetch source docs to avoid N+1
+                source_ids = list({src for _, src, _ in raw_edges})
+                source_docs = self._document_store.get_many(doc_coll, source_ids)
+                for inverse, source_id, created in raw_edges:
+                    doc = source_docs.get(source_id)
+                    ref = EdgeRef(
+                        source_id=source_id,
+                        date=local_date(created),
+                        summary=doc.summary if doc else "",
+                    )
+                    edge_refs.setdefault(inverse, []).append(ref)
+
         return ItemContext(
             item=item,
             viewing_offset=offset,
             similar=similar_refs,
             meta=meta_refs,
+            edges=edge_refs,
             parts=part_refs,
             prev=prev_refs,
             next=next_refs,
@@ -3050,6 +3243,9 @@ class Keeper:
         # Delete from both stores (including versions)
         doc_deleted = self._document_store.delete(doc_coll, id, delete_versions=delete_versions)
         chroma_deleted = self._store.delete(chroma_coll, id, delete_versions=delete_versions)
+        # Clean up edges (both directions)
+        self._document_store.delete_edges_for_source(doc_coll, id)
+        self._document_store.delete_edges_for_target(doc_coll, id)
         return doc_deleted or chroma_deleted
 
     def revert(self, id: str) -> Optional[Item]:
@@ -4115,6 +4311,7 @@ class Keeper:
             try:
                 _task_verbs = {
                     "analyze": "Analyzing",
+                    "backfill-edges": "Backfilling edges",
                     "embed": "Embedding",
                     "ocr": "OCR",
                     "reindex": "Re-embedding",
@@ -4127,6 +4324,8 @@ class Keeper:
                     # analyze releases summarization internally;
                     # release embedding after parts are embedded
                     self._release_embedding_provider()
+                elif item.task_type == "backfill-edges":
+                    self._process_pending_backfill_edges(item)
                 elif item.task_type == "embed":
                     self._process_pending_embed(item)
                     self._release_embedding_provider()
@@ -4561,6 +4760,76 @@ class Keeper:
                 summary=item.content,
                 tags=casefold_tags_for_index(doc.tags),
             )
+
+    def _process_pending_backfill_edges(self, item) -> None:
+        """Process a backfill-edges task: populate edges for all docs with a given tag.
+
+        Scans all documents that have the predicate tag and creates edge
+        rows + auto-vivifies targets. Marks the backfill as completed.
+        """
+        meta = item.metadata or {}
+        predicate = meta.get("predicate")
+        inverse = meta.get("inverse")
+        if not predicate or not inverse:
+            logger.warning("Backfill-edges task missing predicate/inverse: %s", item.id)
+            return
+
+        doc_coll = item.collection
+
+        # Verify the tagdoc still has this _inverse — it may have been
+        # removed or changed since this task was enqueued.
+        tagdoc = self._document_store.get(doc_coll, f".tag/{predicate}")
+        current_inverse = tagdoc.tags.get("_inverse") if tagdoc else None
+        if current_inverse != inverse:
+            logger.info(
+                "Backfill for %s skipped: _inverse changed (%s → %s)",
+                predicate, inverse, current_inverse,
+            )
+            # Clean up stale backfill record
+            self._document_store.delete_backfill(doc_coll, predicate)
+            return
+
+        # Paginate — query_by_tag_key defaults to limit=100
+        edge_count = 0
+        page_size = 500
+        offset = 0
+        while True:
+            docs = self._document_store.query_by_tag_key(
+                doc_coll, predicate, limit=page_size, offset=offset,
+            )
+            if not docs:
+                break
+            offset += len(docs)
+            for doc in docs:
+                target_id = doc.tags.get(predicate)
+                if not target_id or target_id.startswith("."):
+                    continue
+                # Auto-vivify target (doc store only — embedding via reindex queue)
+                if not self._document_store.exists(doc_coll, target_id):
+                    now = utc_now()
+                    self._document_store.upsert(
+                        doc_coll, target_id,
+                        summary="",
+                        tags={"_created": now, "_updated": now, "_source": "auto-vivify"},
+                    )
+                    self._pending_queue.enqueue(
+                        target_id, doc_coll, target_id,
+                        task_type="reindex",
+                        metadata={"tags": {"_created": now, "_updated": now, "_source": "auto-vivify"}},
+                    )
+                created = doc.tags.get("_created") or doc.tags.get("_updated") or utc_now()
+                self._document_store.upsert_edge(
+                    collection=doc_coll,
+                    source_id=doc.id,
+                    predicate=predicate,
+                    target_id=target_id,
+                    inverse=inverse,
+                    created=created,
+                )
+                edge_count += 1
+        # Mark backfill complete
+        self._document_store.upsert_backfill(doc_coll, predicate, inverse, completed=utc_now())
+        logger.info("Backfilled %d edges for predicate=%s inverse=%s", edge_count, predicate, inverse)
 
     def _ocr_image(self, path: Path, content_type: str, extractor) -> str | None:
         """OCR a single image file. Returns extracted text or None."""

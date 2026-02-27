@@ -2,7 +2,7 @@
   "id": "keep",
   "name": "keep",
   "description": "Reflective memory — prompt-aware context injection, memory sync, session archival",
-  "version": "0.69.2",
+  "version": "0.70.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

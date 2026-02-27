@@ -58,6 +58,8 @@ Constrained tags (`act`, `status`) also have individual sub-documents (e.g., `.t
 
 Unconstrained tags (`type`, `project`, `topic`) accept any value. Their descriptions document conventions but don't enforce them.
 
+Some tags also define **edges** — navigable relationships between documents. See [EDGE-TAGS.md](EDGE-TAGS.md) for details.
+
 ### How tag docs are injected into LLM prompts
 
 Tag descriptions feed into analysis through two independent paths:
@@ -282,6 +284,7 @@ Every system doc contains a `## Injection` section that describes how its conten
 
 ## See Also
 
+- [EDGE-TAGS.md](EDGE-TAGS.md) — Edge tags: navigable relationships via `_inverse`
 - [TAGGING.md](TAGGING.md) — Tag basics: setting, filtering, isolation
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags (`_created`, `_updated`, etc.)
 - [ANALYSIS.md](ANALYSIS.md) — How analysis uses tag descriptions to auto-tag parts

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 @dataclass
@@ -427,6 +427,33 @@ class DocumentStore:
                     self._fts_available = True
                 except sqlite3.OperationalError:
                     logger.info("FTS5 not available, full-text search disabled")
+
+            # Version 8 → 9: edges and edge_backfill tables
+            if current_version < 9:
+                self._conn.execute("""
+                    CREATE TABLE IF NOT EXISTS edges (
+                        source_id   TEXT NOT NULL,
+                        collection  TEXT NOT NULL,
+                        predicate   TEXT NOT NULL,
+                        target_id   TEXT NOT NULL,
+                        inverse     TEXT NOT NULL,
+                        created     TEXT NOT NULL,
+                        PRIMARY KEY (source_id, collection, predicate)
+                    )
+                """)
+                self._conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_edges_target
+                    ON edges (target_id, collection, inverse, created)
+                """)
+                self._conn.execute("""
+                    CREATE TABLE IF NOT EXISTS edge_backfill (
+                        collection  TEXT NOT NULL,
+                        predicate   TEXT NOT NULL,
+                        inverse     TEXT NOT NULL,
+                        completed   TEXT,
+                        PRIMARY KEY (collection, predicate)
+                    )
+                """)
 
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
@@ -876,6 +903,10 @@ class DocumentStore:
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         """
         Delete a document record and optionally its version history.
+
+        Note: this does NOT clean up edge rows. Callers that need edge
+        consistency (e.g. Keeper.delete) must call delete_edges_for_source
+        and delete_edges_for_target separately.
 
         Args:
             collection: Collection name
@@ -2314,6 +2345,134 @@ class DocumentStore:
                 raise
 
         return {"documents": doc_count, "versions": ver_count, "parts": part_count}
+
+    # -------------------------------------------------------------------------
+    # Edges
+    # -------------------------------------------------------------------------
+
+    def upsert_edge(
+        self,
+        collection: str,
+        source_id: str,
+        predicate: str,
+        target_id: str,
+        inverse: str,
+        created: str,
+    ) -> None:
+        """Insert or replace an edge row."""
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO edges
+                (source_id, collection, predicate, target_id, inverse, created)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (source_id, collection, predicate, target_id, inverse, created),
+        )
+        self._conn.commit()
+
+    def delete_edge(self, collection: str, source_id: str, predicate: str) -> int:
+        """Delete a single edge by its primary key (source, collection, predicate)."""
+        cur = self._conn.execute(
+            "DELETE FROM edges WHERE source_id = ? AND collection = ? AND predicate = ?",
+            (source_id, collection, predicate),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def delete_edges_for_source(self, collection: str, source_id: str) -> int:
+        """Delete all edges originating from *source_id*."""
+        cur = self._conn.execute(
+            "DELETE FROM edges WHERE collection = ? AND source_id = ?",
+            (collection, source_id),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def delete_edges_for_target(self, collection: str, target_id: str) -> int:
+        """Delete all edges pointing at *target_id*."""
+        cur = self._conn.execute(
+            "DELETE FROM edges WHERE collection = ? AND target_id = ?",
+            (collection, target_id),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def delete_edges_for_predicate(self, collection: str, predicate: str) -> int:
+        """Delete all edges with a given predicate (used when _inverse is removed)."""
+        cur = self._conn.execute(
+            "DELETE FROM edges WHERE collection = ? AND predicate = ?",
+            (collection, predicate),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def get_inverse_edges(
+        self, collection: str, target_id: str,
+    ) -> list[tuple[str, str, str]]:
+        """Return inverse edges pointing at *target_id*.
+
+        Returns list of (inverse, source_id, created) ordered by inverse
+        then created descending.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT inverse, source_id, created
+            FROM edges
+            WHERE collection = ? AND target_id = ?
+            ORDER BY inverse, created DESC
+            """,
+            (collection, target_id),
+        ).fetchall()
+        return [(r["inverse"], r["source_id"], r["created"]) for r in rows]
+
+    def backfill_exists(self, collection: str, predicate: str) -> bool:
+        """Return True if a backfill record exists (pending or completed)."""
+        row = self._conn.execute(
+            "SELECT 1 FROM edge_backfill WHERE collection = ? AND predicate = ?",
+            (collection, predicate),
+        ).fetchone()
+        return row is not None
+
+    def get_backfill_status(
+        self, collection: str, predicate: str,
+    ) -> Optional[str]:
+        """Return the completed timestamp for a backfill, or None if not found."""
+        row = self._conn.execute(
+            """
+            SELECT completed FROM edge_backfill
+            WHERE collection = ? AND predicate = ?
+            """,
+            (collection, predicate),
+        ).fetchone()
+        if row is None:
+            return None
+        return row["completed"]
+
+    def upsert_backfill(
+        self,
+        collection: str,
+        predicate: str,
+        inverse: str,
+        completed: Optional[str] = None,
+    ) -> None:
+        """Insert or update a backfill tracking record."""
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO edge_backfill
+                (collection, predicate, inverse, completed)
+            VALUES (?, ?, ?, ?)
+            """,
+            (collection, predicate, inverse, completed),
+        )
+        self._conn.commit()
+
+    def delete_backfill(self, collection: str, predicate: str) -> None:
+        """Delete a backfill record (used when _inverse is removed from tagdoc)."""
+        self._conn.execute(
+            "DELETE FROM edge_backfill WHERE collection = ? AND predicate = ?",
+            (collection, predicate),
+        )
+        self._conn.commit()
 
     # -------------------------------------------------------------------------
     # Lifecycle

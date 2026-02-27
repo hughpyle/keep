@@ -266,6 +266,19 @@ def _render_frontmatter(ctx: ItemContext) -> str:
                 summary_preview = _truncate(ref.summary, prefix_len)
                 lines.append(f"  - {mid.ljust(id_width)} {summary_preview}")
 
+    # Inverse edges (tag-driven relationships)
+    if ctx.edges:
+        for inverse_name, refs in ctx.edges.items():
+            edge_ids = [_shell_quote_id(r.source_id) for r in refs]
+            id_width = min(max(len(s) for s in edge_ids), 24)
+            lines.append(f"tags/{inverse_name}:")
+            for ref, eid in zip(refs, edge_ids):
+                actual_id_len = max(len(eid), id_width)
+                prefix_len = 4 + actual_id_len + 1 + 13  # date + space
+                summary_preview = _truncate(ref.summary, prefix_len)
+                date_str = f"[{ref.date}] " if ref.date else ""
+                lines.append(f"  - {eid.ljust(id_width)} {date_str}{summary_preview}")
+
     # Parts manifest
     if ctx.parts:
         total = len(ctx.parts)

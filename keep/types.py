@@ -314,6 +314,14 @@ class VersionRef:
 
 
 @dataclass(frozen=True)
+class EdgeRef:
+    """An inverse-edge reference for display."""
+    source_id: str
+    date: str             # local date string
+    summary: str
+
+
+@dataclass(frozen=True)
 class PartRef:
     """A part reference for display."""
     part_num: int
@@ -333,6 +341,7 @@ class ItemContext:
     viewing_offset: int = 0               # 0 = current version
     similar: list[SimilarRef] = field(default_factory=list)
     meta: dict[str, list[MetaRef]] = field(default_factory=dict)
+    edges: dict[str, list[EdgeRef]] = field(default_factory=dict)
     parts: list[PartRef] = field(default_factory=list)
     focus_part: int | None = None
     expand_parts: bool = False            # show all parts (no windowing)
@@ -353,11 +362,15 @@ class ItemContext:
             k: [MetaRef(**m) for m in v]
             for k, v in d.pop("meta", {}).items()
         }
+        edges = {
+            k: [EdgeRef(**e) for e in v]
+            for k, v in d.pop("edges", {}).items()
+        }
         parts = [PartRef(**p) for p in d.pop("parts", [])]
         prev = [VersionRef(**v) for v in d.pop("prev", [])]
         nxt = [VersionRef(**v) for v in d.pop("next", [])]
         return cls(
-            item=item, similar=similar, meta=meta,
+            item=item, similar=similar, meta=meta, edges=edges,
             parts=parts, prev=prev, next=nxt, **d,
         )
 
