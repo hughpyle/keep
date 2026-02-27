@@ -976,10 +976,12 @@ def find(
             expanded.extend(_versions_to_items(item.id, item, versions))
         results = FindResults(expanded, deep_groups={})
 
-    if token_budget is not None:
+    if _get_json_output():
+        typer.echo(_format_items(results, as_json=True, keeper=kp, show_tags=show_tags))
+    elif token_budget is not None:
         typer.echo(render_find_context(results, keeper=kp, token_budget=token_budget, show_tags=show_tags))
     else:
-        typer.echo(_format_items(results, as_json=_get_json_output(), keeper=kp, show_tags=show_tags))
+        typer.echo(_format_items(results, keeper=kp, show_tags=show_tags))
 
 
 @app.command("list")
