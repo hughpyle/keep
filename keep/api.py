@@ -569,10 +569,12 @@ class Keeper:
         if needs_reconcile:
             chroma_coll = self._resolve_chroma_collection()
             doc_coll = self._resolve_doc_collection()
-            threading.Thread(
+            self._reconcile_thread = threading.Thread(
                 target=self._auto_reconcile_safe, args=(chroma_coll, doc_coll), daemon=True
-            ).start()
+            )
+            self._reconcile_thread.start()
         else:
+            self._reconcile_thread = None
             self._reconcile_done.set()
 
         # --- Task delegation client (for hosted processing) ---
@@ -5388,9 +5390,14 @@ class Keeper:
         """
         Close resources (stores, caches, queues).
 
-        Releases model locks (freeing GPU memory) before releasing file locks,
-        ensuring the next process gets a clean GPU.
+        Waits for background reconcile to finish before tearing down stores,
+        then releases model locks (freeing GPU memory) before file locks.
         """
+        # Wait for background reconcile thread to finish so it doesn't
+        # access stores after they're closed.
+        if hasattr(self, '_reconcile_thread') and self._reconcile_thread is not None:
+            self._reconcile_thread.join(timeout=10)
+
         # Release locked model providers (frees GPU memory + gc)
         self._release_embedding_provider()
         self._release_summarization_provider()

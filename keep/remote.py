@@ -56,11 +56,14 @@ class RemoteKeeper:
             )
 
         # Refuse non-HTTPS for remote APIs (bearer token would be sent in cleartext)
-        if not self.api_url.startswith("https://") and "localhost" not in self.api_url and "127.0.0.1" not in self.api_url:
-            raise ValueError(
-                f"Remote API URL must use HTTPS (got {self.api_url}). "
-                "Use HTTPS to protect API credentials, or use localhost for local development."
-            )
+        if not self.api_url.startswith("https://"):
+            from urllib.parse import urlparse
+            host = urlparse(self.api_url).hostname or ""
+            if host not in ("localhost", "127.0.0.1", "::1"):
+                raise ValueError(
+                    f"Remote API URL must use HTTPS (got {self.api_url}). "
+                    "Use HTTPS to protect API credentials, or use localhost for local development."
+                )
 
         headers: dict[str, str] = {
             "Authorization": f"Bearer {api_key}",

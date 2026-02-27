@@ -150,14 +150,17 @@ class ChromaStore:
     def _reload_client(self) -> None:
         """Recreate PersistentClient to pick up on-disk changes.
 
-        Clears the collection handle cache and creates a fresh client,
-        which forces ChromaDB to reload the hnswlib index from disk.
+        Clears the collection handle cache and evicts the shared system cache
+        so ChromaDB builds a fresh System that reloads hnswlib from disk.
         """
         import chromadb
         from chromadb.config import Settings
 
         logger.debug("Reloading ChromaDB client (epoch changed)")
         self._collections.clear()
+        # Evict the cached System so PersistentClient creates a fresh one.
+        # Without this, the SharedSystemClient returns the stale system.
+        chromadb.api.client.SharedSystemClient.clear_system_cache()
         self._client = chromadb.PersistentClient(
             path=str(self._store_path / "chroma"),
             settings=Settings(
@@ -895,12 +898,14 @@ class ChromaStore:
         """
         Close ChromaDB client and release resources.
 
-        Good practice to call when done, though Python's GC will clean up eventually.
+        Evicts the shared system cache so the underlying System (hnswlib
+        indices, SQLite connections) can be garbage-collected.
         """
         self._collections.clear()
-        # ChromaDB PersistentClient doesn't have explicit close(),
-        # but clearing references allows garbage collection
-        self._client = None
+        if self._client is not None:
+            import chromadb.api.client
+            chromadb.api.client.SharedSystemClient.clear_system_cache()
+            self._client = None
 
     def __enter__(self):
         """Context manager entry."""

@@ -47,15 +47,14 @@ class TaskClient:
         self._project = project
 
         # Refuse non-HTTPS for remote APIs (bearer token would be sent in cleartext)
-        if (
-            not self._api_url.startswith("https://")
-            and "localhost" not in self._api_url
-            and "127.0.0.1" not in self._api_url
-        ):
-            raise ValueError(
-                f"Task API URL must use HTTPS (got {self._api_url}). "
-                "Use HTTPS to protect API credentials, or use localhost for local development."
-            )
+        if not self._api_url.startswith("https://"):
+            from urllib.parse import urlparse
+            host = urlparse(self._api_url).hostname or ""
+            if host not in ("localhost", "127.0.0.1", "::1"):
+                raise ValueError(
+                    f"Task API URL must use HTTPS (got {self._api_url}). "
+                    "Use HTTPS to protect API credentials, or use localhost for local development."
+                )
 
         headers: dict[str, str] = {
             "Authorization": f"Bearer {api_key}",
