@@ -268,6 +268,50 @@ class TestDeepEdgeFollow:
         # (depends on FTS matching, but at least the structure should work)
         assert isinstance(groups, dict)
 
+    def test_two_hop_forward_then_inverse(self, keeper):
+        """Session primary → forward edge → entity → inverse edges → sibling sessions."""
+        doc_coll = keeper._resolve_doc_collection()
+        chroma_coll = keeper._resolve_chroma_collection()
+
+        # The fixture already has: session-{0..4} --speaker--> Melanie
+        # So if session-0 is the primary, two-hop should discover
+        # session-{1..4} via session-0 → (speaker) → Melanie → (said) → others.
+        from keep.types import Item
+        primary = [Item(id="session-0", summary="Melanie topic 0",
+                        tags={}, score=1.0)]
+
+        embedding = [0.1] * 10
+        groups = keeper._deep_edge_follow(
+            primary, chroma_coll, doc_coll,
+            query="topic", embedding=embedding,
+        )
+
+        assert "session-0" in groups
+        deep_ids = [i.id for i in groups["session-0"]]
+        # Should find sibling sessions (not session-0 itself)
+        assert any(d.startswith("session-") and d != "session-0"
+                    for d in deep_ids)
+        assert "session-0" not in deep_ids
+        # Should NOT include unrelated (no edge to Melanie)
+        assert "unrelated" not in deep_ids
+
+    def test_two_hop_no_forward_edges(self, keeper):
+        """Primary with no forward edges produces no two-hop candidates."""
+        doc_coll = keeper._resolve_doc_collection()
+        chroma_coll = keeper._resolve_chroma_collection()
+
+        # "unrelated" has no edges at all — neither forward nor inverse
+        from keep.types import Item
+        primary = [Item(id="unrelated", summary="Something",
+                        tags={}, score=1.0)]
+
+        embedding = [0.1] * 10
+        groups = keeper._deep_edge_follow(
+            primary, chroma_coll, doc_coll,
+            query="topic", embedding=embedding,
+        )
+        assert groups == {}
+
 
 # ---------------------------------------------------------------------------
 # find(deep=True) integration — edge vs tag fallback

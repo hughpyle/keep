@@ -2349,6 +2349,13 @@ class Keeper:
         #    b) Forward + inverse (two-hop): primary is a source →
         #       follow forward to targets → collect THEIR inverse sources
         #       (e.g. session → speaker → entity → said → other sessions)
+        #
+        #    Caps prevent runaway fan-out on high-degree entities:
+        #    - max_forward: forward edges per primary (hop-1 fan-out)
+        #    - max_candidates: total candidate pool across all primaries
+        _MAX_FORWARD = 20       # forward edges to traverse per primary
+        _MAX_CANDIDATES = 500   # total candidate IDs before FTS/embedding
+
         primary_to_sources: dict[str, set[str]] = {}
         all_source_ids: set[str] = set()
         top_ids = set()
@@ -2367,7 +2374,7 @@ class Keeper:
             # Path b: two-hop via forward edges (primary is source)
             fwd_edges = self._document_store.get_forward_edges(
                 doc_coll, parent_id)
-            for _pred, target_id, _created in fwd_edges:
+            for _pred, target_id, _created in fwd_edges[:_MAX_FORWARD]:
                 hop2 = self._document_store.get_inverse_edges(
                     doc_coll, target_id)
                 for _inv2, src_id2, _created2 in hop2:
@@ -2376,6 +2383,8 @@ class Keeper:
             if sources:
                 primary_to_sources[parent_id] = sources
                 all_source_ids.update(sources)
+                if len(all_source_ids) >= _MAX_CANDIDATES:
+                    break
 
         if not all_source_ids:
             return {}
