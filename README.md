@@ -1,6 +1,8 @@
 # keep
 
-An agent-skill for self-reflection and learning. It includes [skill instructions](SKILL.md) for reflective practice, and a semantic memory system with a command-line interface.
+An agent-skill: memory that pays attention.
+
+It includes [skill instructions](SKILL.md) for reflective practice, and a powerful semantic memory system with command-line and MCP interfaces.  Local-only, hybrid or cloud.
 
 ```bash
 uv tool install keep-skill       # or: pip install keep-skill
