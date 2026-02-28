@@ -477,6 +477,24 @@ class MockDocumentStore:
                 filtered.append(r)
         return filtered[:limit]
 
+    def get_stopwords(self) -> frozenset[str]:
+        try:
+            from importlib.resources import files
+            stop_text = files("keep.data.system").joinpath("stop.md").read_text()
+        except Exception:
+            return frozenset()
+        words = set()
+        in_frontmatter = False
+        for line in stop_text.splitlines():
+            stripped = line.strip()
+            if stripped == "---":
+                in_frontmatter = not in_frontmatter
+                continue
+            if in_frontmatter or not stripped or stripped.startswith("#"):
+                continue
+            words.add(stripped.lower())
+        return frozenset(words)
+
     @property
     def _fts_available(self) -> bool:
         return True
@@ -606,6 +624,20 @@ class MockDocumentStore:
         ]
         return before - len(self._edges)
 
+    def delete_version_edges_for_source(self, collection: str, source_id: str) -> int:
+        return 0
+
+    def delete_version_edges_for_target(self, collection: str, target_id: str) -> int:
+        return 0
+
+    def delete_version_edges_for_predicate(self, collection: str, predicate: str) -> int:
+        return 0
+
+    def backfill_version_edges_for_predicate(
+        self, collection: str, predicate: str, inverse: str
+    ) -> int:
+        return 0
+
     def get_inverse_edges(self, collection: str, target_id: str) -> list[tuple[str, str, str]]:
         self.__init_edges()
         results = [
@@ -651,7 +683,10 @@ class MockDocumentStore:
             if e["collection"] != collection:
                 continue
             tid = e["target_id"]
-            pattern = r'\b' + re.escape(tid.lower()) + r'\b'
+            escaped = re.escape(tid.lower())
+            left = r'\b' if re.match(r'\w', tid) else r'(?:^|(?<=\s))'
+            right = r'\b' if re.search(r'\w$', tid) else r'(?=\s|$)'
+            pattern = left + escaped + right
             if re.search(pattern, query_lower):
                 targets.add(tid)
         return list(targets)

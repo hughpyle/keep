@@ -353,9 +353,9 @@ async def keep_prompt(
     deep: Annotated[bool, Field(
         description="Follow tags from results to discover related items.",
     )] = False,
-    token_budget: Annotated[int, Field(
-        description="Token budget for search results context (default: 4000).",
-    )] = 4000,
+    token_budget: Annotated[Optional[int], Field(
+        description="Token budget for search results context (template default if not set).",
+    )] = None,
 ) -> str:
     """Render an agent prompt with injected context."""
     async with _lock:

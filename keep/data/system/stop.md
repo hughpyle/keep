@@ -10,7 +10,7 @@ noise from function words.  One word per line.  Blank lines and lines
 starting with `#` are ignored.
 
 Based on the PostgreSQL / Snowball English stop list.
-Users can override by storing a `.stopwords` document in the store.
+Users can override by updating the `.stop` document in the store.
 
 i
 me

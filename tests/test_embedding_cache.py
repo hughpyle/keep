@@ -201,6 +201,17 @@ class TestEmbeddingCache:
         stats = cache.stats()
         assert "legacy_json_entries" not in stats
 
+    def test_close_makes_operations_noop(self, cache: EmbeddingCache) -> None:
+        """After close(), get/put/stats stay safe and do not raise."""
+        cache.put("model", "text", [1.0])
+        cache.close()
+
+        assert cache.get("model", "text") is None
+        cache.put("model", "other", [2.0])  # no-op
+        stats = cache.stats()
+        assert stats["entries"] == 0
+        assert stats["models"] == 0
+
 
 class TestCachingEmbeddingProvider:
     """Test the caching wrapper."""

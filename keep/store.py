@@ -8,6 +8,8 @@ For now, ChromaDb is the only implementation — and that's fine.
 """
 
 import logging
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -97,11 +99,13 @@ class ChromaStore:
 
         # Cross-process write serialization (fcntl file lock)
         self._chroma_lock = ModelLock(store_path / ".chroma.lock")
+        # In-process serialization for client/cache state.
+        self._state_lock = threading.RLock()
+        # Per-thread write-lock depth (enables safe re-entry on nested paths).
+        self._write_lock_state = threading.local()
         # Epoch sentinel for staleness detection
         self._epoch_path = store_path / ".chroma.epoch"
         self._last_epoch: float = self._read_epoch()
-        # Re-entrancy guard: True when write lock is already held
-        self._lock_held = False
     
     @property
     def embedding_dimension(self) -> Optional[int]:
@@ -111,6 +115,26 @@ class ChromaStore:
     def reset_embedding_dimension(self, dimension: int) -> None:
         """Update expected embedding dimension (for provider changes)."""
         self._embedding_dimension = dimension
+
+    @contextmanager
+    def _write_guard(self):
+        """Acquire cross-process write lock with thread-local re-entrancy."""
+        depth = getattr(self._write_lock_state, "depth", 0)
+        acquired = depth == 0
+        if acquired:
+            self._chroma_lock.acquire()
+        self._write_lock_state.depth = depth + 1
+        try:
+            yield
+        finally:
+            new_depth = getattr(self._write_lock_state, "depth", 1) - 1
+            if new_depth <= 0:
+                if hasattr(self._write_lock_state, "depth"):
+                    delattr(self._write_lock_state, "depth")
+                if acquired:
+                    self._chroma_lock.release()
+            else:
+                self._write_lock_state.depth = new_depth
 
     # -------------------------------------------------------------------------
     # Cross-process coordination
@@ -139,6 +163,8 @@ class ChromaStore:
         means another process bumped the epoch, so our in-memory hnswlib
         index is stale. Recreating the PersistentClient forces a fresh
         load from disk.
+
+        Caller must hold ``self._state_lock``.
         """
         if self._client is None:
             return  # Store is closed
@@ -152,6 +178,8 @@ class ChromaStore:
 
         Clears the collection handle cache and evicts the shared system cache
         so ChromaDB builds a fresh System that reloads hnswlib from disk.
+
+        Caller must hold ``self._state_lock``.
         """
         import chromadb
         from chromadb.config import Settings
@@ -174,36 +202,39 @@ class ChromaStore:
     # -------------------------------------------------------------------------
 
     def _get_collection(self, name: str) -> Any:
-        """Get or create a collection by name, migrating L2→cosine if needed."""
+        """Get or create a collection by name, migrating L2→cosine if needed.
+
+        Caller must hold ``self._state_lock``.
+        """
+        if self._client is None:
+            raise RuntimeError("Store is closed")
         if name not in self._collections:
             coll = self._client.get_or_create_collection(
                 name=name,
                 metadata={"hnsw:space": "cosine"},
             )
             # Migrate: if existing collection uses L2, recreate with cosine.
-            # This is a write operation — acquire lock if not already held.
+            # This is a write operation — take write lock re-entrantly.
             if coll.metadata.get("hnsw:space") != "cosine":
-                acquired = False
-                if not self._lock_held:
-                    self._chroma_lock.acquire()
-                    acquired = True
-                    self._lock_held = True
-                try:
-                    logger.info(
-                        "Migrating collection %s from %s to cosine (requires reindex)",
-                        name, coll.metadata.get("hnsw:space"),
-                    )
-                    self._client.delete_collection(name)
-                    coll = self._client.create_collection(
+                with self._write_guard():
+                    # Another process may have changed epoch while we waited.
+                    self._check_freshness()
+                    coll = self._client.get_or_create_collection(
                         name=name,
                         metadata={"hnsw:space": "cosine"},
                     )
-                    self.migrated_to_cosine = True
-                    self._bump_epoch()
-                finally:
-                    if acquired:
-                        self._lock_held = False
-                        self._chroma_lock.release()
+                    if coll.metadata.get("hnsw:space") != "cosine":
+                        logger.info(
+                            "Migrating collection %s from %s to cosine (requires reindex)",
+                            name, coll.metadata.get("hnsw:space"),
+                        )
+                        self._client.delete_collection(name)
+                        coll = self._client.create_collection(
+                            name=name,
+                            metadata={"hnsw:space": "cosine"},
+                        )
+                        self.migrated_to_cosine = True
+                        self._bump_epoch()
             self._collections[name] = coll
         return self._collections[name]
     
@@ -253,9 +284,8 @@ class ChromaStore:
                 f"got {len(embedding)}"
             )
 
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 coll = self._get_collection(collection)
 
@@ -285,8 +315,6 @@ class ChromaStore:
                     metadatas=[self._tags_to_metadata(tags)],
                 )
                 self._bump_epoch()
-            finally:
-                self._lock_held = False
 
     def upsert_version(
         self,
@@ -319,9 +347,8 @@ class ChromaStore:
                 f"got {len(embedding)}"
             )
 
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 coll = self._get_collection(collection)
 
@@ -340,8 +367,6 @@ class ChromaStore:
                     metadatas=[self._tags_to_metadata(versioned_tags)],
                 )
                 self._bump_epoch()
-            finally:
-                self._lock_held = False
 
     def upsert_part(
         self,
@@ -374,9 +399,8 @@ class ChromaStore:
                 f"got {len(embedding)}"
             )
 
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 coll = self._get_collection(collection)
 
@@ -395,8 +419,6 @@ class ChromaStore:
                     metadatas=[self._tags_to_metadata(part_tags)],
                 )
                 self._bump_epoch()
-            finally:
-                self._lock_held = False
 
     def delete_parts(self, collection: str, id: str) -> int:
         """
@@ -409,9 +431,8 @@ class ChromaStore:
         Returns:
             Number of parts deleted
         """
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 coll = self._get_collection(collection)
                 try:
@@ -427,8 +448,6 @@ class ChromaStore:
                     count = 0  # No parts exist
                 self._bump_epoch()
                 return count
-            finally:
-                self._lock_held = False
 
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         """
@@ -442,9 +461,8 @@ class ChromaStore:
         Returns:
             True if item existed and was deleted, False if not found
         """
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 coll = self._get_collection(collection)
 
@@ -470,8 +488,6 @@ class ChromaStore:
 
                 self._bump_epoch()
                 return True
-            finally:
-                self._lock_held = False
 
     def update_summary(self, collection: str, id: str, summary: str) -> bool:
         """
@@ -488,9 +504,8 @@ class ChromaStore:
         Returns:
             True if item was updated, False if not found
         """
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 coll = self._get_collection(collection)
 
@@ -518,8 +533,6 @@ class ChromaStore:
                 )
                 self._bump_epoch()
                 return True
-            finally:
-                self._lock_held = False
 
     def update_tags(self, collection: str, id: str, tags: dict[str, str]) -> bool:
         """
@@ -533,9 +546,8 @@ class ChromaStore:
         Returns:
             True if item was updated, False if not found
         """
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 coll = self._get_collection(collection)
 
@@ -559,8 +571,6 @@ class ChromaStore:
                 )
                 self._bump_epoch()
                 return True
-            finally:
-                self._lock_held = False
 
     # -------------------------------------------------------------------------
     # Read Operations
@@ -577,28 +587,30 @@ class ChromaStore:
         Returns:
             StoreResult if found, None otherwise
         """
-        self._check_freshness()
-        coll = self._get_collection(collection)
-        result = coll.get(
-            ids=[id],
-            include=["documents", "metadatas"],
-        )
+        with self._state_lock:
+            self._check_freshness()
+            coll = self._get_collection(collection)
+            result = coll.get(
+                ids=[id],
+                include=["documents", "metadatas"],
+            )
 
-        if not result["ids"]:
-            return None
+            if not result["ids"]:
+                return None
 
-        return StoreResult(
-            id=result["ids"][0],
-            summary=result["documents"][0] or "",
-            tags=self._metadata_to_tags(result["metadatas"][0]),
-        )
+            return StoreResult(
+                id=result["ids"][0],
+                summary=result["documents"][0] or "",
+                tags=self._metadata_to_tags(result["metadatas"][0]),
+            )
 
     def exists(self, collection: str, id: str) -> bool:
         """Check if an item exists in the store."""
-        self._check_freshness()
-        coll = self._get_collection(collection)
-        result = coll.get(ids=[id], include=[])
-        return bool(result["ids"])
+        with self._state_lock:
+            self._check_freshness()
+            coll = self._get_collection(collection)
+            result = coll.get(ids=[id], include=[])
+            return bool(result["ids"])
 
     def get_embedding(self, collection: str, id: str) -> list[float] | None:
         """
@@ -611,12 +623,13 @@ class ChromaStore:
         Returns:
             Embedding vector if found, None otherwise
         """
-        self._check_freshness()
-        coll = self._get_collection(collection)
-        result = coll.get(ids=[id], include=["embeddings"])
-        if not result["ids"] or result["embeddings"] is None or len(result["embeddings"]) == 0:
-            return None
-        return list(result["embeddings"][0])
+        with self._state_lock:
+            self._check_freshness()
+            coll = self._get_collection(collection)
+            result = coll.get(ids=[id], include=["embeddings"])
+            if not result["ids"] or result["embeddings"] is None or len(result["embeddings"]) == 0:
+                return None
+            return list(result["embeddings"][0])
 
     _LIST_IDS_PAGE = 5000
 
@@ -633,20 +646,21 @@ class ChromaStore:
         Returns:
             List of document IDs
         """
-        self._check_freshness()
-        coll = self._get_collection(collection)
-        all_ids: list[str] = []
-        offset = 0
-        while True:
-            result = coll.get(include=[], limit=self._LIST_IDS_PAGE, offset=offset)
-            batch = result["ids"]
-            if not batch:
-                break
-            all_ids.extend(batch)
-            if len(batch) < self._LIST_IDS_PAGE:
-                break
-            offset += len(batch)
-        return all_ids
+        with self._state_lock:
+            self._check_freshness()
+            coll = self._get_collection(collection)
+            all_ids: list[str] = []
+            offset = 0
+            while True:
+                result = coll.get(include=[], limit=self._LIST_IDS_PAGE, offset=offset)
+                batch = result["ids"]
+                if not batch:
+                    break
+                all_ids.extend(batch)
+                if len(batch) < self._LIST_IDS_PAGE:
+                    break
+                offset += len(batch)
+            return all_ids
 
     def find_missing_ids(self, collection: str, ids: list[str]) -> set[str]:
         """
@@ -661,16 +675,17 @@ class ChromaStore:
         Returns:
             Set of IDs not found in ChromaDB
         """
-        self._check_freshness()
-        coll = self._get_collection(collection)
-        missing: set[str] = set()
-        batch_size = self._LIST_IDS_PAGE
-        for i in range(0, len(ids), batch_size):
-            batch = ids[i:i + batch_size]
-            result = coll.get(ids=batch, include=[])
-            found = set(result["ids"])
-            missing.update(id for id in batch if id not in found)
-        return missing
+        with self._state_lock:
+            self._check_freshness()
+            coll = self._get_collection(collection)
+            missing: set[str] = set()
+            batch_size = self._LIST_IDS_PAGE
+            for i in range(0, len(ids), batch_size):
+                batch = ids[i:i + batch_size]
+                result = coll.get(ids=batch, include=[])
+                found = set(result["ids"])
+                missing.update(id for id in batch if id not in found)
+            return missing
 
     def query_embedding(
         self,
@@ -691,29 +706,30 @@ class ChromaStore:
         Returns:
             List of results ordered by similarity (most similar first)
         """
-        self._check_freshness()
-        coll = self._get_collection(collection)
-        
-        query_params = {
-            "query_embeddings": [embedding],
-            "n_results": limit,
-            "include": ["documents", "metadatas", "distances"],
-        }
-        if where:
-            query_params["where"] = where
-        
-        result = coll.query(**query_params)
-        
-        results = []
-        for i, id in enumerate(result["ids"][0]):
-            results.append(StoreResult(
-                id=id,
-                summary=result["documents"][0][i] or "",
-                tags=self._metadata_to_tags(result["metadatas"][0][i]),
-                distance=result["distances"][0][i] if result["distances"] else None,
-            ))
-        
-        return results
+        with self._state_lock:
+            self._check_freshness()
+            coll = self._get_collection(collection)
+
+            query_params = {
+                "query_embeddings": [embedding],
+                "n_results": limit,
+                "include": ["documents", "metadatas", "distances"],
+            }
+            if where:
+                query_params["where"] = where
+
+            result = coll.query(**query_params)
+
+            results = []
+            for i, id in enumerate(result["ids"][0]):
+                results.append(StoreResult(
+                    id=id,
+                    summary=result["documents"][0][i] or "",
+                    tags=self._metadata_to_tags(result["metadatas"][0][i]),
+                    distance=result["distances"][0][i] if result["distances"] else None,
+                ))
+
+            return results
     
     def query_metadata(
         self,
@@ -734,25 +750,26 @@ class ChromaStore:
         Returns:
             List of matching results (no particular order)
         """
-        self._check_freshness()
-        coll = self._get_collection(collection)
+        with self._state_lock:
+            self._check_freshness()
+            coll = self._get_collection(collection)
 
-        result = coll.get(
-            where=where,
-            limit=limit,
-            offset=offset,
-            include=["documents", "metadatas"],
-        )
-        
-        results = []
-        for i, id in enumerate(result["ids"]):
-            results.append(StoreResult(
-                id=id,
-                summary=result["documents"][i] or "",
-                tags=self._metadata_to_tags(result["metadatas"][i]),
-            ))
-        
-        return results
+            result = coll.get(
+                where=where,
+                limit=limit,
+                offset=offset,
+                include=["documents", "metadatas"],
+            )
+
+            results = []
+            for i, id in enumerate(result["ids"]):
+                results.append(StoreResult(
+                    id=id,
+                    summary=result["documents"][i] or "",
+                    tags=self._metadata_to_tags(result["metadatas"][i]),
+                ))
+
+            return results
     
     # -------------------------------------------------------------------------
     # Collection Management
@@ -760,9 +777,10 @@ class ChromaStore:
     
     def list_collections(self) -> list[str]:
         """List all collection names in the store."""
-        self._check_freshness()
-        collections = self._client.list_collections()
-        return [c.name for c in collections]
+        with self._state_lock:
+            self._check_freshness()
+            collections = self._client.list_collections()
+            return [c.name for c in collections]
 
     def delete_collection(self, name: str) -> bool:
         """
@@ -774,9 +792,8 @@ class ChromaStore:
         Returns:
             True if collection existed and was deleted
         """
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 try:
                     self._client.delete_collection(name)
@@ -785,14 +802,13 @@ class ChromaStore:
                     return True
                 except ValueError:
                     return False
-            finally:
-                self._lock_held = False
 
     def count(self, collection: str) -> int:
         """Return the number of items in a collection."""
-        self._check_freshness()
-        coll = self._get_collection(collection)
-        return coll.count()
+        with self._state_lock:
+            self._check_freshness()
+            coll = self._get_collection(collection)
+            return coll.count()
 
     # -------------------------------------------------------------------------
     # Batch Operations
@@ -809,32 +825,33 @@ class ChromaStore:
         """
         if not ids:
             return []
-        self._check_freshness()
-        coll = self._get_collection(collection)
-        result = coll.get(
-            ids=ids,
-            include=["embeddings", "documents", "metadatas"],
-        )
-        entries = []
-        if result["ids"]:
-            for i, entry_id in enumerate(result["ids"]):
-                embedding = None
-                if result["embeddings"] is not None and i < len(result["embeddings"]):
-                    emb = result["embeddings"][i]
-                    embedding = list(emb) if emb is not None else None
-                summary = ""
-                if result["documents"] is not None and i < len(result["documents"]):
-                    summary = result["documents"][i] or ""
-                tags = {}
-                if result["metadatas"] is not None and i < len(result["metadatas"]):
-                    tags = self._metadata_to_tags(result["metadatas"][i])
-                entries.append({
-                    "id": entry_id,
-                    "embedding": embedding,
-                    "summary": summary,
-                    "tags": tags,
-                })
-        return entries
+        with self._state_lock:
+            self._check_freshness()
+            coll = self._get_collection(collection)
+            result = coll.get(
+                ids=ids,
+                include=["embeddings", "documents", "metadatas"],
+            )
+            entries = []
+            if result["ids"]:
+                for i, entry_id in enumerate(result["ids"]):
+                    embedding = None
+                    if result["embeddings"] is not None and i < len(result["embeddings"]):
+                        emb = result["embeddings"][i]
+                        embedding = list(emb) if emb is not None else None
+                    summary = ""
+                    if result["documents"] is not None and i < len(result["documents"]):
+                        summary = result["documents"][i] or ""
+                    tags = {}
+                    if result["metadatas"] is not None and i < len(result["metadatas"]):
+                        tags = self._metadata_to_tags(result["metadatas"][i])
+                    entries.append({
+                        "id": entry_id,
+                        "embedding": embedding,
+                        "summary": summary,
+                        "tags": tags,
+                    })
+            return entries
 
     def upsert_batch(
         self,
@@ -852,9 +869,8 @@ class ChromaStore:
         """
         if not ids:
             return
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 coll = self._get_collection(collection)
                 metadatas = [self._tags_to_metadata(t) for t in tags]
@@ -865,8 +881,6 @@ class ChromaStore:
                     metadatas=metadatas,
                 )
                 self._bump_epoch()
-            finally:
-                self._lock_held = False
 
     def delete_entries(self, collection: str, ids: list[str]) -> None:
         """
@@ -877,9 +891,8 @@ class ChromaStore:
         """
         if not ids:
             return
-        with self._chroma_lock:
-            self._lock_held = True
-            try:
+        with self._state_lock:
+            with self._write_guard():
                 self._check_freshness()
                 coll = self._get_collection(collection)
                 try:
@@ -887,8 +900,6 @@ class ChromaStore:
                 except ValueError:
                     pass  # Some IDs may not exist
                 self._bump_epoch()
-            finally:
-                self._lock_held = False
 
     # -------------------------------------------------------------------------
     # Resource Management
@@ -901,11 +912,12 @@ class ChromaStore:
         Evicts the shared system cache so the underlying System (hnswlib
         indices, SQLite connections) can be garbage-collected.
         """
-        self._collections.clear()
-        if self._client is not None:
-            import chromadb.api.client
-            chromadb.api.client.SharedSystemClient.clear_system_cache()
-            self._client = None
+        with self._state_lock:
+            self._collections.clear()
+            if self._client is not None:
+                import chromadb.api.client
+                chromadb.api.client.SharedSystemClient.clear_system_cache()
+                self._client = None
 
     def __enter__(self):
         """Context manager entry."""

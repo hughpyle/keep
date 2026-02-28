@@ -12,6 +12,7 @@ import gc
 import logging
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -158,6 +159,7 @@ class LockedEmbeddingProvider:
     def __init__(self, provider, lock_path: Path):
         self._provider = provider
         self._lock = ModelLock(lock_path)
+        self._thread_lock = threading.RLock()
 
     @property
     def model_name(self) -> str:
@@ -165,26 +167,30 @@ class LockedEmbeddingProvider:
 
     @property
     def dimension(self) -> int:
-        with self._lock:
-            return self._provider.dimension
+        with self._thread_lock:
+            with self._lock:
+                return self._provider.dimension
 
     def embed(self, text: str) -> list[float]:
-        with self._lock:
-            return self._provider.embed(text)
+        with self._thread_lock:
+            with self._lock:
+                return self._provider.embed(text)
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        with self._lock:
-            return self._provider.embed_batch(texts)
+        with self._thread_lock:
+            with self._lock:
+                return self._provider.embed_batch(texts)
 
     def release(self) -> None:
         """Free the model."""
-        try:
-            del self._provider
-        except AttributeError:
-            pass
-        self._provider = None
-        gc.collect()
-        logger.debug("Released embedding provider")
+        with self._thread_lock:
+            try:
+                del self._provider
+            except AttributeError:
+                pass
+            self._provider = None
+            gc.collect()
+            logger.debug("Released embedding provider")
 
 
 class LockedSummarizationProvider:
@@ -198,6 +204,7 @@ class LockedSummarizationProvider:
     def __init__(self, provider, lock_path: Path):
         self._provider = provider
         self._lock = ModelLock(lock_path)
+        self._thread_lock = threading.RLock()
 
     @property
     def model_name(self) -> str:
@@ -210,20 +217,22 @@ class LockedSummarizationProvider:
         max_length: int = 500,
         context: str | None = None,
     ) -> str:
-        with self._lock:
-            return self._provider.summarize(
-                content, max_length=max_length, context=context
-            )
+        with self._thread_lock:
+            with self._lock:
+                return self._provider.summarize(
+                    content, max_length=max_length, context=context
+                )
 
     def release(self) -> None:
         """Free the model."""
-        try:
-            del self._provider
-        except AttributeError:
-            pass
-        self._provider = None
-        gc.collect()
-        logger.debug("Released summarization provider")
+        with self._thread_lock:
+            try:
+                del self._provider
+            except AttributeError:
+                pass
+            self._provider = None
+            gc.collect()
+            logger.debug("Released summarization provider")
 
 
 class LockedMediaDescriber:
@@ -237,24 +246,27 @@ class LockedMediaDescriber:
     def __init__(self, provider, lock_path: Path):
         self._provider = provider
         self._lock = ModelLock(lock_path)
+        self._thread_lock = threading.RLock()
 
     @property
     def model_name(self) -> str:
         return getattr(self._provider, "model_name", "unknown")
 
     def describe(self, path: str, content_type: str) -> str | None:
-        with self._lock:
-            return self._provider.describe(path, content_type)
+        with self._thread_lock:
+            with self._lock:
+                return self._provider.describe(path, content_type)
 
     def release(self) -> None:
         """Free the model."""
-        try:
-            del self._provider
-        except AttributeError:
-            pass
-        self._provider = None
-        gc.collect()
-        logger.debug("Released media describer")
+        with self._thread_lock:
+            try:
+                del self._provider
+            except AttributeError:
+                pass
+            self._provider = None
+            gc.collect()
+            logger.debug("Released media describer")
 
 
 class LockedContentExtractor:
@@ -268,21 +280,24 @@ class LockedContentExtractor:
     def __init__(self, provider, lock_path: Path):
         self._provider = provider
         self._lock = ModelLock(lock_path)
+        self._thread_lock = threading.RLock()
 
     @property
     def model_name(self) -> str:
         return getattr(self._provider, "model_name", "unknown")
 
     def extract(self, path: str, content_type: str) -> str | None:
-        with self._lock:
-            return self._provider.extract(path, content_type)
+        with self._thread_lock:
+            with self._lock:
+                return self._provider.extract(path, content_type)
 
     def release(self) -> None:
         """Free the model."""
-        try:
-            del self._provider
-        except AttributeError:
-            pass
-        self._provider = None
-        gc.collect()
-        logger.debug("Released content extractor")
+        with self._thread_lock:
+            try:
+                del self._provider
+            except AttributeError:
+                pass
+            self._provider = None
+            gc.collect()
+            logger.debug("Released content extractor")

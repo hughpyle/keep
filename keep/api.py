@@ -215,6 +215,7 @@ from .providers.embedding_cache import CachingEmbeddingProvider
 from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, SimilarRef, MetaRef, EdgeRef, VersionRef, PartRef,
+    EvidenceUnit, ContextWindow,
     PromptResult, PromptInfo,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
@@ -267,7 +268,6 @@ _META_PREREQ_KEY = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*)=\*$')
 
 # Markdown extensions that may contain YAML frontmatter
 _MARKDOWN_EXTENSIONS = {".md", ".markdown", ".mdx"}
-
 
 def _extract_markdown_frontmatter(content: str) -> tuple[str, dict[str, str]]:
     """
@@ -537,6 +537,7 @@ class Keeper:
         import threading
         self._reconcile_lock = threading.Lock()
         self._reconcile_done = threading.Event()
+        self._closing = threading.Event()  # signals reconcile to abort
         self._provider_init_lock = threading.Lock()
         self._last_spawn_time: float = 0.0
 
@@ -570,7 +571,7 @@ class Keeper:
             chroma_coll = self._resolve_chroma_collection()
             doc_coll = self._resolve_doc_collection()
             self._reconcile_thread = threading.Thread(
-                target=self._auto_reconcile_safe, args=(chroma_coll, doc_coll), daemon=True
+                target=self._auto_reconcile_safe, args=(chroma_coll, doc_coll), daemon=True,
             )
             self._reconcile_thread.start()
         else:
@@ -642,8 +643,9 @@ class Keeper:
     def _auto_reconcile(self, chroma_coll: str, doc_coll: str) -> None:
         """Fix store divergence using summaries (no content re-fetch needed).
 
-        Validates embedding provider first, then delegates to reconcile(fix=True).
-        Skips entirely if no provider is configured or creation fails.
+        Validates embedding provider first, then fixes missing/orphaned items.
+        Uses its own DocumentStore connection to avoid concurrent-access
+        segfaults with the main thread's SQLite connection.
         """
         if self._config.embedding is None:
             logger.info("Skipping reconciliation: no embedding provider configured")
@@ -655,11 +657,20 @@ class Keeper:
             logger.warning("Skipping reconciliation: provider unavailable: %s", e)
             return
 
-        result = self.reconcile(fix=True)
-        logger.info(
-            "Auto-reconcile complete: %d fixed, %d orphans removed, %d missing",
-            result["fixed"], result["removed"], result["missing_from_index"],
-        )
+        # Open a separate SQLite connection for thread-safe reads.
+        # The main thread may be running find() concurrently, and Python's
+        # sqlite3 module crashes (segfault) on concurrent access to the
+        # same Connection object from multiple threads.
+        from .document_store import DocumentStore
+        recon_ds = DocumentStore(self._document_store._db_path)
+        try:
+            result = self.reconcile(fix=True, _doc_store=recon_ds)
+            logger.info(
+                "Auto-reconcile complete: %d fixed, %d orphans removed, %d missing",
+                result["fixed"], result["removed"], result["missing_from_index"],
+            )
+        finally:
+            recon_ds.close()
 
     def _migrate_system_documents(self) -> dict:
         """Migrate system documents to stable IDs and current version."""
@@ -818,17 +829,20 @@ class Keeper:
         Also closes the embedding cache when releasing.
         Safe to call at any time.
         """
-        if self._embedding_provider is not None:
+        with self._provider_init_lock:
+            provider = self._embedding_provider
+            self._embedding_provider = None
+
+        if provider is not None:
             # Release the locked inner provider (frees model weights)
-            inner = getattr(self._embedding_provider, '_provider', None)
+            inner = getattr(provider, '_provider', None)
             if hasattr(inner, 'release'):
                 inner.release()
             # Close the embedding cache
-            if hasattr(self._embedding_provider, '_cache'):
-                cache = self._embedding_provider._cache
+            if hasattr(provider, '_cache'):
+                cache = provider._cache
                 if hasattr(cache, 'close'):
                     cache.close()
-            self._embedding_provider = None
 
     def _get_media_describer(self) -> Optional[MediaDescriber]:
         """
@@ -1576,11 +1590,13 @@ class Keeper:
         if old_inverse and not new_inverse:
             # _inverse removed → clean up all edges and backfill for this predicate
             self._document_store.delete_edges_for_predicate(doc_coll, predicate)
+            self._document_store.delete_version_edges_for_predicate(doc_coll, predicate)
             self._document_store.delete_backfill(doc_coll, predicate)
         elif new_inverse and old_inverse != new_inverse:
             # _inverse added or changed → delete old edges, enqueue new backfill
             if old_inverse:
                 self._document_store.delete_edges_for_predicate(doc_coll, predicate)
+                self._document_store.delete_version_edges_for_predicate(doc_coll, predicate)
                 self._document_store.delete_backfill(doc_coll, predicate)
             self._check_edge_backfill(predicate, new_inverse, doc_coll)
             # Materialize the inverse tagdoc synchronously
@@ -2346,6 +2362,40 @@ class Keeper:
             dict mapping primary item ID to list of deep-discovered Items,
             sorted by RRF score within each group.
         """
+        query_stopwords: frozenset[str] = frozenset()
+        get_stopwords = getattr(self._document_store, "get_stopwords", None)
+        if callable(get_stopwords):
+            try:
+                query_stopwords = get_stopwords()
+            except Exception:
+                query_stopwords = frozenset()
+
+        def _tokenize(text: str) -> set[str]:
+            return {
+                tok for tok in re.findall(r"[a-z0-9]+", (text or "").lower())
+                if len(tok) > 2 and tok not in query_stopwords
+            }
+
+        def _extract_focus(id_value: str) -> tuple[str, Optional[str], Optional[str]]:
+            """Return (parent_id, focus_part, focus_version) from a doc/part/version ID."""
+            if "@p" in id_value:
+                parent, suffix = id_value.rsplit("@p", 1)
+                if suffix.isdigit():
+                    return parent, suffix, None
+            if "@v" in id_value:
+                parent, suffix = id_value.rsplit("@v", 1)
+                if suffix.isdigit():
+                    return parent, None, suffix
+            return id_value, None, None
+
+        query_terms = _tokenize(query)
+
+        def _query_overlap(text: str) -> float:
+            if not query_terms:
+                return 0.0
+            # Normalize to [0, 1] so lexical signal doesn't swamp semantic score.
+            return len(query_terms & _tokenize(text)) / max(len(query_terms), 1)
+
         # 1. Traverse edges for each primary, collect candidate IDs.
         #    Two traversal paths:
         #    a) Inverse edges: primary is a target → collect sources
@@ -2362,6 +2412,17 @@ class Keeper:
 
         primary_to_sources: dict[str, set[str]] = {}
         all_source_ids: set[str] = set()
+        get_inverse_version_edges = getattr(
+            self._document_store, "get_inverse_version_edges", None,
+        )
+        has_archived_versions = False
+        if callable(get_inverse_version_edges):
+            count_versions = getattr(self._document_store, "count_versions", None)
+            if callable(count_versions):
+                has_archived_versions = count_versions(doc_coll) > 0
+            else:
+                # Compatibility path for test doubles or alternate stores.
+                has_archived_versions = True
         # IDs to exclude from deep results: caller-provided exclusion set
         # (items the user will see as primaries) or fall back to all items
         top_ids = set(exclude_ids) if exclude_ids is not None else set()
@@ -2377,6 +2438,15 @@ class Keeper:
                 doc_coll, parent_id)
             for _inv, src_id, _created in inv_edges:
                 sources.add(src_id)
+
+            # Version-note parity: include sources whose archived versions
+            # had edge tags pointing at this primary target.
+            if has_archived_versions:
+                ver_inv_edges = get_inverse_version_edges(
+                    doc_coll, parent_id, limit=_MAX_CANDIDATES,
+                )
+                for _inv, src_id, _created in ver_inv_edges:
+                    sources.add(src_id)
 
             # Path b: two-hop via forward edges (primary is source)
             fwd_edges = self._document_store.get_forward_edges(
@@ -2434,14 +2504,13 @@ class Keeper:
         else:
             return {}
 
-        # 5. Collapse to parent IDs, assign to originating primary
-        groups: dict[str, list[Item]] = {}
-        seen_parents: set[str] = set()
+        # 5. Candidate generation: map fused hits into evidence units.
+        #    Keep this broad/high-recall; reranking happens in stage 6.
+        candidate_units: list[tuple[str, EvidenceUnit, Item]] = []
 
         for item in fused:
-            parent_id = item.id.split("@")[0] if "@" in item.id else item.id
-            if parent_id in seen_parents:
-                continue
+            parent_id, focus_part, focus_version = _extract_focus(item.id)
+            has_focus = focus_part is not None or focus_version is not None
 
             # Find which primary has an edge to this source.
             # Prefer non-excluded primaries (injected entities) so that
@@ -2460,7 +2529,6 @@ class Keeper:
             # they belong to an entity group (entity not in top_ids).
             if parent_id in top_ids and (best_primary is None or best_primary in top_ids):
                 continue
-            seen_parents.add(parent_id)
 
             if best_primary is None:
                 continue
@@ -2469,16 +2537,157 @@ class Keeper:
             head_doc = self._document_store.get(doc_coll, parent_id)
             if head_doc:
                 head_item = _record_to_item(head_doc)
+                tags = dict(head_item.tags)
+                # Preserve matched evidence text for renderer/LLM context.
+                if item.summary and (has_focus or item.summary != head_item.summary):
+                    tags["_focus_summary"] = item.summary
+                if focus_part:
+                    tags["_focus_part"] = focus_part
+                if focus_version:
+                    tags["_focus_version"] = focus_version
+                tags["_anchor_id"] = item.id
+                if focus_part:
+                    tags["_anchor_type"] = "part"
+                elif focus_version:
+                    tags["_anchor_type"] = "version"
+                else:
+                    tags["_anchor_type"] = "document"
                 scored = Item(
-                    id=parent_id, summary=head_item.summary,
-                    tags=head_item.tags, score=item.score,
+                    id=item.id, summary=head_item.summary,
+                    tags=tags, score=item.score,
                 )
             else:
+                tags = dict(item.tags)
+                if item.summary and has_focus:
+                    tags["_focus_summary"] = item.summary
+                if focus_part:
+                    tags["_focus_part"] = focus_part
+                if focus_version:
+                    tags["_focus_version"] = focus_version
+                tags["_anchor_id"] = item.id
+                if focus_part:
+                    tags["_anchor_type"] = "part"
+                elif focus_version:
+                    tags["_anchor_type"] = "version"
+                else:
+                    tags["_anchor_type"] = "document"
                 scored = Item(
-                    id=parent_id, summary=item.summary,
-                    tags=item.tags, score=item.score,
+                    id=item.id, summary=item.summary,
+                    tags=tags, score=item.score,
                 )
-            groups.setdefault(best_primary, []).append(scored)
+
+            evidence_text = scored.tags.get("_focus_summary", scored.summary)
+            lane = "derived" if focus_part is not None else "authoritative"
+            scored.tags["_lane"] = lane
+
+            unit = EvidenceUnit(
+                unit_id=item.id,
+                source_id=parent_id,
+                version=int(focus_version) if focus_version else None,
+                part_num=int(focus_part) if focus_part else None,
+                lane=lane,
+                text=evidence_text,
+                parent_summary=scored.summary,
+                created=scored.tags.get("_created"),
+                score_sem=item.score or 0.0,
+                score_lex=float(_query_overlap(evidence_text)),
+                score_focus=1.0 if has_focus else 0.0,
+                score_coherence=0.2 if scored.tags.get("_focus_summary") else 0.0,
+                provenance={
+                    "anchor_id": item.id,
+                    "anchor_type": scored.tags.get("_anchor_type", "document"),
+                },
+            )
+
+            candidate_units.append((best_primary, unit, scored))
+
+        if not candidate_units:
+            return {}
+
+        # 6. Query-conditioned rerank and parent-level dedup.
+        #    Weights are generic (dataset-agnostic): semantic + lexical
+        #    relevance + focus quality + coherence signal.
+        _W_SEM = 1.0
+        _W_LEX = 0.6
+        _W_FOCUS = 0.4
+        _W_COH = 0.2
+        _MAX_ANCHORS_PER_SOURCE = 2
+        by_source: dict[str, list[tuple[float, str, ContextWindow, Item]]] = {}
+
+        for primary_id, unit, scored in candidate_units:
+            total = (
+                _W_SEM * unit.score_sem
+                + _W_LEX * unit.score_lex
+                + _W_FOCUS * unit.score_focus
+                + _W_COH * unit.score_coherence
+            )
+            reranked = EvidenceUnit(
+                unit_id=unit.unit_id,
+                source_id=unit.source_id,
+                version=unit.version,
+                part_num=unit.part_num,
+                lane=unit.lane,
+                text=unit.text,
+                parent_summary=unit.parent_summary,
+                created=unit.created,
+                score_sem=unit.score_sem,
+                score_lex=unit.score_lex,
+                score_focus=unit.score_focus,
+                score_coherence=unit.score_coherence,
+                score_total=total,
+                provenance=unit.provenance,
+            )
+            window = ContextWindow(
+                anchor=reranked,
+                members=[reranked],  # first slice: anchor-only windows
+                score_total=total,
+                tokens_est=max(len(reranked.text) // 4, 1),
+            )
+            by_source.setdefault(reranked.source_id, []).append(
+                (window.score_total, primary_id, window, scored)
+            )
+
+        groups: dict[str, list[Item]] = {}
+        for entries in by_source.values():
+            entries.sort(key=lambda t: t[0], reverse=True)
+            selected: list[tuple[float, str, ContextWindow, Item]] = []
+            seen_focus: set[tuple[Optional[int], Optional[int], str]] = set()
+            for score_total, primary_id, window, scored in entries:
+                focus_key = (
+                    window.anchor.version,
+                    window.anchor.part_num,
+                    (scored.tags.get("_focus_summary") or "").strip().lower(),
+                )
+                if focus_key in seen_focus:
+                    continue
+                seen_focus.add(focus_key)
+                selected.append((score_total, primary_id, window, scored))
+                if len(selected) >= _MAX_ANCHORS_PER_SOURCE:
+                    break
+            for score_total, primary_id, _window, scored in selected:
+                scored.tags["_window_score"] = f"{score_total:.4f}"
+                out_score = scored.score if scored.score is not None else score_total
+                scored_item = Item(
+                    id=scored.id,
+                    summary=scored.summary,
+                    tags=scored.tags,
+                    score=out_score,
+                )
+                groups.setdefault(primary_id, []).append(scored_item)
+
+        for primary_id, group in groups.items():
+            group.sort(
+                key=lambda x: (
+                    float(x.tags.get("_window_score", "0") or 0),
+                    x.score or 0.0,
+                ),
+                reverse=True,
+            )
+            # Hide internal rerank helper tag from downstream output.
+            for gi in group:
+                if "_window_score" in gi.tags:
+                    del gi.tags["_window_score"]
+            groups[primary_id] = group
 
         return groups
 
@@ -2528,12 +2737,12 @@ class Keeper:
         # enqueued edge-backfill tasks, process them synchronously so
         # edges are available for this query.
         if deep and self._needs_sysdoc_migration:
-            self._needs_sysdoc_migration = False
             try:
                 self._migrate_system_documents()
                 # Drain any edge-backfill tasks that migration enqueued
                 # so edges are ready for this search.
                 self._flush_edge_backfill(doc_coll)
+                self._needs_sysdoc_migration = False
             except Exception as e:
                 logger.warning("System doc migration deferred: %s", e)
 
@@ -2616,12 +2825,14 @@ class Keeper:
                 # by name, inject them as synthetic primaries so their
                 # edges get traversed even if they didn't rank in search.
                 deep_items = list(items)
+                entity_hits: list[str] = []
                 if deep_query:
                     # Only consider the top display window as "already present"
                     _ENTITY_WINDOW = 10
                     top_ids = {(i.id.split("@")[0] if "@" in i.id else i.id)
                                for i in items[:_ENTITY_WINDOW]}
-                    entity_hits = self._document_store.find_edge_targets(doc_coll, deep_query)
+                    entity_hits = self._document_store.find_edge_targets(
+                        doc_coll, deep_query)
                     # Insert at front so entities are within top_k window
                     inject_pos = 0
                     for eid in entity_hits:
@@ -2629,6 +2840,23 @@ class Keeper:
                             deep_items.insert(inject_pos, Item(id=eid, summary="", tags={}, score=0.5))
                             injected_entity_ids.add(eid)
                             inject_pos += 1
+                    # Remove matched entity phrases from deep FTS query so
+                    # activity/content terms dominate deep evidence. This
+                    # avoids over-blocking standalone content words.
+                    if entity_hits:
+                        cleaned = deep_query
+                        for eid in sorted(entity_hits, key=len, reverse=True):
+                            parts = re.findall(r"[a-z0-9]+", eid.lower())
+                            if not parts:
+                                continue
+                            # Match phrase tokens with flexible separators.
+                            pattern = r"\b" + r"[^a-z0-9]+".join(
+                                re.escape(tok) for tok in parts
+                            ) + r"\b"
+                            cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+                        kept = re.findall(r"[a-z0-9]+", cleaned.lower())
+                        if kept:
+                            deep_query = " ".join(kept)
 
                 # Exclude only a few top primaries from deep results.
                 # With deep_primary_cap, most primaries get dropped so
@@ -2758,12 +2986,14 @@ class Keeper:
             # Ensure injected entities pass the filter even if they're
             # beyond the limit window (they were appended, not ranked)
             final_ids.update(injected_entity_ids & deep_groups.keys())
-            remapped: dict[str, dict[str, Item]] = {}
+            remapped: dict[str, list[Item]] = {}
+            remap_keys: dict[str, set[str]] = {}
             for source_id, group in deep_groups.items():
                 # Uplift the group key (source primary) to parent
                 key_parent = source_id.split("@")[0] if "@" in source_id else source_id
                 is_entity_group = key_parent in injected_entity_ids
-                bucket = remapped.setdefault(key_parent, {})
+                bucket = remapped.setdefault(key_parent, [])
+                seen_keys = remap_keys.setdefault(key_parent, set())
                 # Uplift each deep item to its parent too
                 for item in group:
                     deep_parent_id = item.id.split("@")[0] if "@" in item.id else item.id
@@ -2772,21 +3002,37 @@ class Keeper:
                     # intentional (deep_primary_cap handles dedup at render)
                     if deep_parent_id in final_ids and not is_entity_group:
                         continue
-                    if deep_parent_id not in bucket or (item.score or 0) > (bucket[deep_parent_id].score or 0):
-                        if "@" in item.id:
-                            parent_doc = self._document_store.get(doc_coll, deep_parent_id)
-                            if parent_doc:
-                                pi = _record_to_item(parent_doc)
-                                bucket[deep_parent_id] = Item(
-                                    id=deep_parent_id, summary=pi.summary,
-                                    tags=pi.tags, score=item.score,
+                    anchor_key = (
+                        item.tags.get("_anchor_id")
+                        or f"{item.id}|{item.tags.get('_focus_version', '')}|"
+                           f"{item.tags.get('_focus_part', '')}|"
+                           f"{item.tags.get('_focus_summary', '')}"
+                    )
+                    if anchor_key in seen_keys:
+                        continue
+                    seen_keys.add(anchor_key)
+                    if "@" in item.id:
+                        parent_doc = self._document_store.get(doc_coll, deep_parent_id)
+                        if parent_doc:
+                            pi = _record_to_item(parent_doc)
+                            tags = dict(pi.tags)
+                            for k, v in (item.tags or {}).items():
+                                if k.startswith("_focus_") or k.startswith("_anchor_") or k == "_lane":
+                                    tags[k] = v
+                            bucket.append(
+                                Item(
+                                    id=item.id,
+                                    summary=pi.summary,
+                                    tags=tags,
+                                    score=item.score,
                                 )
-                            else:
-                                bucket[deep_parent_id] = item
+                            )
                         else:
-                            bucket[deep_parent_id] = item
+                            bucket.append(item)
+                    else:
+                        bucket.append(item)
             deep_groups = {
-                pid: sorted(bucket.values(), key=lambda x: x.score or 0, reverse=True)
+                pid: sorted(bucket, key=lambda x: x.score or 0, reverse=True)
                 for pid, bucket in remapped.items()
                 if pid in final_ids
             }
@@ -2822,9 +3068,7 @@ class Keeper:
                                     worst_idx = idx
                         if worst_idx is not None:
                             final[worst_idx] = entity_item
-                        else:
-                            # All items have deep groups — append anyway
-                            final.append(entity_item)
+                        # else: all items have deep groups — skip to stay within limit
         # Enrich tags from SQLite (ChromaDB stores casefolded values;
         # SQLite has the canonical original-case values for display)
         def _enrich_from_sqlite(items_to_enrich):
@@ -3002,7 +3246,7 @@ class Keeper:
         tags: Optional[dict[str, str]] = None,
         limit: int = 10,
         deep: bool = False,
-        token_budget: int = 4000,
+        token_budget: Optional[int] = None,
     ) -> Optional[PromptResult]:
         """Render an agent prompt doc with injected context.
 
@@ -3022,7 +3266,7 @@ class Keeper:
             tags: Tag filter for search results
             limit: Max search results
             deep: Follow tags from results to discover related items
-            token_budget: Token budget for {find} context rendering
+            token_budget: Explicit token budget (None = use template default)
 
         Returns:
             PromptResult with context, search_results, and prompt template,
@@ -3054,7 +3298,8 @@ class Keeper:
         # Deep items are rendered in a separate pass from leftover budget,
         # so the primary fetch size doesn't need to shrink for deep mode.
         tokens_per_item = 50
-        fetch_limit = min(200, max(limit, token_budget // tokens_per_item))
+        effective_budget = token_budget or 4000
+        fetch_limit = min(200, max(limit, effective_budget // tokens_per_item))
 
         # Search: find similar items with available filters
         search_results = None
@@ -3634,6 +3879,8 @@ class Keeper:
         # Clean up edges (both directions)
         self._document_store.delete_edges_for_source(doc_coll, id)
         self._document_store.delete_edges_for_target(doc_coll, id)
+        self._document_store.delete_version_edges_for_source(doc_coll, id)
+        self._document_store.delete_version_edges_for_target(doc_coll, id)
         return doc_deleted or chroma_deleted
 
     def revert(self, id: str) -> Optional[Item]:
@@ -5250,6 +5497,10 @@ class Keeper:
                     created=created,
                 )
                 edge_count += 1
+        # Materialize archived-version edges for this predicate too.
+        self._document_store.backfill_version_edges_for_predicate(
+            doc_coll, predicate, inverse,
+        )
         # Mark backfill complete
         self._document_store.upsert_backfill(doc_coll, predicate, inverse, completed=utc_now())
         logger.info("Backfilled %d edges for predicate=%s inverse=%s", edge_count, predicate, inverse)
@@ -5485,6 +5736,7 @@ class Keeper:
     def reconcile(
         self,
         fix: bool = False,
+        _doc_store: "Optional[DocumentStore]" = None,
     ) -> dict:
         """
         Check and optionally fix consistency between document store and vector store.
@@ -5495,15 +5747,18 @@ class Keeper:
 
         Args:
             fix: If True, re-index documents missing from vector store
+            _doc_store: Optional separate DocumentStore for thread-safe reads
+                (used by background reconcile to avoid concurrent SQLite access)
 
         Returns:
             Dict with 'missing_from_index', 'orphaned_in_index', 'fixed' counts
         """
+        ds = _doc_store or self._document_store
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
         # Find mismatches between stores
-        doc_ids = self._document_store.list_ids(doc_coll)
+        doc_ids = ds.list_ids(doc_coll)
         missing_from_chroma = self._store.find_missing_ids(chroma_coll, doc_ids)
 
         # Skip versioned (@v{N}) and part (@p{N}) IDs — tracked in separate tables
@@ -5519,8 +5774,10 @@ class Keeper:
         if fix:
             # Re-index items missing from ChromaDB using stored summary
             for doc_id in missing_from_chroma:
+                if self._closing.is_set():
+                    break
                 try:
-                    doc_record = self._document_store.get(doc_coll, doc_id)
+                    doc_record = ds.get(doc_coll, doc_id)
                     if doc_record:
                         embedding = self._get_embedding_provider().embed(doc_record.summary)
                         self._store.upsert(
@@ -5537,6 +5794,8 @@ class Keeper:
 
             # Remove orphaned ChromaDB entries
             for orphan_id in orphaned_in_chroma:
+                if self._closing.is_set():
+                    break
                 try:
                     self._store.delete(chroma_coll, orphan_id)
                     removed += 1
@@ -5564,37 +5823,63 @@ class Keeper:
 
         Waits for background reconcile to finish before tearing down stores,
         then releases model locks (freeing GPU memory) before file locks.
+
+        Wraps each step in try/except because close() may be called from
+        an atexit handler during interpreter shutdown, when C extension
+        modules (sqlite3, chromadb) may already be partially finalized.
         """
-        # Wait for background reconcile thread to finish so it doesn't
-        # access stores after they're closed.
+        # Signal reconcile thread to stop and wait for it
+        if hasattr(self, '_closing'):
+            self._closing.set()
         if hasattr(self, '_reconcile_thread') and self._reconcile_thread is not None:
             self._reconcile_thread.join(timeout=10)
 
         # Release locked model providers (frees GPU memory + gc)
-        self._release_embedding_provider()
-        self._release_summarization_provider()
+        try:
+            self._release_embedding_provider()
+        except Exception:
+            pass
+        try:
+            self._release_summarization_provider()
+        except Exception:
+            pass
 
         if self._media_describer is not None:
             if hasattr(self._media_describer, 'release'):
-                self._media_describer.release()
+                try:
+                    self._media_describer.release()
+                except Exception:
+                    pass
             self._media_describer = None
 
         if self._content_extractor is not None:
             if hasattr(self._content_extractor, 'release'):
-                self._content_extractor.release()
+                try:
+                    self._content_extractor.release()
+                except Exception:
+                    pass
             self._content_extractor = None
 
         # Close ChromaDB store
         if hasattr(self, '_store') and self._store is not None:
-            self._store.close()
+            try:
+                self._store.close()
+            except Exception:
+                pass
 
         # Close document store (SQLite)
         if hasattr(self, '_document_store') and self._document_store is not None:
-            self._document_store.close()
+            try:
+                self._document_store.close()
+            except Exception:
+                pass
 
         # Close pending summary queue
         if hasattr(self, '_pending_queue'):
-            self._pending_queue.close()
+            try:
+                self._pending_queue.close()
+            except Exception:
+                pass
 
         # Close task delegation client
         if hasattr(self, '_task_client') and self._task_client is not None:

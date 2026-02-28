@@ -509,7 +509,7 @@ class TestKeepPrompt:
         mock_keeper.render_prompt.assert_called_once_with(
             "reflect", "query", id="my-id",
             since="P7D", until="2026-02-20", tags={"project": "x"},
-            deep=False, token_budget=4000,
+            deep=False, token_budget=None,
         )
 
     @pytest.mark.asyncio

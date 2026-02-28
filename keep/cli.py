@@ -247,13 +247,34 @@ def render_find_context(
         return "No results."
 
     deep_groups = getattr(items, "deep_groups", {})
+    compact_mode = bool(deep_groups) and token_budget <= 300
+    candidate_items = list(items)
+
+    # With deep mode + primary cap, pick primaries before spending budget.
+    # This avoids low budgets being exhausted by unrelated top-ranked primaries
+    # before entity/deep-group anchors are even considered.
+    if deep_primary_cap is not None and deep_groups and len(candidate_items) > deep_primary_cap:
+        def _base_id(it: "Item") -> str:
+            return it.id.split("@")[0] if "@" in it.id else it.id
+
+        def _has_deep_group(it: "Item") -> bool:
+            bid = _base_id(it)
+            return bid in deep_groups or it.id in deep_groups
+
+        # Stable sort preserves original rank order within buckets.
+        candidate_items.sort(key=lambda it: (
+            not bool(it.tags.get("_entity")),  # query-mentioned entities first
+            not _has_deep_group(it),           # then items with deep groups
+        ))
+        candidate_items = candidate_items[:deep_primary_cap]
+
     remaining = token_budget
 
     # Pass 1: summary lines for every item that fits
     # Each entry: (item, [lines_so_far])
     rendered: list[tuple["Item", list[str]]] = []
 
-    for item in items:
+    for item in candidate_items:
         if remaining <= 0:
             break
 
@@ -270,66 +291,264 @@ def render_find_context(
         remaining -= _tok(line)
         rendered.append((item, [line]))
 
-    # When deep_primary_cap is set, truncate primaries to top N (prefer
-    # those with deep groups) and skip pass 2 — budget goes to deep items.
-    if deep_primary_cap is not None and deep_groups and len(rendered) > deep_primary_cap:
-        # Sort: entities first (query-mentioned), then deep groups, then rest
-        has_deep = set()
-        is_entity = set()
-        for item, _ in rendered:
-            pid = item.id.split("@")[0] if "@" in item.id else item.id
-            if pid in deep_groups or item.id in deep_groups:
-                has_deep.add(item.id)
-            if item.tags.get("_entity"):
-                is_entity.add(item.id)
-        rendered.sort(key=lambda t: (
-            t[0].id not in is_entity,   # entities first
-            t[0].id not in has_deep,    # then items with deep groups
-        ))
-        # Reclaim budget from dropped items
-        for _, block_lines in rendered[deep_primary_cap:]:
-            for line in block_lines:
-                remaining += _tok(line)
-        rendered = rendered[:deep_primary_cap]
-
     # Pass 2: deep sub-items, ranked by score across all groups.
     # Runs before detail backfill so deep evidence gets budget priority.
     if deep_groups and remaining > 0:
-        # Build a flat list of (deep_item, parent_block_lines) ranked by score
+        def _append_line(block_lines: list[str], line: str) -> bool:
+            nonlocal remaining
+            cost = _tok(line)
+            if remaining - cost < 0:
+                return False
+            block_lines.append(line)
+            remaining -= cost
+            return True
+
+        def _append_section(
+            block_lines: list[str],
+            header: str,
+            lines: list[str],
+        ) -> bool:
+            """Append header + as many section lines as fit, or nothing."""
+            nonlocal remaining
+            if not lines:
+                return False
+
+            header_cost = _tok(header)
+            if remaining - header_cost < 0:
+                return False
+
+            budget_after_header = remaining - header_cost
+            take = 0
+            for line in lines:
+                c = _tok(line)
+                if budget_after_header - c < 0:
+                    break
+                budget_after_header -= c
+                take += 1
+
+            # Never emit empty headers.
+            if take == 0:
+                return False
+
+            block_lines.append(header)
+            remaining -= header_cost
+            for line in lines[:take]:
+                block_lines.append(line)
+                remaining -= _tok(line)
+            return True
+
+        def _thread_radius() -> int:
+            """Adapt version-thread window width as budget tightens."""
+            budget_hint = min(token_budget, remaining)
+            if budget_hint <= 450:
+                return 0  # focus version only
+            if budget_hint <= 900:
+                return 1  # local neighborhood (3 versions)
+            return 2      # full neighborhood (5 versions)
+
+        def _base_id(id_value: str) -> str:
+            return id_value.split("@")[0] if "@" in id_value else id_value
+
+        def _deep_key(deep_item: "Item") -> str:
+            return (
+                deep_item.tags.get("_anchor_id")
+                or f"{deep_item.id}|{deep_item.tags.get('_focus_version', '')}|"
+                   f"{deep_item.tags.get('_focus_part', '')}|"
+                   f"{deep_item.tags.get('_focus_summary', '')}"
+            )
+
+        def _add_deep_window(
+            parent_id: str,
+            deep_items: list["Item"],
+            block_lines: list[str],
+        ) -> None:
+            """Attach a compact narrative window around one parent thread."""
+            if compact_mode:
+                return
+            if keeper is None or remaining <= 0:
+                return
+
+            focus_versions = sorted({
+                int(v)
+                for v in (di.tags.get("_focus_version") for di in deep_items)
+                if v and str(v).isdigit()
+            })
+            focus_parts = sorted({
+                int(p)
+                for p in (di.tags.get("_focus_part") for di in deep_items)
+                if p and str(p).isdigit()
+            })
+
+            # Version-thread window: merge local neighborhoods around all focused versions.
+            if focus_versions:
+                radius = _thread_radius()
+                around_map = {}
+                for fv in focus_versions:
+                    try:
+                        around = keeper.list_versions_around(
+                            parent_id, int(fv), radius=radius,
+                        )
+                    except Exception:
+                        around = []
+                    for v in around:
+                        around_map[v.version] = v
+                around = [around_map[k] for k in sorted(around_map)]
+
+                # Skip degenerate compact thread windows that only restate
+                # the already-rendered deep line (focused version duplicate).
+                if around and radius == 0 and len(around) == 1 and len(focus_versions) == 1:
+                    v0 = around[0]
+                    focus_v = str(focus_versions[0])
+                    anchor_item = next(
+                        (di for di in deep_items if di.tags.get("_focus_version") == focus_v),
+                        None,
+                    )
+                    deep_summary = (
+                        anchor_item.tags.get("_focus_summary", anchor_item.summary)
+                        if anchor_item else ""
+                    )
+                    if (
+                        str(v0.version) == focus_v
+                        and (v0.summary or "").strip() == (deep_summary or "").strip()
+                    ):
+                        around = []
+
+                thread_lines = []
+                for v in around:
+                    prefix = "*" if int(v.version) in focus_versions else "-"
+                    thread_lines.append(f"      {prefix} @V{{{v.version}}} {v.summary}")
+                _append_section(block_lines, "      Thread:", thread_lines)
+
+            # Parts window: include overview + local part neighbors.
+            if remaining <= 0:
+                return
+            try:
+                parts = keeper.list_parts(parent_id)
+            except Exception:
+                parts = []
+            if not parts:
+                return
+
+            selected = []
+            if focus_parts:
+                part_map = {p.part_num: p for p in parts}
+                if 0 in part_map:
+                    selected.append(part_map[0])  # @P{0} coherence prior
+                for fp in focus_parts:
+                    for pn in (fp - 1, fp, fp + 1):
+                        if pn in part_map and part_map[pn] not in selected:
+                            selected.append(part_map[pn])
+            else:
+                # No focused part: include overview if present.
+                part0 = next((p for p in parts if p.part_num == 0), None)
+                if part0:
+                    selected.append(part0)
+
+            story_lines = [f"      - @P{{{p.part_num}}} {p.summary}" for p in selected]
+            _append_section(block_lines, "      Story:", story_lines)
+
+        # Build per-parent deep bundles so evidence stays coherent:
+        # render anchor lines and local window together before moving on.
         rendered_map = {}
+        block_order: list[int] = []
         for item, block_lines in rendered:
-            parent_id = (item.id.split("@")[0]
-                         if "@" in item.id else item.id)
+            parent_id = _base_id(item.id)
             rendered_map[parent_id] = block_lines
             rendered_map[item.id] = block_lines
+            bid = id(block_lines)
+            if bid not in block_order:
+                block_order.append(bid)
 
-        ranked_deep: list[tuple[float, "Item", list[str]]] = []
+        bundles: dict[tuple[int, str], dict[str, object]] = {}
         for group_key, group in deep_groups.items():
             block_lines = rendered_map.get(group_key)
             if not block_lines:
                 continue
+            bid = id(block_lines)
             for deep_item in group:
-                ranked_deep.append(
-                    (deep_item.score or 0, deep_item, block_lines))
-        ranked_deep.sort(key=lambda t: t[0], reverse=True)
+                parent_id = _base_id(deep_item.id)
+                bkey = (bid, parent_id)
+                bucket = bundles.setdefault(
+                    bkey,
+                    {"block_lines": block_lines, "parent_id": parent_id, "items": []},
+                )
+                bucket["items"].append(deep_item)
 
+        for bucket in bundles.values():
+            items_for_parent = bucket["items"]
+            # Dedup within a parent-thread bundle by anchor identity.
+            deduped: list["Item"] = []
+            seen_local: set[str] = set()
+            for deep_item in sorted(items_for_parent, key=lambda di: di.score or 0, reverse=True):
+                dkey = _deep_key(deep_item)
+                if dkey in seen_local:
+                    continue
+                seen_local.add(dkey)
+                deduped.append(deep_item)
+            bucket["items"] = deduped
+            bucket["score"] = max((di.score or 0.0) for di in deduped) if deduped else 0.0
+
+        bundles_by_block: dict[int, list[dict[str, object]]] = {}
+        for (bid, _parent_id), bucket in bundles.items():
+            bundles_by_block.setdefault(bid, []).append(bucket)
+        for group_list in bundles_by_block.values():
+            group_list.sort(key=lambda b: float(b.get("score", 0.0)), reverse=True)
+
+        ordered_bundles: list[dict[str, object]] = []
+        used_bundle_keys: set[tuple[int, str]] = set()
+
+        # Coverage first: seed one thread bundle per rendered block.
+        for bid in block_order:
+            group_list = bundles_by_block.get(bid, [])
+            if not group_list:
+                continue
+            first = group_list[0]
+            bkey = (bid, str(first["parent_id"]))
+            if bkey not in used_bundle_keys:
+                used_bundle_keys.add(bkey)
+                ordered_bundles.append(first)
+
+        # Density second: add remaining bundles globally by score.
+        tail: list[dict[str, object]] = []
+        for bid, group_list in bundles_by_block.items():
+            for bucket in group_list:
+                bkey = (bid, str(bucket["parent_id"]))
+                if bkey in used_bundle_keys:
+                    continue
+                tail.append(bucket)
+        tail.sort(key=lambda b: float(b.get("score", 0.0)), reverse=True)
+        ordered_bundles.extend(tail)
+
+        max_anchors_per_bundle = 1 if token_budget <= 900 else 2
         seen_deep: set[str] = set()
-        for _score, deep_item, block_lines in ranked_deep:
+        for bucket in ordered_bundles:
             if remaining <= 0:
                 break
-            if deep_item.id in seen_deep:
-                continue
-            seen_deep.add(deep_item.id)
-            ddate = (deep_item.tags.get("_created") or
-                     deep_item.tags.get("_updated", ""))[:10]
-            ddate_part = f"  [{ddate}]" if ddate else ""
-            dl = f"    - {deep_item.id}{ddate_part}  {deep_item.summary}"
-            block_lines.append(dl)
-            remaining -= _tok(dl)
+            block_lines = bucket["block_lines"]
+            parent_id = str(bucket["parent_id"])
+            deep_items = bucket["items"]
+
+            emitted: list["Item"] = []
+            for deep_item in deep_items[:max_anchors_per_bundle]:
+                dkey = _deep_key(deep_item)
+                if dkey in seen_deep:
+                    continue
+                ddate = (deep_item.tags.get("_created") or
+                         deep_item.tags.get("_updated", ""))[:10]
+                ddate_part = f"  [{ddate}]" if ddate else ""
+                deep_summary = deep_item.tags.get("_focus_summary", deep_item.summary)
+                dl = f"    - {deep_item.id}{ddate_part}  {deep_summary}"
+                if not _append_line(block_lines, dl):
+                    break
+                seen_deep.add(dkey)
+                emitted.append(deep_item)
+
+            if emitted:
+                _add_deep_window(parent_id, emitted, block_lines)
 
     # Pass 3: backfill parts + versions on remaining budget.
     # For deep mode this runs after deep items; otherwise after summaries.
-    if len(rendered) >= _MIN_ITEMS_FOR_DETAIL and keeper and remaining > 0:
+    if len(rendered) >= _MIN_ITEMS_FOR_DETAIL and keeper and remaining > 0 and not compact_mode:
         for item, block_lines in rendered:
             if remaining <= 0:
                 break
@@ -1678,7 +1897,13 @@ def expand_prompt(result: "PromptResult", kp=None) -> str:
             return ""
         is_deep = m.group(1) is not None
         budget_str = m.group(2)
-        budget = int(budget_str) if budget_str else result.token_budget
+        # Explicit CLI --tokens always wins over template budget
+        if result.token_budget is not None:
+            budget = result.token_budget
+        elif budget_str:
+            budget = int(budget_str)
+        else:
+            budget = 4000
         cap = 3 if is_deep else None
         return render_find_context(
             result.search_results, keeper=kp,
@@ -1725,10 +1950,10 @@ def prompt(
         "--deep", "-D",
         help="Follow tags from results to discover related items"
     )] = False,
-    token_budget: Annotated[int, typer.Option(
+    token_budget: Annotated[Optional[int], typer.Option(
         "--tokens",
-        help="Token budget for {find} context (default: 4000)"
-    )] = 4000,
+        help="Token budget for {find} context (template default if not set)"
+    )] = None,
     store: StoreOption = None,
 ):
     """Render an agent prompt with injected context.

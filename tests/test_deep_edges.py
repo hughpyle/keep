@@ -109,6 +109,35 @@ class TestHasEdges:
         assert store.has_edges("other") is True
 
 
+class TestInverseVersionEdges:
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        with DocumentStore(tmp_path / "documents.db") as s:
+            yield s
+
+    def test_finds_sources_from_archived_edge_tags(self, store):
+        store.upsert("c", ".tag/speaker", summary="", tags={"_inverse": "said"})
+        store.upsert("c", "doc-x", summary="Joanna mentioned hiking",
+                     tags={"speaker": "Joanna"})
+        store.upsert("c", "doc-x", summary="Nate wrapped up",
+                     tags={"speaker": "Nate"})
+
+        rows = store.get_inverse_version_edges("c", "Joanna")
+        assert any(inv == "said" and src == "doc-x" for inv, src, _ in rows)
+
+    def test_inverse_version_edges_are_case_sensitive(self, store):
+        store.upsert("c", ".tag/speaker", summary="", tags={"_inverse": "said"})
+        store.upsert("c", "doc-x", summary="Joanna mentioned hiking",
+                     tags={"speaker": "Joanna"})
+        # Force archival of the previous version so version_edges materialize.
+        store.upsert("c", "doc-x", summary="Nate wrapped up",
+                     tags={"speaker": "Nate"})
+
+        assert store.get_inverse_version_edges("c", "Joanna")
+        assert store.get_inverse_version_edges("c", "joanna") == []
+
+
 # ---------------------------------------------------------------------------
 # _deep_edge_follow integration (mock providers)
 # ---------------------------------------------------------------------------
@@ -312,6 +341,175 @@ class TestDeepEdgeFollow:
         )
         assert groups == {}
 
+    def test_keeps_multiple_anchors_for_same_source(self, tmp_path, mock_providers):
+        """A single source doc can contribute multiple focused deep anchors."""
+        from keep.types import Item
+
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        kp._document_store.upsert(doc_coll, ".tag/speaker", summary="",
+                                  tags={"_inverse": "said"})
+        kp._document_store.upsert(doc_coll, "Melanie", summary="A person",
+                                  tags={"_source": "auto-vivify"})
+        kp._document_store.upsert(
+            doc_coll, "session-0",
+            summary="Melanie practiced clarinet today",
+            tags={"speaker": "Melanie"},
+        )
+        # Create a version hit containing the same activity term.
+        kp._document_store.upsert(
+            doc_coll, "session-0",
+            summary="Melanie volunteered at the youth center",
+            tags={"speaker": "Melanie"},
+        )
+        # Create a part hit on the same source.
+        kp._document_store.upsert_parts(
+            doc_coll, "session-0",
+            [PartInfo(
+                part_num=1,
+                summary="Clarinet practice details",
+                tags={},
+                content="Clarinet scales and rehearsal",
+                created_at="2024-01-01",
+            )],
+        )
+        kp._document_store.upsert_edge(
+            doc_coll, "session-0", "speaker", "Melanie", "said", "2024-01-01",
+        )
+        kp._store.upsert(chroma_coll, "session-0", [0.2] * 10,
+                         "Melanie volunteered at the youth center",
+                         tags={"speaker": "melanie"})
+
+        primary = [Item(id="Melanie", summary="A person", tags={}, score=1.0)]
+        groups = kp._deep_edge_follow(
+            primary, chroma_coll, doc_coll,
+            query="clarinet", embedding=[0.2] * 10,
+        )
+
+        assert "Melanie" in groups
+        ids = [i.id for i in groups["Melanie"]]
+        assert any(i.startswith("session-0@p") for i in ids), ids
+        # Keep multiple anchors for the same source (not collapsed to one).
+        assert sum(1 for i in ids if i.split("@")[0] == "session-0") >= 2, ids
+
+    def test_inverse_follow_includes_version_only_edge_tag(
+        self, tmp_path, mock_providers, monkeypatch
+    ):
+        """Version-derived inverse sources are included in deep edge traversal."""
+        from keep.types import Item
+
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        kp._document_store.upsert(doc_coll, "Joanna", summary="A person", tags={})
+        kp._document_store.upsert(
+            doc_coll, "conv3-session11",
+            summary="Nate wrapped up the conversation",
+            tags={"speaker": "Nate"},
+        )
+
+        kp._store.upsert(
+            chroma_coll,
+            "conv3-session11",
+            [0.1] * 10,
+            "Nate wrapped up the conversation",
+            tags={"speaker": "nate"},
+        )
+
+        # Mock version-path support on the test double store.
+        monkeypatch.setattr(
+            kp._document_store, "count_versions", lambda _c: 1, raising=False,
+        )
+        monkeypatch.setattr(
+            kp._document_store,
+            "get_inverse_version_edges",
+            lambda _c, target, limit=200: [("said", "conv3-session11", "2024-04-01")]
+            if target == "Joanna" else [],
+            raising=False,
+        )
+
+        primary = [Item(id="Joanna", summary="A person", tags={}, score=1.0)]
+        groups = kp._deep_edge_follow(
+            primary, chroma_coll, doc_coll,
+            query="How many hikes has Joanna been on?",
+            embedding=[0.1] * 10,
+        )
+
+        assert "Joanna" in groups
+        deep_ids = [i.id for i in groups["Joanna"]]
+        assert "conv3-session11" in deep_ids
+
+    def test_focus_summary_preserved_from_version_hit(
+        self, tmp_path, mock_providers, monkeypatch
+    ):
+        """When deep hits a version, parent keeps matched version text as _focus_summary."""
+        from keep.types import Item
+
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        kp._document_store.upsert(doc_coll, ".tag/speaker", summary="",
+                                  tags={"_inverse": "said"})
+        kp._document_store.upsert(doc_coll, "Melanie", summary="A person",
+                                  tags={"_source": "auto-vivify"})
+
+        # Head summary is intentionally generic.
+        kp._document_store.upsert(doc_coll, "session-1",
+                                  summary="Bye and take care",
+                                  tags={"speaker": "Melanie"})
+        kp._document_store.upsert_edge(
+            doc_coll, "session-1", "speaker", "Melanie", "said", "2024-01-01")
+
+        class _MockHit:
+            def __init__(self, id, summary, score, tags):
+                self.id = id
+                self.summary = summary
+                self._score = score
+                self._tags = tags
+
+            def to_item(self):
+                return Item(
+                    id=self.id,
+                    summary=self.summary,
+                    tags=self._tags,
+                    score=self._score,
+                )
+
+        # Force one focused version hit and one generic semantic hit.
+        monkeypatch.setattr(
+            kp._document_store,
+            "query_fts_scoped",
+            lambda *_args, **_kwargs: [
+                ("session-1@v1", "I went hiking near the lake", -1.0),
+            ],
+        )
+        monkeypatch.setattr(
+            kp._store,
+            "query_embedding",
+            lambda *_args, **_kwargs: [
+                _MockHit("session-1", "Bye and take care", 0.95, {"speaker": "melanie"}),
+            ],
+        )
+
+        primary = [Item(id="Melanie", summary="A person", tags={}, score=1.0)]
+        groups = kp._deep_edge_follow(
+            primary, chroma_coll, doc_coll,
+            query="hiking", embedding=[0.1] * 10,
+        )
+
+        assert "Melanie" in groups
+        hit = groups["Melanie"][0]
+        assert hit.id.split("@")[0] == "session-1"
+        assert hit.summary == "Bye and take care"
+        assert "hiking" in hit.tags.get("_focus_summary", "").lower()
+        assert hit.tags.get("_anchor_type") == "version"
+        assert hit.tags.get("_anchor_id") == "session-1@v1"
+        assert hit.tags.get("_lane") == "authoritative"
+
 
 # ---------------------------------------------------------------------------
 # Entity injection: query-mentioned edge targets as synthetic primaries
@@ -387,6 +585,105 @@ class TestEntityInjection:
 
         # "Melanie" should NOT be a group key (not mentioned in query)
         assert "Melanie" not in deep_groups
+
+    def test_entity_tokens_removed_from_deep_query(
+        self, tmp_path, mock_providers, monkeypatch
+    ):
+        """Deep FTS query should remove injected entity name tokens."""
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        kp._document_store.upsert(doc_coll, ".tag/speaker", summary="",
+                                  tags={"_inverse": "said"})
+        kp._document_store.upsert(doc_coll, "Melanie", summary="",
+                                  tags={"_source": "auto-vivify"})
+        kp._document_store.upsert(doc_coll, "session-0",
+                                  summary="Melanie went hiking yesterday",
+                                  tags={"speaker": "Melanie"})
+        kp._document_store.upsert_edge(
+            doc_coll, "session-0", "speaker", "Melanie", "said", "2024-01-01")
+        kp._store.upsert(chroma_coll, "session-0", [0.1] * 10,
+                         "Melanie went hiking yesterday",
+                         tags={"speaker": "melanie"})
+
+        captured: dict[str, str] = {}
+
+        def _capture(primary_items, cc, dc, *, query, embedding, top_k=10, exclude_ids=None):
+            captured["query"] = query
+            return {}
+
+        monkeypatch.setattr(kp, "_deep_edge_follow", _capture)
+        kp.find("How many hikes has Melanie been on?", deep=True, limit=5)
+
+        assert "query" in captured
+        assert "melanie" not in captured["query"].split()
+        assert "hikes" in captured["query"].split()
+
+    def test_entity_phrase_removal_preserves_non_entity_tokens(
+        self, tmp_path, mock_providers, monkeypatch
+    ):
+        """Removing entity phrase should not remove unrelated content tokens."""
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        kp._document_store.upsert(doc_coll, ".tag/group", summary="",
+                                  tags={"_inverse": "mentioned_in"})
+        kp._document_store.upsert(doc_coll, "Book Club", summary="",
+                                  tags={"_source": "auto-vivify"})
+        kp._document_store.upsert(doc_coll, "session-0",
+                                  summary="Book Club discussed recommendations",
+                                  tags={"group": "Book Club"})
+        kp._document_store.upsert_edge(
+            doc_coll, "session-0", "group", "Book Club", "mentioned_in", "2024-01-01")
+        kp._store.upsert(chroma_coll, "session-0", [0.1] * 10,
+                         "Book Club discussed recommendations",
+                         tags={"group": "book club"})
+
+        captured: dict[str, str] = {}
+
+        def _capture(primary_items, cc, dc, *, query, embedding, top_k=10, exclude_ids=None):
+            captured["query"] = query
+            return {}
+
+        monkeypatch.setattr(kp, "_deep_edge_follow", _capture)
+        kp.find("How many book recommendations from Book Club this month?", deep=True, limit=5)
+
+        tokens = captured.get("query", "").split()
+        assert "book" in tokens
+        assert "club" not in tokens
+
+    def test_deep_query_uses_store_stopwords(
+        self, tmp_path, mock_providers, monkeypatch
+    ):
+        """Deep lexical scoring should read stopwords from DocumentStore."""
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        kp._document_store.upsert(doc_coll, ".tag/speaker", summary="",
+                                  tags={"_inverse": "said"})
+        kp._document_store.upsert(doc_coll, "Melanie", summary="",
+                                  tags={"_source": "auto-vivify"})
+        kp._document_store.upsert(doc_coll, "session-0",
+                                  summary="Melanie went hiking yesterday",
+                                  tags={"speaker": "Melanie"})
+        kp._document_store.upsert_edge(
+            doc_coll, "session-0", "speaker", "Melanie", "said", "2024-01-01")
+        kp._store.upsert(chroma_coll, "session-0", [0.1] * 10,
+                         "Melanie went hiking yesterday",
+                         tags={"speaker": "melanie"})
+
+        calls = {"count": 0}
+
+        def _custom_stopwords() -> frozenset[str]:
+            calls["count"] += 1
+            return frozenset({"how", "many", "hikes", "has", "been", "on"})
+
+        monkeypatch.setattr(kp._document_store, "get_stopwords", _custom_stopwords)
+        kp.find("How many hikes has Melanie been on?", deep=True, limit=5)
+        assert calls["count"] >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -464,3 +761,110 @@ class TestBuildFtsQuery:
     def test_only_special_chars_returns_none(self, store):
         result = store._build_fts_query("\"\" ''")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for specific bugs
+# ---------------------------------------------------------------------------
+
+class TestEntityLimitOverflow:
+    """find(deep=True) must not return more than limit items."""
+
+    def test_entity_promotion_respects_limit(self, tmp_path, mock_providers):
+        """When all final items have deep groups, entity promotion should not
+        exceed limit by appending."""
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        # Set up entity with edges
+        kp._document_store.upsert(doc_coll, ".tag/speaker", summary="",
+                                  tags={"_inverse": "said"})
+        kp._document_store.upsert(doc_coll, "Entity", summary="",
+                                  tags={"_source": "auto-vivify"})
+
+        # Create documents that all have edges (so all get deep groups)
+        for i in range(5):
+            doc_id = f"doc-{i}"
+            kp._document_store.upsert(doc_coll, doc_id,
+                                      summary=f"Entity talks about {i}",
+                                      tags={"speaker": "Entity"})
+            kp._document_store.upsert_edge(
+                doc_coll, doc_id, "speaker", "Entity", "said",
+                f"2024-01-0{i+1}")
+            kp._store.upsert(chroma_coll, doc_id,
+                              [float(i) / 10] * 10,
+                              f"Entity talks about {i}",
+                              tags={"speaker": "entity"})
+
+        results = kp.find("What did Entity say?", deep=True, limit=2)
+        assert len(results) <= 2, (
+            f"Expected at most 2 results, got {len(results)}: "
+            f"{[i.id for i in results]}"
+        )
+
+
+class TestEntityPunctuationMatching:
+    """find_edge_targets must match IDs with non-word punctuation."""
+
+    def test_cplus_plus_target(self, tmp_path):
+        with DocumentStore(tmp_path / "documents.db") as store:
+            store.upsert("c", "C++", summary="", tags={})
+            store.upsert_edge("c", "some-doc", "topic", "C++", "about",
+                              "2024-01-01")
+            hits = store.find_edge_targets("c", "What about C++ performance?")
+            assert "C++" in hits, f"Expected C++ in hits, got {hits}"
+
+    def test_hash_target(self, tmp_path):
+        with DocumentStore(tmp_path / "documents.db") as store:
+            store.upsert("c", "C#", summary="", tags={})
+            store.upsert_edge("c", "some-doc", "topic", "C#", "about",
+                              "2024-01-01")
+            hits = store.find_edge_targets("c", "Tell me about C# features")
+            assert "C#" in hits, f"Expected C# in hits, got {hits}"
+
+    def test_normal_name_still_works(self, tmp_path):
+        with DocumentStore(tmp_path / "documents.db") as store:
+            store.upsert("c", "Melanie", summary="", tags={})
+            store.upsert_edge("c", "some-doc", "speaker", "Melanie", "said",
+                              "2024-01-01")
+            hits = store.find_edge_targets("c", "What did Melanie say?")
+            assert "Melanie" in hits
+
+
+class TestMigrationRetry:
+    """Deep-search migration should retry after transient failure."""
+
+    def test_retry_after_migration_failure(self, tmp_path, mock_providers):
+        kp = Keeper(store_path=str(tmp_path / "store"))
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+
+        # Add a document so find() has something to search
+        kp._document_store.upsert(doc_coll, "doc-1",
+                                  summary="test content", tags={})
+        kp._store.upsert(chroma_coll, "doc-1", [0.1] * 10,
+                          "test content", tags={})
+
+        # Force the migration flag on and make migration fail
+        kp._needs_sysdoc_migration = True
+        original_migrate = kp._migrate_system_documents
+
+        call_count = [0]
+        def failing_migrate():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("transient failure")
+            return original_migrate()
+
+        kp._migrate_system_documents = failing_migrate
+
+        # First deep find — migration fails, but search still works
+        kp.find("test", deep=True, limit=5)
+        assert call_count[0] == 1
+
+        # Second deep find — should retry migration (not skip it)
+        kp.find("test", deep=True, limit=5)
+        assert call_count[0] == 2, (
+            "Expected migration to be retried on second call"
+        )

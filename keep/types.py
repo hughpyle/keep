@@ -5,7 +5,7 @@ Data types for reflective memory.
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import urlparse, urlunparse
 
 
@@ -14,7 +14,16 @@ SYSTEM_TAG_PREFIX = "_"
 
 # Tags used internally but hidden from display output
 # These exist for efficient queries/sorting but aren't user-facing
-INTERNAL_TAGS = frozenset({"_updated_date", "_accessed_date", "_focus_part"})
+INTERNAL_TAGS = frozenset({
+    "_updated_date",
+    "_accessed_date",
+    "_focus_part",
+    "_focus_version",
+    "_focus_summary",
+    "_lane",
+    "_anchor_id",
+    "_anchor_type",
+})
 
 
 def utc_now() -> str:
@@ -395,7 +404,7 @@ class PromptResult:
     text: str | None = None               # raw query text passed to render_prompt()
     since: str | None = None              # since filter value
     until: str | None = None              # until filter value
-    token_budget: int = 4000             # token budget for {find} context rendering
+    token_budget: int | None = None      # explicit token budget (None = use template default)
 
 
 @dataclass(frozen=True)
@@ -403,3 +412,36 @@ class PromptInfo:
     """Summary info for an available agent prompt."""
     name: str            # e.g. "reflect"
     summary: str         # first line of doc body
+
+
+# ---------------------------------------------------------------------------
+# Retrieval evidence/window types (internal pipeline structures)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EvidenceUnit:
+    """Query-scored evidence candidate used during deep retrieval."""
+    unit_id: str
+    source_id: str
+    version: int | None
+    part_num: int | None
+    lane: Literal["authoritative", "derived"]
+    text: str
+    parent_summary: str
+    created: str | None = None
+    score_sem: float = 0.0
+    score_lex: float = 0.0
+    score_focus: float = 0.0
+    score_coherence: float = 0.0
+    score_total: float = 0.0
+    provenance: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ContextWindow:
+    """Narrative window centered on one anchor EvidenceUnit."""
+    anchor: EvidenceUnit
+    members: list[EvidenceUnit] = field(default_factory=list)
+    score_total: float = 0.0
+    tokens_est: int = 0

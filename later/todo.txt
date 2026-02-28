@@ -256,3 +256,5 @@ x check for CLI compatibility with windows (WLS should work but no plan to valid
 . filter noisy tags from parts-classification: meta/foo/provisional
 . Prompts as notes
 . "deep query" prompt
+. tags that name an inverse generate edges to nodes (and the inverse tag)
+. nodes referenced by edges will be whisked into existence

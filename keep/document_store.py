@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 @dataclass
@@ -95,7 +95,7 @@ class DocumentStore:
         """
         self._db_path = store_path
         self._conn: Optional[sqlite3.Connection] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._fts_available = False
         self._stopwords: Optional[frozenset[str]] = None
         try:
@@ -107,6 +107,21 @@ class DocumentStore:
             else:
                 raise
     
+    def _execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+        """Execute SQL with thread-safety via the instance lock.
+
+        sqlite3 connections are NOT safe for concurrent use from multiple
+        threads (``check_same_thread=False`` only disables the Python-level
+        check).  This helper serialises all access through ``self._lock``.
+        """
+        with self._lock:
+            return self._conn.execute(sql, params)
+
+    def _executemany(self, sql: str, params_seq) -> sqlite3.Cursor:
+        """Like _execute but for executemany."""
+        with self._lock:
+            return self._conn.executemany(sql, params_seq)
+
     def _init_db(self) -> None:
         """Initialize the SQLite database."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,11 +129,11 @@ class DocumentStore:
         self._conn.row_factory = sqlite3.Row
 
         # Enable WAL mode for better concurrent access across processes
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._execute("PRAGMA journal_mode=WAL")
         # Wait up to 5 seconds for locks instead of failing immediately
-        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._execute("PRAGMA busy_timeout=5000")
 
-        self._conn.execute("""
+        self._execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 id TEXT NOT NULL,
                 collection TEXT NOT NULL,
@@ -139,15 +154,15 @@ class DocumentStore:
         # All three FTS tables must exist for full hybrid search.
         if not self._fts_available:
             try:
-                self._conn.execute("SELECT 1 FROM documents_fts LIMIT 0")
-                self._conn.execute("SELECT 1 FROM parts_fts LIMIT 0")
-                self._conn.execute("SELECT 1 FROM versions_fts LIMIT 0")
+                self._execute("SELECT 1 FROM documents_fts LIMIT 0")
+                self._execute("SELECT 1 FROM parts_fts LIMIT 0")
+                self._execute("SELECT 1 FROM versions_fts LIMIT 0")
                 self._fts_available = True
             except sqlite3.OperationalError:
                 pass  # Tables don't exist or FTS5 not available
 
         # Quick integrity check for existing databases
-        result = self._conn.execute("PRAGMA quick_check").fetchone()
+        result = self._execute("PRAGMA quick_check").fetchone()
         if result[0] != "ok":
             raise sqlite3.DatabaseError("database disk image is malformed")
 
@@ -166,7 +181,7 @@ class DocumentStore:
         - Version 6 → 7: FTS5 index + triggers (documents)
         - Version 7 → 8: FTS5 indexes + triggers (parts, versions)
         """
-        current_version = self._conn.execute(
+        current_version = self._execute(
             "PRAGMA user_version"
         ).fetchone()[0]
 
@@ -174,10 +189,10 @@ class DocumentStore:
             return  # Already up to date — no writes needed
 
         # Exclusive lock prevents two processes from racing through migrations
-        self._conn.execute("BEGIN EXCLUSIVE")
+        self._execute("BEGIN EXCLUSIVE")
         try:
             # Re-read inside the lock (another process may have migrated)
-            current_version = self._conn.execute(
+            current_version = self._execute(
                 "PRAGMA user_version"
             ).fetchone()[0]
 
@@ -187,7 +202,7 @@ class DocumentStore:
 
             if current_version < 1:
                 # Create versions table for document history
-                self._conn.execute("""
+                self._execute("""
                     CREATE TABLE IF NOT EXISTS document_versions (
                         id TEXT NOT NULL,
                         collection TEXT NOT NULL,
@@ -199,7 +214,7 @@ class DocumentStore:
                         PRIMARY KEY (id, collection, version)
                     )
                 """)
-                self._conn.execute("""
+                self._execute("""
                     CREATE INDEX IF NOT EXISTS idx_versions_doc
                     ON document_versions(id, collection, version DESC)
                 """)
@@ -208,17 +223,17 @@ class DocumentStore:
                 # Add accessed_at column for last-access tracking
                 columns = {
                     row[1] for row in
-                    self._conn.execute("PRAGMA table_info(documents)").fetchall()
+                    self._execute("PRAGMA table_info(documents)").fetchall()
                 }
                 if "accessed_at" not in columns:
-                    self._conn.execute(
+                    self._execute(
                         "ALTER TABLE documents ADD COLUMN accessed_at TEXT"
                     )
-                    self._conn.execute(
+                    self._execute(
                         "UPDATE documents SET accessed_at = updated_at "
                         "WHERE accessed_at IS NULL"
                     )
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE INDEX IF NOT EXISTS idx_documents_accessed
                         ON documents(accessed_at)
                     """)
@@ -227,19 +242,19 @@ class DocumentStore:
                 # Add content_hash column if missing (very old databases)
                 columns = {
                     row[1] for row in
-                    self._conn.execute("PRAGMA table_info(documents)").fetchall()
+                    self._execute("PRAGMA table_info(documents)").fetchall()
                 }
                 if "content_hash" not in columns:
-                    self._conn.execute(
+                    self._execute(
                         "ALTER TABLE documents ADD COLUMN content_hash TEXT"
                     )
 
                 # One-time hash truncation (64-char → 10-char)
-                self._conn.execute("""
+                self._execute("""
                     UPDATE documents SET content_hash = SUBSTR(content_hash, -10)
                     WHERE content_hash IS NOT NULL AND LENGTH(content_hash) > 10
                 """)
-                cursor = self._conn.execute("""
+                cursor = self._execute("""
                     SELECT id, collection, tags_json FROM documents
                     WHERE tags_json LIKE '%bundled_hash%'
                 """)
@@ -248,25 +263,25 @@ class DocumentStore:
                     bh = tags.get("bundled_hash")
                     if bh and len(bh) > 10:
                         tags["bundled_hash"] = bh[-10:]
-                        self._conn.execute(
+                        self._execute(
                             "UPDATE documents SET tags_json = ? "
                             "WHERE id = ? AND collection = ?",
                             (json.dumps(tags), row["id"], row["collection"])
                         )
 
                 # Create indexes (idempotent)
-                self._conn.execute("""
+                self._execute("""
                     CREATE INDEX IF NOT EXISTS idx_documents_collection
                     ON documents(collection)
                 """)
-                self._conn.execute("""
+                self._execute("""
                     CREATE INDEX IF NOT EXISTS idx_documents_updated
                     ON documents(updated_at)
                 """)
 
             if current_version < 4:
                 # Create parts table for structural decomposition
-                self._conn.execute("""
+                self._execute("""
                     CREATE TABLE IF NOT EXISTS document_parts (
                         id TEXT NOT NULL,
                         collection TEXT NOT NULL,
@@ -278,14 +293,14 @@ class DocumentStore:
                         PRIMARY KEY (id, collection, part_num)
                     )
                 """)
-                self._conn.execute("""
+                self._execute("""
                     CREATE INDEX IF NOT EXISTS idx_parts_doc
                     ON document_parts(id, collection, part_num)
                 """)
 
             if current_version < 5:
                 # Index for content-hash dedup lookups
-                self._conn.execute("""
+                self._execute("""
                     CREATE INDEX IF NOT EXISTS idx_documents_content_hash
                     ON documents(collection, content_hash)
                     WHERE content_hash IS NOT NULL
@@ -295,19 +310,19 @@ class DocumentStore:
                 # Full SHA256 hash for dedup content verification
                 columns = {
                     row[1]
-                    for row in self._conn.execute(
+                    for row in self._execute(
                         "PRAGMA table_info(documents)"
                     ).fetchall()
                 }
                 if "content_hash_full" not in columns:
-                    self._conn.execute(
+                    self._execute(
                         "ALTER TABLE documents ADD COLUMN content_hash_full TEXT"
                     )
 
             if current_version < 7:
                 # FTS5 full-text search index on document summaries
                 try:
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
                         USING fts5(
                             summary,
@@ -318,21 +333,21 @@ class DocumentStore:
                     """)
                     # Triggers: INSERT OR REPLACE fires DELETE then INSERT,
                     # so both triggers cover the upsert case.
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE TRIGGER IF NOT EXISTS documents_fts_ai
                         AFTER INSERT ON documents BEGIN
                             INSERT INTO documents_fts(rowid, summary)
                             VALUES (new.rowid, new.summary);
                         END
                     """)
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE TRIGGER IF NOT EXISTS documents_fts_ad
                         AFTER DELETE ON documents BEGIN
                             INSERT INTO documents_fts(documents_fts, rowid, summary)
                             VALUES('delete', old.rowid, old.summary);
                         END
                     """)
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE TRIGGER IF NOT EXISTS documents_fts_au
                         AFTER UPDATE OF summary ON documents BEGIN
                             INSERT INTO documents_fts(documents_fts, rowid, summary)
@@ -341,7 +356,7 @@ class DocumentStore:
                             VALUES (new.rowid, new.summary);
                         END
                     """)
-                    self._conn.execute(
+                    self._execute(
                         "INSERT INTO documents_fts(documents_fts) VALUES('rebuild')"
                     )
                     self._fts_available = True
@@ -352,7 +367,7 @@ class DocumentStore:
                 # FTS5 indexes for parts (summary + content) and versions
                 try:
                     # --- Parts FTS ---
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts
                         USING fts5(
                             summary, content,
@@ -361,21 +376,21 @@ class DocumentStore:
                             tokenize='porter unicode61'
                         )
                     """)
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE TRIGGER IF NOT EXISTS parts_fts_ai
                         AFTER INSERT ON document_parts BEGIN
                             INSERT INTO parts_fts(rowid, summary, content)
                             VALUES (new.rowid, new.summary, new.content);
                         END
                     """)
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE TRIGGER IF NOT EXISTS parts_fts_ad
                         AFTER DELETE ON document_parts BEGIN
                             INSERT INTO parts_fts(parts_fts, rowid, summary, content)
                             VALUES('delete', old.rowid, old.summary, old.content);
                         END
                     """)
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE TRIGGER IF NOT EXISTS parts_fts_au
                         AFTER UPDATE OF summary, content ON document_parts BEGIN
                             INSERT INTO parts_fts(parts_fts, rowid, summary, content)
@@ -384,12 +399,12 @@ class DocumentStore:
                             VALUES (new.rowid, new.summary, new.content);
                         END
                     """)
-                    self._conn.execute(
+                    self._execute(
                         "INSERT INTO parts_fts(parts_fts) VALUES('rebuild')"
                     )
 
                     # --- Versions FTS ---
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE VIRTUAL TABLE IF NOT EXISTS versions_fts
                         USING fts5(
                             summary,
@@ -398,21 +413,21 @@ class DocumentStore:
                             tokenize='porter unicode61'
                         )
                     """)
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE TRIGGER IF NOT EXISTS versions_fts_ai
                         AFTER INSERT ON document_versions BEGIN
                             INSERT INTO versions_fts(rowid, summary)
                             VALUES (new.rowid, new.summary);
                         END
                     """)
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE TRIGGER IF NOT EXISTS versions_fts_ad
                         AFTER DELETE ON document_versions BEGIN
                             INSERT INTO versions_fts(versions_fts, rowid, summary)
                             VALUES('delete', old.rowid, old.summary);
                         END
                     """)
-                    self._conn.execute("""
+                    self._execute("""
                         CREATE TRIGGER IF NOT EXISTS versions_fts_au
                         AFTER UPDATE OF summary ON document_versions BEGIN
                             INSERT INTO versions_fts(versions_fts, rowid, summary)
@@ -421,7 +436,7 @@ class DocumentStore:
                             VALUES (new.rowid, new.summary);
                         END
                     """)
-                    self._conn.execute(
+                    self._execute(
                         "INSERT INTO versions_fts(versions_fts) VALUES('rebuild')"
                     )
                     self._fts_available = True
@@ -430,7 +445,7 @@ class DocumentStore:
 
             # Version 8 → 9: edges and edge_backfill tables
             if current_version < 9:
-                self._conn.execute("""
+                self._execute("""
                     CREATE TABLE IF NOT EXISTS edges (
                         source_id   TEXT NOT NULL,
                         collection  TEXT NOT NULL,
@@ -441,11 +456,11 @@ class DocumentStore:
                         PRIMARY KEY (source_id, collection, predicate)
                     )
                 """)
-                self._conn.execute("""
+                self._execute("""
                     CREATE INDEX IF NOT EXISTS idx_edges_target
                     ON edges (target_id, collection, inverse, created)
                 """)
-                self._conn.execute("""
+                self._execute("""
                     CREATE TABLE IF NOT EXISTS edge_backfill (
                         collection  TEXT NOT NULL,
                         predicate   TEXT NOT NULL,
@@ -455,7 +470,64 @@ class DocumentStore:
                     )
                 """)
 
-            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            # Version 9 → 10: materialized version_edges
+            if current_version < 10:
+                self._execute("""
+                    CREATE TABLE IF NOT EXISTS version_edges (
+                        collection  TEXT NOT NULL,
+                        source_id   TEXT NOT NULL,
+                        version     INTEGER NOT NULL,
+                        predicate   TEXT NOT NULL,
+                        target_id   TEXT NOT NULL,
+                        inverse     TEXT NOT NULL,
+                        created     TEXT NOT NULL,
+                        PRIMARY KEY (collection, source_id, version, predicate)
+                    )
+                """)
+                self._execute("""
+                    CREATE INDEX IF NOT EXISTS idx_version_edges_target
+                    ON version_edges (target_id, collection, inverse, created)
+                """)
+                # One-time backfill from archived versions for currently known
+                # edge predicates (prefer tagdocs; include backfill/edges for
+                # compatibility with partially-migrated stores).
+                self._execute("""
+                    WITH predicates AS (
+                        SELECT d.collection AS collection,
+                               SUBSTR(d.id, 6) AS predicate,
+                               CAST(json_extract(d.tags_json, '$._inverse') AS TEXT) AS inverse
+                        FROM documents d
+                        WHERE d.id LIKE '.tag/%'
+                          AND INSTR(SUBSTR(d.id, 6), '/') = 0
+                          AND json_extract(d.tags_json, '$._inverse') IS NOT NULL
+                        UNION
+                        SELECT collection, predicate, inverse
+                        FROM edge_backfill
+                        UNION
+                        SELECT DISTINCT collection, predicate, inverse
+                        FROM edges
+                    )
+                    INSERT OR REPLACE INTO version_edges
+                        (collection, source_id, version, predicate, target_id, inverse, created)
+                    SELECT
+                        v.collection,
+                        v.id,
+                        v.version,
+                        j.key,
+                        CAST(j.value AS TEXT),
+                        p.inverse,
+                        v.created_at
+                    FROM document_versions v
+                    JOIN json_each(v.tags_json) j
+                    JOIN predicates p
+                      ON p.collection = v.collection
+                     AND p.predicate = j.key
+                    WHERE j.value IS NOT NULL
+                      AND TRIM(CAST(j.value AS TEXT)) != ''
+                      AND SUBSTR(CAST(j.value AS TEXT), 1, 1) != '.'
+                """)
+
+            self._execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
         except Exception:
             self._conn.rollback()
@@ -544,8 +616,11 @@ class DocumentStore:
         return utc_now()
 
     def _get_unlocked(self, collection: str, id: str) -> Optional[DocumentRecord]:
-        """Get a document by ID without acquiring the lock (for use within locked contexts)."""
-        cursor = self._conn.execute("""
+        """Get a document by ID without acquiring the lock (for use within locked contexts).
+
+        With RLock, this can safely use _execute (re-entrant).
+        """
+        cursor = self._execute("""
             SELECT id, collection, summary, tags_json, created_at, updated_at,
                    content_hash, content_hash_full, accessed_at
             FROM documents
@@ -609,7 +684,7 @@ class DocumentStore:
         with self._lock:
             # Use BEGIN IMMEDIATE for cross-process atomicity:
             # holds a write lock for the entire read-archive-replace sequence
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._execute("BEGIN IMMEDIATE")
             try:
                 # Check if exists to preserve created_at and archive
                 existing = self._get_unlocked(collection, id)
@@ -628,7 +703,7 @@ class DocumentStore:
                         and existing.content_hash != content_hash
                     )
 
-                self._conn.execute("""
+                self._execute("""
                     INSERT OR REPLACE INTO documents
                     (id, collection, summary, tags_json, created_at, updated_at,
                      content_hash, content_hash_full, accessed_at)
@@ -636,6 +711,8 @@ class DocumentStore:
                 """, (id, collection, summary, tags_json, created_at, now,
                       content_hash, content_hash_full, now))
                 self._conn.commit()
+                if id == ".stop":
+                    self._stopwords = None
             except Exception:
                 self._conn.rollback()
                 raise
@@ -672,7 +749,7 @@ class DocumentStore:
             The version number assigned to the archived version
         """
         # Get the next version number
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT COALESCE(MAX(version), 0) + 1
             FROM document_versions
             WHERE id = ? AND collection = ?
@@ -689,7 +766,7 @@ class DocumentStore:
         if current.updated_at:
             version_tags["_updated"] = current.updated_at
 
-        self._conn.execute("""
+        self._execute("""
             INSERT INTO document_versions
             (id, collection, version, summary, tags_json, content_hash, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -702,8 +779,155 @@ class DocumentStore:
             current.content_hash,
             current.updated_at,  # Use updated_at as the version's timestamp
         ))
+        self._materialize_version_edges_for_version_unlocked(
+            collection=collection,
+            source_id=id,
+            version=next_version,
+            tags=version_tags,
+            created=current.updated_at or self._now(),
+        )
 
         return next_version
+
+    def _edge_predicate_map_unlocked(self, collection: str) -> dict[str, str]:
+        """Return predicate -> inverse for edge-enabled tags in *collection*."""
+        mapping: dict[str, str] = {}
+
+        # Source of truth: tagdocs with _inverse.
+        rows = self._execute(
+            """
+            SELECT SUBSTR(id, 6) AS predicate,
+                   CAST(json_extract(tags_json, '$._inverse') AS TEXT) AS inverse
+            FROM documents
+            WHERE collection = ?
+              AND id LIKE '.tag/%'
+              AND INSTR(SUBSTR(id, 6), '/') = 0
+              AND json_extract(tags_json, '$._inverse') IS NOT NULL
+            """,
+            (collection,),
+        ).fetchall()
+        for row in rows:
+            pred = row["predicate"]
+            inv = row["inverse"]
+            if pred and inv:
+                mapping[pred] = inv
+
+        # Compatibility: fall back to existing backfill/edge rows.
+        rows = self._execute(
+            """
+            SELECT predicate, inverse
+            FROM edge_backfill
+            WHERE collection = ?
+            """,
+            (collection,),
+        ).fetchall()
+        for row in rows:
+            pred = row["predicate"]
+            inv = row["inverse"]
+            if pred and inv and pred not in mapping:
+                mapping[pred] = inv
+
+        rows = self._execute(
+            """
+            SELECT DISTINCT predicate, inverse
+            FROM edges
+            WHERE collection = ?
+            """,
+            (collection,),
+        ).fetchall()
+        for row in rows:
+            pred = row["predicate"]
+            inv = row["inverse"]
+            if pred and inv and pred not in mapping:
+                mapping[pred] = inv
+
+        return mapping
+
+    def _materialize_version_edges_for_version_unlocked(
+        self,
+        *,
+        collection: str,
+        source_id: str,
+        version: int,
+        tags: dict[str, str],
+        created: str,
+    ) -> None:
+        """Materialize version edge rows for one archived version."""
+        predicate_map = self._edge_predicate_map_unlocked(collection)
+        self._execute(
+            """
+            DELETE FROM version_edges
+            WHERE collection = ? AND source_id = ? AND version = ?
+            """,
+            (collection, source_id, version),
+        )
+        if not predicate_map:
+            return
+
+        for key, value in tags.items():
+            if key.startswith("_"):
+                continue
+            if value is None:
+                continue
+            target_id = str(value).strip()
+            if not target_id or target_id.startswith("."):
+                continue
+            inverse = predicate_map.get(key)
+            if not inverse:
+                continue
+            self._execute(
+                """
+                INSERT OR REPLACE INTO version_edges
+                    (collection, source_id, version, predicate, target_id, inverse, created)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (collection, source_id, version, key, target_id, inverse, created),
+            )
+
+    def _rebuild_version_edges_for_source_unlocked(
+        self, collection: str, source_id: str
+    ) -> None:
+        """Rebuild all materialized version edges for one source document."""
+        self._execute(
+            "DELETE FROM version_edges WHERE collection = ? AND source_id = ?",
+            (collection, source_id),
+        )
+        predicate_map = self._edge_predicate_map_unlocked(collection)
+        if not predicate_map:
+            return
+
+        rows = self._execute(
+            """
+            SELECT version, tags_json, created_at
+            FROM document_versions
+            WHERE collection = ? AND id = ?
+            """,
+            (collection, source_id),
+        ).fetchall()
+        for row in rows:
+            tags = json.loads(row["tags_json"]) if row["tags_json"] else {}
+            for key, value in tags.items():
+                if key.startswith("_"):
+                    continue
+                if value is None:
+                    continue
+                target_id = str(value).strip()
+                if not target_id or target_id.startswith("."):
+                    continue
+                inverse = predicate_map.get(key)
+                if not inverse:
+                    continue
+                self._execute(
+                    """
+                    INSERT OR REPLACE INTO version_edges
+                        (collection, source_id, version, predicate, target_id, inverse, created)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        collection, source_id, row["version"], key,
+                        target_id, inverse, row["created_at"],
+                    ),
+                )
     
     def update_summary(self, collection: str, id: str, summary: str) -> bool:
         """
@@ -722,7 +946,7 @@ class DocumentStore:
         now = self._now()
 
         with self._lock:
-            cursor = self._conn.execute("""
+            cursor = self._execute("""
                 UPDATE documents
                 SET summary = ?, updated_at = ?
                 WHERE id = ? AND collection = ?
@@ -745,7 +969,7 @@ class DocumentStore:
         """
         now = self._now()
         with self._lock:
-            cursor = self._conn.execute("""
+            cursor = self._execute("""
                 UPDATE documents
                 SET content_hash = ?, content_hash_full = ?, updated_at = ?
                 WHERE id = ? AND collection = ?
@@ -774,7 +998,7 @@ class DocumentStore:
         tags_json = json.dumps(tags, ensure_ascii=False)
 
         with self._lock:
-            cursor = self._conn.execute("""
+            cursor = self._execute("""
                 UPDATE documents
                 SET tags_json = ?, updated_at = ?
                 WHERE id = ? AND collection = ?
@@ -792,7 +1016,7 @@ class DocumentStore:
         now = self._now()
         try:
             with self._lock:
-                self._conn.execute("""
+                self._execute("""
                     UPDATE documents SET accessed_at = ?
                     WHERE id = ? AND collection = ?
                 """, (now, id, collection))
@@ -809,7 +1033,7 @@ class DocumentStore:
         now = self._now()
         with self._lock:
             placeholders = ",".join("?" * len(ids))
-            self._conn.execute(f"""
+            self._execute(f"""
                 UPDATE documents SET accessed_at = ?
                 WHERE collection = ? AND id IN ({placeholders})
             """, (now, collection, *ids))
@@ -826,10 +1050,10 @@ class DocumentStore:
             The restored DocumentRecord, or None if no versions exist.
         """
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._execute("BEGIN IMMEDIATE")
             try:
                 # Get the most recent archived version
-                cursor = self._conn.execute("""
+                cursor = self._execute("""
                     SELECT version, summary, tags_json, content_hash, created_at
                     FROM document_versions
                     WHERE id = ? AND collection = ?
@@ -852,7 +1076,7 @@ class DocumentStore:
 
                 now = self._now()
                 # Replace current document with the archived version
-                self._conn.execute("""
+                self._execute("""
                     INSERT OR REPLACE INTO documents
                     (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -860,10 +1084,17 @@ class DocumentStore:
                       original_created_at, created_at, content_hash, now))
 
                 # Delete the version row we just restored
-                self._conn.execute("""
+                self._execute("""
                     DELETE FROM document_versions
                     WHERE id = ? AND collection = ? AND version = ?
                 """, (id, collection, version))
+                self._execute(
+                    """
+                    DELETE FROM version_edges
+                    WHERE collection = ? AND source_id = ? AND version = ?
+                    """,
+                    (collection, id, version),
+                )
 
                 self._conn.commit()
             except Exception:
@@ -893,10 +1124,17 @@ class DocumentStore:
             True if the version existed and was deleted
         """
         with self._lock:
-            cursor = self._conn.execute(
+            cursor = self._execute(
                 "DELETE FROM document_versions"
                 " WHERE id = ? AND collection = ? AND version = ?",
                 (id, collection, version),
+            )
+            self._execute(
+                """
+                DELETE FROM version_edges
+                WHERE collection = ? AND source_id = ? AND version = ?
+                """,
+                (collection, id, version),
             )
             return cursor.rowcount > 0
 
@@ -917,26 +1155,32 @@ class DocumentStore:
             True if document existed and was deleted
         """
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._execute("BEGIN IMMEDIATE")
             try:
-                cursor = self._conn.execute("""
+                cursor = self._execute("""
                     DELETE FROM documents
                     WHERE id = ? AND collection = ?
                 """, (id, collection))
 
                 if delete_versions:
-                    self._conn.execute("""
+                    self._execute("""
                         DELETE FROM document_versions
                         WHERE id = ? AND collection = ?
                     """, (id, collection))
+                    self._execute("""
+                        DELETE FROM version_edges
+                        WHERE collection = ? AND source_id = ?
+                    """, (collection, id))
 
                 # Always clean up parts (structural decomposition)
-                self._conn.execute("""
+                self._execute("""
                     DELETE FROM document_parts
                     WHERE id = ? AND collection = ?
                 """, (id, collection))
 
                 self._conn.commit()
+                if id == ".stop":
+                    self._stopwords = None
             except Exception:
                 self._conn.rollback()
                 raise
@@ -984,7 +1228,7 @@ class DocumentStore:
             return all(tags.get(k) == v for k, v in filt.items())
 
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._execute("BEGIN IMMEDIATE")
             try:
                 # Validate source
                 source = self._get_unlocked(collection, source_id)
@@ -995,7 +1239,7 @@ class DocumentStore:
                 existing_target = self._get_unlocked(collection, target_id)
 
                 # Get all archived versions (oldest first for sequential renumbering)
-                cursor = self._conn.execute("""
+                cursor = self._execute("""
                     SELECT version, summary, tags_json, content_hash, created_at
                     FROM document_versions
                     WHERE id = ? AND collection = ?
@@ -1045,10 +1289,14 @@ class DocumentStore:
                 if matching_versions:
                     version_nums = [v.version for v in matching_versions]
                     placeholders = ",".join("?" * len(version_nums))
-                    self._conn.execute(f"""
+                    self._execute(f"""
                         DELETE FROM document_versions
                         WHERE id = ? AND collection = ? AND version IN ({placeholders})
                     """, (source_id, collection, *version_nums))
+                    self._execute(f"""
+                        DELETE FROM version_edges
+                        WHERE collection = ? AND source_id = ? AND version IN ({placeholders})
+                    """, (collection, source_id, *version_nums))
 
                 # Determine base version for target history
                 now = self._now()
@@ -1056,7 +1304,7 @@ class DocumentStore:
                     # Archive existing target's current into its history
                     self._archive_current_unlocked(collection, target_id, existing_target)
                     # Get the next version number after archiving
-                    cursor = self._conn.execute("""
+                    cursor = self._execute("""
                         SELECT COALESCE(MAX(version), 0) + 1
                         FROM document_versions
                         WHERE id = ? AND collection = ?
@@ -1070,7 +1318,7 @@ class DocumentStore:
                 target_history = extracted[:-1]  # older ones
 
                 # Insert or update target current in documents table
-                self._conn.execute("""
+                self._execute("""
                     INSERT OR REPLACE INTO documents
                     (id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1083,7 +1331,7 @@ class DocumentStore:
 
                 # Insert target version history with sequential numbering
                 for seq, vi in enumerate(target_history, start=base_version):
-                    self._conn.execute("""
+                    self._execute("""
                         INSERT INTO document_versions
                         (id, collection, version, summary, tags_json, content_hash, created_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1101,7 +1349,7 @@ class DocumentStore:
                     if remaining_versions:
                         # Promote newest remaining to current
                         promote = remaining_versions[-1]  # already sorted ASC
-                        self._conn.execute("""
+                        self._execute("""
                             UPDATE documents
                             SET summary = ?, tags_json = ?, updated_at = ?,
                                 content_hash = ?, accessed_at = ?
@@ -1113,19 +1361,27 @@ class DocumentStore:
                             source_id, collection,
                         ))
                         # Delete the promoted version from history
-                        self._conn.execute("""
+                        self._execute("""
                             DELETE FROM document_versions
                             WHERE id = ? AND collection = ? AND version = ?
                         """, (source_id, collection, promote.version))
+                        self._execute("""
+                            DELETE FROM version_edges
+                            WHERE collection = ? AND source_id = ? AND version = ?
+                        """, (collection, source_id, promote.version))
                         new_source = self._get_unlocked(collection, source_id)
                     else:
                         # Nothing remains — delete source
-                        self._conn.execute("""
+                        self._execute("""
                             DELETE FROM documents WHERE id = ? AND collection = ?
                         """, (source_id, collection))
                 else:
                     # Source current was not extracted — it stays
                     new_source = self._get_unlocked(collection, source_id)
+
+                # Rebuild materialized version edges after renumbering/moves.
+                self._rebuild_version_edges_for_source_unlocked(collection, target_id)
+                self._rebuild_version_edges_for_source_unlocked(collection, source_id)
 
                 self._conn.commit()
             except Exception:
@@ -1149,7 +1405,7 @@ class DocumentStore:
         Returns:
             DocumentRecord if found, None otherwise
         """
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT id, collection, summary, tags_json, created_at, updated_at,
                    content_hash, content_hash_full, accessed_at
             FROM documents
@@ -1201,7 +1457,7 @@ class DocumentStore:
 
         # Use OFFSET query to handle gaps in version numbering.
         # offset=1 → OFFSET 0 (newest archived), offset=2 → OFFSET 1, etc.
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT version, summary, tags_json, content_hash, created_at
             FROM document_versions
             WHERE id = ? AND collection = ?
@@ -1240,7 +1496,7 @@ class DocumentStore:
         Returns:
             List of VersionInfo, newest archived first
         """
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT version, summary, tags_json, content_hash, created_at
             FROM document_versions
             WHERE id = ? AND collection = ?
@@ -1273,7 +1529,7 @@ class DocumentStore:
         number, useful for showing surrounding context when a version is hit
         during search.
         """
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT version, summary, tags_json, content_hash, created_at
             FROM document_versions
             WHERE id = ? AND collection = ? AND version BETWEEN ? AND ?
@@ -1319,7 +1575,7 @@ class DocumentStore:
             # Viewing an old version: get prev (N-1) and next (N+1)
             # Previous version (older)
             if current_version > 1:
-                cursor = self._conn.execute("""
+                cursor = self._execute("""
                     SELECT version, summary, tags_json, content_hash, created_at
                     FROM document_versions
                     WHERE id = ? AND collection = ? AND version = ?
@@ -1335,7 +1591,7 @@ class DocumentStore:
                     )]
 
             # Next version (newer)
-            cursor = self._conn.execute("""
+            cursor = self._execute("""
                 SELECT version, summary, tags_json, content_hash, created_at
                 FROM document_versions
                 WHERE id = ? AND collection = ? AND version = ?
@@ -1360,7 +1616,7 @@ class DocumentStore:
 
     def version_count(self, collection: str, id: str) -> int:
         """Count archived versions for a document."""
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT COUNT(*) FROM document_versions
             WHERE id = ? AND collection = ?
         """, (id, collection))
@@ -1368,7 +1624,7 @@ class DocumentStore:
 
     def max_version(self, collection: str, id: str) -> int:
         """Return the highest archived version number, or 0 if none."""
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT COALESCE(MAX(version), 0) FROM document_versions
             WHERE id = ? AND collection = ?
         """, (id, collection))
@@ -1378,7 +1634,7 @@ class DocumentStore:
         self, collection: str, id: str, from_version: int
     ) -> int:
         """Count archived versions with version >= from_version."""
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT COUNT(*) FROM document_versions
             WHERE id = ? AND collection = ? AND version >= ?
         """, (id, collection, from_version))
@@ -1405,7 +1661,7 @@ class DocumentStore:
             # Copy with original timestamps
             import json
             tags_json = json.dumps(source.tags, ensure_ascii=False)
-            self._conn.execute("""
+            self._execute("""
                 INSERT OR REPLACE INTO documents
                 (id, collection, summary, tags_json, created_at, updated_at,
                  content_hash, accessed_at)
@@ -1435,7 +1691,7 @@ class DocumentStore:
             return {}
 
         placeholders = ",".join("?" * len(ids))
-        cursor = self._conn.execute(f"""
+        cursor = self._execute(f"""
             SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ? AND id IN ({placeholders})
@@ -1458,7 +1714,7 @@ class DocumentStore:
 
     def exists(self, collection: str, id: str) -> bool:
         """Check if a document exists."""
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT 1 FROM documents
             WHERE id = ? AND collection = ?
         """, (id, collection))
@@ -1477,7 +1733,7 @@ class DocumentStore:
         Uses short hash for indexed lookup, then verifies via full hash
         to avoid 40-bit collision false positives.
         """
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT id, collection, summary, tags_json, created_at,
                    updated_at, content_hash, content_hash_full, accessed_at
             FROM documents
@@ -1519,19 +1775,19 @@ class DocumentStore:
             List of document IDs
         """
         if limit:
-            cursor = self._conn.execute("""
+            cursor = self._execute("""
                 SELECT id FROM documents
                 WHERE collection = ?
                 ORDER BY updated_at DESC
                 LIMIT ?
             """, (collection, limit))
         else:
-            cursor = self._conn.execute("""
+            cursor = self._execute("""
                 SELECT id FROM documents
                 WHERE collection = ?
                 ORDER BY updated_at DESC
             """, (collection,))
-        
+
         return [row["id"] for row in cursor]
 
     def list_recent(
@@ -1557,7 +1813,7 @@ class DocumentStore:
         order_col = allowed_order.get(order_by)
         if order_col is None:
             raise ValueError(f"Invalid order_by: {order_by!r} (expected 'updated' or 'accessed')")
-        cursor = self._conn.execute(f"""
+        cursor = self._execute(f"""
             SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
             FROM documents
             WHERE collection = ?
@@ -1598,7 +1854,7 @@ class DocumentStore:
         if order_col is None:
             raise ValueError(f"Invalid order_by: {order_by!r} (expected 'updated' or 'accessed')")
 
-        cursor = self._conn.execute(f"""
+        cursor = self._execute(f"""
             SELECT id, summary, tags_json, {order_col} as sort_ts,
                    0 as version_offset, content_hash, accessed_at
             FROM documents
@@ -1637,7 +1893,7 @@ class DocumentStore:
 
     def count(self, collection: str) -> int:
         """Count documents in a collection."""
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT COUNT(*) FROM documents
             WHERE collection = ?
         """, (collection,))
@@ -1645,12 +1901,12 @@ class DocumentStore:
     
     def count_all(self) -> int:
         """Count total documents across all collections."""
-        cursor = self._conn.execute("SELECT COUNT(*) FROM documents")
+        cursor = self._execute("SELECT COUNT(*) FROM documents")
         return cursor.fetchone()[0]
 
     def count_versions(self, collection: str) -> int:
         """Count archived versions in a collection."""
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT COUNT(*) FROM document_versions
             WHERE collection = ?
         """, (collection,))
@@ -1692,7 +1948,7 @@ class DocumentStore:
                 sql += " LIMIT -1"  # SQLite requires LIMIT before OFFSET
             sql += " OFFSET ?"
             params += (offset,)
-        cursor = self._conn.execute(sql, params)
+        cursor = self._execute(sql, params)
 
         results = []
         for row in cursor:
@@ -1709,13 +1965,13 @@ class DocumentStore:
         return results
 
     def _get_stopwords(self) -> frozenset[str]:
-        """Load stopwords, checking for a `.stopwords` override in the store."""
+        """Load stopwords, checking for a `.stop` override in the store."""
         if self._stopwords is not None:
             return self._stopwords
         # Check for user override in the store
         try:
-            row = self._conn.execute(
-                "SELECT summary FROM documents WHERE id = '.stopwords' LIMIT 1"
+            row = self._execute(
+                "SELECT summary FROM documents WHERE id = '.stop' LIMIT 1"
             ).fetchone()
             if row and row[0].strip():
                 words = set()
@@ -1745,6 +2001,10 @@ class DocumentStore:
                 words.add(stripped.lower())
         self._stopwords = frozenset(words)
         return self._stopwords
+
+    def get_stopwords(self) -> frozenset[str]:
+        """Return the active stopword set used for FTS and deep query scoring."""
+        return self._get_stopwords()
 
     def _build_fts_query(self, query: str) -> Optional[str]:
         """Tokenize a natural-language query into an FTS5 MATCH expression.
@@ -1809,7 +2069,7 @@ class DocumentStore:
                 doc_params.extend([f"$.{k}", v])
         doc_sql += " ORDER BY f.rank LIMIT ?"
         doc_params.append(limit)
-        doc_rows = self._conn.execute(doc_sql, doc_params).fetchall()
+        doc_rows = self._execute(doc_sql, doc_params).fetchall()
 
         # --- Search parts (summary + content) ---
         part_sql = """
@@ -1826,7 +2086,7 @@ class DocumentStore:
                 part_params.extend([f"$.{k}", v])
         part_sql += " ORDER BY f.rank LIMIT ?"
         part_params.append(limit)
-        part_rows = self._conn.execute(part_sql, part_params).fetchall()
+        part_rows = self._execute(part_sql, part_params).fetchall()
 
         # --- Search versions ---
         ver_sql = """
@@ -1843,7 +2103,7 @@ class DocumentStore:
                 ver_params.extend([f"$.{k}", v])
         ver_sql += " ORDER BY f.rank LIMIT ?"
         ver_params.append(limit)
-        ver_rows = self._conn.execute(ver_sql, ver_params).fetchall()
+        ver_rows = self._execute(ver_sql, ver_params).fetchall()
 
         # Merge by BM25 rank (more negative = better), take top `limit`
         combined = [(row[0], row[1], row[2]) for row in doc_rows]
@@ -1890,7 +2150,7 @@ class DocumentStore:
                 doc_params.extend([f"$.{k}", v])
         doc_sql += " ORDER BY f.rank LIMIT ?"
         doc_params.append(limit)
-        doc_rows = self._conn.execute(doc_sql, doc_params).fetchall()
+        doc_rows = self._execute(doc_sql, doc_params).fetchall()
 
         # --- Search parts ---
         part_sql = f"""
@@ -1908,7 +2168,7 @@ class DocumentStore:
                 part_params.extend([f"$.{k}", v])
         part_sql += " ORDER BY f.rank LIMIT ?"
         part_params.append(limit)
-        part_rows = self._conn.execute(part_sql, part_params).fetchall()
+        part_rows = self._execute(part_sql, part_params).fetchall()
 
         # --- Search versions ---
         ver_sql = f"""
@@ -1926,7 +2186,7 @@ class DocumentStore:
                 ver_params.extend([f"$.{k}", v])
         ver_sql += " ORDER BY f.rank LIMIT ?"
         ver_params.append(limit)
-        ver_rows = self._conn.execute(ver_sql, ver_params).fetchall()
+        ver_rows = self._execute(ver_sql, ver_params).fetchall()
 
         combined = [(row[0], row[1], row[2]) for row in doc_rows]
         combined.extend((row[0], row[1], row[2]) for row in part_rows)
@@ -1973,7 +2233,7 @@ class DocumentStore:
                 sql += " LIMIT -1"
             sql += " OFFSET ?"
             params += (offset,)
-        cursor = self._conn.execute(sql, params)
+        cursor = self._execute(sql, params)
 
         results = []
         for row in cursor:
@@ -2015,17 +2275,17 @@ class DocumentStore:
             Number of parts stored
         """
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._execute("BEGIN IMMEDIATE")
             try:
                 # Delete existing parts
-                self._conn.execute("""
+                self._execute("""
                     DELETE FROM document_parts
                     WHERE id = ? AND collection = ?
                 """, (id, collection))
 
                 # Insert new parts
                 for part in parts:
-                    self._conn.execute("""
+                    self._execute("""
                         INSERT INTO document_parts
                         (id, collection, part_num, summary, tags_json, content, created_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -2059,7 +2319,7 @@ class DocumentStore:
             part: PartInfo to store
         """
         with self._lock:
-            self._conn.execute("""
+            self._execute("""
                 INSERT OR REPLACE INTO document_parts
                 (id, collection, part_num, summary, tags_json, content, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -2087,7 +2347,7 @@ class DocumentStore:
         Returns:
             PartInfo if found, None otherwise
         """
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT part_num, summary, tags_json, content, created_at
             FROM document_parts
             WHERE id = ? AND collection = ? AND part_num = ?
@@ -2120,7 +2380,7 @@ class DocumentStore:
         Returns:
             List of PartInfo, ordered by part_num
         """
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT part_num, summary, tags_json, content, created_at
             FROM document_parts
             WHERE id = ? AND collection = ?
@@ -2140,7 +2400,7 @@ class DocumentStore:
 
     def part_count(self, collection: str, id: str) -> int:
         """Count parts for a document."""
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT COUNT(*) FROM document_parts
             WHERE id = ? AND collection = ?
         """, (id, collection))
@@ -2158,7 +2418,7 @@ class DocumentStore:
             Number of parts deleted
         """
         with self._lock:
-            cursor = self._conn.execute("""
+            cursor = self._execute("""
                 DELETE FROM document_parts
                 WHERE id = ? AND collection = ?
             """, (id, collection))
@@ -2185,7 +2445,7 @@ class DocumentStore:
             True if the part was found and updated
         """
         with self._lock:
-            cursor = self._conn.execute("""
+            cursor = self._execute("""
                 UPDATE document_parts
                 SET tags_json = ?
                 WHERE id = ? AND collection = ? AND part_num = ?
@@ -2206,7 +2466,7 @@ class DocumentStore:
         Returns:
             Sorted list of distinct tag keys
         """
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT DISTINCT j.key FROM documents, json_each(tags_json) AS j
             WHERE collection = ? AND j.key NOT LIKE '\\_%' ESCAPE '\\'
             ORDER BY j.key
@@ -2225,7 +2485,7 @@ class DocumentStore:
         Returns:
             Sorted list of distinct values
         """
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT DISTINCT json_extract(tags_json, '$.' || ?) AS val
             FROM documents
             WHERE collection = ?
@@ -2240,7 +2500,7 @@ class DocumentStore:
 
         Used for IDF weighting in deep tag-follow scoring.
         """
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT j.key, j.value, COUNT(*) as cnt
             FROM documents, json_each(tags_json) AS j
             WHERE collection = ?
@@ -2299,7 +2559,7 @@ class DocumentStore:
             sql += " OFFSET ?"
             params.append(offset)
 
-        cursor = self._conn.execute(sql, params)
+        cursor = self._execute(sql, params)
 
         results = []
         for row in cursor:
@@ -2323,7 +2583,7 @@ class DocumentStore:
     
     def list_collections(self) -> list[str]:
         """List all collection names."""
-        cursor = self._conn.execute("""
+        cursor = self._execute("""
             SELECT DISTINCT collection FROM documents
             ORDER BY collection
         """)
@@ -2340,11 +2600,14 @@ class DocumentStore:
             Number of documents deleted
         """
         with self._lock:
-            cursor = self._conn.execute("""
+            had_stop = self.exists(collection, ".stop")
+            cursor = self._execute("""
                 DELETE FROM documents
                 WHERE collection = ?
             """, (collection,))
             self._conn.commit()
+            if had_stop:
+                self._stopwords = None
         return cursor.rowcount
     
     # -------------------------------------------------------------------------
@@ -2365,16 +2628,25 @@ class DocumentStore:
             Number of documents deleted
         """
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            had_stop = self.exists(collection, ".stop")
+            self._execute("BEGIN IMMEDIATE")
             try:
-                cursor = self._conn.execute(
+                cursor = self._execute(
                     "DELETE FROM documents WHERE collection = ?", (collection,))
                 doc_count = cursor.rowcount
-                self._conn.execute(
+                self._execute(
                     "DELETE FROM document_versions WHERE collection = ?", (collection,))
-                self._conn.execute(
+                self._execute(
                     "DELETE FROM document_parts WHERE collection = ?", (collection,))
+                self._execute(
+                    "DELETE FROM version_edges WHERE collection = ?", (collection,))
+                self._execute(
+                    "DELETE FROM edges WHERE collection = ?", (collection,))
+                self._execute(
+                    "DELETE FROM edge_backfill WHERE collection = ?", (collection,))
                 self._conn.commit()
+                if had_stop:
+                    self._stopwords = None
             except Exception:
                 self._conn.rollback()
                 raise
@@ -2411,11 +2683,12 @@ class DocumentStore:
         part_count = 0
 
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._execute("BEGIN IMMEDIATE")
             try:
+                touched_with_versions: set[str] = set()
                 for doc in documents:
                     tags_json = json.dumps(doc.get("tags", {}), ensure_ascii=False)
-                    self._conn.execute("""
+                    self._execute("""
                         INSERT OR REPLACE INTO documents
                         (id, collection, summary, tags_json, created_at,
                          updated_at, content_hash, content_hash_full, accessed_at)
@@ -2430,7 +2703,7 @@ class DocumentStore:
 
                     for ver in doc.get("versions", []):
                         ver_tags_json = json.dumps(ver.get("tags", {}), ensure_ascii=False)
-                        self._conn.execute("""
+                        self._execute("""
                             INSERT OR REPLACE INTO document_versions
                             (id, collection, version, summary, tags_json,
                              content_hash, created_at)
@@ -2441,10 +2714,11 @@ class DocumentStore:
                             ver.get("content_hash"), ver["created_at"],
                         ))
                         ver_count += 1
+                        touched_with_versions.add(doc["id"])
 
                     for part in doc.get("parts", []):
                         part_tags_json = json.dumps(part.get("tags", {}), ensure_ascii=False)
-                        self._conn.execute("""
+                        self._execute("""
                             INSERT OR REPLACE INTO document_parts
                             (id, collection, part_num, summary, tags_json,
                              content, created_at)
@@ -2455,6 +2729,11 @@ class DocumentStore:
                             part.get("content", ""), part["created_at"],
                         ))
                         part_count += 1
+
+                for source_id in touched_with_versions:
+                    self._rebuild_version_edges_for_source_unlocked(
+                        collection, source_id,
+                    )
 
                 self._conn.commit()
             except Exception:
@@ -2477,7 +2756,7 @@ class DocumentStore:
         created: str,
     ) -> None:
         """Insert or replace an edge row."""
-        self._conn.execute(
+        self._execute(
             """
             INSERT OR REPLACE INTO edges
                 (source_id, collection, predicate, target_id, inverse, created)
@@ -2489,7 +2768,7 @@ class DocumentStore:
 
     def delete_edge(self, collection: str, source_id: str, predicate: str) -> int:
         """Delete a single edge by its primary key (source, collection, predicate)."""
-        cur = self._conn.execute(
+        cur = self._execute(
             "DELETE FROM edges WHERE source_id = ? AND collection = ? AND predicate = ?",
             (source_id, collection, predicate),
         )
@@ -2498,7 +2777,7 @@ class DocumentStore:
 
     def delete_edges_for_source(self, collection: str, source_id: str) -> int:
         """Delete all edges originating from *source_id*."""
-        cur = self._conn.execute(
+        cur = self._execute(
             "DELETE FROM edges WHERE collection = ? AND source_id = ?",
             (collection, source_id),
         )
@@ -2507,7 +2786,7 @@ class DocumentStore:
 
     def delete_edges_for_target(self, collection: str, target_id: str) -> int:
         """Delete all edges pointing at *target_id*."""
-        cur = self._conn.execute(
+        cur = self._execute(
             "DELETE FROM edges WHERE collection = ? AND target_id = ?",
             (collection, target_id),
         )
@@ -2516,12 +2795,106 @@ class DocumentStore:
 
     def delete_edges_for_predicate(self, collection: str, predicate: str) -> int:
         """Delete all edges with a given predicate (used when _inverse is removed)."""
-        cur = self._conn.execute(
+        cur = self._execute(
             "DELETE FROM edges WHERE collection = ? AND predicate = ?",
             (collection, predicate),
         )
         self._conn.commit()
         return cur.rowcount
+
+    def delete_version_edge(
+        self, collection: str, source_id: str, version: int, predicate: str,
+    ) -> int:
+        """Delete one materialized version edge row."""
+        cur = self._execute(
+            """
+            DELETE FROM version_edges
+            WHERE collection = ? AND source_id = ? AND version = ? AND predicate = ?
+            """,
+            (collection, source_id, version, predicate),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def delete_version_edges_for_source(self, collection: str, source_id: str) -> int:
+        """Delete all materialized version edges from *source_id*."""
+        cur = self._execute(
+            """
+            DELETE FROM version_edges
+            WHERE collection = ? AND source_id = ?
+            """,
+            (collection, source_id),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def delete_version_edges_for_target(self, collection: str, target_id: str) -> int:
+        """Delete all materialized version edges pointing at *target_id*."""
+        cur = self._execute(
+            """
+            DELETE FROM version_edges
+            WHERE collection = ? AND target_id = ?
+            """,
+            (collection, target_id),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def delete_version_edges_for_predicate(self, collection: str, predicate: str) -> int:
+        """Delete all materialized version edges with a given predicate."""
+        cur = self._execute(
+            """
+            DELETE FROM version_edges
+            WHERE collection = ? AND predicate = ?
+            """,
+            (collection, predicate),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def backfill_version_edges_for_predicate(
+        self, collection: str, predicate: str, inverse: str,
+    ) -> int:
+        """Rebuild materialized version edges for one predicate across a collection."""
+        if not predicate or not inverse:
+            return 0
+        with self._lock:
+            self._execute("BEGIN IMMEDIATE")
+            try:
+                self._execute(
+                    """
+                    DELETE FROM version_edges
+                    WHERE collection = ? AND predicate = ?
+                    """,
+                    (collection, predicate),
+                )
+                cur = self._execute(
+                    """
+                    INSERT OR REPLACE INTO version_edges
+                        (collection, source_id, version, predicate, target_id, inverse, created)
+                    SELECT
+                        v.collection,
+                        v.id,
+                        v.version,
+                        ?,
+                        CAST(j.value AS TEXT),
+                        ?,
+                        v.created_at
+                    FROM document_versions v
+                    JOIN json_each(v.tags_json) j
+                      ON j.key = ?
+                    WHERE v.collection = ?
+                      AND j.value IS NOT NULL
+                      AND TRIM(CAST(j.value AS TEXT)) != ''
+                      AND SUBSTR(CAST(j.value AS TEXT), 1, 1) != '.'
+                    """,
+                    (predicate, inverse, predicate, collection),
+                )
+                self._conn.commit()
+                return cur.rowcount
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def get_inverse_edges(
         self, collection: str, target_id: str,
@@ -2531,7 +2904,7 @@ class DocumentStore:
         Returns list of (inverse, source_id, created) ordered by inverse
         then created descending.
         """
-        rows = self._conn.execute(
+        rows = self._execute(
             """
             SELECT inverse, source_id, created
             FROM edges
@@ -2539,6 +2912,30 @@ class DocumentStore:
             ORDER BY inverse, created DESC
             """,
             (collection, target_id),
+        ).fetchall()
+        return [(r["inverse"], r["source_id"], r["created"]) for r in rows]
+
+    def get_inverse_version_edges(
+        self,
+        collection: str,
+        target_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[tuple[str, str, str]]:
+        """Return inverse edges from materialized archived-version edge rows."""
+        if not target_id:
+            return []
+        rows = self._execute(
+            """
+            SELECT inverse, source_id, MAX(created) AS created
+            FROM version_edges
+            WHERE collection = ?
+              AND target_id = ?
+            GROUP BY inverse, source_id
+            ORDER BY inverse, created DESC
+            LIMIT ?
+            """,
+            (collection, target_id, limit),
         ).fetchall()
         return [(r["inverse"], r["source_id"], r["created"]) for r in rows]
 
@@ -2550,7 +2947,7 @@ class DocumentStore:
         Returns list of (predicate, target_id, created) ordered by predicate
         then created descending.
         """
-        rows = self._conn.execute(
+        rows = self._execute(
             """
             SELECT predicate, target_id, created
             FROM edges
@@ -2577,21 +2974,27 @@ class DocumentStore:
         if not query:
             return []
         query_lower = query.lower()
-        rows = self._conn.execute(
+        rows = self._execute(
             "SELECT DISTINCT target_id FROM edges WHERE collection = ?",
             (collection,),
         ).fetchall()
         hits = []
         for (target_id,) in rows:
-            # Word-boundary match: handles punctuation, possessives, etc.
-            pattern = r'\b' + re.escape(target_id.lower()) + r'\b'
+            # Match target_id as a standalone token in the query.
+            # Use \b where the boundary is a word character, otherwise
+            # use lookaround for whitespace/string boundary to handle
+            # IDs like "C++" that end with non-word chars.
+            escaped = re.escape(target_id.lower())
+            left = r'\b' if re.match(r'\w', target_id) else r'(?:^|(?<=\s))'
+            right = r'\b' if re.search(r'\w$', target_id) else r'(?=\s|$)'
+            pattern = left + escaped + right
             if re.search(pattern, query_lower):
                 hits.append(target_id)
         return hits
 
     def has_edges(self, collection: str) -> bool:
         """Return True if *collection* has any edges at all."""
-        row = self._conn.execute(
+        row = self._execute(
             "SELECT 1 FROM edges WHERE collection = ? LIMIT 1",
             (collection,),
         ).fetchone()
@@ -2599,7 +3002,7 @@ class DocumentStore:
 
     def backfill_exists(self, collection: str, predicate: str) -> bool:
         """Return True if a backfill record exists (pending or completed)."""
-        row = self._conn.execute(
+        row = self._execute(
             "SELECT 1 FROM edge_backfill WHERE collection = ? AND predicate = ?",
             (collection, predicate),
         ).fetchone()
@@ -2609,7 +3012,7 @@ class DocumentStore:
         self, collection: str, predicate: str,
     ) -> Optional[str]:
         """Return the completed timestamp for a backfill, or None if not found."""
-        row = self._conn.execute(
+        row = self._execute(
             """
             SELECT completed FROM edge_backfill
             WHERE collection = ? AND predicate = ?
@@ -2628,7 +3031,7 @@ class DocumentStore:
         completed: Optional[str] = None,
     ) -> None:
         """Insert or update a backfill tracking record."""
-        self._conn.execute(
+        self._execute(
             """
             INSERT OR REPLACE INTO edge_backfill
                 (collection, predicate, inverse, completed)
@@ -2640,7 +3043,7 @@ class DocumentStore:
 
     def delete_backfill(self, collection: str, predicate: str) -> None:
         """Delete a backfill record (used when _inverse is removed from tagdoc)."""
-        self._conn.execute(
+        self._execute(
             "DELETE FROM edge_backfill WHERE collection = ? AND predicate = ?",
             (collection, predicate),
         )
@@ -2652,9 +3055,10 @@ class DocumentStore:
     
     def close(self) -> None:
         """Close the database connection."""
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
     
     def __enter__(self):
         return self

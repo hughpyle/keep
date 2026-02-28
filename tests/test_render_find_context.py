@@ -91,18 +91,34 @@ class TestExpandPromptFindBudget:
             context=None,
             search_results=[_item(id="a", summary="Test")],
             prompt="Context:\n{find}\nEnd.",
-            token_budget=4000,
+            token_budget=None,
         )
         output = expand_prompt(result)
         assert "a" in output
         assert "{find}" not in output
 
-    def test_budget_from_placeholder(self):
-        """Budget specified in placeholder should override default."""
+    def test_budget_from_placeholder_when_no_explicit(self):
+        """Template budget wins when token_budget is None (user didn't specify)."""
         from keep.cli import expand_prompt
         # Create many items
         items = [_item(id=f"item-{i}", summary="X" * 200) for i in range(20)]
-        # Default budget is large, but placeholder says 50
+        # token_budget=None means user didn't specify, template says 50
+        result = PromptResult(
+            context=None,
+            search_results=items,
+            prompt="Context:\n{find:50}\nEnd.",
+            token_budget=None,
+        )
+        output = expand_prompt(result)
+        # With budget=50 tokens, shouldn't fit all 20 items
+        assert "item-0" in output
+        assert "item-19" not in output
+
+    def test_explicit_budget_overrides_placeholder(self):
+        """Explicit token_budget from CLI overrides template budget."""
+        from keep.cli import expand_prompt
+        items = [_item(id=f"item-{i}", summary="X" * 200) for i in range(20)]
+        # User set --tokens 10000, template says 50 — explicit wins
         result = PromptResult(
             context=None,
             search_results=items,
@@ -110,31 +126,31 @@ class TestExpandPromptFindBudget:
             token_budget=10000,
         )
         output = expand_prompt(result)
-        # With budget=50 tokens, shouldn't fit all 20 items
+        # With explicit budget=10000, all 20 items should fit
         assert "item-0" in output
-        assert "item-19" not in output
+        assert "item-19" in output
 
     def test_deep_with_budget(self):
-        """The {find:deep:8000} syntax should be expanded."""
+        """The {find:deep:8000} syntax should be expanded using template budget."""
         from keep.cli import expand_prompt
         result = PromptResult(
             context=None,
             search_results=[_item(id="a", summary="Test")],
             prompt="{find:deep:8000}",
-            token_budget=4000,
+            token_budget=None,
         )
         output = expand_prompt(result)
         assert "a" in output
         assert "{find" not in output
 
     def test_deep_without_budget(self):
-        """The {find:deep} syntax should use default budget."""
+        """The {find:deep} syntax should use default budget when no explicit override."""
         from keep.cli import expand_prompt
         result = PromptResult(
             context=None,
             search_results=[_item(id="a", summary="Deep test")],
             prompt="{find:deep}",
-            token_budget=4000,
+            token_budget=None,
         )
         output = expand_prompt(result)
         assert "Deep test" in output
@@ -163,7 +179,7 @@ class TestDeepPrimaryCap:
             context=None,
             search_results=[_item(id="a", summary="Test")],
             prompt="{find:deep:8000}",
-            token_budget=4000,
+            token_budget=None,
         )
         output = expand_prompt(result)
         assert "a" in output
@@ -246,6 +262,294 @@ class TestDeepPrimaryCap:
         # "has-deep" should be kept (it has a deep group)
         assert "has-deep" in result
         assert "deep-y" in result
+
+    def test_cap_applied_before_low_budget_spend(self):
+        """Low budgets should still include entity/deep-group primaries."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        items = [
+            _item(id="top-0", summary="X" * 280, score=0.99),
+            _item(id="top-1", summary="Y" * 280, score=0.98),
+            _item(id="grp-a", summary="Group A", score=0.70),
+            _item(id="grp-b", summary="Group B", score=0.69),
+            _item(
+                id="Joanna",
+                summary="Entity",
+                score=0.50,
+                tags={"_updated_date": "2026-02-20", "_entity": "true"},
+            ),
+        ]
+        deep_groups = {
+            "grp-a": [_item(id="a-1", summary="A deep", score=0.8)],
+            "grp-b": [_item(id="b-1", summary="B deep", score=0.7)],
+            "Joanna": [_item(id="j-1", summary="Joanna deep", score=0.9)],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+
+        output = render_find_context(
+            results, token_budget=120, deep_primary_cap=3,
+        )
+        assert "Joanna" in output
+        assert "top-0" not in output
+
+    def test_deep_line_prefers_focus_summary(self):
+        """Deep sub-item lines should render _focus_summary when present."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        items = [_item(id="parent", summary="Parent summary")]
+        deep_groups = {
+            "parent": [_item(
+                id="child",
+                summary="Generic head summary",
+                score=0.9,
+                tags={"_focus_summary": "Matched hike evidence"},
+            )],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        output = render_find_context(results, token_budget=5000)
+
+        assert "Matched hike evidence" in output
+        assert "Generic head summary" not in output
+
+    def test_low_budget_deep_uses_compact_mode(self):
+        """Low deep budgets should avoid expensive Thread/Story expansion."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        keeper = MagicMock()
+        keeper.list_parts.return_value = [
+            PartRef(part_num=0, summary="Overview"),
+            PartRef(part_num=1, summary="Details"),
+        ]
+        keeper.list_versions_around.return_value = [
+            VersionInfo(version=4, summary="Before", tags={}, created_at="2026-01-01", content_hash="a"),
+            VersionInfo(version=5, summary="Matched", tags={}, created_at="2026-01-02", content_hash="b"),
+        ]
+        keeper.list_versions.return_value = []
+
+        items = [_item(id="Joanna", summary="Entity", tags={"_entity": "true"})]
+        deep_groups = {
+            "Joanna": [_item(
+                id="conv3-session11",
+                summary="Head",
+                score=0.9,
+                tags={"_focus_summary": "Matched evidence", "_focus_version": "5", "_focus_part": "1"},
+            )],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        output = render_find_context(results, keeper=keeper, token_budget=200, deep_primary_cap=3)
+
+        assert "conv3-session11" in output
+        assert "Thread:" not in output
+        assert "Story:" not in output
+
+    def test_deep_window_includes_version_thread(self):
+        """Deep anchors with _focus_version should render a local version thread."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        keeper = MagicMock()
+        keeper.list_parts.return_value = []
+        keeper.list_versions_around.return_value = [
+            VersionInfo(version=4, summary="Before", tags={}, created_at="2026-01-01", content_hash="a"),
+            VersionInfo(version=5, summary="Matched", tags={}, created_at="2026-01-02", content_hash="b"),
+            VersionInfo(version=6, summary="After", tags={}, created_at="2026-01-03", content_hash="c"),
+        ]
+        keeper.list_versions.return_value = []
+
+        items = [_item(id="parent", summary="Parent summary")]
+        deep_groups = {
+            "parent": [_item(
+                id="child",
+                summary="Head summary",
+                score=0.9,
+                tags={"_focus_summary": "Matched evidence", "_focus_version": "5"},
+            )],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        output = render_find_context(results, keeper=keeper, token_budget=5000)
+
+        keeper.list_versions_around.assert_called_once_with("child", 5, radius=2)
+        assert "Thread:" in output
+        assert "@V{5}" in output
+
+    def test_deep_window_merges_multiple_focus_versions_per_parent(self):
+        """Multiple deep anchors from one parent should emit one merged Thread block."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        keeper = MagicMock()
+        keeper.list_parts.return_value = []
+
+        def _around(_id, version, radius=2):
+            return [
+                VersionInfo(version=version - 1, summary=f"Before {version}",
+                            tags={}, created_at="2026-01-01", content_hash="a"),
+                VersionInfo(version=version, summary=f"Hit {version}",
+                            tags={}, created_at="2026-01-02", content_hash="b"),
+                VersionInfo(version=version + 1, summary=f"After {version}",
+                            tags={}, created_at="2026-01-03", content_hash="c"),
+            ][: (2 * radius + 1)]
+
+        keeper.list_versions_around.side_effect = _around
+        keeper.list_versions.return_value = []
+
+        items = [_item(id="parent", summary="Parent summary")]
+        deep_groups = {
+            "parent": [
+                _item(
+                    id="parent@v5",
+                    summary="Head summary",
+                    score=0.92,
+                    tags={"_focus_summary": "clarinet practice", "_focus_version": "5"},
+                ),
+                _item(
+                    id="parent@v9",
+                    summary="Head summary",
+                    score=0.89,
+                    tags={"_focus_summary": "volunteering update", "_focus_version": "9"},
+                ),
+            ],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        output = render_find_context(results, keeper=keeper, token_budget=5000)
+
+        assert output.count("Thread:") == 1
+        assert "@V{5}" in output
+        assert "@V{9}" in output
+        assert any(c.args == ("parent", 5) and c.kwargs.get("radius") == 2
+                   for c in keeper.list_versions_around.call_args_list)
+        assert any(c.args == ("parent", 9) and c.kwargs.get("radius") == 2
+                   for c in keeper.list_versions_around.call_args_list)
+
+    def test_deep_window_tapers_thread_radius_at_mid_budget(self):
+        """Mid budgets should shrink version window to radius=1."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        keeper = MagicMock()
+        keeper.list_parts.return_value = []
+        keeper.list_versions_around.return_value = [
+            VersionInfo(version=4, summary="Before", tags={}, created_at="2026-01-01", content_hash="a"),
+            VersionInfo(version=5, summary="Matched", tags={}, created_at="2026-01-02", content_hash="b"),
+            VersionInfo(version=6, summary="After", tags={}, created_at="2026-01-03", content_hash="c"),
+        ]
+        keeper.list_versions.return_value = []
+
+        items = [_item(id="parent", summary="Parent summary")]
+        deep_groups = {
+            "parent": [_item(
+                id="child",
+                summary="Head summary",
+                score=0.9,
+                tags={"_focus_summary": "Matched evidence", "_focus_version": "5"},
+            )],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        render_find_context(results, keeper=keeper, token_budget=600)
+
+        keeper.list_versions_around.assert_called_once_with("child", 5, radius=1)
+
+    def test_deep_window_tapers_thread_radius_to_focus_only(self):
+        """Low non-compact budgets should use radius=0."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        keeper = MagicMock()
+        keeper.list_parts.return_value = []
+        keeper.list_versions_around.return_value = [
+            VersionInfo(version=5, summary="Matched", tags={}, created_at="2026-01-02", content_hash="b"),
+        ]
+        keeper.list_versions.return_value = []
+
+        items = [_item(id="parent", summary="Parent summary")]
+        deep_groups = {
+            "parent": [_item(
+                id="child",
+                summary="Head summary",
+                score=0.9,
+                tags={"_focus_summary": "Matched evidence", "_focus_version": "5"},
+            )],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        render_find_context(results, keeper=keeper, token_budget=320)
+
+        keeper.list_versions_around.assert_called_once_with("child", 5, radius=0)
+
+    def test_deep_window_drops_duplicate_focus_only_thread(self):
+        """Do not render Thread block when radius=0 duplicates deep line."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        keeper = MagicMock()
+        keeper.list_parts.return_value = []
+        keeper.list_versions_around.return_value = [
+            VersionInfo(
+                version=5,
+                summary="Matched evidence",
+                tags={},
+                created_at="2026-01-02",
+                content_hash="b",
+            ),
+        ]
+        keeper.list_versions.return_value = []
+
+        items = [_item(id="parent", summary="Parent summary")]
+        deep_groups = {
+            "parent": [_item(
+                id="child",
+                summary="Head summary",
+                score=0.9,
+                tags={"_focus_summary": "Matched evidence", "_focus_version": "5"},
+            )],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+        output = render_find_context(results, keeper=keeper, token_budget=320)
+
+        assert "child" in output
+        assert "Thread:" not in output
+        assert "@V{5}" not in output
+
+    def test_deep_window_never_emits_empty_story_or_thread_headers(self):
+        """Tight budgets should not leave orphan Story/Thread headers."""
+        from keep.cli import render_find_context
+        from keep.api import FindResults
+
+        keeper = MagicMock()
+        keeper.list_parts.side_effect = lambda _id: [
+            PartRef(part_num=0, summary="S" * 186),
+        ]
+        keeper.list_versions_around.side_effect = lambda _id, _v, radius=1: [
+            VersionInfo(version=1, summary="V" * 145, tags={}, created_at="2026-01-01", content_hash="a"),
+            VersionInfo(version=2, summary="V" * 24, tags={}, created_at="2026-01-02", content_hash="b"),
+        ][: (2 * radius + 1)]
+        keeper.list_versions.return_value = []
+
+        items = [
+            _item(id="p0", summary="P" * 300, score=1.0),
+            _item(id="p1", summary="P" * 31, score=0.9),
+            _item(id="p2", summary="P" * 220, score=0.8),
+        ]
+        deep_groups = {
+            "p0": [_item(id="c0", summary="D", score=1.0, tags={"_focus_summary": "d" * 290, "_focus_version": "1"})],
+            "p1": [_item(id="c1", summary="D", score=0.9, tags={"_focus_summary": "d" * 80, "_focus_version": "1"})],
+            "p2": [_item(id="c2", summary="D", score=0.8, tags={"_focus_summary": "d" * 40, "_focus_version": "1"})],
+        }
+        results = FindResults(items, deep_groups=deep_groups)
+
+        output = render_find_context(results, keeper=keeper, token_budget=315)
+        lines = output.splitlines()
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == "Story:":
+                assert i + 1 < len(lines)
+                assert lines[i + 1].strip().startswith("- @P{")
+            if stripped == "Thread:":
+                assert i + 1 < len(lines)
+                nxt = lines[i + 1].strip()
+                assert nxt.startswith("* @V{") or nxt.startswith("- @V{")
 
 
 class TestRenderFindContextDetail:

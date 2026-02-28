@@ -535,3 +535,35 @@ class TestAccessedAt:
     def test_touch_many_empty_ids(self, store: DocumentStore) -> None:
         """touch_many() with empty list is a no-op."""
         store.touch_many("default", [])  # Should not raise
+
+
+class TestStopwordOverrides:
+    """Stopwords should come from the `.stop` store note."""
+
+    @pytest.fixture
+    def store(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "documents.db"
+            with DocumentStore(db_path) as store:
+                yield store
+
+    def test_dot_stop_overrides_default_list(self, store: DocumentStore) -> None:
+        store.upsert("default", ".stop", "how\nmany\nhikes", {})
+        query = store._build_fts_query("how many hikes today")
+        assert query == '"today"'
+
+    def test_dot_stopwords_legacy_note_is_ignored(self, store: DocumentStore) -> None:
+        store.upsert("default", ".stopwords", "today\nhiking", {})
+        query = store._build_fts_query("today hiking")
+        assert query is not None
+        assert '"today"' in query
+        assert '"hiking"' in query
+
+    def test_stopword_cache_invalidates_when_dot_stop_changes(self, store: DocumentStore) -> None:
+        store.upsert("default", ".stop", "foo", {})
+        first = store._build_fts_query("foo bar")
+        assert first == '"bar"'
+
+        store.upsert("default", ".stop", "bar", {})
+        second = store._build_fts_query("foo bar")
+        assert second == '"foo"'
