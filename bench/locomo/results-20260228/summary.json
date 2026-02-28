@@ -1,0 +1,27 @@
+{
+  "total": 1540,
+  "elapsed_seconds": 859.6,
+  "model": "gpt-4o-mini",
+  "judge_prompt": "memobase/mem0 standard ACCURACY_PROMPT",
+  "scoring": "binary (CORRECT=1, WRONG=0)",
+  "adversarial": "excluded (standard practice)",
+  "categories": {
+    "open-domain": {
+      "count": 96,
+      "llm_score": 0.5
+    },
+    "multi-hop": {
+      "count": 282,
+      "llm_score": 0.6418
+    },
+    "single-hop": {
+      "count": 841,
+      "llm_score": 0.8621
+    },
+    "temporal": {
+      "count": 321,
+      "llm_score": 0.6854
+    }
+  },
+  "overall_weighted": 0.7623
+}
