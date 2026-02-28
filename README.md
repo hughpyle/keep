@@ -34,6 +34,8 @@ What makes this more than a vector store: when you view your current context (`k
 - **Contextual feedback** — Open commitments and past learnings surface automatically
 - **Semantic search** — Find by meaning, not keywords
 - **Tag organization** — Speech acts, status, project, topic, type — structured and queryable
+- **Deep search** — Follow edges and tags from results to discover related items across the graph
+- **Edge tags** — Turn tags into navigable relationships with automatic inverse links
 - **Parts** — `analyze` decomposes documents into searchable sections, each with its own embedding and tags
 - **Strings** — Every note is a string of versions; reorganize history by meaning with `keep move`
 - **Works offline** — Local models (MLX, Ollama), or API providers (OpenAI, Gemini, Voyage, Anthropic)
@@ -57,7 +59,7 @@ The skill instructions and hooks install into your agent's configuration automat
 | Layer | What it does |
 |-------|-------------|
 | **Skill prompt** | Always in system prompt — guides reflection, breakdown capture, document indexing |
-| **Hooks** | Inject `keep now -n 10` context at session start, prompt submit, and session end |
+| **Hooks** | Inject `keep now -n 10` context at session start and prompt submit |
 | **MCP** | [Stdio server](docs/KEEP-MCP.md) with 9 tools — any MCP-compatible agent gets full memory |
 | **LangChain** | [LangGraph BaseStore](docs/LANGCHAIN-INTEGRATION.md), retriever, tools, and middleware |
 | **Daily cron** | Scheduled deep reflection in an isolated session ([OpenClaw cron](SKILL.md#openclaw-integration)) |
@@ -104,6 +106,7 @@ keep put "Token refresh needs clock sync" -t topic=auth
 
 # Search
 keep find "authentication flow" --limit 5
+keep find "auth" --deep                # Follow edges to discover related items
 keep find "auth" --since P7D           # Last 7 days
 
 # Retrieve
@@ -154,6 +157,8 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples
 - **[docs/TAGGING.md](docs/TAGGING.md)** — Tags, speech acts, project/topic organization
 - **[docs/VERSIONING.md](docs/VERSIONING.md)** — Document versioning and history
 - **[docs/META-TAGS.md](docs/META-TAGS.md)** — Tag descriptions, constrained values, and contextual queries
+- **[docs/EDGE-TAGS.md](docs/EDGE-TAGS.md)** — Edge tags and relationship navigation
+- **[docs/ANALYSIS.md](docs/ANALYSIS.md)** — Document decomposition into searchable parts
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Working session patterns
 - **[docs/LANGCHAIN-INTEGRATION.md](docs/LANGCHAIN-INTEGRATION.md)** — LangChain/LangGraph integration
 - **[docs/KEEP-MCP.md](docs/KEEP-MCP.md)** — MCP server for AI agent integration
