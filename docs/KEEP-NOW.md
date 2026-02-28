@@ -18,7 +18,7 @@ echo "piped content" | keep now       # Set from stdin
 | Option | Description |
 |--------|-------------|
 | `--reset` | Reset to default from system |
-| `-V`, `--version N` | Get specific version (0=current, 1=previous) |
+| `-V`, `--version N` | Version selector (`N>=0` from current, `N<0` from oldest; `-1` oldest) |
 | `-H`, `--history` | Expand version history in frontmatter |
 | `-t`, `--tag KEY=VALUE` | Set tag (with content) or filter (without content) |
 | `-n`, `--limit N` | Max similar/meta items to show (default 3) |

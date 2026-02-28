@@ -72,11 +72,13 @@ URIs (`http://`, `https://`, `file://`) are fetched and indexed automatically.
 ### keep_find
 
 ```
-query:  "natural language search"
-tags:   {"project": "myapp"}       # filter (all must match)
-limit:  10                          # max results
-since:  "P3D" or "2026-01-15"     # time filter
-until:  "P1D" or "2026-02-01"
+query:        "natural language search"
+tags:         {"project": "myapp"}       # filter (all must match)
+since:        "P3D" or "2026-01-15"     # time filter
+until:        "P1D" or "2026-02-01"
+deep:         true                       # follow tags/edges to discover related items
+show_tags:    true                       # show non-system tags for each result
+token_budget: 4000                       # token budget for results context
 ```
 
 ### keep_get

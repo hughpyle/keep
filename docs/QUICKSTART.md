@@ -235,4 +235,4 @@ Run `keep config` to see integration status. Set `KEEP_NO_SETUP=1` to skip auto-
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System internals
 - [SKILL.md](../SKILL.md) — The reflective practice
 
-Everything here also works via the [REST API](REST-API.md) — same engine, same semantic search, accessible from any language or tool.
+Everything here also works via [MCP](KEEP-MCP.md) and the [Python API](PYTHON-API.md) — same engine, same semantic search, accessible from any language or tool.

@@ -50,9 +50,8 @@ keep_now(content="Diagnosing flaky test in auth module", tags={"project": "myapp
 keep_now(content="Found timing issue", tags={"project": "myapp"})
 
 # 3. Check previous context if needed
-keep_get(id="now", version=1)                               # Previous version
-keep_now(history=True)                                      # List all versions
-keep_now(tags={"project": "myapp"})                         # Find recent now with project tag
+keep_get(id="now@V{1}")                                     # Previous version
+keep_get(id="now@V{2}")                                     # Two versions ago
 
 # 4. Record learnings (cross-project knowledge uses topic only)
 keep_put(content="Flaky timing fix: mock time instead of real assertions", tags={"topic": "testing", "type": "learning"})
@@ -67,7 +66,6 @@ keep_put(content="Flaky timing fix: mock time instead of real assertions", tags=
 **Starting a session:**
 ```
 keep_get(id="now")                                # Current intentions with version history
-keep_now(history=True)                            # How intentions evolved
 keep_find(query="recent work", since="P1D")       # Last 24 hours
 ```
 
@@ -151,7 +149,7 @@ keep_put(content="Please review the PR", tags={"act": "request", "status": "open
 keep_list(tags={"act": "commitment", "status": "open"})
 
 # Close the loop
-keep_tag_update(id="ID", tags={"status": "fulfilled"})
+keep_tag(id="ID", tags={"status": "fulfilled"})
 ```
 
 See [TAGGING.md](TAGGING.md#speech-act-tags) for the full speech-act framework.

@@ -75,7 +75,7 @@ Document summary here...
 {"id": "...", "summary": "...", "tags": {...}, "score": 0.823}
 ```
 
-Version numbers are **offsets**: @V{0} = current, @V{1} = previous, @V{2} = two versions ago.
+Version numbers are **selectors**: @V{0} = current, @V{1} = previous, @V{2} = two versions ago, @V{-1} = oldest archived, @V{-2} = second-oldest.
 Part numbers are **1-indexed**: @P{1} = first part, @P{2} = second part, etc.
 
 **Output width:** Summaries are truncated to fit the terminal. When stdout is not a TTY (e.g., piped through hooks), output uses 200 columns for wider summaries.
@@ -125,6 +125,7 @@ keep get ID --parts                   # List structural parts
 # Search
 keep find "query"                     # Semantic search
 keep find "query" --text              # Full-text search
+keep find "query" --deep              # Follow tags/edges to discover related items
 keep find "query" --since P7D         # Last 7 days
 
 # List and filter

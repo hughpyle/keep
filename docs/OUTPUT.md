@@ -118,7 +118,7 @@ Items semantically close to this one, ranked by similarity. Each line:
 - **date** — last updated date
 - **summary** — truncated summary
 
-Similar items are occasions for reflection: what else do I know about this? Control with `-n` (limit) or `--no-similar` to suppress.
+Similar items are occasions for reflection: what else do I know about this? Control with `-n` (limit).
 
 ### 5. `meta/*:` — Contextual sections
 

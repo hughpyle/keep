@@ -21,7 +21,10 @@ keep find --id ID                     # Find items similar to an existing item
 | `-n`, `--limit N` | Maximum results (default 10) |
 | `--since DURATION` | Only items updated since (see time filtering below) |
 | `--until DURATION` | Only items updated before (see time filtering below) |
+| `-D`, `--deep` | Follow tags/edges from results to discover related items |
+| `--tags` | Show non-system tags for each result |
 | `-H`, `--history` | Include archived versions of matching items |
+| `--tokens N` | Token budget for rich context output (includes parts and versions) |
 | `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
 | `-s`, `--store PATH` | Override store directory |
 
@@ -76,6 +79,19 @@ Results are displayed as summary lines with similarity score and date:
 ```
 
 Dates reflect when the item was created. Use `--full` for complete frontmatter with tags, similar items, and version navigation.
+
+## Deep search
+
+Deep search (`--deep`) follows tags and edges from the primary results to discover related items that wouldn't appear in a normal search. Results are grouped under the primary item that led to them.
+
+```bash
+keep find "authentication" --deep      # Primary results + related items
+keep find "auth" --deep -n 5           # Top 5 with deep groups
+```
+
+When edge tags are defined (see [EDGE-TAGS.md](EDGE-TAGS.md)), deep search follows edges to find related items via graph traversal. Without edges, it falls back to tag-based discovery — finding items that share tags with the primary results.
+
+Deep search is incompatible with `--history`; if both are specified, `--deep` is ignored.
 
 ## Including archived versions
 
