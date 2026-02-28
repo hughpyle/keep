@@ -200,5 +200,5 @@ The LLM prompt used for analysis is configurable. Create a `.prompt/analyze/*` d
 - [KEEP-GET.md](KEEP-GET.md) — Retrieving items and parts
 - [KEEP-FIND.md](KEEP-FIND.md) — Search results include parts
 - [META-TAGS.md](META-TAGS.md) — Contextual queries (`.meta/*`)
-- [PROMPTS.md](PROMPTS.md) — Prompt overrides for summarization and analysis
+- [PROMPTS.md](PROMPTS.md) — Prompts for summarization, analysis, and agent workflows
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

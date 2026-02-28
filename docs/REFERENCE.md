@@ -189,7 +189,7 @@ See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) for full details.
 - [TAGGING.md](TAGGING.md) — Tags, speech acts, project/topic organization
 - [VERSIONING.md](VERSIONING.md) — Document versioning and history
 - [META-TAGS.md](META-TAGS.md) — Contextual queries (`.meta/*`)
-- [PROMPTS.md](PROMPTS.md) — Prompt overrides for summarization and analysis
+- [PROMPTS.md](PROMPTS.md) — Prompts for summarization, analysis, and agent workflows
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags
 
 ## More

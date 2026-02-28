@@ -119,5 +119,5 @@ keep put "file:///path/to/design.pdf" -t type=reference -t topic=architecture
 - [VERSIONING.md](VERSIONING.md) — How versioning works
 - [KEEP-GET.md](KEEP-GET.md) — Retrieve indexed documents
 - [META-TAGS.md](META-TAGS.md) — Contextual queries (`.meta/*`)
-- [PROMPTS.md](PROMPTS.md) — Prompt overrides for summarization and analysis
+- [PROMPTS.md](PROMPTS.md) — Prompts for summarization, analysis, and agent workflows
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

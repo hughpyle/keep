@@ -156,6 +156,6 @@ Now `keep get` on that item shows `meta/artist:`, `meta/album:`, and `meta/genre
 
 - [EDGE-TAGS.md](EDGE-TAGS.md) — Edge tags: navigable relationships via `_inverse`
 - [TAGGING.md](TAGGING.md) — Tag descriptions, constrained values, and filtering
-- [PROMPTS.md](PROMPTS.md) — Prompt overrides for summarization and analysis
+- [PROMPTS.md](PROMPTS.md) — Prompts for summarization, analysis, and agent workflows
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags (`_created`, `_updated`, etc.)
 - [REFERENCE.md](REFERENCE.md) — Complete CLI reference

@@ -246,7 +246,7 @@ See [PYTHON-API.md](PYTHON-API.md) for complete Python API reference.
 ## See Also
 
 - [META-TAGS.md](META-TAGS.md) — Contextual queries (`.meta/*`)
-- [PROMPTS.md](PROMPTS.md) — Prompt overrides for summarization and analysis
+- [PROMPTS.md](PROMPTS.md) — Prompts for summarization, analysis, and agent workflows
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags
 - [KEEP-LIST.md](KEEP-LIST.md) — List and filter by tags
 - [KEEP-FIND.md](KEEP-FIND.md) — Search with tag filters

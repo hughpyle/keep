@@ -1,17 +1,25 @@
-# Prompt Overrides
+# Prompts
 
-Prompt docs at `.prompt/summarize/*` and `.prompt/analyze/*` let you customize the LLM system prompts used for summarization and analysis. Unlike tag docs (which augment the prompt), prompt docs **replace** the default system prompt entirely.
+keep uses three families of prompt docs, all stored under `.prompt/`:
 
-## How prompt docs work
+| Family | IDs | Used by |
+|--------|-----|---------|
+| `.prompt/summarize/` | `default`, `conversation`, ... | `keep put` (summarization) |
+| `.prompt/analyze/` | `default`, `conversation`, ... | `keep analyze` (decomposition) |
+| `.prompt/agent/` | `reflect`, `query`, `conversation`, `session-start`, ... | `keep prompt` CLI and `keep_prompt` MCP tool |
 
-Each prompt doc has two parts:
+Summarize and analyze prompts replace the LLM system prompt for their respective operations. Agent prompts are rendered with context injection and returned as text — see [KEEP-PROMPT.md](KEEP-PROMPT.md) for the CLI and [KEEP-MCP.md](KEEP-MCP.md) for the MCP tool.
+
+## Summarize and analyze prompts
+
+Each summarize/analyze prompt doc has two parts:
 
 1. **Match rules** — tag queries that determine when this prompt applies (same DSL as `.meta/*` docs)
 2. **`## Prompt` section** — the actual system prompt text sent to the LLM
 
-When a document is summarized or analyzed, keep scans all `.prompt/{type}/*` docs, finds those whose match rules match the document's tags, and selects the most specific match (most rules matched). The `## Prompt` section from the winner replaces the default system prompt.
+When a document is summarized or analyzed, keep scans the matching `.prompt/{type}/` docs, finds those whose match rules match the document's tags, and selects the most specific match (most rules matched). The `## Prompt` section from the winner replaces the default system prompt.
 
-## Bundled prompt docs
+### Bundled
 
 | ID | Match rule | Purpose |
 |----|-----------|---------|
@@ -20,7 +28,7 @@ When a document is summarized or analyzed, keep scans all `.prompt/{type}/*` doc
 | `.prompt/analyze/default` | *(none — fallback)* | Default analysis prompt for structural decomposition |
 | `.prompt/analyze/conversation` | `type=conversation` | Fact extraction from conversations |
 
-## Creating custom prompts
+### Creating custom prompts
 
 Create a new prompt doc with match rules targeting specific tags:
 
@@ -56,16 +64,31 @@ EOF
 
 The most specific match wins — a prompt matching `type=meeting project=myapp` (2 rules) beats one matching just `type=meeting` (1 rule), which beats the default (0 rules).
 
+## Agent prompts
+
+Agent prompts live at `.prompt/agent/` and contain template placeholders (`{get}`, `{find}`, `{text}`) that are expanded with store context at render time. They are returned as text for the calling agent to follow — not sent to an LLM as a system prompt.
+
+```bash
+keep prompt reflect                      # Render the reflect prompt
+keep prompt reflect "auth flow"          # With search context injected
+keep prompt --list                       # List available agent prompts
+```
+
+See [KEEP-PROMPT.md](KEEP-PROMPT.md) for full usage and template placeholders.
+
 ## Viewing prompt docs
 
 ```bash
-keep get .prompt/summarize/default      # See the default summarization prompt
-keep get .prompt/analyze/conversation   # See the conversation analysis prompt
-keep list .prompt                       # All prompt docs
+keep get .prompt/summarize/default       # See a summarize/analyze prompt
+keep get .prompt/agent/reflect           # See an agent prompt
+keep list .prompt                        # All prompt docs
 ```
+
+Prompt docs are editable and versioned like any other store document.
 
 ## See Also
 
+- [KEEP-PROMPT.md](KEEP-PROMPT.md) — Agent prompt CLI and template placeholders
 - [TAGGING.md](TAGGING.md) — Tag descriptions and how `## Prompt` sections work in tag docs
 - [META-TAGS.md](META-TAGS.md) — Contextual queries (same match-rule DSL)
 - [KEEP-ANALYZE.md](KEEP-ANALYZE.md) — CLI reference for `keep analyze`
