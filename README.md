@@ -158,7 +158,8 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for configuration and more examples
 - **[docs/REFERENCE.md](docs/REFERENCE.md)** — Quick reference index
 - **[docs/TAGGING.md](docs/TAGGING.md)** — Tags, speech acts, project/topic organization
 - **[docs/VERSIONING.md](docs/VERSIONING.md)** — Document versioning and history
-- **[docs/META-TAGS.md](docs/META-TAGS.md)** — Tag descriptions, constrained values, and contextual queries
+- **[docs/META-TAGS.md](docs/META-TAGS.md)** — Contextual queries (`.meta/*`)
+- **[docs/PROMPTS.md](docs/PROMPTS.md)** — Prompt overrides for summarization and analysis
 - **[docs/EDGE-TAGS.md](docs/EDGE-TAGS.md)** — Edge tags and relationship navigation
 - **[docs/ANALYSIS.md](docs/ANALYSIS.md)** — Document decomposition into searchable parts
 - **[docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md)** — Working session patterns

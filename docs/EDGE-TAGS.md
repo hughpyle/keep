@@ -1,6 +1,8 @@
 # Edge Tags
 
-Edge tags turn ordinary tags into navigable relationships. When a `.tag/KEY` document declares `_inverse: VERB`, any document tagged with `KEY=target` creates a link to the target — and the target gets an automatic inverse listing under `tags/VERB:`.
+Edge tags turn ordinary tags into navigable relationships.  Usually if a note has tag "speaker: Kate", this is just a label.  But when "speaker" is an _edge tag_, this becomes a reference (a graph edge) between the note and another note "Kate".  Moreover, that note "Kate" has an edge back to the note(s) where it was tagged.
+
+This is defined by the _tagdoc_: the note that defines the tag, which has id like `.tag/*`.  When a `.tag/KEY` document declares `_inverse: VERB`, any document tagged with `KEY=target` creates a link to the target — and the target gets an automatic inverse listing under `tags/VERB:`.
 
 Edge definitions are user-editable on purpose. They let you decide which relationships matter enough to become first-class navigation for you and your agent.
 
@@ -114,6 +116,6 @@ Inverse edges (`tags/said:`) are only visible through `keep get` on the target.
 
 ## See Also
 
-- [META-TAGS.md](META-TAGS.md) — Tag descriptions, contextual queries, prompt overrides
-- [TAGGING.md](TAGGING.md) — Tag basics: setting, filtering, isolation
+- [TAGGING.md](TAGGING.md) — Tag descriptions, constrained values, filtering
+- [META-TAGS.md](META-TAGS.md) — Contextual queries (`.meta/*`)
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags (`_created`, `_updated`, etc.)

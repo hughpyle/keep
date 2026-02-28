@@ -96,5 +96,5 @@ See [KEEP-PROMPT.md](KEEP-PROMPT.md) for full prompt options including `--id`, `
 - [KEEP-MOVE.md](KEEP-MOVE.md) — Move now history into named items
 - [TAGGING.md](TAGGING.md) — Tag system and speech-act tracking
 - [VERSIONING.md](VERSIONING.md) — Version history and navigation
-- [META-TAGS.md](META-TAGS.md) — Tag descriptions and contextual queries
+- [META-TAGS.md](META-TAGS.md) — Contextual queries (`.meta/*`)
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

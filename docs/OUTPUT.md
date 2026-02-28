@@ -186,6 +186,7 @@ See [REFERENCE.md](REFERENCE.md#output-formats) for examples of each format.
 
 - [TAGGING.md](TAGGING.md) — Tag system and conventions
 - [VERSIONING.md](VERSIONING.md) — Version history and navigation
-- [META-TAGS.md](META-TAGS.md) — Tag descriptions and contextual queries
+- [META-TAGS.md](META-TAGS.md) — Contextual queries (`.meta/*`)
+- [PROMPTS.md](PROMPTS.md) — Prompt overrides for summarization and analysis
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Hidden system tags
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

@@ -188,7 +188,8 @@ See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) for full details.
 - [OUTPUT.md](OUTPUT.md) — How to read the frontmatter output
 - [TAGGING.md](TAGGING.md) — Tags, speech acts, project/topic organization
 - [VERSIONING.md](VERSIONING.md) — Document versioning and history
-- [META-TAGS.md](META-TAGS.md) — Tag descriptions, constrained values, and contextual queries
+- [META-TAGS.md](META-TAGS.md) — Contextual queries (`.meta/*`)
+- [PROMPTS.md](PROMPTS.md) — Prompt overrides for summarization and analysis
 - [SYSTEM-TAGS.md](SYSTEM-TAGS.md) — Auto-managed system tags
 
 ## More

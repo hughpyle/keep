@@ -89,5 +89,5 @@ keep get ID -t project=myapp          # Error if item doesn't have this tag
 
 - [VERSIONING.md](VERSIONING.md) — Version identifiers and history
 - [KEEP-FIND.md](KEEP-FIND.md) — Search for items by meaning
-- [META-TAGS.md](META-TAGS.md) — Tag descriptions and contextual queries
+- [META-TAGS.md](META-TAGS.md) — Contextual queries (`.meta/*`)
 - [REFERENCE.md](REFERENCE.md) — Quick reference index
