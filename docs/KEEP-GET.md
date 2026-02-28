@@ -8,14 +8,16 @@ Retrieve item(s) by ID.
 keep get ID                           # Current version with similar items
 keep get ID1 ID2 ID3                  # Multiple items (separated by ---)
 keep get ID -V 1                      # Previous version
+keep get ID -V -1                     # Oldest archived version
 keep get "ID@V{1}"                    # Same as -V 1 (version identifier syntax)
+keep get "ID@V{-1}"                   # Same as -V -1
 ```
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `-V`, `--version N` | Get specific version (0=current, 1=previous) |
+| `-V`, `--version N` | Version selector (`N>=0` from current, `N<0` from oldest; `-1` oldest) |
 | `-H`, `--history` | Expand version history in frontmatter (default 10, use `-n` to override) |
 | `-S`, `--similar` | List similar items (default 10) |
 | `-M`, `--meta` | List meta items |

@@ -1472,7 +1472,9 @@ class Keeper:
         Also handles tag removal: if a key that was an edge-tag is no
         longer present, the corresponding edge row is deleted.
         """
-        # System docs never participate as edge sources
+        # System docs never participate as edge sources.
+        # Hosted RBAC invariant: non-system writes (writer role) must not
+        # trigger writes to dot-prefixed system documents.
         if id.startswith("."):
             return
 
@@ -1511,8 +1513,9 @@ class Keeper:
             if previous_value and not current_value:
                 self._document_store.delete_edge(doc_coll, id, key)
 
-            # Tag present → upsert edge + auto-vivify target
-            # Skip sysdoc targets (names starting with '.')
+            # Tag present → upsert edge + auto-vivify target.
+            # Skip sysdoc targets (names starting with '.'): this prevents
+            # non-system writes from indirectly creating/updating system docs.
             if current_value and not current_value.startswith("."):
                 target_id = current_value
                 # Auto-vivify: create target as empty doc if it doesn't exist
@@ -1576,7 +1579,9 @@ class Keeper:
         Detects whether _inverse was added, changed, or removed, and
         adjusts edges/backfill accordingly.
         """
-        # Extract predicate from tagdoc ID: .tag/KEY → KEY
+        # Extract predicate from tagdoc ID: .tag/KEY → KEY.
+        # Explicit boundary: only system-tagdoc writes may mutate edge schema
+        # and materialize inverse tagdocs. Non-system writes cannot enter here.
         if not id.startswith(".tag/") or "/" in id[5:]:
             return  # not a top-level tagdoc
         predicate = id[5:]
@@ -3132,7 +3137,10 @@ class Keeper:
 
         Args:
             id: Document identifier
-            version: Version offset (0 or None = current, 1 = previous, ...)
+            version: Public version selector:
+                - None or 0: current
+                - N > 0: offset from current (1=previous)
+                - N < 0: archived ordinal from oldest (-1=oldest)
             similar_limit: Max similar items to include
             meta_limit: Max items per meta-doc section
             include_similar: Whether to resolve similar items
@@ -3140,7 +3148,11 @@ class Keeper:
             include_parts: Whether to include parts manifest
             include_versions: Whether to include version navigation
         """
-        offset = version or 0
+        id = normalize_id(id)
+        resolved = self.resolve_version_offset(id, version)
+        if resolved is None:
+            return None
+        offset = resolved
         if offset > 0:
             item = self.get_version(id, offset)
         else:
@@ -3152,19 +3164,32 @@ class Keeper:
         prev_refs: list[VersionRef] = []
         next_refs: list[VersionRef] = []
         if include_versions:
-            nav = self.get_version_nav(id, version)
-            for i, v in enumerate(nav.get("prev", [])):
-                prev_refs.append(VersionRef(
-                    offset=offset + i + 1,
-                    date=local_date(v.tags.get("_created") or v.created_at or ""),
-                    summary=v.summary,
-                ))
-            for i, v in enumerate(nav.get("next", [])):
-                next_refs.append(VersionRef(
-                    offset=offset - i - 1,
-                    date=local_date(v.tags.get("_created") or v.created_at or ""),
-                    summary=v.summary,
-                ))
+            if offset == 0:
+                nav = self.get_version_nav(id, None)
+                for i, v in enumerate(nav.get("prev", [])):
+                    prev_refs.append(VersionRef(
+                        offset=i + 1,
+                        date=local_date(v.tags.get("_created") or v.created_at or ""),
+                        summary=v.summary,
+                    ))
+            else:
+                # Keep navigation in user-visible offset space.
+                # This avoids mixing offset (V{N}) with internal version numbers.
+                older = self.get_version(id, offset + 1)
+                if older is not None:
+                    prev_refs.append(VersionRef(
+                        offset=offset + 1,
+                        date=local_date(older.tags.get("_created", "")),
+                        summary=older.summary,
+                    ))
+                if offset > 1:
+                    newer = self.get_version(id, offset - 1)
+                    if newer is not None:
+                        next_refs.append(VersionRef(
+                            offset=offset - 1,
+                            date=local_date(newer.tags.get("_created", "")),
+                            summary=newer.summary,
+                        ))
 
         # Similar items (only for current version)
         similar_refs: list[SimilarRef] = []
@@ -3230,6 +3255,31 @@ class Keeper:
             prev=prev_refs,
             next=next_refs,
         )
+
+    def resolve_version_offset(self, id: str, selector: int | None) -> Optional[int]:
+        """
+        Resolve a public version selector to a concrete offset.
+
+        Public selector semantics:
+        - None or 0: current version (offset 0)
+        - N > 0: N versions back from current (offset N)
+        - N < 0: Nth archived version from oldest (-1 oldest, -2 second-oldest)
+
+        Returns:
+            Resolved non-negative offset, or None if selector is out of range.
+        """
+        if selector is None or selector == 0:
+            return 0
+        if selector > 0:
+            return selector
+
+        doc_coll = self._resolve_doc_collection()
+        archived_count = self._document_store.version_count(doc_coll, id)
+        oldest_ordinal = -selector
+        if oldest_ordinal < 1 or oldest_ordinal > archived_count:
+            return None
+        # oldest ordinal 1 maps to deepest offset (archived_count)
+        return archived_count - oldest_ordinal + 1
 
     # ------------------------------------------------------------------
     # Agent prompts
@@ -3747,30 +3797,36 @@ class Keeper:
         offset: int = 0,
     ) -> Optional[Item]:
         """
-        Get a specific version of a document by offset.
+        Get a specific version of a document by public selector.
 
-        Offset semantics:
+        Selector semantics:
         - 0 = current version
         - 1 = previous version
         - 2 = two versions ago
-        - etc.
+        - ...
+        - -1 = oldest archived version
+        - -2 = second oldest archived version
+        - ...
 
         Args:
             id: Document identifier
-            offset: Version offset (0=current, 1=previous, etc.)
+            offset: Public version selector
 
         Returns:
             Item if found, None if version doesn't exist
         """
         id = normalize_id(id)
+        resolved_offset = self.resolve_version_offset(id, offset)
+        if resolved_offset is None:
+            return None
         doc_coll = self._resolve_doc_collection()
 
-        if offset == 0:
+        if resolved_offset == 0:
             # Current version
             return self.get(id)
 
         # Get archived version
-        version_info = self._document_store.get_version(doc_coll, id, offset)
+        version_info = self._document_store.get_version(doc_coll, id, resolved_offset)
         if version_info is None:
             return None
 
@@ -3939,21 +3995,26 @@ class Keeper:
 
     def delete_version(self, id: str, offset: int) -> bool:
         """
-        Delete a specific archived version by offset.
+        Delete a specific archived version by public selector.
 
-        Offset semantics match get_version: 1=previous, 2=two ago, etc.
-        Offset 0 is the current version — use revert() for that.
+        Selector semantics match get_version:
+        - 1=previous, 2=two ago, ...
+        - -1=oldest archived, -2=second oldest archived, ...
+        - 0=current (not allowed here; use revert()).
 
         Returns True if the version was found and deleted.
         """
         id = normalize_id(id)
-        if offset < 1:
+        resolved_offset = self.resolve_version_offset(id, offset)
+        if resolved_offset is None:
+            return False
+        if resolved_offset < 1:
             raise ValueError("Use revert() to delete the current version (offset 0)")
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
         # Resolve offset → internal version number
-        version_info = self._document_store.get_version(doc_coll, id, offset)
+        version_info = self._document_store.get_version(doc_coll, id, resolved_offset)
         if version_info is None:
             return False
 

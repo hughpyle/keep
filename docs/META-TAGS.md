@@ -6,6 +6,14 @@ Meta-tags are system documents stored at `.tag/*`, `.meta/*`, and `.prompt/*` th
 2. **Contextual queries** (`.meta/*`) — Surface relevant items when you view context with `keep now` or `keep get`
 3. **Prompt overrides** (`.prompt/*`) — Customize the LLM prompts used for summarization and analysis
 
+These docs are user-editable on purpose. They are the control surface for making your memory and your agent more skillful over time:
+
+- Better tags make better retrieval and decomposition.
+- Better meta queries surface better reflective context.
+- Better prompts produce better summaries and analysis.
+
+If your workflow changes, edit these docs so the system behavior changes with it.
+
 ## Tag descriptions (`.tag/*`)
 
 Every tag key can have a description document at `.tag/KEY`. These are installed automatically on first use and serve as living documentation:
@@ -90,6 +98,35 @@ To customize classification behavior, edit the `## Prompt` section in a tag doc 
 Meta-tags at `.meta/*` contain **tag queries** that surface relevant items when you run `keep now` or `keep get`. They answer: *what else should I be aware of right now?*
 
 Meta docs currently serve as query patterns — they define what gets surfaced as context, not how the LLM behaves.
+
+### Why edit meta docs?
+
+Edit `.meta/*` docs when you want to improve *ambient judgment*:
+
+- What should always be surfaced before action?
+- Which open loops should be hard to ignore?
+- Which learnings should follow you across projects?
+
+Meta docs are your "attention policy" for reflection and planning.
+
+### Meta vs edge: when to use which
+
+Use **meta docs** when you want dynamic, contextual surfacing:
+
+- Project/topic-scoped reminders (`project=`, `topic=`)
+- Prerequisite-gated context (`genre=*`, `artist=*`)
+- Ranked context windows (similarity + recency)
+
+Use **edge tags** when you want explicit relationship navigation:
+
+- Entity links and inverse views (`speaker -> said`)
+- Graph-style traversal (who/what points to this)
+- Relationship-first deep search behavior
+
+In practice:
+
+- Meta answers "what else should I pay attention to now?"
+- Edges answer "what is explicitly related to this entity?"
 
 For example, when you run `keep now` while working on a project tagged `project=myapp`:
 

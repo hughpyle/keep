@@ -20,8 +20,11 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-# Pattern for version identifier suffix: @V{N} where N is digits only
-VERSION_SUFFIX_PATTERN = re.compile(r'@V\{(\d+)\}$')
+# Pattern for version identifier suffix: @V{N} where N may be signed.
+# Public semantics:
+#   N >= 0: offset from current
+#   N < 0: ordinal from oldest archived (-1 oldest, -2 second-oldest, ...)
+VERSION_SUFFIX_PATTERN = re.compile(r'@V\{(-?\d+)\}$')
 
 # Pattern for part identifier suffix: @P{N} where N is digits only
 PART_SUFFIX_PATTERN = re.compile(r'@P\{(\d+)\}$')
@@ -1688,7 +1691,7 @@ def now(
     )] = False,
     version: Annotated[Optional[int], typer.Option(
         "--version", "-V",
-        help="Get specific version (0=current, 1=previous, etc.)"
+        help="Version selector (>=0 from current, <0 from oldest: -1 oldest)"
     )] = None,
     history: Annotated[bool, typer.Option(
         "--history", "-H",
@@ -1765,11 +1768,11 @@ def now(
     # Handle version retrieval
     if version is not None:
         ctx = kp.get_context(
-            doc_id, version=version if version > 0 else None,
+            doc_id, version=version,
             include_similar=False, include_meta=False, include_parts=False,
         )
         if ctx is None:
-            typer.echo(f"Version not found (offset {version})", err=True)
+            typer.echo(f"Version not found: {doc_id}@V{{{version}}}", err=True)
             raise typer.Exit(1)
         typer.echo(render_context(ctx, as_json=_get_json_output()))
         return
@@ -2102,7 +2105,7 @@ def get(
     id: Annotated[list[str], typer.Argument(help="URI(s) of note(s) (append @V{N} for version)")],
     version: Annotated[Optional[int], typer.Option(
         "--version", "-V",
-        help="Get specific version (0=current, 1=previous, etc.)"
+        help="Version selector (>=0 from current, <0 from oldest: -1 oldest)"
     )] = None,
     history: Annotated[bool, typer.Option(
         "--history", "-H",
@@ -2138,6 +2141,7 @@ def get(
     Retrieve note(s) by ID.
 
     Accepts one or more IDs. Version identifiers: Append @V{N} to get a specific version.
+    N>=0 selects from current; N<0 selects from oldest archived (-1 oldest).
     Part identifiers: Append @P{N} to get a specific part.
 
     \b
@@ -2145,7 +2149,9 @@ def get(
         keep get doc:1                  # Current version with similar notes
         keep get doc:1 doc:2 doc:3      # Multiple notes
         keep get doc:1 -V 1             # Previous version with prev/next nav
+        keep get doc:1 -V -1            # Oldest archived version
         keep get "doc:1@V{1}"           # Same as -V 1
+        keep get "doc:1@V{-1}"          # Same as -V -1
         keep get "doc:1@P{1}"           # Part 1 of analyzed note
         keep get doc:1 --history        # List all versions
         keep get doc:1 --parts          # List structural parts
@@ -2339,7 +2345,7 @@ def _get_one(
 ) -> Optional[str]:
     """Get a single item and return its formatted output, or None on error."""
 
-    # Parse @V{N} or @P{N} identifier from ID (security: check literal first)
+    # Parse @V{N} (signed) or @P{N} identifier from ID (security: check literal first)
     actual_id = one_id
     version_from_id = None
     part_from_id = None
@@ -2384,11 +2390,11 @@ def _get_one(
         return _get_resolve_list(kp, actual_id, resolve, limit)
 
     # Default + --history + --parts: frontmatter with expanded sections
-    offset = effective_version if effective_version is not None else 0
-    ctx = kp.get_context(actual_id, version=offset if offset > 0 else None)
+    selector = effective_version if effective_version is not None else None
+    ctx = kp.get_context(actual_id, version=selector)
     if ctx is None:
-        if offset > 0:
-            typer.echo(f"Version not found: {actual_id} (offset {offset})", err=True)
+        if selector is not None:
+            typer.echo(f"Version not found: {actual_id}@V{{{selector}}}", err=True)
         else:
             typer.echo(f"Not found: {actual_id}", err=True)
         return None
@@ -2436,6 +2442,7 @@ def del_cmd(
 
     Without @V{N}: reverts to the previous version (or fully deletes if no history).
     With @V{N}: deletes that specific archived version; other versions remain.
+      N>=0 selects by offset from current; N<0 selects by oldest-ordinal.
 
     \b
     Examples:
@@ -2454,7 +2461,7 @@ def del_cmd(
             had_errors = True
             continue
 
-        # Parse @V{N} suffix
+        # Parse @V{N} suffix (signed selectors allowed)
         version_offset = None
         actual_id = one_id
         match = VERSION_SUFFIX_PATTERN.search(one_id)
@@ -2462,8 +2469,15 @@ def del_cmd(
             version_offset = int(match.group(1))
             actual_id = one_id[:match.start()]
 
-        if version_offset is not None and version_offset > 0:
-            # Delete a specific archived version
+        if version_offset is not None:
+            if version_offset == 0:
+                typer.echo(
+                    f"Error: @V{{0}} is current. Use 'keep del {_shell_quote_id(actual_id)}' to revert.",
+                    err=True,
+                )
+                had_errors = True
+                continue
+            # Delete a specific archived version (offset or oldest-ordinal selector)
             deleted = kp.delete_version(actual_id, version_offset)
             if not deleted:
                 typer.echo(f"Version not found: {one_id}", err=True)

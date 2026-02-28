@@ -2,6 +2,12 @@
 
 Edge tags turn ordinary tags into navigable relationships. When a `.tag/KEY` document declares `_inverse: VERB`, any document tagged with `KEY=target` creates a link to the target — and the target gets an automatic inverse listing under `tags/VERB:`.
 
+Edge definitions are user-editable on purpose. They let you decide which relationships matter enough to become first-class navigation for you and your agent.
+
+- Add edges to make important entities easier to traverse.
+- Rename inverses to fit your domain language.
+- Remove edges when they create noise instead of signal.
+
 ## How it works
 
 The bundled `.tag/speaker` tagdoc has `_inverse: said`. This means:
@@ -78,6 +84,23 @@ When you add `_inverse` to an existing tagdoc, keep automatically backfills edge
 - **Single-valued**: Each document can have one value per edge tag (e.g., one `speaker`). Multiple documents can point at the same target.
 - **System doc targets skipped**: Tag values starting with `.` (like `.meta/todo`) don't create edges.
 - **Removal**: Setting a tag to empty (`-t speaker=`) deletes that edge without affecting other edges on the document.
+
+## Edge vs meta: choosing the right tool
+
+Use **edge tags** for explicit graph relationships:
+
+- "Who said this?"
+- "What does this contain?"
+- "Which notes point at this entity?"
+
+Use **meta docs** for contextual reflection policy:
+
+- "What open commitments should appear here?"
+- "What learnings should be surfaced in this project?"
+- "What context should appear only when prerequisite tags exist?"
+
+Edge tags optimize navigability and relationship fidelity.
+Meta docs optimize relevance and situational awareness.
 
 ## Finding edge sources
 

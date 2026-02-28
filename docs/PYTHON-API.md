@@ -150,7 +150,7 @@ kp.list_tags("project") # All values for 'project' key
 ```python
 # Get previous version
 kp.get_version(id, offset=1) → Item | None
-# offset: 0=current, 1=previous, 2=two versions ago
+# selector: 0=current, 1=previous, 2=two versions ago, -1=oldest archived
 
 # List all versions
 kp.list_versions(id, limit=10) → list[VersionInfo]
@@ -293,6 +293,7 @@ Append `@V{N}` to specify version by offset:
 - `ID@V{0}` — Current version
 - `ID@V{1}` — Previous version
 - `ID@V{2}` — Two versions ago
+- `ID@V{-1}` — Oldest archived version
 
 ```python
 item = kp.get("doc:1@V{1}")  # Get previous version

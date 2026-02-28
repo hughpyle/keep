@@ -463,8 +463,16 @@ class TestShellQuoteId:
         assert _shell_quote_id("file:///path/to/doc.md") == "file:///path/to/doc.md"
         assert _shell_quote_id("https://example.com/path") == "https://example.com/path"
         assert _shell_quote_id("now@V{3}") == "now@V{3}"
+        assert _shell_quote_id("now@V{-3}") == "now@V{-3}"
         assert _shell_quote_id(".tag/act") == ".tag/act"
         assert _shell_quote_id(".conversations") == ".conversations"
+
+    def test_version_suffix_pattern_accepts_signed(self):
+        """@V suffix parser accepts negative selectors."""
+        from keep.cli import VERSION_SUFFIX_PATTERN
+        m = VERSION_SUFFIX_PATTERN.search("now@V{-2}")
+        assert m is not None
+        assert m.group(1) == "-2"
 
     def test_space_id_quoted(self):
         """IDs with spaces get single-quoted."""

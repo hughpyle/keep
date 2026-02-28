@@ -251,6 +251,24 @@ class TestEdgeIntegration:
         edges = kp._document_store.get_inverse_edges(doc_coll, ".meta/todo")
         assert edges == []
 
+    def test_sysdoc_target_not_autovivified_or_mutated(self, kp):
+        """Non-system writes must not mutate dot-prefixed docs via edge processing."""
+        self._create_tagdoc(kp, "speaker", "said")
+        kp.put(content="original", id=".meta/todo", summary="Meta baseline")
+
+        before = kp.get(".meta/todo")
+        assert before is not None
+        before_summary = before.summary
+        before_created = before.tags.get("_created")
+
+        kp.put(content="System ref", id="doc1", summary="Ref",
+               tags={"speaker": ".meta/todo"})
+
+        after = kp.get(".meta/todo")
+        assert after is not None
+        assert after.summary == before_summary
+        assert after.tags.get("_created") == before_created
+
     def test_no_edge_without_inverse_tagdoc(self, kp):
         """Tags without _inverse tagdoc don't create edges."""
         kp.put(content="Some doc", id="doc1", summary="Doc",

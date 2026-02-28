@@ -15,21 +15,25 @@ unlike other memory stores, you can re-string it by meaning.
 
 ## Version identifiers
 
-Append `@V{N}` to any ID to specify a version by offset:
+Append `@V{N}` to any ID to specify a version:
 
 - `ID@V{0}` — current version
 - `ID@V{1}` — previous version
 - `ID@V{2}` — two versions ago
+- `ID@V{-1}` — oldest archived version
+- `ID@V{-2}` — second-oldest archived version
 
 ```bash
 keep get "%a1b2c3d4@V{1}"        # Previous version
 keep get "now@V{2}"              # Two versions ago of nowdoc
+keep get "now@V{-1}"             # Oldest archived nowdoc
 ```
 
 ## Accessing versions
 
 ```bash
 keep get ID -V 1                 # Previous version (equivalent to @V{1})
+keep get ID -V -1                # Oldest archived (equivalent to @V{-1})
 keep get ID --history            # List all versions
 keep now -V 1                   # Previous intentions
 keep now --history              # List all nowdoc versions

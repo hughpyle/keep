@@ -483,3 +483,86 @@ class TestTagPart:
         assert result is not None
         assert result.tags["_part_num"] == "1"  # unchanged
         assert result.tags["topic"] == "updated"
+
+
+class TestVersionContextNavigation:
+    """Regression tests for offset-based version navigation in get_context()."""
+
+    def test_get_context_old_version_uses_offset_neighbors(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.types import Item
+
+        kp = Keeper(store_path=tmp_path)
+
+        # Current exists but should not be used for offset>1 next link.
+        kp.get = lambda _id: Item(id="doc", summary="current", tags={"_created": "2026-01-04T00:00:00+00:00"})  # type: ignore[method-assign]
+
+        # Simulate sparse internal version numbering behind a stable offset API.
+        by_offset = {
+            2: Item(id="doc", summary="viewed", tags={"_created": "2026-01-03T00:00:00+00:00", "_version": "100"}),
+            3: Item(id="doc", summary="older", tags={"_created": "2026-01-02T00:00:00+00:00", "_version": "42"}),
+            1: Item(id="doc", summary="newer", tags={"_created": "2026-01-04T00:00:00+00:00", "_version": "777"}),
+        }
+        kp.get_version = lambda _id, off=0: by_offset.get(off)  # type: ignore[method-assign]
+
+        # Guard against regressions that pass offset into internal-version nav.
+        kp.get_version_nav = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not call get_version_nav for old-version context"))  # type: ignore[method-assign]
+
+        ctx = kp.get_context(
+            "doc",
+            version=2,
+            include_similar=False,
+            include_meta=False,
+            include_parts=False,
+            include_versions=True,
+        )
+
+        assert ctx is not None
+        assert [v.offset for v in ctx.prev] == [3]
+        assert [v.summary for v in ctx.prev] == ["older"]
+        assert [v.offset for v in ctx.next] == [1]
+        assert [v.summary for v in ctx.next] == ["newer"]
+
+
+class TestNegativeVersionSelectors:
+    """Public negative selectors resolve by oldest-ordinal semantics."""
+
+    def test_resolve_version_offset_negative_from_oldest(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+
+        kp = Keeper(store_path=tmp_path)
+        kp._document_store.version_count = lambda _coll, _id: 5  # type: ignore[method-assign]
+
+        assert kp.resolve_version_offset("doc", -1) == 5  # oldest
+        assert kp.resolve_version_offset("doc", -2) == 4  # second-oldest
+        assert kp.resolve_version_offset("doc", -5) == 1  # newest archived
+        assert kp.resolve_version_offset("doc", -6) is None  # out of range
+
+    def test_get_context_accepts_negative_selector(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.types import Item
+
+        kp = Keeper(store_path=tmp_path)
+        kp._document_store.version_count = lambda _coll, _id: 3  # type: ignore[method-assign]
+
+        seen_offsets: list[int] = []
+
+        def _get_version(_id: str, off: int = 0):
+            seen_offsets.append(off)
+            if off == 3:
+                return Item(id="doc", summary="oldest", tags={"_created": "2026-01-01T00:00:00+00:00"})
+            return None
+
+        kp.get_version = _get_version  # type: ignore[method-assign]
+
+        ctx = kp.get_context(
+            "doc",
+            version=-1,
+            include_similar=False,
+            include_meta=False,
+            include_parts=False,
+            include_versions=False,
+        )
+        assert ctx is not None
+        assert ctx.item.summary == "oldest"
+        assert seen_offsets == [3]
