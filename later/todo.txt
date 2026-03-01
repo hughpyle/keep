@@ -7,7 +7,7 @@
     and, which node gets the "multi-valued-ness" of the implicit inverse?
         (they both do, really - it really *is* N:N not 1:N, but only halfway)
 
-* clearer distinction of "meta-tags" and "edge-tags": usecase examples
+* "reflective callback" queue
 
 * more edge tags for linking "artifacts" with "notes"
 
@@ -96,7 +96,7 @@
     - Revisit in 3-6 months. Abstract vector store interface so we can swap.
     - https://github.com/alibaba/zvec
 
-* Benchmark results
+* Measure some energy and latency.
 
 * Measure some outcomes.  Describe behavior in openclaw, in claude code, etc.  Show where it works.
 
@@ -258,3 +258,4 @@ x check for CLI compatibility with windows (WLS should work but no plan to valid
 . "deep query" prompt
 . tags that name an inverse generate edges to nodes (and the inverse tag)
 . nodes referenced by edges will be whisked into existence
+. Benchmark results
