@@ -509,8 +509,17 @@ class Keeper:
         self._content_extractor = None  # ContentExtractor, lazy-loaded
         self._analyzer = None  # AnalyzerProvider, lazy-loaded
 
-        # Cache env tags once per Keeper instance (stable within a process)
-        self._env_tags = casefold_tags(_get_env_tags())
+        # Cache and validate config/env tags once per Keeper instance.
+        self._default_tags = self._validate_tag_map(
+            self._config.default_tags,
+            source="Config default tags",
+            check_constraints=False,
+        )
+        self._env_tags = self._validate_tag_map(
+            _get_env_tags(),
+            source="KEEP_TAG_* environment tags",
+            check_constraints=False,
+        )
 
         # --- Persistent operations log ---
         from .logging_config import configure_ops_log
@@ -1338,6 +1347,29 @@ class Keeper:
         if mode == "merge":
             existing_ids = set(self._document_store.list_ids(doc_coll))
 
+        # Validate imported tag keys and normalize case to match normal writes.
+        for doc in documents:
+            doc_id = doc.get("id", "<unknown>")
+            doc["tags"] = self._validate_tag_map(
+                doc.get("tags", {}),
+                source=f"Import document tags ({doc_id})",
+                check_constraints=False,
+            )
+            for ver in doc.get("versions", []):
+                ver_num = ver.get("version", "?")
+                ver["tags"] = self._validate_tag_map(
+                    ver.get("tags", {}),
+                    source=f"Import version tags ({doc_id}@v{ver_num})",
+                    check_constraints=False,
+                )
+            for part in doc.get("parts", []):
+                part_num = part.get("part_num", "?")
+                part["tags"] = self._validate_tag_map(
+                    part.get("tags", {}),
+                    source=f"Import part tags ({doc_id}@p{part_num})",
+                    check_constraints=False,
+                )
+
         # Filter to importable documents
         to_import = []
         skipped = 0
@@ -1401,20 +1433,36 @@ class Keeper:
     # Tag Validation
     # -------------------------------------------------------------------------
 
+    def _validate_tag_map(
+        self,
+        tags: dict[str, str],
+        *,
+        source: str,
+        check_constraints: bool,
+    ) -> dict[str, str]:
+        """Casefold and validate tag keys/values for non-system tags."""
+        normalized = casefold_tags({str(k): str(v) for k, v in tags.items()})
+        for key, value in normalized.items():
+            if key.startswith(SYSTEM_TAG_PREFIX):
+                continue
+            try:
+                validate_tag_key(key)
+            except ValueError as e:
+                raise ValueError(f"{source}: {e}") from e
+            if len(value) > MAX_TAG_VALUE_LENGTH:
+                raise ValueError(
+                    f"{source}: Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}"
+                )
+        if check_constraints:
+            self._validate_constrained_tags(normalized)
+        return normalized
+
     def _validate_write_tags(self, tags: dict[str, str]) -> dict[str, str]:
         """Casefold, validate keys/lengths, and check constrained values.
 
         Returns the casefolded tags dict.  Used by put(), tag(), tag_part().
         """
-        tags = casefold_tags(tags)
-        for key, value in tags.items():
-            if key.startswith(SYSTEM_TAG_PREFIX):
-                continue
-            validate_tag_key(key)
-            if len(value) > MAX_TAG_VALUE_LENGTH:
-                raise ValueError(f"Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}")
-        self._validate_constrained_tags(tags)
-        return tags
+        return self._validate_tag_map(tags, source="Tags", check_constraints=True)
 
     def _validate_constrained_tags(self, tags: dict[str, str]) -> None:
         """Check constrained tag values against sub-doc existence.
@@ -1706,8 +1754,8 @@ class Keeper:
         # Build tags: existing → config → env → user → system
         merged_tags = {**existing_tags}
 
-        if self._config.default_tags:
-            merged_tags.update(casefold_tags(self._config.default_tags))
+        if self._default_tags:
+            merged_tags.update(self._default_tags)
 
         merged_tags.update(self._env_tags)
 
@@ -1976,6 +2024,12 @@ class Keeper:
             _is_markdown = any(_uri_lower.endswith(ext) for ext in _MARKDOWN_EXTENSIONS)
             if _is_markdown and doc.content:
                 body, fm_tags = _extract_markdown_frontmatter(doc.content)
+                if fm_tags:
+                    fm_tags = self._validate_tag_map(
+                        fm_tags,
+                        source=f"Frontmatter tags in {uri}",
+                        check_constraints=False,
+                    )
                 if body != doc.content or fm_tags:
                     doc = Document(
                         uri=doc.uri,
@@ -1990,7 +2044,13 @@ class Keeper:
             if doc.tags or tags:
                 merged_tags = {}
                 if doc.tags:
-                    merged_tags.update(doc.tags)
+                    merged_tags.update(
+                        self._validate_tag_map(
+                            filter_non_system_tags(doc.tags),
+                            source=f"Document-derived tags from {uri}",
+                            check_constraints=False,
+                        )
+                    )
                 if tags:
                     merged_tags.update(tags)
 
@@ -2757,7 +2817,11 @@ class Keeper:
         where = None
         casefolded_tags: Optional[dict[str, str]] = None
         if tags:
-            casefolded_tags = {k.casefold(): v.casefold() for k, v in tags.items()}
+            casefolded_tags = {}
+            for k, v in tags.items():
+                key = str(k).casefold()
+                validate_tag_key(key)
+                casefolded_tags[key] = str(v).casefold()
             conditions = [{k: v} for k, v in casefolded_tags.items()]
             where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
@@ -4133,7 +4197,9 @@ class Keeper:
 
         # Casefold tag filters so they match casefolded storage
         if tags:
-            tags = casefold_tags(tags)
+            tags = casefold_tags({str(k): str(v) for k, v in tags.items()})
+            for key in tags:
+                validate_tag_key(key)
 
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()

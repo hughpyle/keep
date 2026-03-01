@@ -238,6 +238,27 @@ class TestExportImport:
         with pytest.raises(ValueError, match="not supported"):
             keeper.import_data({"format": "keep-export", "version": 99})
 
+    def test_import_rejects_invalid_tag_key(self, keeper):
+        """Import rejects tag keys that violate tag-key validation."""
+        data = {
+            "format": "keep-export",
+            "version": 1,
+            "exported_at": "2026-01-01T00:00:00",
+            "store_info": {"document_count": 1, "version_count": 0,
+                          "part_count": 0, "collection": "default"},
+            "documents": [{
+                "id": "bad-tags",
+                "summary": "Doc with invalid tag key",
+                "tags": {"bad!key": "x"},
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-01T00:00:00",
+                "accessed_at": "2026-01-01T00:00:00",
+            }],
+        }
+
+        with pytest.raises(ValueError, match="Import document tags"):
+            keeper.import_data(data, mode="merge")
+
     def test_timestamp_preservation(self, keeper):
         """Import preserves original timestamps."""
         data = {

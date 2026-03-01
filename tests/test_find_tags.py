@@ -74,6 +74,11 @@ class TestFindTagsFilter:
         results_default = kp.find("pets")
         assert {r.id for r in results_none} == {r.id for r in results_default}
 
+    def test_find_rejects_invalid_tag_key(self, kp):
+        """find() rejects tag keys that fail the shared key validator."""
+        with pytest.raises(ValueError, match="invalid characters"):
+            kp.find("pets", tags={"bad!key": "alice"})
+
 
 class TestFindSinceFilter:
     """Regression tests: find() with since= must not drop items whose
