@@ -92,7 +92,6 @@ packages = ["keep"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/keep",
-    "/keep/data/kiro-hooks",
     "/docs",
     "/SKILL.md",
     "/README.md",
