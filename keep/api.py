@@ -683,33 +683,43 @@ class Keeper:
 
         # Legacy metadata migration: old key=value Chroma metadata does not
         # satisfy marker-based tag filters. Rewrite metadata in-place.
-        if self._needs_chroma_tag_marker_migration(chroma_coll, doc_coll):
-            import sys
-            try:
-                print(
-                    "Migrating search metadata to multivalue tag markers "
-                    "(this may take a while on larger stores)...",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                stats = self._migrate_chroma_tag_markers(chroma_coll, doc_coll)
-                logger.info(
-                    "Tag marker migration complete: %d docs, %d versions, %d parts",
-                    stats["docs"], stats["versions"], stats["parts"],
-                )
-                print(
-                    "Search metadata migrated to multivalue tag markers "
-                    f"({stats['docs']} docs, {stats['versions']} versions, {stats['parts']} parts).",
-                    file=sys.stderr,
-                )
-            except Exception as e:
-                logger.warning("Tag marker migration failed: %s", e)
-                print(
-                    "WARNING: tag metadata migration failed; "
-                    "tag-filtered semantic search may be incomplete.\n"
-                    "Run: keep pending --reindex",
-                    file=sys.stderr,
-                )
+        #
+        # The detection scan is O(number of indexed rows), so persist a
+        # per-store "verified" flag after a successful check/migration.
+        if not self._config.chroma_tag_markers_verified:
+            marker_migration_state = self._detect_chroma_tag_marker_migration_need(
+                chroma_coll, doc_coll,
+            )
+            if marker_migration_state is True:
+                import sys
+                try:
+                    print(
+                        "Migrating search metadata to multivalue tag markers "
+                        "(this may take a while on larger stores)...",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    stats = self._migrate_chroma_tag_markers(chroma_coll, doc_coll)
+                    logger.info(
+                        "Tag marker migration complete: %d docs, %d versions, %d parts",
+                        stats["docs"], stats["versions"], stats["parts"],
+                    )
+                    print(
+                        "Search metadata migrated to multivalue tag markers "
+                        f"({stats['docs']} docs, {stats['versions']} versions, {stats['parts']} parts).",
+                        file=sys.stderr,
+                    )
+                    self._mark_chroma_tag_markers_verified()
+                except Exception as e:
+                    logger.warning("Tag marker migration failed: %s", e)
+                    print(
+                        "WARNING: tag metadata migration failed; "
+                        "tag-filtered semantic search may be incomplete.\n"
+                        "Run: keep pending --reindex",
+                        file=sys.stderr,
+                    )
+            elif marker_migration_state is False:
+                self._mark_chroma_tag_markers_verified()
 
         if needs_reconcile:
             self._reconcile_thread = threading.Thread(
@@ -769,10 +779,26 @@ class Keeper:
             logger.debug("Store consistency check failed: %s", e)
         return False
 
-    def _needs_chroma_tag_marker_migration(
+    def _mark_chroma_tag_markers_verified(self) -> None:
+        """Persist that this store no longer needs startup marker scans."""
+        if self._config.chroma_tag_markers_verified:
+            return
+        self._config.chroma_tag_markers_verified = True
+        try:
+            save_config(self._config)
+        except Exception as e:
+            logger.debug("Failed to persist chroma_tag_markers_verified: %s", e)
+
+    def _detect_chroma_tag_marker_migration_need(
         self, chroma_coll: str, doc_coll: str,
-    ) -> bool:
-        """Detect legacy Chroma metadata without multivalue tag markers."""
+    ) -> Optional[bool]:
+        """Detect legacy Chroma metadata without multivalue tag markers.
+
+        Returns:
+            True: legacy metadata detected, migration needed
+            False: scan completed and migration not needed
+            None: check failed (caller should avoid persisting "verified")
+        """
         has_tag_markers = getattr(self._store, "has_tag_markers", None)
         if not callable(has_tag_markers):
             return False
@@ -816,6 +842,7 @@ class Keeper:
                         return True
         except Exception as e:
             logger.debug("Tag marker migration check failed: %s", e)
+            return None
         return False
 
     def _migrate_chroma_tag_markers(
@@ -1841,16 +1868,32 @@ class Keeper:
                 # Only writes to document store — embedding is deferred to
                 # avoid loading the model on the write path.
                 if not self._document_store.exists(doc_coll, target_id):
+                    reference_created = (
+                        merged_tags.get("_created")
+                        or merged_tags.get("_updated")
+                        or utc_now()
+                    )
                     now = utc_now()
                     self._document_store.upsert(
                         doc_coll, target_id,
                         summary="",
-                        tags={"_created": now, "_updated": now, "_source": "auto-vivify"},
+                        tags={
+                            "_created": reference_created,
+                            "_updated": now,
+                            "_source": "auto-vivify",
+                        },
+                        created_at=reference_created,
                     )
                     self._pending_queue.enqueue(
                         target_id, doc_coll, target_id,
                         task_type="reindex",
-                        metadata={"tags": {"_created": now, "_updated": now, "_source": "auto-vivify"}},
+                        metadata={
+                            "tags": {
+                                "_created": reference_created,
+                                "_updated": now,
+                                "_source": "auto-vivify",
+                            },
+                        },
                     )
 
                 created = merged_tags.get("_created") or merged_tags.get("_updated") or utc_now()
@@ -6056,16 +6099,32 @@ class Keeper:
                         continue
                     # Auto-vivify target (doc store only — embedding via reindex queue)
                     if not self._document_store.exists(doc_coll, target_id):
+                        reference_created = (
+                            doc.tags.get("_created")
+                            or doc.tags.get("_updated")
+                            or utc_now()
+                        )
                         now = utc_now()
                         self._document_store.upsert(
                             doc_coll, target_id,
                             summary="",
-                            tags={"_created": now, "_updated": now, "_source": "auto-vivify"},
+                            tags={
+                                "_created": reference_created,
+                                "_updated": now,
+                                "_source": "auto-vivify",
+                            },
+                            created_at=reference_created,
                         )
                         self._pending_queue.enqueue(
                             target_id, doc_coll, target_id,
                             task_type="reindex",
-                            metadata={"tags": {"_created": now, "_updated": now, "_source": "auto-vivify"}},
+                            metadata={
+                                "tags": {
+                                    "_created": reference_created,
+                                    "_updated": now,
+                                    "_source": "auto-vivify",
+                                },
+                            },
                         )
                     created = doc.tags.get("_created") or doc.tags.get("_updated") or utc_now()
                     self._document_store.upsert_edge(

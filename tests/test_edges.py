@@ -188,6 +188,69 @@ class TestEdgeIntegration:
         assert item is not None
         assert item.tags.get("_source") == "auto-vivify"
 
+    def test_auto_vivify_created_inherits_source_created(self, kp):
+        """Auto-vivified target _created should inherit the source note timestamp."""
+        self._create_tagdoc(kp, "speaker", "said")
+        doc_coll = kp._resolve_doc_collection()
+        source_created = "2024-01-02T03:04:05"
+        source_updated = "2024-01-02T03:04:06"
+
+        kp._process_edge_tags(
+            "conv-ts",
+            {"speaker": "nate", "_created": source_created, "_updated": source_updated},
+            {},
+            doc_coll,
+        )
+
+        item = kp.get("nate")
+        assert item is not None
+        assert item.tags.get("_source") == "auto-vivify"
+        assert item.tags.get("_created") == source_created
+
+    def test_backfill_auto_vivify_created_inherits_source_created(self, kp):
+        """Backfill-created targets inherit _created from the referencing source doc."""
+        from keep.pending_summaries import PendingSummary
+
+        self._create_tagdoc(kp, "speaker", "said")
+        doc_coll = kp._resolve_doc_collection()
+        source_created = "2024-02-03T10:11:12"
+        source_updated = "2024-02-03T10:11:13"
+
+        kp._document_store.upsert(
+            doc_coll,
+            "conv-backfill",
+            summary="Backfill source",
+            tags={
+                "speaker": "zoe",
+                "_created": source_created,
+                "_updated": source_updated,
+                "_source": "inline",
+            },
+        )
+
+        pending = PendingSummary(
+            id="_backfill:speaker",
+            collection=doc_coll,
+            content="",
+            queued_at="",
+            attempts=1,
+            task_type="backfill-edges",
+            metadata={"predicate": "speaker", "inverse": "said"},
+        )
+        original_q = kp._document_store.query_by_tag_key
+        kp._document_store.query_by_tag_key = (
+            lambda collection, key, limit=100, offset=0, since_date=None, until_date=None:
+            original_q(collection, key, limit=offset + limit, since_date=since_date, until_date=until_date)[
+                offset:offset + limit
+            ]
+        )
+        kp._process_pending_backfill_edges(pending)
+
+        item = kp.get("zoe")
+        assert item is not None
+        assert item.tags.get("_source") == "auto-vivify"
+        assert item.tags.get("_created") == source_created
+
     def test_multiple_edges_same_target(self, kp):
         """Multiple docs pointing at the same target show as multiple edges."""
         self._create_tagdoc(kp, "speaker", "said")

@@ -147,6 +147,10 @@ class StoreConfig:
     # Composite hash of bundled system docs (auto-computed, replaces manual version)
     system_docs_hash: str = ""
 
+    # True once this store has been scanned for legacy Chroma tag metadata.
+    # Avoids re-running an O(N) startup check on every process invocation.
+    chroma_tag_markers_verified: bool = False
+
     # Tool integrations tracking (presence of key = handled, value = installed or skipped)
     integrations: dict[str, Any] = field(default_factory=dict)
 
@@ -542,6 +546,9 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Backward compat: if old integer version exists but no hash, set hash to ""
     # so migration runs and computes the real hash.
     system_docs_hash = data.get("store", {}).get("system_docs_hash", "")
+    chroma_tag_markers_verified = bool(
+        data.get("store", {}).get("chroma_tag_markers_verified", False)
+    )
 
     # Parse integrations section (presence = handled)
     integrations = data.get("integrations", {})
@@ -624,6 +631,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         max_inline_length=max_inline_length,
         max_file_size=max_file_size,
         system_docs_hash=system_docs_hash,
+        chroma_tag_markers_verified=chroma_tag_markers_verified,
         integrations=integrations,
         remote=remote,
         backend=backend,
@@ -678,6 +686,8 @@ def save_config(config: StoreConfig) -> None:
     # Write system_docs_hash if set (tracks migration state)
     if config.system_docs_hash:
         store_section["system_docs_hash"] = config.system_docs_hash
+    if config.chroma_tag_markers_verified:
+        store_section["chroma_tag_markers_verified"] = True
     # Only write backend if not default
     if config.backend != "local":
         store_section["backend"] = config.backend

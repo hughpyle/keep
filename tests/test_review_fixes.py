@@ -619,7 +619,7 @@ class TestTagMarkerMigration:
         monkeypatch.setattr(Keeper, "_check_store_consistency", lambda self: False)
         monkeypatch.setattr(
             Keeper,
-            "_needs_chroma_tag_marker_migration",
+            "_detect_chroma_tag_marker_migration_need",
             lambda self, _chroma_coll, _doc_coll: True,
         )
         monkeypatch.setattr(
@@ -635,6 +635,40 @@ class TestTagMarkerMigration:
             assert "Search metadata migrated to multivalue tag markers (1 docs, 2 versions, 3 parts)." in stderr
         finally:
             kp.close()
+
+    def test_persists_verified_flag_and_skips_repeat_scan(
+        self, mock_providers, tmp_path, monkeypatch,
+    ):
+        from keep.api import Keeper
+
+        calls = {"detect": 0}
+
+        def _detect_false(self, _chroma_coll, _doc_coll):
+            calls["detect"] += 1
+            return False
+
+        monkeypatch.setattr(
+            Keeper, "_detect_chroma_tag_marker_migration_need", _detect_false,
+        )
+
+        kp = Keeper(store_path=tmp_path)
+        try:
+            assert kp._config.chroma_tag_markers_verified is True
+        finally:
+            kp.close()
+
+        assert calls["detect"] == 1
+
+        def _detect_should_not_run(self, _chroma_coll, _doc_coll):
+            raise AssertionError("unexpected marker rescan")
+
+        monkeypatch.setattr(
+            Keeper,
+            "_detect_chroma_tag_marker_migration_need",
+            _detect_should_not_run,
+        )
+        kp2 = Keeper(store_path=tmp_path)
+        kp2.close()
 
     def test_migrates_legacy_tag_metadata_in_place(self, mock_providers, tmp_path):
         from keep.api import Keeper
@@ -662,7 +696,10 @@ class TestTagMarkerMigration:
 
             assert not kp._store.has_tag_markers(chroma_coll, "doc:legacy")
 
-            assert kp._needs_chroma_tag_marker_migration(chroma_coll, doc_coll)
+            assert (
+                kp._detect_chroma_tag_marker_migration_need(chroma_coll, doc_coll)
+                is True
+            )
             stats = kp._migrate_chroma_tag_markers(chroma_coll, doc_coll)
             assert stats["docs"] >= 1
             assert kp._store.has_tag_markers(chroma_coll, "doc:legacy")
@@ -722,7 +759,10 @@ class TestTagMarkerMigration:
             current = kp.get("doc:history")
             assert current is not None
             assert "topic" not in current.tags
-            assert kp._needs_chroma_tag_marker_migration(chroma_coll, doc_coll)
+            assert (
+                kp._detect_chroma_tag_marker_migration_need(chroma_coll, doc_coll)
+                is True
+            )
         finally:
             kp.close()
 
