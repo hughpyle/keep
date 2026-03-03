@@ -218,7 +218,7 @@ from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, SimilarRef, MetaRef, EdgeRef, VersionRef, PartRef,
     EvidenceUnit, ContextWindow,
-    PromptResult, PromptInfo,
+    PromptResult, PromptInfo, TagMap,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
     iter_tag_pairs, set_tag_values, tag_values,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
@@ -2247,7 +2247,7 @@ class Keeper:
         uri: Optional[str] = None,
         id: Optional[str] = None,
         summary: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         created_at: Optional[str] = None,
         force: bool = False,
     ) -> Item:
@@ -3079,7 +3079,7 @@ class Keeper:
         self,
         query: Optional[str] = None,
         *,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         similar_to: Optional[str] = None,
         limit: int = 10,
         since: Optional[str] = None,
@@ -3785,7 +3785,7 @@ class Keeper:
         id: Optional[str] = None,
         since: Optional[str] = None,
         until: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         limit: int = 10,
         deep: bool = False,
         token_budget: Optional[int] = None,
@@ -4559,7 +4559,7 @@ class Keeper:
         content: str,
         *,
         scope: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
     ) -> Item:
         """
         Set the current working intentions.
@@ -4587,7 +4587,7 @@ class Keeper:
         name: str,
         *,
         source_id: str = NOWDOC_ID,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         only_current: bool = False,
     ) -> Item:
         """
@@ -5295,7 +5295,7 @@ class Keeper:
         self,
         *,
         prefix: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         tag_keys: Optional[list[str]] = None,
         since: Optional[str] = None,
         until: Optional[str] = None,

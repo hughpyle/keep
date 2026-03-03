@@ -19,7 +19,7 @@ _SLUG_RE = re.compile(r'^[a-z][a-z0-9-]{0,61}[a-z0-9]$')
 
 from .config import StoreConfig
 from .document_store import VersionInfo
-from .types import Item, ItemContext, SimilarRef, MetaRef, VersionRef, PartRef, local_date
+from .types import Item, ItemContext, SimilarRef, MetaRef, VersionRef, PartRef, TagMap, local_date
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ class RemoteKeeper:
         uri: Optional[str] = None,
         id: Optional[str] = None,
         summary: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         created_at: Optional[str] = None,
     ) -> Item:
         resp = self._post("/v1/notes", json={
@@ -203,7 +203,7 @@ class RemoteKeeper:
         content: str,
         *,
         scope: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
     ) -> Item:
         params = {"scope": scope} if scope else {}
         filtered = {k: v for k, v in {"content": content, "tags": tags}.items() if v is not None}
@@ -214,7 +214,7 @@ class RemoteKeeper:
     def tag(
         self,
         id: str,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
     ) -> Optional[Item]:
         if tags is None:
             return self.get(id)
@@ -244,7 +244,7 @@ class RemoteKeeper:
         name: str,
         *,
         source_id: str = "now",
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         only_current: bool = False,
     ) -> Item:
         resp = self._post("/v1/move", json={
@@ -261,7 +261,7 @@ class RemoteKeeper:
         self,
         query: Optional[str] = None,
         *,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         similar_to: Optional[str] = None,
         limit: int = 10,
         since: Optional[str] = None,
@@ -343,7 +343,7 @@ class RemoteKeeper:
         self,
         *,
         prefix: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         tag_keys: Optional[list[str]] = None,
         since: Optional[str] = None,
         until: Optional[str] = None,

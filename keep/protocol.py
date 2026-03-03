@@ -11,7 +11,7 @@ from typing import Any, Iterator, Optional, Protocol, runtime_checkable
 from .document_store import DocumentRecord, PartInfo, VersionInfo
 from .pending_summaries import PendingSummary
 from .store import StoreResult
-from .types import Item, ItemContext
+from .types import Item, ItemContext, TagMap
 
 
 @runtime_checkable
@@ -33,7 +33,7 @@ class KeeperProtocol(Protocol):
         uri: Optional[str] = None,
         id: Optional[str] = None,
         summary: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         created_at: Optional[str] = None,
     ) -> Item: ...
 
@@ -42,13 +42,13 @@ class KeeperProtocol(Protocol):
         content: str,
         *,
         scope: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
     ) -> Item: ...
 
     def tag(
         self,
         id: str,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
     ) -> Optional[Item]: ...
 
     def delete(
@@ -65,7 +65,7 @@ class KeeperProtocol(Protocol):
         name: str,
         *,
         source_id: str = "now",
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         only_current: bool = False,
     ) -> Item: ...
 
@@ -75,7 +75,7 @@ class KeeperProtocol(Protocol):
         self,
         query: Optional[str] = None,
         *,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         similar_to: Optional[str] = None,
         limit: int = 10,
         since: Optional[str] = None,
@@ -118,7 +118,7 @@ class KeeperProtocol(Protocol):
         self,
         *,
         prefix: Optional[str] = None,
-        tags: Optional[dict[str, str]] = None,
+        tags: Optional[TagMap] = None,
         tag_keys: Optional[list[str]] = None,
         since: Optional[str] = None,
         until: Optional[str] = None,
