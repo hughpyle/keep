@@ -377,6 +377,78 @@ def test_continue_frame_evidence_includes_rich_metadata(mock_providers, tmp_path
         kp.close()
 
 
+def test_continue_publishes_decision_discriminators_and_snapshot(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    try:
+        kp.put(
+            content="decision capsule basis",
+            id="note:decision",
+            tags={"topic": "continuations", "speaker": "alice"},
+            summary="decision capsule basis",
+        )
+        out = kp.continue_flow(
+            {
+                "schema_version": "continue.v1",
+                "request_id": "req-decision-1",
+                "goal": "query",
+                "frame_request": {
+                    "seed": {"mode": "id", "value": "note:decision"},
+                    "options": {"metadata": "basic"},
+                },
+                "feedback": {"work_results": []},
+            }
+        )
+        assert out["status"] == "done"
+        discriminators = out["frame"]["views"]["discriminators"]
+        assert discriminators["version"] == "ds.v1"
+        assert set(discriminators["planner_priors"].keys()) == {"fanout", "selectivity", "cardinality"}
+        assert set(discriminators["query_stats"].keys()) == {
+            "lane_entropy",
+            "top1_top2_margin",
+            "pivot_coverage_topk",
+            "expansion_yield_prev_step",
+            "cost_per_gain_prev_step",
+            "temporal_alignment",
+        }
+        assert "policy_hint" in discriminators
+        snapshot = out["state"]["frontier"]["decision_support"]
+        assert set(snapshot.keys()) == {"version", "strategy_chosen", "reason_codes", "pivot_ids"}
+        assert snapshot["version"] == "ds.v1"
+        assert "query_stats" not in snapshot
+    finally:
+        kp.close()
+
+
+def test_continue_decision_override_controls_strategy(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    try:
+        kp.put(content="override strategy", id="note:override", summary="override strategy")
+        out = kp.continue_flow(
+            {
+                "schema_version": "continue.v1",
+                "request_id": "req-decision-override-1",
+                "goal": "query",
+                "frame_request": {
+                    "seed": {"mode": "id", "value": "note:override"},
+                    "options": {"metadata": "basic"},
+                },
+                "decision_override": {
+                    "strategy": "top2_plus_bridge",
+                    "reason": "cross-lane question",
+                },
+                "feedback": {"work_results": []},
+            }
+        )
+        assert out["status"] == "done"
+        policy_hint = out["frame"]["views"]["discriminators"]["policy_hint"]
+        assert policy_hint["strategy"] == "top2_plus_bridge"
+        assert "override:cross-lane question" in policy_hint["reason_codes"]
+        snapshot = out["state"]["frontier"]["decision_support"]
+        assert snapshot["strategy_chosen"] == "top2_plus_bridge"
+    finally:
+        kp.close()
+
+
 def test_continue_custom_steps_applies_tags(mock_providers, tmp_path):
     kp = Keeper(store_path=tmp_path)
     try:

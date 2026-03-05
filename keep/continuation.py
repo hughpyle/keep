@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import sqlite3
 import threading
@@ -28,6 +29,16 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "continue.v1"
 ALLOWED_FRAME_OPS = {"where", "slice"}
+DECISION_SUPPORT_VERSION = "ds.v1"
+DECISION_STRATEGIES = {"single_lane_refine", "top2_plus_bridge", "explore_more"}
+DEFAULT_DECISION_POLICY = {
+    "margin_high": 0.18,
+    "entropy_low": 0.45,
+    "margin_low": 0.08,
+    "entropy_high": 0.72,
+    "pivot_topk": 6,
+    "max_pivots": 2,
+}
 _BIND_EXPR_RE = re.compile(r"\$\{(params|slots)\.([A-Za-z0-9_]+)(?:\|([^}]*))?\}")
 
 
@@ -270,6 +281,7 @@ class LocalContinuationRuntime:
                 "template_ref",
                 "params",
                 "frame_request",
+                "decision_policy",
                 "steps",
                 "stages",
             )
@@ -310,6 +322,9 @@ class LocalContinuationRuntime:
         if "frame_request" in payload:
             frame_request = payload.get("frame_request")
             merged["frame_request"] = frame_request if isinstance(frame_request, dict) else {}
+        if "decision_policy" in payload:
+            policy = payload.get("decision_policy")
+            merged["decision_policy"] = policy if isinstance(policy, dict) else {}
         if "steps" in payload:
             steps = payload.get("steps")
             merged["steps"] = [dict(step) for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
@@ -645,6 +660,11 @@ class LocalContinuationRuntime:
                 parsed = None
         if not isinstance(parsed, dict):
             return [], [], {"code": "invalid_input", "message": f"Profile must parse to an object: {profile_id}"}
+
+        if not isinstance(program.get("decision_policy"), dict):
+            profile_policy = parsed.get("decision_policy")
+            if isinstance(profile_policy, dict):
+                program["decision_policy"] = dict(profile_policy)
 
         steps = parsed.get("steps")
         if isinstance(steps, list):
@@ -1184,6 +1204,7 @@ class LocalContinuationRuntime:
         evidence: list[dict[str, Any]],
         budget_used: Optional[dict[str, Any]] = None,
         extra_slots: Optional[dict[str, Any]] = None,
+        discriminators: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         params = program.get("params") if isinstance(program.get("params"), dict) else {}
         query_text = str(params.get("text") or "")
@@ -1217,6 +1238,11 @@ class LocalContinuationRuntime:
                 "task": task,
                 "evidence": evidence,
                 "hygiene": [],
+                "discriminators": (
+                    discriminators
+                    if isinstance(discriminators, dict)
+                    else self._empty_discriminators()
+                ),
             },
             "budget_used": {
                 "tokens": self._as_int((budget_used or {}).get("tokens"), 0),
@@ -1282,14 +1308,337 @@ class LocalContinuationRuntime:
         template_frame_request = frontmatter.get("frame_request")
         if not isinstance(template_frame_request, dict):
             template_frame_request = None
+        template_policy = frontmatter.get("decision_policy")
+        if not isinstance(template_policy, dict):
+            template_policy = None
         template_stages = self._normalize_profile_stages(frontmatter.get("stages"))
         return {
             "template_ref": template_ref,
             "template_text": template_text,
             "bindings": dict(bindings),
             "frame_request": template_frame_request,
+            "decision_policy": template_policy,
             "stages": template_stages,
         }
+
+    @staticmethod
+    def _empty_discriminators() -> dict[str, Any]:
+        return {
+            "version": DECISION_SUPPORT_VERSION,
+            "planner_priors": {
+                "fanout": {},
+                "selectivity": {},
+                "cardinality": {},
+            },
+            "query_stats": {
+                "lane_entropy": 0.0,
+                "top1_top2_margin": 0.0,
+                "pivot_coverage_topk": 0.0,
+                "expansion_yield_prev_step": 0.0,
+                "cost_per_gain_prev_step": 0.0,
+                "temporal_alignment": 0.0,
+            },
+            "policy_hint": {
+                "strategy": "explore_more",
+                "reason_codes": ["insufficient_signal"],
+            },
+            "staleness": {"stats_age_s": None, "fallback_mode": True},
+        }
+
+    @staticmethod
+    def _as_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return default
+
+    @staticmethod
+    def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+        return max(low, min(high, value))
+
+    def _decision_policy_from_program(self, program: dict[str, Any]) -> dict[str, Any]:
+        policy: Any = program.get("decision_policy")
+        if not isinstance(policy, dict):
+            params = program.get("params") if isinstance(program.get("params"), dict) else {}
+            policy = params.get("decision_policy") if isinstance(params, dict) else None
+        if not isinstance(policy, dict):
+            policy = {}
+
+        merged = dict(DEFAULT_DECISION_POLICY)
+        merged["margin_high"] = self._clamp(self._as_float(policy.get("margin_high"), merged["margin_high"]))
+        merged["entropy_low"] = self._clamp(self._as_float(policy.get("entropy_low"), merged["entropy_low"]))
+        merged["margin_low"] = self._clamp(self._as_float(policy.get("margin_low"), merged["margin_low"]))
+        merged["entropy_high"] = self._clamp(self._as_float(policy.get("entropy_high"), merged["entropy_high"]))
+        merged["pivot_topk"] = min(max(self._as_int(policy.get("pivot_topk"), merged["pivot_topk"]), 1), 20)
+        merged["max_pivots"] = min(max(self._as_int(policy.get("max_pivots"), merged["max_pivots"]), 1), 5)
+        return merged
+
+    def _decision_override_from_payload(
+        self, payload: dict[str, Any],
+    ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, str]]]:
+        override = payload.get("decision_override")
+        if override is None:
+            return None, None
+        if not isinstance(override, dict):
+            return None, {
+                "code": "invalid_input",
+                "message": "decision_override must be an object",
+            }
+        strategy = str(override.get("strategy") or "").strip()
+        if strategy not in DECISION_STRATEGIES:
+            return None, {
+                "code": "invalid_input",
+                "message": f"Unsupported decision_override.strategy: {strategy}",
+            }
+        return {
+            "strategy": strategy,
+            "reason": str(override.get("reason") or ""),
+        }, None
+
+    def _candidate_subject_keys(
+        self, frame_request: dict[str, Any], evidence: list[dict[str, Any]],
+    ) -> list[str]:
+        candidates: list[str] = []
+        where_tags = self._parse_where_tags(frame_request)
+        for key in where_tags:
+            k = str(key).strip()
+            if k and k not in candidates:
+                candidates.append(k)
+        for row in evidence[:12]:
+            metadata = row.get("metadata") if isinstance(row, dict) else None
+            tags = metadata.get("tags") if isinstance(metadata, dict) else None
+            if not isinstance(tags, dict):
+                continue
+            for key in sorted(tags.keys()):
+                k = str(key).strip()
+                if k and k not in candidates:
+                    candidates.append(k)
+                if len(candidates) >= 12:
+                    return candidates
+        return candidates
+
+    def _query_stats(
+        self,
+        *,
+        frame_request: dict[str, Any],
+        evidence: list[dict[str, Any]],
+        previous_evidence_ids: list[str],
+        topk: int,
+    ) -> dict[str, float]:
+        window = evidence[:topk]
+        scores: list[float] = []
+        for idx, row in enumerate(window):
+            raw = row.get("score")
+            if isinstance(raw, (int, float)):
+                scores.append(float(raw))
+            else:
+                scores.append(float(max(topk - idx, 1)))
+
+        if len(scores) >= 2:
+            ranked = sorted(scores, reverse=True)
+            denom = max(abs(ranked[0]), 1e-9)
+            top_margin = self._clamp((ranked[0] - ranked[1]) / denom)
+        elif len(scores) == 1:
+            top_margin = 1.0
+        else:
+            top_margin = 0.0
+
+        if scores:
+            weights = [max(score, 0.0) for score in scores]
+            total = sum(weights)
+            if total <= 0:
+                weights = [1.0 / (idx + 1) for idx in range(len(scores))]
+                total = sum(weights)
+            probs = [w / total for w in weights if total > 0]
+            if len(probs) <= 1:
+                lane_entropy = 0.0
+            else:
+                entropy = -sum(p * math.log(p) for p in probs if p > 0)
+                lane_entropy = self._clamp(entropy / math.log(len(probs)))
+        else:
+            lane_entropy = 0.0
+
+        where_keys = set(self._parse_where_tags(frame_request).keys())
+        if not where_keys:
+            counts: dict[str, int] = {}
+            for row in window:
+                metadata = row.get("metadata") if isinstance(row, dict) else None
+                tags = metadata.get("tags") if isinstance(metadata, dict) else None
+                if not isinstance(tags, dict):
+                    continue
+                for key, value in tags.items():
+                    if value in (None, "", [], {}):
+                        continue
+                    k = str(key)
+                    counts[k] = counts.get(k, 0) + 1
+            if counts:
+                where_keys = {max(counts, key=counts.get)}
+
+        covered = 0
+        for row in window:
+            metadata = row.get("metadata") if isinstance(row, dict) else None
+            tags = metadata.get("tags") if isinstance(metadata, dict) else None
+            if not isinstance(tags, dict):
+                continue
+            if any(tags.get(key) not in (None, "", [], {}) for key in where_keys):
+                covered += 1
+        pivot_coverage = self._clamp(covered / max(1, len(window)))
+
+        current_ids = [str(row.get("id")) for row in evidence if row.get("id")]
+        prev_ids = {str(item) for item in previous_evidence_ids if item}
+        gain = len([eid for eid in current_ids if eid not in prev_ids])
+        expansion_yield = self._clamp(gain / max(1, len(current_ids)))
+        cost_per_gain = float(len(current_ids)) if gain == 0 else float(len(current_ids)) / gain
+
+        now = datetime.now(timezone.utc)
+        recent_count = 0
+        dated_count = 0
+        for row in window:
+            metadata = row.get("metadata") if isinstance(row, dict) else None
+            updated = metadata.get("updated") if isinstance(metadata, dict) else None
+            if not isinstance(updated, str) or not updated.strip():
+                continue
+            try:
+                dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            dated_count += 1
+            age_days = (now - dt.astimezone(timezone.utc)).total_seconds() / 86400.0
+            if age_days <= 365.0:
+                recent_count += 1
+        temporal_alignment = 0.5 if dated_count == 0 else self._clamp(recent_count / dated_count)
+
+        return {
+            "lane_entropy": round(lane_entropy, 4),
+            "top1_top2_margin": round(top_margin, 4),
+            "pivot_coverage_topk": round(pivot_coverage, 4),
+            "expansion_yield_prev_step": round(expansion_yield, 4),
+            "cost_per_gain_prev_step": round(cost_per_gain, 4),
+            "temporal_alignment": round(temporal_alignment, 4),
+        }
+
+    def _choose_strategy(
+        self,
+        *,
+        query_stats: dict[str, float],
+        policy: dict[str, Any],
+        staleness: dict[str, Any],
+        decision_override: Optional[dict[str, Any]],
+    ) -> tuple[str, list[str]]:
+        if decision_override is not None:
+            reason = str(decision_override.get("reason") or "").strip()
+            codes = ["override"] if not reason else [f"override:{reason}"]
+            return str(decision_override["strategy"]), codes
+
+        margin = self._as_float(query_stats.get("top1_top2_margin"), 0.0)
+        entropy = self._as_float(query_stats.get("lane_entropy"), 1.0)
+        margin_high = self._as_float(policy.get("margin_high"), DEFAULT_DECISION_POLICY["margin_high"])
+        entropy_low = self._as_float(policy.get("entropy_low"), DEFAULT_DECISION_POLICY["entropy_low"])
+        margin_low = self._as_float(policy.get("margin_low"), DEFAULT_DECISION_POLICY["margin_low"])
+        entropy_high = self._as_float(policy.get("entropy_high"), DEFAULT_DECISION_POLICY["entropy_high"])
+
+        reasons: list[str] = []
+        strategy = "explore_more"
+        if margin >= margin_high and entropy <= entropy_low:
+            strategy = "single_lane_refine"
+            reasons = ["high_margin", "low_entropy"]
+        elif margin <= margin_low or entropy >= entropy_high:
+            strategy = "top2_plus_bridge"
+            reasons = ["low_margin" if margin <= margin_low else "high_entropy"]
+        else:
+            reasons = ["mixed_signal"]
+
+        if bool(staleness.get("fallback_mode")):
+            reasons.append("planner_fallback")
+        return strategy, reasons
+
+    @staticmethod
+    def _pivot_ids(evidence: list[dict[str, Any]], *, strategy: str, max_pivots: int) -> list[str]:
+        ids = [str(row.get("id")) for row in evidence if row.get("id")]
+        if strategy == "single_lane_refine":
+            return ids[: min(1, max_pivots)]
+        if strategy == "top2_plus_bridge":
+            return ids[: min(2, max_pivots)]
+        return []
+
+    def _decision_capsule(
+        self,
+        *,
+        program: dict[str, Any],
+        frame_request: dict[str, Any],
+        evidence: list[dict[str, Any]],
+        previous_evidence_ids: list[str],
+        decision_override: Optional[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        planner_payload = {
+            "planner_priors": {
+                "fanout": {},
+                "selectivity": {},
+                "cardinality": {},
+            },
+            "staleness": {"stats_age_s": None, "fallback_mode": True},
+        }
+        try:
+            params = program.get("params") if isinstance(program.get("params"), dict) else {}
+            scope_key = params.get("scope_key") if isinstance(params, dict) else None
+            candidates = self._candidate_subject_keys(frame_request, evidence)
+            planner_payload = self._keeper.get_planner_priors(
+                scope_key=scope_key if isinstance(scope_key, str) and scope_key else None,
+                candidates=candidates or None,
+            )
+        except Exception:
+            logger.debug("Planner priors unavailable for decision capsule", exc_info=True)
+
+        priors = planner_payload.get("planner_priors") if isinstance(planner_payload, dict) else {}
+        if not isinstance(priors, dict):
+            priors = {}
+        staleness = planner_payload.get("staleness") if isinstance(planner_payload, dict) else {}
+        if not isinstance(staleness, dict):
+            staleness = {"stats_age_s": None, "fallback_mode": True}
+
+        policy = self._decision_policy_from_program(program)
+        query_stats = self._query_stats(
+            frame_request=frame_request,
+            evidence=evidence,
+            previous_evidence_ids=previous_evidence_ids,
+            topk=self._as_int(policy.get("pivot_topk"), DEFAULT_DECISION_POLICY["pivot_topk"]),
+        )
+        strategy, reason_codes = self._choose_strategy(
+            query_stats=query_stats,
+            policy=policy,
+            staleness=staleness,
+            decision_override=decision_override,
+        )
+        pivot_ids = self._pivot_ids(
+            evidence,
+            strategy=strategy,
+            max_pivots=self._as_int(policy.get("max_pivots"), DEFAULT_DECISION_POLICY["max_pivots"]),
+        )
+
+        discriminators = {
+            "version": DECISION_SUPPORT_VERSION,
+            "planner_priors": {
+                "fanout": priors.get("fanout", {}) if isinstance(priors.get("fanout"), dict) else {},
+                "selectivity": priors.get("selectivity", {}) if isinstance(priors.get("selectivity"), dict) else {},
+                "cardinality": priors.get("cardinality", {}) if isinstance(priors.get("cardinality"), dict) else {},
+            },
+            "query_stats": query_stats,
+            "policy_hint": {
+                "strategy": strategy,
+                "reason_codes": reason_codes,
+            },
+            "staleness": {
+                "stats_age_s": staleness.get("stats_age_s"),
+                "fallback_mode": bool(staleness.get("fallback_mode")),
+            },
+        }
+        snapshot = {
+            "version": DECISION_SUPPORT_VERSION,
+            "strategy_chosen": strategy,
+            "reason_codes": reason_codes,
+            "pivot_ids": pivot_ids,
+        }
+        return discriminators, snapshot
 
     def _resolve_template_expr(
         self,
@@ -1588,6 +1937,8 @@ class LocalContinuationRuntime:
                 resolved_plan: list[dict[str, Any]] = []
                 resolved_stages: list[dict[str, Any]] = []
                 process_stage: Optional[str] = None
+                decision_discriminators = self._empty_discriminators()
+                decision_snapshot: Optional[dict[str, Any]] = None
                 legacy_fields = self._legacy_input_fields(payload)
                 if legacy_fields:
                     errors.append({
@@ -1599,6 +1950,9 @@ class LocalContinuationRuntime:
                         ),
                     })
                 program = self._merge_program(state, payload)
+                decision_override, decision_override_err = self._decision_override_from_payload(payload)
+                if decision_override_err is not None:
+                    errors.append(decision_override_err)
                 if is_new_flow and not self._program_has_inputs(payload):
                     errors.append({
                         "code": "missing_required_field",
@@ -1626,6 +1980,12 @@ class LocalContinuationRuntime:
                             and not isinstance(program.get("frame_request"), dict)
                         ):
                             program["_template_frame_request"] = template_frame_request
+                        template_policy = template_spec.get("decision_policy")
+                        if (
+                            isinstance(template_policy, dict)
+                            and not isinstance(program.get("decision_policy"), dict)
+                        ):
+                            program["decision_policy"] = template_policy
                         template_stages = template_spec.get("stages")
                         if (
                             isinstance(template_stages, list)
@@ -1675,6 +2035,9 @@ class LocalContinuationRuntime:
                         state=state,
                         stages=resolved_stages,
                     )
+                previous_evidence_ids = state.get("frontier", {}).get("evidence_ids") or []
+                if not isinstance(previous_evidence_ids, list):
+                    previous_evidence_ids = []
                 evidence = self._frame_evidence(program) if program and not errors else []
                 if program and template_spec is not None and not errors:
                     slots, slot_errors = self._resolve_template_slots(
@@ -1691,6 +2054,15 @@ class LocalContinuationRuntime:
                         errors.append(write_err)
                     elif write_ops:
                         applied_ops.extend(write_ops)
+                if program and not errors:
+                    frame_request = self._effective_frame_request(program)
+                    decision_discriminators, decision_snapshot = self._decision_capsule(
+                        program=program,
+                        frame_request=frame_request,
+                        evidence=evidence,
+                        previous_evidence_ids=previous_evidence_ids,
+                        decision_override=decision_override,
+                    )
 
                 if not requested and not errors and not applied_ops:
                     created, err = self._plan_work(
@@ -1762,7 +2134,10 @@ class LocalContinuationRuntime:
                 next_step = int((state.get("cursor") or {}).get("step", 0)) + 1
                 state["cursor"] = {"step": next_step, "stage": cursor_stage, "phase": stage}
                 state["program"] = program
-                state.setdefault("frontier", {})["evidence_ids"] = [row.get("id") for row in evidence]
+                frontier = state.setdefault("frontier", {})
+                frontier["evidence_ids"] = [row.get("id") for row in evidence]
+                if isinstance(decision_snapshot, dict):
+                    frontier["decision_support"] = decision_snapshot
                 state.setdefault("pending", {})["work_ids"] = [row.work_id for row in requested]
                 budget_used = state.get("budget_used")
                 if not isinstance(budget_used, dict):
@@ -1801,6 +2176,7 @@ class LocalContinuationRuntime:
                     evidence,
                     budget_used,
                     template_slots,
+                    decision_discriminators,
                 )
                 rendered = None
                 if not errors:
