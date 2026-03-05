@@ -5861,22 +5861,17 @@ class Keeper:
         scope_key: str | None = None,
         candidates: list[str] | None = None,
     ) -> dict:
-        """Return precomputed planner priors for continuation discriminators.
+        """Return minimal planner priors for continuation discriminators.
 
-        Returns the ``frame.views.discriminators`` shape::
-
-            {
-                "planner_priors": {
-                    "expansion_estimates": { ... },
-                    "facet_cardinality": { ... },
-                },
-                "staleness": {
-                    "stats_age_s": 14,
-                    "fallback_mode": false,
-                },
-            }
-
-        Returns an empty fallback dict when planner stats are unavailable.
+        Shape:
+        {
+            "planner_priors": {
+                "fanout": {...},
+                "selectivity": {...},
+                "cardinality": {...}
+            },
+            "staleness": {"stats_age_s": 14, "fallback_mode": false}
+        }
         """
         if not self._planner_stats:
             return {
@@ -5888,11 +5883,22 @@ class Keeper:
         if scope_key is None:
             scope_key = build_scope_key()
 
-        priors = self._planner_stats.get_priors(
+        raw_priors = self._planner_stats.get_priors(
             scope_key,
+            metric_families=[
+                "expansion.fanout",
+                "expansion.selectivity",
+                "facet.cardinality",
+            ],
             subject_keys=candidates,
         )
         staleness = self._planner_stats.get_staleness(scope_key)
+
+        priors = {
+            "fanout": raw_priors.get("expansion.fanout", {}),
+            "selectivity": raw_priors.get("expansion.selectivity", {}),
+            "cardinality": raw_priors.get("facet.cardinality", {}),
+        }
 
         return {
             "planner_priors": priors,

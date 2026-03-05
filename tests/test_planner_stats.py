@@ -22,6 +22,7 @@ from pathlib import Path
 
 from keep.document_store import DocumentStore
 from keep.planner_stats import PlannerStatsStore, build_scope_key
+from keep.api import Keeper
 
 
 # ---------------------------------------------------------------------------
@@ -625,3 +626,35 @@ class TestPlannerPriorsShape:
 
         card = priors["facet.cardinality"]["topic"]
         assert set(card.keys()) >= {"distinct_values", "top_values", "entropy"}
+
+
+class TestKeeperPlannerPriorsAPI:
+
+    def test_keeper_returns_minimal_priors_shape(self, tmp_path):
+        kp = Keeper(store_path=tmp_path)
+        try:
+            # Seed some stats directly; API should map internal metric names
+            # to the minimal external shape.
+            scope = build_scope_key()
+            kp._planner_stats.upsert_stat(
+                "expansion.fanout", scope, "speaker",
+                {"mean": 3.2, "p50": 2.0, "p90": 6.0, "max": 12}, 50,
+            )
+            kp._planner_stats.upsert_stat(
+                "expansion.selectivity", scope, "speaker",
+                {"selectivity": 0.41, "sources_total": 100, "sources_with_hits": 41}, 100,
+            )
+            kp._planner_stats.upsert_stat(
+                "facet.cardinality", scope, "topic",
+                {"distinct_values": 9, "top_values": [["x", 4]], "entropy": 1.2}, 20,
+            )
+
+            out = kp.get_planner_priors(scope_key=scope)
+            assert "planner_priors" in out
+            assert "staleness" in out
+            assert set(out["planner_priors"].keys()) == {"fanout", "selectivity", "cardinality"}
+            assert "speaker" in out["planner_priors"]["fanout"]
+            assert "speaker" in out["planner_priors"]["selectivity"]
+            assert "topic" in out["planner_priors"]["cardinality"]
+        finally:
+            kp.close()
