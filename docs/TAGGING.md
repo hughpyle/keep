@@ -5,6 +5,8 @@ Tags are key-value pairs attached to every item. They enable filtering, organiza
 Multiple values per key are allowed. Setting an additional value for the same key adds it (deduplicated), rather than overwriting.
 Each key supports up to 512 distinct values.
 
+Some tags are **singular** — new values replace old ones instead of accumulating. The `act` and `status` tags are singular: `keep tag ID --tag status=fulfilled` on a doc with `status=open` results in only `fulfilled`, not both.
+
 ## Setting tags
 
 ```bash
@@ -180,17 +182,50 @@ keep put "Active work in progress." --id .tag/status/working
 # Now status=working is accepted
 ```
 
+### Singular values
+
+Some tags are **singular** — at most one value is allowed per key. When a `.tag/KEY` document has `_singular: true` in its tags, new values replace old ones instead of accumulating via set-union.
+
+```bash
+keep put "fix auth" -t status=open -t act=commitment
+keep tag ID --tag status=fulfilled    # replaces open → fulfilled
+keep get ID                           # status: fulfilled (not [open, fulfilled])
+```
+
+Providing multiple values for a singular key in one call is an error:
+
+```bash
+keep tag ID --tag status=open,fulfilled   # ✗ ValueError: singular tag
+```
+
+A tag can be both `_constrained` and `_singular`. The `act` and `status` tags are both — values are validated against sub-documents *and* only one value is kept.
+
+To make a custom tag singular, set `_singular: true` on its tagdoc:
+
+```bash
+keep put "$(cat <<'EOF'
+---
+tags:
+  _singular: "true"
+---
+# Tag: `priority`
+
+Priority level. Only one value at a time.
+EOF
+)" --id .tag/priority
+```
+
 ### Bundled tag descriptions
 
 keep ships with these tag descriptions:
 
-| Tag | Constrained | Values | Purpose |
-|-----|:-----------:|--------|---------|
-| `act` | Yes | `commitment`, `request`, `offer`, `assertion`, `assessment`, `declaration` | Speech-act category (what the speaker is doing) |
-| `status` | Yes | `open`, `blocked`, `fulfilled`, `declined`, `withdrawn`, `renegotiated` | Lifecycle state of commitments/requests/offers |
-| `type` | No | `learning`, `breakdown`, `gotcha`, `reference`, `teaching`, `meeting`, `pattern`, `possibility`, `decision` | Content classification |
-| `project` | No | (user-defined) | Bounded work context |
-| `topic` | No | (user-defined) | Cross-cutting subject area |
+| Tag | Constrained | Singular | Values | Purpose |
+|-----|:-----------:|:--------:|--------|---------|
+| `act` | Yes | Yes | `commitment`, `request`, `offer`, `assertion`, `assessment`, `declaration` | Speech-act category (what the speaker is doing) |
+| `status` | Yes | Yes | `open`, `blocked`, `fulfilled`, `declined`, `withdrawn`, `renegotiated` | Lifecycle state of commitments/requests/offers |
+| `type` | No | No | `learning`, `breakdown`, `gotcha`, `reference`, `teaching`, `meeting`, `pattern`, `possibility`, `decision` | Content classification |
+| `project` | No | No | (user-defined) | Bounded work context |
+| `topic` | No | No | (user-defined) | Cross-cutting subject area |
 
 Constrained tags (`act`, `status`) also have individual sub-documents (e.g., `.tag/act/commitment`, `.tag/status/open`) that describe each value in detail.
 

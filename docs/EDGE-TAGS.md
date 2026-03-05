@@ -85,6 +85,7 @@ When you add `_inverse` to an existing tagdoc, keep automatically backfills edge
 
 - **Case-sensitive values**: `speaker: Deborah` and `speaker: deborah` link to different targets. Be consistent.
 - **Multi-valued**: A document can have multiple values per edge tag (e.g., `speaker: [alice, bob]`). Each value creates a separate edge. Multiple documents can point at the same target.
+- **Singular edge tags**: An edge tag with `_singular: true` on its tagdoc replaces the old value (and its edge) when a new value is set. For example, an `assignee` edge tag that is singular would reassign the edge rather than accumulating multiple assignees.
 - **System doc targets skipped**: Tag values starting with `.` (like `.meta/todo`) don't create edges.
 - **Removal**: Setting a tag to empty (`-t speaker=`) deletes that edge without affecting other edges on the document.
 
