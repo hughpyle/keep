@@ -743,6 +743,25 @@ class Keeper:
             except Exception as e:
                 logger.warning("Failed to initialize TaskClient: %s", e)
 
+        # --- Planner stats (precomputed priors for continuation) ---
+        self._planner_stats = None
+        if self._is_local:
+            from .planner_stats import PlannerStatsStore
+            try:
+                self._planner_stats = PlannerStatsStore(
+                    self._store_path / "planner_stats.db"
+                )
+                # Bootstrap: enqueue rebuild task if stats have never been built.
+                # The daemon will pick this up on its next tick.
+                doc_coll = self._resolve_doc_collection()
+                if self._planner_stats.needs_rebuild(doc_coll):
+                    self._pending_queue.enqueue(
+                        ".planner-rebuild", doc_coll, "",
+                        task_type="planner-rebuild",
+                    )
+            except Exception as e:
+                logger.warning("Failed to initialize PlannerStatsStore: %s", e)
+
         # System doc migration deferred to first write (needs embeddings)
         from .system_docs import _bundled_docs_hash
         self._needs_sysdoc_migration = (
@@ -5562,6 +5581,7 @@ class Keeper:
                     "backfill-edges": "Backfilling edges",
                     "embed": "Embedding",
                     "ocr": "OCR",
+                    "planner-rebuild": "Rebuilding planner stats",
                     "reindex": "Re-embedding",
                     "summarize": "Summarizing",
                 }
@@ -5582,6 +5602,11 @@ class Keeper:
                     self._release_content_extractor()
                     self._release_summarization_provider()
                     self._release_embedding_provider()
+                elif item.task_type == "planner-rebuild":
+                    if self._planner_stats:
+                        self._planner_stats.rebuild(
+                            self._document_store, item.collection,
+                        )
                 elif item.task_type == "reindex":
                     self._process_pending_reindex(item)
                     self._release_embedding_provider()
@@ -5635,6 +5660,22 @@ class Keeper:
                 result["errors"].append(f"{item.id}: {error_msg}")
                 logger.warning("Failed to %s %s (attempt %d): %s",
                              item.task_type, item.id, item.attempts, e)
+
+        # Drain planner outbox (bounded)
+        if self._planner_stats:
+            try:
+                doc_coll = self._resolve_doc_collection()
+                planner_result = self._planner_stats.drain_outbox(
+                    self._document_store, doc_coll,
+                    max_items=20, max_ms=200,
+                )
+                if planner_result["processed"]:
+                    logger.info(
+                        "Planner stats: processed=%d failed=%d",
+                        planner_result["processed"], planner_result["failed"],
+                    )
+            except Exception as e:
+                logger.debug("Planner drain skipped: %s", e)
 
         # Poll for delegated task results
         if self._task_client:
@@ -5810,6 +5851,63 @@ class Keeper:
             "Delegated %s %s reverted to local: %s",
             item.task_type, item.id, reason,
         )
+
+    # -------------------------------------------------------------------------
+    # Planner priors
+    # -------------------------------------------------------------------------
+
+    def get_planner_priors(
+        self,
+        scope_key: str | None = None,
+        candidates: list[str] | None = None,
+    ) -> dict:
+        """Return precomputed planner priors for continuation discriminators.
+
+        Returns the ``frame.views.discriminators`` shape::
+
+            {
+                "planner_priors": {
+                    "expansion_estimates": { ... },
+                    "facet_cardinality": { ... },
+                },
+                "staleness": {
+                    "stats_age_s": 14,
+                    "fallback_mode": false,
+                },
+            }
+
+        Returns an empty fallback dict when planner stats are unavailable.
+        """
+        if not self._planner_stats:
+            return {
+                "planner_priors": {},
+                "staleness": {"stats_age_s": None, "fallback_mode": True},
+            }
+
+        from .planner_stats import build_scope_key
+        if scope_key is None:
+            scope_key = build_scope_key()
+
+        priors = self._planner_stats.get_priors(
+            scope_key,
+            subject_keys=candidates,
+        )
+        staleness = self._planner_stats.get_staleness(scope_key)
+
+        return {
+            "planner_priors": priors,
+            "staleness": staleness,
+        }
+
+    def rebuild_planner_stats(self) -> dict:
+        """Full rebuild of planner statistics from canonical data.
+
+        Returns dict with count of stats upserted per metric family.
+        """
+        if not self._planner_stats:
+            return {}
+        doc_coll = self._resolve_doc_collection()
+        return self._planner_stats.rebuild(self._document_store, doc_coll)
 
     def apply_result(self, item_id, collection, result, *, existing_tags=None):
         """Apply a ProcessorResult to the local store."""

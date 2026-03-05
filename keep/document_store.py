@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 @dataclass
@@ -596,6 +596,83 @@ class DocumentStore:
                 self._execute("""
                     CREATE INDEX IF NOT EXISTS idx_version_edges_target
                     ON version_edges (target_id, collection, inverse, created)
+                """)
+
+            # Version 11 → 12: planner outbox table + triggers
+            if current_version < 12:
+                self._execute("""
+                    CREATE TABLE IF NOT EXISTS planner_outbox (
+                        outbox_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                        mutation     TEXT NOT NULL,
+                        entity_id    TEXT NOT NULL,
+                        collection   TEXT NOT NULL,
+                        payload_json TEXT NOT NULL DEFAULT '{}',
+                        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+                        claimed_by   TEXT,
+                        claimed_at   TEXT,
+                        attempts     INTEGER DEFAULT 0
+                    )
+                """)
+                self._execute("""
+                    CREATE INDEX IF NOT EXISTS idx_planner_outbox_unclaimed
+                    ON planner_outbox (claimed_by) WHERE claimed_by IS NULL
+                """)
+
+                # --- Document triggers ---
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS planner_outbox_doc_ai
+                    AFTER INSERT ON documents BEGIN
+                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('doc_insert', new.id, new.collection,
+                                json_object('tags_json', new.tags_json));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS planner_outbox_doc_au
+                    AFTER UPDATE OF tags_json ON documents BEGIN
+                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('doc_update', new.id, new.collection,
+                                json_object('old_tags_json', old.tags_json,
+                                            'new_tags_json', new.tags_json));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS planner_outbox_doc_ad
+                    AFTER DELETE ON documents BEGIN
+                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('doc_delete', old.id, old.collection,
+                                json_object('tags_json', old.tags_json));
+                    END
+                """)
+
+                # --- Edge triggers ---
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS planner_outbox_edge_ai
+                    AFTER INSERT ON edges BEGIN
+                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('edge_insert', new.source_id, new.collection,
+                                json_object('predicate', new.predicate,
+                                            'target_id', new.target_id));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS planner_outbox_edge_ad
+                    AFTER DELETE ON edges BEGIN
+                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('edge_delete', old.source_id, old.collection,
+                                json_object('predicate', old.predicate,
+                                            'target_id', old.target_id));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS planner_outbox_edge_au
+                    AFTER UPDATE ON edges BEGIN
+                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('edge_update', new.source_id, new.collection,
+                                json_object('predicate', new.predicate,
+                                            'target_id', new.target_id,
+                                            'old_target_id', old.target_id));
+                    END
                 """)
 
             self._execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -3194,6 +3271,115 @@ class DocumentStore:
             (collection, predicate),
         )
         self._conn.commit()
+
+    # -------------------------------------------------------------------------
+    # Planner outbox
+    # -------------------------------------------------------------------------
+
+    _OUTBOX_STALE_SECONDS = 300  # 5 minutes
+
+    def outbox_depth(self) -> int:
+        """Count unclaimed outbox rows."""
+        row = self._execute(
+            "SELECT COUNT(*) FROM planner_outbox WHERE claimed_by IS NULL"
+        ).fetchone()
+        return row[0] if row else 0
+
+    def dequeue_outbox(
+        self, limit: int = 50, claim_id: str | None = None,
+    ) -> list[dict]:
+        """Claim and return unclaimed outbox rows.
+
+        Returns list of dicts with keys: outbox_id, mutation, entity_id,
+        collection, payload_json, created_at.
+        """
+        import os
+        if claim_id is None:
+            claim_id = str(os.getpid())
+        now = utc_now()
+
+        with self._lock:
+            # Recover stale claims
+            self._execute(
+                """
+                UPDATE planner_outbox
+                SET claimed_by = NULL, claimed_at = NULL,
+                    attempts = attempts + 1
+                WHERE claimed_by IS NOT NULL
+                  AND julianday(?) - julianday(claimed_at)
+                      > ? / 86400.0
+                """,
+                (now, self._OUTBOX_STALE_SECONDS),
+            )
+
+            rows = self._execute(
+                """
+                SELECT outbox_id, mutation, entity_id, collection,
+                       payload_json, created_at
+                FROM planner_outbox
+                WHERE claimed_by IS NULL
+                ORDER BY outbox_id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+            if not rows:
+                self._conn.commit()
+                return []
+
+            ids = [r[0] for r in rows]
+            placeholders = ",".join("?" for _ in ids)
+            self._execute(
+                f"""
+                UPDATE planner_outbox
+                SET claimed_by = ?, claimed_at = ?
+                WHERE outbox_id IN ({placeholders})
+                """,
+                [claim_id, now] + ids,
+            )
+            self._conn.commit()
+
+        return [
+            {
+                "outbox_id": r[0],
+                "mutation": r[1],
+                "entity_id": r[2],
+                "collection": r[3],
+                "payload_json": r[4],
+                "created_at": r[5],
+            }
+            for r in rows
+        ]
+
+    def complete_outbox(self, outbox_ids: list[int]) -> None:
+        """Delete completed outbox rows."""
+        if not outbox_ids:
+            return
+        placeholders = ",".join("?" for _ in outbox_ids)
+        with self._lock:
+            self._execute(
+                f"DELETE FROM planner_outbox WHERE outbox_id IN ({placeholders})",
+                outbox_ids,
+            )
+            self._conn.commit()
+
+    def fail_outbox(self, outbox_ids: list[int]) -> None:
+        """Release failed outbox rows for retry."""
+        if not outbox_ids:
+            return
+        placeholders = ",".join("?" for _ in outbox_ids)
+        with self._lock:
+            self._execute(
+                f"""
+                UPDATE planner_outbox
+                SET claimed_by = NULL, claimed_at = NULL,
+                    attempts = attempts + 1
+                WHERE outbox_id IN ({placeholders})
+                """,
+                outbox_ids,
+            )
+            self._conn.commit()
 
     # -------------------------------------------------------------------------
     # Lifecycle
