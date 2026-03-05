@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "keep-skill"
-version = "0.80.1"
+version = "0.80.2"
 description = "Reflective memory - remember and search documents by meaning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -34,7 +34,7 @@ dependencies = [
     "anthropic>=0.40.0",
     "google-genai>=1.0.0",
     # Document extraction
-    "pypdf>=6.7.3",
+    "pypdf>=6.7.5",
     "pypdfium2>=4.0",
     "beautifulsoup4>=4.9",
     "python-docx>=1.0",
