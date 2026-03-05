@@ -6041,34 +6041,46 @@ class Keeper:
                 self._store.update_tags(chroma_coll, item_id,
                                         casefold_tags_for_index(updated_tags))
 
+    def _run_local_task_workflow(
+        self,
+        *,
+        task_type: str,
+        item_id: str,
+        collection: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> dict:
+        """Run shared local workflow for summarize/ocr/analyze tasks.
+
+        Returns a small status envelope:
+        {"status": "applied|skipped", "details": {...}}
+        """
+        from .task_workflows import TaskRequest, run_local_task
+
+        outcome = run_local_task(
+            self,
+            TaskRequest(
+                task_type=task_type,
+                id=item_id,
+                collection=collection,
+                content=content,
+                metadata=dict(metadata or {}),
+            ),
+        )
+        return {"status": outcome.status, "details": dict(outcome.details)}
+
     def _process_pending_summarize(self, item) -> None:
         """Process a pending summarization work item."""
-        from .processors import process_summarize
-
-        doc = self._document_store.get(item.collection, item.id)
-        if doc is None:
-            # Doc was deleted/moved since enqueue — skip (no point retrying)
-            logger.info("Skipping summary for deleted doc: %s", item.id)
-            return
-
-        # Resolve summarization prompt from .prompt/summarize/* docs
-        summarize_prompt = None
-        try:
-            summarize_prompt = self._resolve_prompt_doc("summarize", doc.tags)
-        except Exception as e:
-            logger.debug("Summarize prompt doc resolution failed: %s", e)
-
-        context = None
-        user_tags = filter_non_system_tags(doc.tags)
-        if user_tags:
-            context = self._gather_context(item.id, user_tags)
-
-        result = process_summarize(
-            item.content, context=context,
-            summarization_provider=self._get_summarization_provider(),
-            system_prompt_override=summarize_prompt,
+        outcome = self._run_local_task_workflow(
+            task_type="summarize",
+            item_id=item.id,
+            collection=item.collection,
+            content=item.content,
+            metadata=item.metadata,
         )
-        self.apply_result(item.id, item.collection, result)
+        if outcome.get("status") == "skipped":
+            reason = outcome.get("details", {}).get("reason") or "skipped"
+            logger.info("Skipping summary for %s: %s", item.id, reason)
 
     def _process_pending_embed(self, item) -> None:
         """Process a deferred embedding task (cloud mode).
@@ -6124,10 +6136,19 @@ class Keeper:
 
     def _process_pending_analyze(self, item) -> None:
         """Process a pending analysis work item."""
-        tags = item.metadata.get("tags") if item.metadata else None
-        force = item.metadata.get("force", False) if item.metadata else False
-        parts = self.analyze(item.id, tags=tags, force=force)
-        logger.info("Analyzed %s into %d parts", item.id, len(parts))
+        outcome = self._run_local_task_workflow(
+            task_type="analyze",
+            item_id=item.id,
+            collection=item.collection,
+            content=item.content,
+            metadata=item.metadata,
+        )
+        if outcome.get("status") == "applied":
+            parts_count = int(outcome.get("details", {}).get("parts_count") or 0)
+            logger.info("Analyzed %s into %d parts", item.id, parts_count)
+        else:
+            reason = outcome.get("details", {}).get("reason") or "skipped"
+            logger.info("Skipping analyze for %s: %s", item.id, reason)
 
     def _process_pending_reindex(self, item) -> None:
         """Process a reindex task: embed summary and write to vector store.
@@ -6319,94 +6340,25 @@ class Keeper:
 
         Then updates the document summary and embedding with the content.
         """
-        from .processors import process_ocr
-        meta = item.metadata or {}
-        uri = meta.get("uri") or item.id
-        ocr_pages = meta.get("ocr_pages", [])
-        content_type = meta.get("content_type", "")
-
-        if not ocr_pages:
-            return
-
-        # Cap page count to prevent unbounded OCR on huge documents
-        MAX_OCR_PAGES = 1000
-        if len(ocr_pages) > MAX_OCR_PAGES:
-            logger.warning(
-                "OCR page count %d exceeds limit %d for %s — truncating",
-                len(ocr_pages), MAX_OCR_PAGES, uri,
-            )
-            ocr_pages = ocr_pages[:MAX_OCR_PAGES]
-
-        # Load content extractor
-        extractor = self._get_content_extractor()
-        if not extractor:
-            raise IOError("No content extractor configured for OCR")
-
-        path = Path(uri.removeprefix("file://")).resolve()
-        if not path.exists():
-            logger.warning("File no longer exists for OCR: %s", path)
-            return
-
-        # Re-validate path is within home directory (may differ from enqueue time)
-        home = Path.home().resolve()
-        if not path.is_relative_to(home):
-            logger.warning("OCR path outside home directory, skipping: %s", path)
-            return
-
-        is_image = content_type.startswith("image/") if content_type else False
-        # Fallback: detect from extension if content_type not in metadata
-        if not content_type:
-            from .providers.documents import FileDocumentProvider
-            ext = path.suffix.lower()
-            ct = FileDocumentProvider.EXTENSION_TYPES.get(ext, "")
-            is_image = ct.startswith("image/")
-            if is_image:
-                content_type = ct
-
-        if is_image:
-            full_content = self._ocr_image(path, content_type, extractor)
-        else:
-            full_content = self._ocr_pdf(path, ocr_pages, extractor)
-
-        if not full_content or not full_content.strip():
-            logger.info("OCR produced no usable text for %s", uri)
-            return
-
-        # Get existing document for context + tags
-        doc_coll = item.collection
-        existing = self._document_store.get(doc_coll, item.id)
-        if not existing:
-            return  # deleted since enqueue
-
-        context = None
-        user_tags = filter_non_system_tags(existing.tags)
-        if user_tags:
-            context = self._gather_context(item.id, user_tags)
-
-        # Process (pure function)
-        try:
-            result = process_ocr(
-                full_content,
-                max_summary_length=self._config.max_summary_length,
-                context=context,
-                summarization_provider=self._get_summarization_provider(),
-            )
-        except Exception as e:
-            logger.warning("OCR summarization failed for %s: %s", uri, e)
-            result = process_ocr(
-                full_content,
-                max_summary_length=self._config.max_summary_length,
-                context=context,
-                summarization_provider=None,
-            )
-
-        # Apply to store
-        self.apply_result(item.id, doc_coll, result, existing_tags=existing.tags)
-
-        logger.info(
-            "OCR complete for %s: %d chars, type=%s",
-            uri, len(full_content), content_type or "pdf",
+        outcome = self._run_local_task_workflow(
+            task_type="ocr",
+            item_id=item.id,
+            collection=item.collection,
+            content=item.content,
+            metadata=item.metadata,
         )
+        if outcome.get("status") == "applied":
+            details = outcome.get("details", {})
+            uri = (item.metadata or {}).get("uri") or item.id
+            logger.info(
+                "OCR complete for %s: %d chars, type=%s",
+                uri,
+                int(details.get("chars") or 0),
+                details.get("content_type") or "pdf",
+            )
+        else:
+            reason = outcome.get("details", {}).get("reason") or "skipped"
+            logger.info("Skipping OCR for %s: %s", item.id, reason)
 
     def pending_count(self) -> int:
         """Get count of pending summaries awaiting processing."""
