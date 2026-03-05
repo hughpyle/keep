@@ -34,6 +34,15 @@ keep continue-work FLOW_ID WORK_ID # execute a pending work item
 
 Output is JSON. Add `--json` for compact single-line output.
 
+### MCP
+
+Two tools are available via the MCP server (`keep mcp`):
+
+- **`keep_continue`** — run one tick. Takes a `payload` dict matching the [input schema](#input-schema) below.
+- **`keep_continue_work`** — execute a pending work item. Takes `flow_id` and `work_id`.
+
+Both return JSON. The auto-refining loop works the same way: call `keep_continue` repeatedly until `next.recommended` is `"stop"`.
+
 ### Python
 
 ```python

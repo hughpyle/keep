@@ -13,8 +13,9 @@ ChromaDB cross-process safety is handled at the store layer.
 """
 
 import asyncio
+import json
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -383,6 +384,57 @@ async def keep_prompt(
             return f"Prompt not found: {name}"
 
         return expand_prompt(result, kp=keeper)
+
+
+@mcp.tool(
+    description=(
+        "Run one continuation tick. Continuations are stateful multi-step memory interactions "
+        "with automatic refinement and decision support. "
+        "Pass a payload dict with the continuation request — see docs/CONTINUATIONS.md for the full schema. "
+        "Common fields: flow_id (omit to start new), state_version, program, frame_request, feedback."
+    ),
+    annotations=_IDEMPOTENT,
+)
+async def keep_continue(
+    payload: Annotated[dict[str, Any], Field(
+        description=(
+            "Continuation request object. "
+            "To start a new flow: {\"program\": {\"goal\": \"...\", \"profile\": \"query.auto\"}}. "
+            "To continue: {\"flow_id\": \"...\", \"state_version\": N}. "
+            "To submit work results: {\"flow_id\": \"...\", \"state_version\": N, "
+            "\"feedback\": {\"work_results\": [...]}}."
+        ),
+    )],
+) -> str:
+    """Run one continuation tick."""
+    async with _lock:
+        keeper = _get_keeper()
+        try:
+            result = keeper.continue_flow(payload)
+        except (ValueError, OSError) as e:
+            return f"Error: {e}"
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool(
+    description=(
+        "Execute a pending work item from a continuation flow. "
+        "Returns a work_result envelope with outputs and quality metrics."
+    ),
+    annotations=_IDEMPOTENT,
+)
+async def keep_continue_work(
+    flow_id: Annotated[str, Field(description="Flow containing the work item.")],
+    work_id: Annotated[str, Field(description="Work item to execute.")],
+) -> str:
+    """Execute a pending continuation work item."""
+    async with _lock:
+        keeper = _get_keeper()
+        try:
+            result = keeper.continue_run_work(flow_id, work_id)
+        except (ValueError, OSError) as e:
+            return f"Error: {e}"
+    return json.dumps(result, indent=2)
 
 
 # ---------------------------------------------------------------------------
