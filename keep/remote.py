@@ -571,12 +571,12 @@ class RemoteKeeper:
             raise ValueError("Remote /v1/continue response must be a JSON object")
         return resp
 
-    def continue_run_work(self, flow_id: str, work_id: str) -> dict[str, Any]:
-        if not flow_id or not work_id:
-            raise ValueError("flow_id and work_id are required")
+    def continue_run_work(self, cursor: str, work_id: str) -> dict[str, Any]:
+        if not cursor or not work_id:
+            raise ValueError("cursor and work_id are required")
         resp = self._post(
             "/v1/continue/work",
-            json={"flow_id": str(flow_id), "work_id": str(work_id)},
+            json={"cursor": str(cursor), "work_id": str(work_id)},
         )
         if not isinstance(resp, dict):
             raise ValueError("Remote /v1/continue/work response must be a JSON object")

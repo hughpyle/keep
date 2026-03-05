@@ -22,7 +22,7 @@ def _summarize_request(note_id: str, content: str, *, request_id: str, idempoten
                 },
             }
         ],
-        "feedback": {"work_results": []},
+        "work_results": [],
     }
     if idempotency_key is not None:
         payload["idempotency_key"] = idempotency_key
@@ -44,15 +44,14 @@ def test_engine_round_trip_with_adapters(mock_providers, tmp_path):
             _summarize_request("note:engine:1", content, request_id="engine-req-1")
         )
         assert first["status"] == "waiting_work"
-        work_id = first["requests"]["work"][0]["work_id"]
+        work_id = first["work"][0]["work_id"]
 
-        work_result = engine.run_work(first["flow_id"], work_id)
+        work_result = engine.run_work(first["cursor"], work_id)
         second = engine.continue_flow(
             {
                 "request_id": "engine-req-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"],
-                "feedback": {"work_results": [work_result]},
+                "cursor": first["cursor"],
+                "work_results": [work_result],
             }
         )
         assert second["status"] == "done"
@@ -91,8 +90,7 @@ def test_engine_idempotency_replay_with_adapters(mock_providers, tmp_path):
                 idempotency_key="engine-idem-key",
             )
         )
-        assert replay["flow_id"] == first["flow_id"]
-        assert replay["state_version"] == first["state_version"]
+        assert replay["cursor"] == first["cursor"]
         assert replay["status"] == first["status"]
     finally:
         engine.close()

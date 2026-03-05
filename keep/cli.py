@@ -3262,7 +3262,7 @@ def continue_cmd(
 
 @app.command("continue-work")
 def continue_work_cmd(
-    flow_id: Annotated[str, typer.Argument(help="Flow ID")],
+    cursor: Annotated[str, typer.Argument(help="Flow cursor")],
     work_id: Annotated[str, typer.Argument(help="Work item ID")],
     store: StoreOption = None,
 ):
@@ -3276,7 +3276,7 @@ def continue_work_cmd(
         kp.close()
         raise typer.Exit(1)
     try:
-        result = kp.continue_run_work(flow_id, work_id)
+        result = kp.continue_run_work(cursor, work_id)
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         kp.close()

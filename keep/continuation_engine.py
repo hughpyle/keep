@@ -7,17 +7,22 @@ and idempotency over pluggable storage/execution adapters.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
-import math
 import threading
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from .continuation_env import ContinuationRuntimeEnv
 from .continuation_executor import LocalWorkExecutor, WorkExecutor
+from .continuation_policy import (
+    DECISION_STRATEGIES,
+    DECISION_SUPPORT_VERSION,
+    DEFAULT_DECISION_POLICY,
+    ContinuationDecisionPolicy,
+)
 from .continuation_store import (
     FlowRow,
     FlowStore,
@@ -28,8 +33,6 @@ from .continuation_store import (
 logger = logging.getLogger(__name__)
 
 ALLOWED_FRAME_OPS = {"where", "slice"}
-DECISION_SUPPORT_VERSION = "ds.v1"
-DECISION_STRATEGIES = {"single_lane_refine", "top2_plus_bridge", "explore_more"}
 BUILTIN_QUERY_AUTO_PROFILES = {"query.auto", ".profile/query.auto"}
 SYSTEM_NOTE_PREFIX = "."
 MAX_CONTINUE_PAYLOAD_BYTES = 512_000
@@ -37,15 +40,8 @@ MAX_CONTINUE_STATE_BYTES = 1_000_000
 MAX_CONTINUE_WORK_INPUT_BYTES = 256_000
 MAX_CONTINUE_WORK_RESULT_BYTES = 256_000
 MAX_CONTINUE_EVENTS_PER_FLOW = 500
-DEFAULT_DECISION_POLICY = {
-    "margin_high": 0.18,
-    "entropy_low": 0.45,
-    "margin_low": 0.08,
-    "entropy_high": 0.72,
-    "lineage_strong": 0.75,
-    "pivot_topk": 6,
-    "max_pivots": 2,
-}
+CONTINUE_RESPONSE_MODES = {"standard", "debug"}
+PROGRAM_OVERRIDE_KEYS = {"params", "frame_request", "decision_policy"}
 
 class ContinuationEngine:
     """Durable local continuation runtime."""
@@ -61,6 +57,14 @@ class ContinuationEngine:
         self._work_executor = work_executor or LocalWorkExecutor(env)
         self._flow_store = flow_store
         self._lock = threading.RLock()
+        self._decision_policy = ContinuationDecisionPolicy(
+            env=env,
+            parse_where_tags=self._parse_where_tags,
+            pipeline_limit=self._pipeline_limit,
+            normalize_metadata_level=self._normalize_metadata_level,
+            as_int=self._as_int,
+            is_decision_tag_key=self._is_decision_tag_key,
+        )
 
     @staticmethod
     def _hash_json(payload: dict[str, Any]) -> str:
@@ -105,6 +109,89 @@ class ContinuationEngine:
     @staticmethod
     def _output_hash(payload: dict[str, Any]) -> str:
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _encode_cursor(flow_id: str, state_version: int) -> str:
+        payload = {"f": str(flow_id), "v": int(state_version)}
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_cursor(cursor: Any) -> Optional[tuple[str, int]]:
+        token = str(cursor or "").strip()
+        if not token:
+            return None
+        try:
+            padded = token + ("=" * (-len(token) % 4))
+            raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+            payload = json.loads(raw.decode("utf-8"))
+            flow_id = str(payload.get("f") or "").strip()
+            version = int(payload.get("v"))
+            if not flow_id or version < 0:
+                return None
+            return flow_id, version
+        except Exception:
+            return None
+
+    @staticmethod
+    def _response_mode(payload: dict[str, Any]) -> str:
+        mode = str(payload.get("response_mode") or "standard").strip().lower()
+        if mode not in CONTINUE_RESPONSE_MODES:
+            raise ValueError(f"Unsupported response_mode: {mode}")
+        return mode
+
+    @classmethod
+    def _include_debug_fields(cls, payload: dict[str, Any]) -> bool:
+        return cls._response_mode(payload) == "debug"
+
+    @staticmethod
+    def _applied_entry(
+        *,
+        source: str,
+        work_id: Optional[str],
+        op: str,
+        target: Optional[str],
+        status: str,
+        mutation_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "source": source,
+            "work_id": work_id,
+            "op": op,
+            "target": target,
+            "status": status,
+        }
+        if mutation_id:
+            entry["mutation_id"] = mutation_id
+        return entry
+
+    @staticmethod
+    def _dependency_stamp(
+        *,
+        frame_request: dict[str, Any],
+        evidence: list[dict[str, Any]],
+    ) -> str:
+        # Lightweight stamp for shallow revalidation between ticks.
+        material: dict[str, Any] = {
+            "frame_request": frame_request if isinstance(frame_request, dict) else {},
+            "evidence": [],
+        }
+        for row in evidence:
+            if not isinstance(row, dict):
+                continue
+            metadata = row.get("metadata")
+            focus = metadata.get("focus") if isinstance(metadata, dict) else {}
+            material["evidence"].append(
+                {
+                    "id": row.get("id"),
+                    "base_id": metadata.get("base_id") if isinstance(metadata, dict) else None,
+                    "updated": metadata.get("updated") if isinstance(metadata, dict) else None,
+                    "focus_version": focus.get("version") if isinstance(focus, dict) else None,
+                    "focus_part": focus.get("part") if isinstance(focus, dict) else None,
+                }
+            )
+        canonical = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -191,33 +278,65 @@ class ContinuationEngine:
             )
         )
 
-    def _merge_program(self, state: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-        existing = state.get("program") or {}
-        if not isinstance(existing, dict):
-            existing = {}
-
-        if not self._program_has_inputs(payload):
-            return existing
-
-        merged = dict(existing)
+    def _program_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        program: dict[str, Any] = {}
         if "goal" in payload:
-            merged["goal"] = str(payload.get("goal") or "").strip().lower()
+            program["goal"] = str(payload.get("goal") or "").strip().lower()
         if "profile" in payload:
-            merged["profile"] = str(payload.get("profile") or "").strip()
+            program["profile"] = str(payload.get("profile") or "").strip()
         if "params" in payload:
             params = payload.get("params")
-            merged["params"] = params if isinstance(params, dict) else {}
+            program["params"] = params if isinstance(params, dict) else {}
         if "frame_request" in payload:
             frame_request = payload.get("frame_request")
-            merged["frame_request"] = frame_request if isinstance(frame_request, dict) else {}
+            program["frame_request"] = frame_request if isinstance(frame_request, dict) else {}
         if "decision_policy" in payload:
             policy = payload.get("decision_policy")
-            merged["decision_policy"] = policy if isinstance(policy, dict) else {}
+            program["decision_policy"] = policy if isinstance(policy, dict) else {}
         if "steps" in payload:
             steps = payload.get("steps")
-            merged["steps"] = [dict(step) for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
-        merged["goal"] = self._goal_from_program(merged)
-        return merged
+            program["steps"] = [dict(step) for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
+        program["goal"] = self._goal_from_program(program)
+        return program
+
+    @staticmethod
+    def _overrides_from_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], Optional[dict[str, str]]]:
+        if "overrides" not in payload:
+            return {}, None
+        overrides = payload.get("overrides")
+        if not isinstance(overrides, dict):
+            return {}, {
+                "code": "invalid_input",
+                "message": "overrides must be an object",
+            }
+        unknown = sorted(str(key) for key in overrides.keys() if key not in PROGRAM_OVERRIDE_KEYS)
+        if unknown:
+            return {}, {
+                "code": "invalid_input",
+                "message": f"Unsupported overrides keys: {', '.join(unknown)}",
+            }
+        normalized: dict[str, Any] = {}
+        if "params" in overrides:
+            params = overrides.get("params")
+            normalized["params"] = params if isinstance(params, dict) else {}
+        if "frame_request" in overrides:
+            frame_request = overrides.get("frame_request")
+            normalized["frame_request"] = frame_request if isinstance(frame_request, dict) else {}
+        if "decision_policy" in overrides:
+            policy = overrides.get("decision_policy")
+            normalized["decision_policy"] = policy if isinstance(policy, dict) else {}
+        return normalized, None
+
+    def _program_for_tick(self, base_program: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+        program = dict(base_program) if isinstance(base_program, dict) else {}
+        if "params" in overrides:
+            program["params"] = overrides["params"]
+        if "frame_request" in overrides:
+            program["frame_request"] = overrides["frame_request"]
+        if "decision_policy" in overrides:
+            program["decision_policy"] = overrides["decision_policy"]
+        program["goal"] = self._goal_from_program(program)
+        return program
 
     def _effective_frame_request(self, program: dict[str, Any]) -> dict[str, Any]:
         frame_request = program.get("frame_request")
@@ -763,28 +882,28 @@ class ContinuationEngine:
 
     def _apply_work_result(
         self, flow_id: str, work_result: dict[str, Any],
-    ) -> tuple[dict[str, Any], Optional[dict[str, str]]]:
+    ) -> tuple[list[dict[str, Any]], Optional[dict[str, str]]]:
         work_result_size_err = self._validate_json_size(
             work_result,
             max_bytes=MAX_CONTINUE_WORK_RESULT_BYTES,
             label="work_result",
         )
         if work_result_size_err is not None:
-            return {}, work_result_size_err
+            return [], work_result_size_err
 
         work_id = str(work_result.get("work_id") or "")
         if not work_id:
-            return {}, {"code": "missing_required_field", "message": "work_result.work_id is required"}
+            return [], {"code": "missing_required_field", "message": "work_result.work_id is required"}
 
         work = self._get_work(flow_id, work_id)
         if work is None:
-            return {}, {"code": "invalid_input", "message": f"Unknown work_id: {work_id}"}
+            return [], {"code": "invalid_input", "message": f"Unknown work_id: {work_id}"}
         if work.status != "requested":
-            return {}, {"code": "invalid_input", "message": f"work_id is not pending: {work_id}"}
+            return [], {"code": "invalid_input", "message": f"work_id is not pending: {work_id}"}
 
         status = str(work_result.get("status") or "ok")
         if status not in {"ok", "failed", "partial"}:
-            return {}, {"code": "invalid_input", "message": f"Invalid work_result.status: {status}"}
+            return [], {"code": "invalid_input", "message": f"Invalid work_result.status: {status}"}
 
         if status != "ok":
             self._flow_store.update_work_result(
@@ -792,7 +911,15 @@ class ContinuationEngine:
                 status="failed",
                 result_json=json.dumps(work_result, ensure_ascii=False),
             )
-            return {"work_id": work_id, "status": "failed"}, None
+            return [
+                self._applied_entry(
+                    source="work",
+                    work_id=work_id,
+                    op="work_result",
+                    target=None,
+                    status="failed",
+                )
+            ], None
 
         work_input = json.loads(work.input_json)
         applied, err = self._apply_work_outputs(
@@ -802,13 +929,13 @@ class ContinuationEngine:
             work_id=work_id,
         )
         if err is not None:
-            return {}, err
+            return [], err
         self._flow_store.update_work_result(
             work_id=work_id,
             status="completed",
             result_json=json.dumps(work_result, ensure_ascii=False),
         )
-        return {"work_id": work_id, "status": "applied", "ops": applied}, None
+        return applied, None
 
     @staticmethod
     def _resolve_mutation_value(value: Any, *, outputs: dict[str, Any], work_input: dict[str, Any]) -> Any:
@@ -1010,6 +1137,7 @@ class ContinuationEngine:
         self, ops: list[dict[str, Any]], *, flow_id: str, work_id: Optional[str] = None,
     ) -> tuple[list[dict[str, Any]], Optional[dict[str, str]]]:
         applied: list[dict[str, Any]] = []
+        source = "work" if work_id else "inline"
         in_tx = self._flow_store.in_transaction()
         for raw_op in ops:
             if not isinstance(raw_op, dict):
@@ -1020,12 +1148,14 @@ class ContinuationEngine:
             mutation_id = self._insert_pending_mutation(flow_id=flow_id, work_id=work_id, op=op)
             existing = self._get_mutation(mutation_id)
             if existing is not None and existing.status == "applied":
-                applied.append({
-                    "op": str(op.get("op") or ""),
-                    "target": str(op.get("target") or ""),
-                    "status": "applied",
-                    "mutation_id": mutation_id,
-                })
+                applied.append(self._applied_entry(
+                    source=source,
+                    work_id=work_id,
+                    op=str(op.get("op") or ""),
+                    target=str(op.get("target") or ""),
+                    status="applied",
+                    mutation_id=mutation_id,
+                ))
                 continue
             if existing is not None and existing.status == "failed":
                 return applied, {
@@ -1033,12 +1163,14 @@ class ContinuationEngine:
                     "message": existing.error or "previous mutation attempt failed",
                 }
             if in_tx:
-                applied.append({
-                    "op": str(op.get("op") or ""),
-                    "target": str(op.get("target") or ""),
-                    "status": "queued",
-                    "mutation_id": mutation_id,
-                })
+                applied.append(self._applied_entry(
+                    source=source,
+                    work_id=work_id,
+                    op=str(op.get("op") or ""),
+                    target=str(op.get("target") or ""),
+                    status="queued",
+                    mutation_id=mutation_id,
+                ))
                 continue
             applied_entry, apply_err = self._apply_single_mutation(op)
             if apply_err is not None:
@@ -1049,8 +1181,14 @@ class ContinuationEngine:
                 )
                 return applied, apply_err
             self._set_mutation_status(mutation_id, status="applied")
-            applied_entry["mutation_id"] = mutation_id
-            applied.append(applied_entry)
+            applied.append(self._applied_entry(
+                source=source,
+                work_id=work_id,
+                op=str(applied_entry.get("op") or ""),
+                target=str(applied_entry.get("target") or ""),
+                status=str(applied_entry.get("status") or "applied"),
+                mutation_id=mutation_id,
+            ))
         return applied, None
 
     def _apply_work_outputs(
@@ -1060,19 +1198,19 @@ class ContinuationEngine:
         *,
         flow_id: str,
         work_id: Optional[str],
-    ) -> tuple[dict[str, Any], Optional[dict[str, str]]]:
+    ) -> tuple[list[dict[str, Any]], Optional[dict[str, str]]]:
         outputs = work_result.get("outputs") or {}
         if not isinstance(outputs, dict):
-            return {}, {"code": "invalid_input", "message": "work_result.outputs must be an object"}
+            return [], {"code": "invalid_input", "message": "work_result.outputs must be an object"}
         ops, err = self._mutation_ops_from_work(work_input, outputs)
         if err is not None:
-            return {}, err
+            return [], err
         if not ops:
-            return {}, None
+            return [], None
         applied, err = self._apply_mutation_ops(ops, flow_id=flow_id, work_id=work_id)
         if err is not None:
-            return {}, err
-        return {"ops": applied}, None
+            return [], err
+        return applied, None
 
     def _build_frame(
         self,
@@ -1085,6 +1223,7 @@ class ContinuationEngine:
         evidence: list[dict[str, Any]],
         budget_used: Optional[dict[str, Any]] = None,
         discriminators: Optional[dict[str, Any]] = None,
+        include_debug_fields: bool = False,
     ) -> dict[str, Any]:
         params = program.get("params") if isinstance(program.get("params"), dict) else {}
         query_text = str(params.get("text") or "")
@@ -1103,261 +1242,75 @@ class ContinuationEngine:
             "stage": stage,
             "query": query_text,
         }
-        return {
-            "slots": slots,
-            "views": {
-                "task": task,
-                "evidence": evidence,
-                "hygiene": [],
-                "discriminators": (
-                    discriminators
-                    if isinstance(discriminators, dict)
-                    else self._empty_discriminators()
-                ),
-            },
-            "budget_used": {
-                "tokens": self._as_int((budget_used or {}).get("tokens"), 0),
-                "nodes": self._as_int((budget_used or {}).get("nodes"), 0),
-            },
-            "status": status,
+        frame: dict[str, Any] = {
+            "evidence": evidence,
+            "decision": (
+                discriminators
+                if isinstance(discriminators, dict)
+                else self._empty_discriminators()
+            ),
         }
+        if include_debug_fields:
+            frame["debug"] = {
+                "slots": slots,
+                "task": task,
+                "hygiene": [],
+                "budget_used": {
+                    "tokens": self._as_int((budget_used or {}).get("tokens"), 0),
+                    "nodes": self._as_int((budget_used or {}).get("nodes"), 0),
+                },
+                "status": status,
+            }
+        return frame
 
     @staticmethod
     def _empty_discriminators() -> dict[str, Any]:
-        return {
-            "version": DECISION_SUPPORT_VERSION,
-            "planner_priors": {
-                "fanout": {},
-                "selectivity": {},
-                "cardinality": {},
-            },
-            "query_stats": {
-                "lane_entropy": 0.0,
-                "top1_top2_margin": 0.0,
-                "pivot_coverage_topk": 0.0,
-                "expansion_yield_prev_step": 0.0,
-                "cost_per_gain_prev_step": 0.0,
-                "temporal_alignment": 0.0,
-            },
-            "policy_hint": {
-                "strategy": "explore_more",
-                "reason_codes": ["insufficient_signal"],
-            },
-            "staleness": {"stats_age_s": None, "fallback_mode": True},
-        }
+        return ContinuationDecisionPolicy.empty_discriminators()
 
     @staticmethod
     def _as_float(value: Any, default: float) -> float:
-        try:
-            return float(value)
-        except Exception:
-            return default
+        return ContinuationDecisionPolicy.as_float(value, default)
 
     @staticmethod
     def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
-        return max(low, min(high, value))
+        return ContinuationDecisionPolicy.clamp(value, low, high)
 
     def _decision_policy_from_program(self, program: dict[str, Any]) -> dict[str, Any]:
-        policy: Any = program.get("decision_policy")
-        if not isinstance(policy, dict):
-            params = program.get("params") if isinstance(program.get("params"), dict) else {}
-            policy = params.get("decision_policy") if isinstance(params, dict) else None
-        if not isinstance(policy, dict):
-            policy = {}
-
-        merged = dict(DEFAULT_DECISION_POLICY)
-        merged["margin_high"] = self._clamp(self._as_float(policy.get("margin_high"), merged["margin_high"]))
-        merged["entropy_low"] = self._clamp(self._as_float(policy.get("entropy_low"), merged["entropy_low"]))
-        merged["margin_low"] = self._clamp(self._as_float(policy.get("margin_low"), merged["margin_low"]))
-        merged["entropy_high"] = self._clamp(self._as_float(policy.get("entropy_high"), merged["entropy_high"]))
-        merged["lineage_strong"] = self._clamp(
-            self._as_float(policy.get("lineage_strong"), merged["lineage_strong"]),
-        )
-        merged["pivot_topk"] = min(max(self._as_int(policy.get("pivot_topk"), merged["pivot_topk"]), 1), 20)
-        merged["max_pivots"] = min(max(self._as_int(policy.get("max_pivots"), merged["max_pivots"]), 1), 5)
-        return merged
+        return self._decision_policy.decision_policy_from_program(program)
 
     @staticmethod
     def _empty_lineage_signal() -> dict[str, Any]:
-        return {
-            "coverage_topk": 0.0,
-            "dominant_concentration_topk": 0.0,
-            "dominant": "",
-            "distinct_topk": 0,
-        }
+        return ContinuationDecisionPolicy.empty_lineage_signal()
 
     def _lineage_signal(
         self, evidence: list[dict[str, Any]], *, field: str, topk: int,
     ) -> dict[str, Any]:
-        window = evidence[:topk]
-        if not window:
-            return self._empty_lineage_signal()
-
-        counts: dict[str, int] = {}
-        present = 0
-        for row in window:
-            if not isinstance(row, dict):
-                continue
-            metadata = row.get("metadata")
-            focus = metadata.get("focus") if isinstance(metadata, dict) else None
-            if not isinstance(focus, dict):
-                continue
-            raw = focus.get(field)
-            lineage = str(raw or "").strip()
-            if not lineage:
-                continue
-            present += 1
-            counts[lineage] = counts.get(lineage, 0) + 1
-
-        if not counts:
-            return self._empty_lineage_signal()
-
-        dominant, dominant_count = max(counts.items(), key=lambda item: item[1])
-        coverage = self._clamp(present / max(1, len(window)))
-        concentration = self._clamp(dominant_count / max(1, present))
-        return {
-            "coverage_topk": round(coverage, 4),
-            "dominant_concentration_topk": round(concentration, 4),
-            "dominant": dominant,
-            "distinct_topk": int(len(counts)),
-        }
+        return self._decision_policy.lineage_signal(evidence, field=field, topk=topk)
 
     def _lineage_signals(self, evidence: list[dict[str, Any]], *, topk: int) -> dict[str, Any]:
-        return {
-            "version": self._lineage_signal(evidence, field="version", topk=topk),
-            "part": self._lineage_signal(evidence, field="part", topk=topk),
-        }
+        return self._decision_policy.lineage_signals(evidence, topk=topk)
 
     def _decision_override_from_payload(
         self, payload: dict[str, Any],
     ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, str]]]:
-        override = payload.get("decision_override")
-        if override is None:
-            return None, None
-        if not isinstance(override, dict):
-            return None, {
-                "code": "invalid_input",
-                "message": "decision_override must be an object",
-            }
-        strategy = str(override.get("strategy") or "").strip()
-        if strategy not in DECISION_STRATEGIES:
-            return None, {
-                "code": "invalid_input",
-                "message": f"Unsupported decision_override.strategy: {strategy}",
-            }
-        return {
-            "strategy": strategy,
-            "reason": str(override.get("reason") or ""),
-        }, None
+        return ContinuationDecisionPolicy.decision_override_from_payload(payload)
 
     def _candidate_subject_keys(
         self, frame_request: dict[str, Any], evidence: list[dict[str, Any]],
     ) -> list[str]:
-        candidates: list[str] = []
-        where_tags = self._parse_where_tags(frame_request)
-        for key in where_tags:
-            k = str(key).strip()
-            if self._is_decision_tag_key(k) and k not in candidates:
-                candidates.append(k)
-        for row in evidence[:12]:
-            metadata = row.get("metadata") if isinstance(row, dict) else None
-            tags = metadata.get("tags") if isinstance(metadata, dict) else None
-            if not isinstance(tags, dict):
-                continue
-            for key in sorted(tags.keys()):
-                k = str(key).strip()
-                if self._is_decision_tag_key(k) and k not in candidates:
-                    candidates.append(k)
-                if len(candidates) >= 12:
-                    break
-            if len(candidates) >= 12:
-                break
-
-        tag_kind_cache: dict[str, str] = {}
-        facets: list[str] = []
-        edges: list[str] = []
-        for key in candidates:
-            kind = self._tag_key_kind(key, cache=tag_kind_cache)
-            if kind == "edge":
-                edges.append(key)
-            else:
-                facets.append(key)
-        return facets + edges
+        return self._decision_policy.candidate_subject_keys(frame_request, evidence)
 
     def _tag_key_kind(self, key: str, *, cache: Optional[dict[str, str]] = None) -> str:
-        k = str(key or "").strip()
-        if not k:
-            return "facet"
-        if cache is not None and k in cache:
-            return cache[k]
-
-        kind = "facet"
-        try:
-            doc_coll = self._env.resolve_doc_collection()
-            tagdoc = self._env.get_document(f".tag/{k}", collection=doc_coll)
-            tags = tagdoc.tags if tagdoc and isinstance(getattr(tagdoc, "tags", None), dict) else {}
-            inverse = str(tags.get("_inverse") or "").strip()
-            if inverse:
-                kind = "edge"
-        except Exception:
-            kind = "facet"
-
-        if cache is not None:
-            cache[k] = kind
-        return kind
+        return self._decision_policy.tag_key_kind(key, cache=cache)
 
     @staticmethod
     def _best_fact_from_counts(
         counts: dict[tuple[str, str], int], *, total: int,
     ) -> Optional[str]:
-        if not counts:
-            return None
-        (key, value), count = max(
-            counts.items(),
-            key=lambda item: (item[1], item[0][0], item[0][1]),
-        )
-        if count < 2 or (count / max(total, 1)) < 0.4:
-            return None
-        return f"{key}={value}"
+        return ContinuationDecisionPolicy.best_fact_from_counts(counts, total=total)
 
     def _tag_profile(self, evidence: list[dict[str, Any]], *, topk: int) -> dict[str, Any]:
-        window = evidence[:topk]
-        if not window:
-            return {
-                "edge_key_count": 0,
-                "facet_key_count": 0,
-                "edge_keys": [],
-                "facet_keys": [],
-            }
-
-        keyset: set[str] = set()
-        for row in window:
-            if not isinstance(row, dict):
-                continue
-            metadata = row.get("metadata")
-            tags = metadata.get("tags") if isinstance(metadata, dict) else None
-            if not isinstance(tags, dict):
-                continue
-            for key in tags:
-                k = str(key).strip()
-                if not self._is_decision_tag_key(k):
-                    continue
-                keyset.add(k)
-
-        tag_kind_cache: dict[str, str] = {}
-        edge_keys: list[str] = []
-        facet_keys: list[str] = []
-        for key in sorted(keyset):
-            if self._tag_key_kind(key, cache=tag_kind_cache) == "edge":
-                edge_keys.append(key)
-            else:
-                facet_keys.append(key)
-        return {
-            "edge_key_count": len(edge_keys),
-            "facet_key_count": len(facet_keys),
-            "edge_keys": edge_keys,
-            "facet_keys": facet_keys,
-        }
+        return self._decision_policy.tag_profile(evidence, topk=topk)
 
     def _query_stats(
         self,
@@ -1367,97 +1320,12 @@ class ContinuationEngine:
         previous_evidence_ids: list[str],
         topk: int,
     ) -> dict[str, float]:
-        window = evidence[:topk]
-        scores: list[float] = []
-        for idx, row in enumerate(window):
-            raw = row.get("score")
-            if isinstance(raw, (int, float)):
-                scores.append(float(raw))
-            else:
-                scores.append(float(max(topk - idx, 1)))
-
-        if len(scores) >= 2:
-            ranked = sorted(scores, reverse=True)
-            denom = max(abs(ranked[0]), 1e-9)
-            top_margin = self._clamp((ranked[0] - ranked[1]) / denom)
-        elif len(scores) == 1:
-            top_margin = 1.0
-        else:
-            top_margin = 0.0
-
-        if scores:
-            weights = [max(score, 0.0) for score in scores]
-            total = sum(weights)
-            if total <= 0:
-                weights = [1.0 / (idx + 1) for idx in range(len(scores))]
-                total = sum(weights)
-            probs = [w / total for w in weights if total > 0]
-            if len(probs) <= 1:
-                lane_entropy = 0.0
-            else:
-                entropy = -sum(p * math.log(p) for p in probs if p > 0)
-                lane_entropy = self._clamp(entropy / math.log(len(probs)))
-        else:
-            lane_entropy = 0.0
-
-        where_keys = set(self._parse_where_tags(frame_request).keys())
-        if not where_keys:
-            counts: dict[str, int] = {}
-            for row in window:
-                metadata = row.get("metadata") if isinstance(row, dict) else None
-                tags = metadata.get("tags") if isinstance(metadata, dict) else None
-                if not isinstance(tags, dict):
-                    continue
-                for key, value in tags.items():
-                    if value in (None, "", [], {}):
-                        continue
-                    k = str(key)
-                    counts[k] = counts.get(k, 0) + 1
-            if counts:
-                where_keys = {max(counts, key=counts.get)}
-
-        covered = 0
-        for row in window:
-            metadata = row.get("metadata") if isinstance(row, dict) else None
-            tags = metadata.get("tags") if isinstance(metadata, dict) else None
-            if not isinstance(tags, dict):
-                continue
-            if any(tags.get(key) not in (None, "", [], {}) for key in where_keys):
-                covered += 1
-        pivot_coverage = self._clamp(covered / max(1, len(window)))
-
-        current_ids = [str(row.get("id")) for row in evidence if row.get("id")]
-        prev_ids = {str(item) for item in previous_evidence_ids if item}
-        gain = len([eid for eid in current_ids if eid not in prev_ids])
-        expansion_yield = self._clamp(gain / max(1, len(current_ids)))
-        cost_per_gain = float(len(current_ids)) if gain == 0 else float(len(current_ids)) / gain
-
-        now = datetime.now(timezone.utc)
-        recent_count = 0
-        dated_count = 0
-        for row in window:
-            metadata = row.get("metadata") if isinstance(row, dict) else None
-            updated = metadata.get("updated") if isinstance(metadata, dict) else None
-            if not isinstance(updated, str) or not updated.strip():
-                continue
-            try:
-                dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-            except Exception:
-                continue
-            dated_count += 1
-            age_days = (now - dt.astimezone(timezone.utc)).total_seconds() / 86400.0
-            if age_days <= 365.0:
-                recent_count += 1
-        temporal_alignment = 0.5 if dated_count == 0 else self._clamp(recent_count / dated_count)
-
-        return {
-            "lane_entropy": round(lane_entropy, 4),
-            "top1_top2_margin": round(top_margin, 4),
-            "pivot_coverage_topk": round(pivot_coverage, 4),
-            "expansion_yield_prev_step": round(expansion_yield, 4),
-            "cost_per_gain_prev_step": round(cost_per_gain, 4),
-            "temporal_alignment": round(temporal_alignment, 4),
-        }
+        return self._decision_policy.query_stats(
+            frame_request=frame_request,
+            evidence=evidence,
+            previous_evidence_ids=previous_evidence_ids,
+            topk=topk,
+        )
 
     def _choose_strategy(
         self,
@@ -1468,56 +1336,17 @@ class ContinuationEngine:
         staleness: dict[str, Any],
         decision_override: Optional[dict[str, Any]],
     ) -> tuple[str, list[str]]:
-        if decision_override is not None:
-            reason = str(decision_override.get("reason") or "").strip()
-            codes = ["override"] if not reason else [f"override:{reason}"]
-            return str(decision_override["strategy"]), codes
-
-        margin = self._as_float(query_stats.get("top1_top2_margin"), 0.0)
-        entropy = self._as_float(query_stats.get("lane_entropy"), 1.0)
-        margin_high = self._as_float(policy.get("margin_high"), DEFAULT_DECISION_POLICY["margin_high"])
-        entropy_low = self._as_float(policy.get("entropy_low"), DEFAULT_DECISION_POLICY["entropy_low"])
-        margin_low = self._as_float(policy.get("margin_low"), DEFAULT_DECISION_POLICY["margin_low"])
-        entropy_high = self._as_float(policy.get("entropy_high"), DEFAULT_DECISION_POLICY["entropy_high"])
-        lineage_strong = self._as_float(policy.get("lineage_strong"), DEFAULT_DECISION_POLICY["lineage_strong"])
-
-        version = lineage.get("version") if isinstance(lineage, dict) else {}
-        part = lineage.get("part") if isinstance(lineage, dict) else {}
-        version_dom = self._as_float(
-            version.get("dominant_concentration_topk") if isinstance(version, dict) else None, 0.0,
+        return self._decision_policy.choose_strategy(
+            query_stats=query_stats,
+            lineage=lineage,
+            policy=policy,
+            staleness=staleness,
+            decision_override=decision_override,
         )
-        part_dom = self._as_float(
-            part.get("dominant_concentration_topk") if isinstance(part, dict) else None, 0.0,
-        )
-        lineage_dom = max(version_dom, part_dom)
-        lineage_kind = "version" if version_dom >= part_dom else "part"
-
-        reasons: list[str] = []
-        strategy = "explore_more"
-        if margin >= margin_high and entropy <= entropy_low:
-            strategy = "single_lane_refine"
-            reasons = ["high_margin", "low_entropy"]
-        elif lineage_dom >= lineage_strong and entropy < entropy_high:
-            strategy = "single_lane_refine"
-            reasons = [f"strong_{lineage_kind}_lineage"]
-        elif margin <= margin_low or entropy >= entropy_high:
-            strategy = "top2_plus_bridge"
-            reasons = ["low_margin" if margin <= margin_low else "high_entropy"]
-        else:
-            reasons = ["mixed_signal"]
-
-        if bool(staleness.get("fallback_mode")):
-            reasons.append("planner_fallback")
-        return strategy, reasons
 
     @staticmethod
     def _pivot_ids(evidence: list[dict[str, Any]], *, strategy: str, max_pivots: int) -> list[str]:
-        ids = [str(row.get("id")) for row in evidence if row.get("id")]
-        if strategy == "single_lane_refine":
-            return ids[: min(1, max_pivots)]
-        if strategy == "top2_plus_bridge":
-            return ids[: min(2, max_pivots)]
-        return []
+        return ContinuationDecisionPolicy.pivot_ids(evidence, strategy=strategy, max_pivots=max_pivots)
 
     def _decision_capsule(
         self,
@@ -1528,121 +1357,16 @@ class ContinuationEngine:
         previous_evidence_ids: list[str],
         decision_override: Optional[dict[str, Any]],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        planner_payload = {
-            "planner_priors": {
-                "fanout": {},
-                "selectivity": {},
-                "cardinality": {},
-            },
-            "staleness": {"stats_age_s": None, "fallback_mode": True},
-        }
-        try:
-            params = program.get("params") if isinstance(program.get("params"), dict) else {}
-            scope_key = params.get("scope_key") if isinstance(params, dict) else None
-            candidates = self._candidate_subject_keys(frame_request, evidence)
-            planner_payload = self._env.get_planner_priors(
-                scope_key=scope_key if isinstance(scope_key, str) and scope_key else None,
-                candidates=candidates or None,
-            )
-        except Exception:
-            logger.debug("Planner priors unavailable for decision capsule", exc_info=True)
-
-        priors = planner_payload.get("planner_priors") if isinstance(planner_payload, dict) else {}
-        if not isinstance(priors, dict):
-            priors = {}
-        staleness = planner_payload.get("staleness") if isinstance(planner_payload, dict) else {}
-        if not isinstance(staleness, dict):
-            staleness = {"stats_age_s": None, "fallback_mode": True}
-
-        policy = self._decision_policy_from_program(program)
-        topk = self._as_int(policy.get("pivot_topk"), DEFAULT_DECISION_POLICY["pivot_topk"])
-        query_stats = self._query_stats(
+        return self._decision_policy.decision_capsule(
+            program=program,
             frame_request=frame_request,
             evidence=evidence,
             previous_evidence_ids=previous_evidence_ids,
-            topk=topk,
-        )
-        lineage = self._lineage_signals(evidence, topk=topk)
-        tag_profile = self._tag_profile(evidence, topk=topk)
-        strategy, reason_codes = self._choose_strategy(
-            query_stats=query_stats,
-            lineage=lineage,
-            policy=policy,
-            staleness=staleness,
             decision_override=decision_override,
         )
-        pivot_ids = self._pivot_ids(
-            evidence,
-            strategy=strategy,
-            max_pivots=self._as_int(policy.get("max_pivots"), DEFAULT_DECISION_POLICY["max_pivots"]),
-        )
-
-        discriminators = {
-            "version": DECISION_SUPPORT_VERSION,
-            "planner_priors": {
-                "fanout": priors.get("fanout", {}) if isinstance(priors.get("fanout"), dict) else {},
-                "selectivity": priors.get("selectivity", {}) if isinstance(priors.get("selectivity"), dict) else {},
-                "cardinality": priors.get("cardinality", {}) if isinstance(priors.get("cardinality"), dict) else {},
-            },
-            "query_stats": query_stats,
-            "lineage": lineage,
-            "tag_profile": tag_profile,
-            "policy_hint": {
-                "strategy": strategy,
-                "reason_codes": reason_codes,
-            },
-            "staleness": {
-                "stats_age_s": staleness.get("stats_age_s"),
-                "fallback_mode": bool(staleness.get("fallback_mode")),
-            },
-        }
-        snapshot = {
-            "version": DECISION_SUPPORT_VERSION,
-            "strategy_chosen": strategy,
-            "reason_codes": reason_codes,
-            "pivot_ids": pivot_ids,
-        }
-        return discriminators, snapshot
 
     def _dominant_tag_fact(self, evidence: list[dict[str, Any]]) -> Optional[str]:
-        if not evidence:
-            return None
-        rows = evidence[:10]
-        total = max(len(rows), 1)
-        facet_counts: dict[tuple[str, str], int] = {}
-        edge_counts: dict[tuple[str, str], int] = {}
-        tag_kind_cache: dict[str, str] = {}
-
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            metadata = row.get("metadata")
-            tags = metadata.get("tags") if isinstance(metadata, dict) else None
-            if not isinstance(tags, dict):
-                continue
-            for key, raw in tags.items():
-                k = str(key).strip()
-                if not self._is_decision_tag_key(k):
-                    continue
-                kind = self._tag_key_kind(k, cache=tag_kind_cache)
-                values: list[str] = []
-                if isinstance(raw, list):
-                    values = [str(v) for v in raw if isinstance(v, (str, int, float, bool))]
-                elif isinstance(raw, (str, int, float, bool)):
-                    values = [str(raw)]
-                for val in values[:4]:
-                    if not val.strip():
-                        continue
-                    if kind == "edge":
-                        edge_counts[(k, val)] = edge_counts.get((k, val), 0) + 1
-                    else:
-                        facet_counts[(k, val)] = facet_counts.get((k, val), 0) + 1
-
-        # Facets provide grouping/scoping; edges are fallback pivots if no strong facet.
-        fact = self._best_fact_from_counts(facet_counts, total=total)
-        if fact:
-            return fact
-        return self._best_fact_from_counts(edge_counts, total=total)
+        return self._decision_policy.dominant_tag_fact(evidence)
 
     def _query_auto_next_frame_request(
         self,
@@ -1651,145 +1375,25 @@ class ContinuationEngine:
         evidence: list[dict[str, Any]],
         decision_snapshot: dict[str, Any],
     ) -> Optional[dict[str, Any]]:
-        seed = current_frame_request.get("seed") if isinstance(current_frame_request, dict) else {}
-        if not isinstance(seed, dict):
-            return None
-        if str(seed.get("mode") or "") != "query" or not str(seed.get("value") or "").strip():
-            return None
-
-        budget = current_frame_request.get("budget")
-        if not isinstance(budget, dict):
-            budget = {}
-        options = current_frame_request.get("options")
-        if not isinstance(options, dict):
-            options = {}
-        metadata_level = self._normalize_metadata_level(options.get("metadata"))
-        limit = self._pipeline_limit(current_frame_request, default_limit=10)
-        strategy = str(decision_snapshot.get("strategy_chosen") or "explore_more")
-
-        if strategy == "single_lane_refine":
-            fact = self._dominant_tag_fact(evidence)
-            pipeline: list[dict[str, Any]] = []
-            if fact:
-                pipeline.append({"op": "where", "args": {"facts": [fact]}})
-            pipeline.append({"op": "slice", "args": {"limit": limit}})
-            return {
-                "seed": {"mode": "query", "value": str(seed.get("value"))},
-                "pipeline": pipeline,
-                "budget": dict(budget),
-                "options": {"deep": True, "metadata": metadata_level},
-            }
-
-        if strategy == "top2_plus_bridge":
-            return {
-                "seed": {"mode": "query", "value": str(seed.get("value"))},
-                "pipeline": [{"op": "slice", "args": {"limit": limit}}],
-                "budget": dict(budget),
-                "options": {"deep": True, "metadata": metadata_level},
-            }
-
-        # explore_more: broaden modestly then re-evaluate.
-        broaden_limit = min(max(limit + 5, 1), 50)
-        return {
-            "seed": {"mode": "query", "value": str(seed.get("value"))},
-            "pipeline": [{"op": "slice", "args": {"limit": broaden_limit}}],
-            "budget": dict(budget),
-            "options": {"deep": True, "metadata": metadata_level},
-        }
+        return self._decision_policy.query_auto_next_frame_request(
+            current_frame_request=current_frame_request,
+            evidence=evidence,
+            decision_snapshot=decision_snapshot,
+        )
 
     def _top_tag_facts(
         self, evidence: list[dict[str, Any]], *, max_facts: int = 2,
     ) -> list[str]:
-        if not evidence or max_facts <= 0:
-            return []
-        rows = evidence[:10]
-        total = max(len(rows), 1)
-        facet_counts: dict[tuple[str, str], int] = {}
-        edge_counts: dict[tuple[str, str], int] = {}
-        tag_kind_cache: dict[str, str] = {}
-
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            metadata = row.get("metadata")
-            tags = metadata.get("tags") if isinstance(metadata, dict) else None
-            if not isinstance(tags, dict):
-                continue
-            for key, raw in tags.items():
-                k = str(key).strip()
-                if not self._is_decision_tag_key(k):
-                    continue
-                kind = self._tag_key_kind(k, cache=tag_kind_cache)
-                values: list[str] = []
-                if isinstance(raw, list):
-                    values = [str(v) for v in raw if isinstance(v, (str, int, float, bool))]
-                elif isinstance(raw, (str, int, float, bool)):
-                    values = [str(raw)]
-                for val in values[:4]:
-                    if not val.strip():
-                        continue
-                    if kind == "edge":
-                        edge_counts[(k, val)] = edge_counts.get((k, val), 0) + 1
-                    else:
-                        facet_counts[(k, val)] = facet_counts.get((k, val), 0) + 1
-
-        def _ordered(counts: dict[tuple[str, str], int]) -> list[str]:
-            ranked = sorted(
-                counts.items(),
-                key=lambda item: (item[1], item[0][0], item[0][1]),
-                reverse=True,
-            )
-            out: list[str] = []
-            for (key, value), count in ranked:
-                if count < 2 or (count / total) < 0.4:
-                    continue
-                out.append(f"{key}={value}")
-                if len(out) >= max_facts:
-                    break
-            return out
-
-        facts: list[str] = []
-        for fact in _ordered(facet_counts):
-            if fact not in facts:
-                facts.append(fact)
-            if len(facts) >= max_facts:
-                return facts
-        for fact in _ordered(edge_counts):
-            if fact not in facts:
-                facts.append(fact)
-            if len(facts) >= max_facts:
-                return facts
-        return facts
+        return self._decision_policy.top_tag_facts(evidence, max_facts=max_facts)
 
     @staticmethod
     def _query_auto_branch_utility(
         *, discriminators: dict[str, Any], evidence_count: int,
     ) -> float:
-        query_stats = discriminators.get("query_stats") if isinstance(discriminators, dict) else {}
-        lineage = discriminators.get("lineage") if isinstance(discriminators, dict) else {}
-        margin = 0.0
-        if isinstance(query_stats, dict):
-            try:
-                margin = float(query_stats.get("top1_top2_margin") or 0.0)
-            except Exception:
-                margin = 0.0
-        version_dom = 0.0
-        part_dom = 0.0
-        if isinstance(lineage, dict):
-            version = lineage.get("version")
-            part = lineage.get("part")
-            if isinstance(version, dict):
-                try:
-                    version_dom = float(version.get("dominant_concentration_topk") or 0.0)
-                except Exception:
-                    version_dom = 0.0
-            if isinstance(part, dict):
-                try:
-                    part_dom = float(part.get("dominant_concentration_topk") or 0.0)
-                except Exception:
-                    part_dom = 0.0
-        evidence_term = 0.0 if evidence_count <= 0 else min(float(evidence_count) / 10.0, 1.0)
-        return round(margin + (0.3 * max(version_dom, part_dom)) + (0.05 * evidence_term), 6)
+        return ContinuationDecisionPolicy.query_auto_branch_utility(
+            discriminators=discriminators,
+            evidence_count=evidence_count,
+        )
 
     def _query_auto_top2_plus_bridge_branches(
         self,
@@ -1797,54 +1401,10 @@ class ContinuationEngine:
         current_frame_request: dict[str, Any],
         evidence: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        seed = current_frame_request.get("seed") if isinstance(current_frame_request, dict) else {}
-        if not isinstance(seed, dict):
-            return []
-        if str(seed.get("mode") or "") != "query" or not str(seed.get("value") or "").strip():
-            return []
-
-        budget = current_frame_request.get("budget")
-        if not isinstance(budget, dict):
-            budget = {}
-        options = current_frame_request.get("options")
-        if not isinstance(options, dict):
-            options = {}
-        metadata_level = self._normalize_metadata_level(options.get("metadata"))
-        limit = self._pipeline_limit(current_frame_request, default_limit=10)
-        query_value = str(seed.get("value"))
-
-        branches: list[dict[str, Any]] = []
-        top_facts = self._top_tag_facts(evidence, max_facts=2)
-        for idx, fact in enumerate(top_facts, start=1):
-            branches.append(
-                {
-                    "id": f"pivot_{idx}",
-                    "kind": "pivot",
-                    "frame_request": {
-                        "seed": {"mode": "query", "value": query_value},
-                        "pipeline": [
-                            {"op": "where", "args": {"facts": [fact]}},
-                            {"op": "slice", "args": {"limit": limit}},
-                        ],
-                        "budget": dict(budget),
-                        "options": {"deep": True, "metadata": metadata_level},
-                    },
-                }
-            )
-
-        branches.append(
-            {
-                "id": "bridge",
-                "kind": "bridge",
-                "frame_request": {
-                    "seed": {"mode": "query", "value": query_value},
-                    "pipeline": [{"op": "slice", "args": {"limit": limit}}],
-                    "budget": dict(budget),
-                    "options": {"deep": True, "metadata": metadata_level},
-                },
-            }
+        return self._decision_policy.query_auto_top2_plus_bridge_branches(
+            current_frame_request=current_frame_request,
+            evidence=evidence,
         )
-        return branches[:3]
 
     def _apply_inline_write(
         self, state: dict[str, Any], program: dict[str, Any], *, flow_id: str,
@@ -1900,6 +1460,7 @@ class ContinuationEngine:
         self,
         *,
         flow_id: str,
+        cursor: str,
         goal: str,
         stage: str,
         requested_work: list[dict[str, Any]],
@@ -1916,6 +1477,7 @@ class ContinuationEngine:
         context = {
             "event_id": event_id,
             "flow_id": flow_id,
+            "cursor": cursor,
             "goal": goal or "unknown",
             "stage": stage or "paused",
             "requested_count": len(requested_work),
@@ -1934,6 +1496,10 @@ class ContinuationEngine:
     def continue_flow(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("continue input must be a JSON object")
+        legacy_keys = [key for key in ("flow_id", "state_version", "feedback") if key in payload]
+        if legacy_keys:
+            raise ValueError(f"Unsupported fields in continue payload: {', '.join(legacy_keys)}")
+        include_debug_fields = self._include_debug_fields(payload)
         payload_size_err = self._validate_json_size(
             payload,
             max_bytes=MAX_CONTINUE_PAYLOAD_BYTES,
@@ -1966,18 +1532,22 @@ class ContinuationEngine:
 
             self._flow_store.begin_immediate()
             try:
-                flow_id = payload.get("flow_id")
-                is_new_flow = flow_id is None
-                if flow_id is None:
+                cursor_token = payload.get("cursor")
+                decoded_cursor = self._decode_cursor(cursor_token) if cursor_token is not None else None
+                if cursor_token is not None and decoded_cursor is None:
+                    raise ValueError("invalid cursor")
+                is_new_flow = decoded_cursor is None
+                if decoded_cursor is None:
                     flow = self._create_flow()
+                    expected_version = None
                 else:
+                    flow_id, expected_version = decoded_cursor
                     flow = self._get_flow(str(flow_id))
                     if flow is None:
-                        raise ValueError(f"unknown flow_id: {flow_id}")
+                        raise ValueError("unknown cursor")
 
                 if flow is None:
                     raise ValueError("flow state unavailable")
-                expected_version = payload.get("state_version")
                 if expected_version is not None and int(expected_version) != flow.state_version:
                     if self._flow_store.in_transaction():
                         self._flow_store.rollback()
@@ -1988,11 +1558,9 @@ class ContinuationEngine:
                     goal = self._goal_from_program(program)
                     note_id = self._infer_note_id(program) if program else None
                     evidence, _ = self._frame_evidence(program) if program else ([], None)
-                    return {
+                    conflict_output = {
                         "request_id": request_id,
-                        "idempotency_key": idempotency_key,
-                        "flow_id": flow.flow_id,
-                        "state_version": flow.state_version,
+                        "cursor": self._encode_cursor(flow.flow_id, flow.state_version),
                         "status": "failed",
                         "frame": self._build_frame(
                             flow.flow_id,
@@ -2003,19 +1571,26 @@ class ContinuationEngine:
                             program,
                             evidence,
                             state.get("budget_used") if isinstance(state, dict) else None,
+                            include_debug_fields=include_debug_fields,
                         ),
-                        "requests": {"work": []},
-                        "applied": {"work_ops": []},
-                        "state": state,
-                        "next": {
-                            "recommended": "continue",
-                            "reason": "Reload current state_version and retry",
-                        },
+                        "work": [],
+                        "applied_ops": [],
                         "errors": [{
                             "code": "state_conflict",
-                            "message": "state_version does not match current flow version",
+                            "message": "cursor is not current for this flow",
                         }],
                     }
+                    if include_debug_fields:
+                        conflict_output["state"] = state
+                        conflict_output["output_hash"] = self._output_hash(
+                            {
+                                "cursor": conflict_output["cursor"],
+                                "status": "failed",
+                                "work": [],
+                                "errors": conflict_output["errors"],
+                            }
+                        )
+                    return conflict_output
 
                 state = json.loads(flow.state_json)
                 errors: list[dict[str, str]] = []
@@ -2025,8 +1600,19 @@ class ContinuationEngine:
                 decision_snapshot: Optional[dict[str, Any]] = None
                 used_auto_query_pending = False
                 used_auto_query_branch_id: Optional[str] = None
-                program = self._merge_program(state, payload)
+                overrides, overrides_err = self._overrides_from_payload(payload)
+                base_program = state.get("program") if isinstance(state.get("program"), dict) else {}
+                if is_new_flow:
+                    base_program = self._program_from_payload(payload) if self._program_has_inputs(payload) else {}
+                elif self._program_has_inputs(payload):
+                    errors.append({
+                        "code": "invalid_input",
+                        "message": "Flow program is immutable after start; use overrides",
+                    })
+                program = self._program_for_tick(base_program, overrides)
                 decision_override, decision_override_err = self._decision_override_from_payload(payload)
+                if overrides_err is not None:
+                    errors.append(overrides_err)
                 if decision_override_err is not None:
                     errors.append(decision_override_err)
                 frontier_state = state.get("frontier")
@@ -2053,7 +1639,13 @@ class ContinuationEngine:
                     if not used_auto_query_pending and isinstance(auto_next_frame, dict):
                         program["frame_request"] = auto_next_frame
                         used_auto_query_pending = True
-                if "frame_request" in payload and isinstance(frontier_state, dict):
+                if (
+                    isinstance(frontier_state, dict)
+                    and (
+                        "frame_request" in payload
+                        or ("frame_request" in overrides)
+                    )
+                ):
                     frontier_state.pop("auto_query_next_frame_request", None)
                     frontier_state.pop("auto_query_branch_plan", None)
                     frontier_state.pop("auto_query_selected_branch", None)
@@ -2079,12 +1671,16 @@ class ContinuationEngine:
                     if frame_err is not None:
                         errors.append(frame_err)
 
-                feedback = payload.get("feedback") or {}
-                work_results = feedback.get("work_results") or []
+                if "feedback" in payload:
+                    errors.append({
+                        "code": "invalid_input",
+                        "message": "feedback is not supported; use top-level work_results",
+                    })
+                work_results = payload.get("work_results") or []
                 if not isinstance(work_results, list):
                     errors.append({
                         "code": "invalid_input",
-                        "message": "feedback.work_results must be a list",
+                        "message": "work_results must be a list",
                     })
                     work_results = []
 
@@ -2099,7 +1695,7 @@ class ContinuationEngine:
                     if err:
                         errors.append(err)
                     elif applied:
-                        applied_ops.append(applied)
+                        applied_ops.extend(applied)
 
                 requested = self._list_requested_work(flow.flow_id)
                 request_work: list[dict[str, Any]] = []
@@ -2108,6 +1704,9 @@ class ContinuationEngine:
                 previous_evidence_ids = state.get("frontier", {}).get("evidence_ids") or []
                 if not isinstance(previous_evidence_ids, list):
                     previous_evidence_ids = []
+                previous_dependency_stamp = state.get("frontier", {}).get("dependency_stamp")
+                if not isinstance(previous_dependency_stamp, str):
+                    previous_dependency_stamp = ""
                 evidence: list[dict[str, Any]] = []
                 if program and not errors:
                     evidence, evidence_err = self._frame_evidence(program)
@@ -2125,13 +1724,34 @@ class ContinuationEngine:
                         applied_ops.extend(write_ops)
                 if program and not errors:
                     frame_request = self._effective_frame_request(program)
-                    decision_discriminators, decision_snapshot = self._decision_capsule(
-                        program=program,
+                    dependency_stamp = self._dependency_stamp(
                         frame_request=frame_request,
                         evidence=evidence,
-                        previous_evidence_ids=previous_evidence_ids,
-                        decision_override=decision_override,
                     )
+                    can_shallow_verify = (
+                        not self._is_query_auto_profile(program)
+                        and not self._program_has_inputs(payload)
+                        and not bool(overrides)
+                        and not bool(work_results)
+                        and not bool(requested)
+                        and not bool(applied_ops)
+                        and bool(previous_dependency_stamp)
+                        and previous_dependency_stamp == dependency_stamp
+                    )
+                    if can_shallow_verify:
+                        logger.debug(
+                            "Shallow verify reuse for flow %s dependency stamp %s",
+                            flow.flow_id,
+                            dependency_stamp[:10],
+                        )
+                    else:
+                        decision_discriminators, decision_snapshot = self._decision_capsule(
+                            program=program,
+                            frame_request=frame_request,
+                            evidence=evidence,
+                            previous_evidence_ids=previous_evidence_ids,
+                            decision_override=decision_override,
+                        )
 
                 if not requested and not errors and not applied_ops:
                     created, err = self._plan_work(
@@ -2175,9 +1795,14 @@ class ContinuationEngine:
 
                 next_step = int((state.get("cursor") or {}).get("step", 0)) + 1
                 state["cursor"] = {"step": next_step, "stage": cursor_stage, "phase": stage}
-                state["program"] = program
+                state["program"] = base_program
                 frontier = state.setdefault("frontier", {})
                 frontier["evidence_ids"] = [row.get("id") for row in evidence]
+                if program:
+                    frontier["dependency_stamp"] = self._dependency_stamp(
+                        frame_request=self._effective_frame_request(program),
+                        evidence=evidence,
+                    )
                 if isinstance(decision_snapshot, dict):
                     frontier["decision_support"] = decision_snapshot
                 if program and self._is_query_auto_profile(program) and not errors and not requested:
@@ -2271,25 +1896,6 @@ class ContinuationEngine:
                 budget_used["tokens"] = self._as_int(budget_used.get("tokens"), 0)
                 budget_used["nodes"] = self._as_int(budget_used.get("nodes"), 0) + len(evidence)
 
-                next_hint = {
-                    "recommended": "continue",
-                    "reason": "Continue ticking this flow",
-                }
-                if status == "waiting_work":
-                    next_hint = {
-                        "recommended": "continue",
-                        "reason": "Return completed work_results to continue",
-                    }
-                elif status == "done":
-                    next_hint = {
-                        "recommended": "stop",
-                        "reason": "Flow reached a terminal state",
-                    }
-                elif status == "failed":
-                    next_hint = {
-                        "recommended": "continue",
-                        "reason": "Fix input errors and retry",
-                    }
                 if (
                     status == "done"
                     and program
@@ -2304,10 +1910,7 @@ class ContinuationEngine:
                         )
                     )
                 ):
-                    next_hint = {
-                        "recommended": "continue",
-                        "reason": "Auto query refinement branches are pending",
-                    }
+                    status = "in_progress"
 
                 frame = self._build_frame(
                     flow.flow_id,
@@ -2319,6 +1922,7 @@ class ContinuationEngine:
                     evidence,
                     budget_used,
                     decision_discriminators,
+                    include_debug_fields=include_debug_fields,
                 )
 
                 new_state_version = flow.state_version + 1
@@ -2350,30 +1954,23 @@ class ContinuationEngine:
 
                 output = {
                     "request_id": request_id,
-                    "idempotency_key": idempotency_key,
-                    "flow_id": flow.flow_id,
-                    "state_version": new_state_version,
+                    "cursor": self._encode_cursor(flow.flow_id, new_state_version),
                     "status": status,
                     "frame": frame,
-                    "requests": {
-                        "work": request_work,
-                    },
-                    "applied": {
-                        "work_ops": applied_ops,
-                    },
-                    "state": state,
-                    "next": next_hint,
+                    "work": request_work,
+                    "applied_ops": applied_ops,
                     "errors": errors,
-                    "output_hash": self._output_hash(
+                }
+                if include_debug_fields:
+                    output["state"] = state
+                    output["output_hash"] = self._output_hash(
                         {
-                            "flow_id": flow.flow_id,
-                            "state_version": new_state_version,
+                            "cursor": output["cursor"],
                             "status": status,
-                            "requests": request_work,
+                            "work": request_work,
                             "errors": errors,
                         }
-                    ),
-                }
+                    )
                 self._flow_store.commit()
                 post_failures = self._replay_pending_mutations(flow_id=flow.flow_id, limit=200)
                 if post_failures:
@@ -2412,16 +2009,10 @@ class ContinuationEngine:
                             self._prune_events(flow.flow_id)
                             self._flow_store.commit()
                             output["status"] = corrected_status
-                            output["state_version"] = corrected_version
+                            output["cursor"] = self._encode_cursor(flow.flow_id, corrected_version)
                             output["errors"] = corrected_errors
-                            output["state"] = latest_state
-                            output["next"] = {
-                                "recommended": "continue",
-                                "reason": "Resolve mutation failures and retry",
-                            }
-                            frame_obj = output.get("frame")
-                            if isinstance(frame_obj, dict):
-                                frame_obj["status"] = corrected_status
+                            if include_debug_fields:
+                                output["state"] = latest_state
                         else:
                             self._flow_store.rollback()
                     except Exception:
@@ -2429,30 +2020,32 @@ class ContinuationEngine:
                             self._flow_store.rollback()
                         raise
 
-                output["output_hash"] = self._output_hash(
-                    {
-                        "flow_id": output.get("flow_id"),
-                        "state_version": output.get("state_version"),
-                        "status": output.get("status"),
-                        "requests": output.get("requests", {}).get("work", []),
-                        "errors": output.get("errors", []),
-                    }
-                )
+                if include_debug_fields:
+                    output["output_hash"] = self._output_hash(
+                        {
+                            "cursor": output.get("cursor"),
+                            "status": output.get("status"),
+                            "work": output.get("work", []),
+                            "errors": output.get("errors", []),
+                        }
+                    )
                 if output.get("status") == "paused":
                     pause_note_id = self._emit_pause_decision_request(
                         flow_id=flow.flow_id,
+                        cursor=str(output.get("cursor") or ""),
                         goal=goal,
                         stage=cursor_stage,
                         requested_work=request_work,
                     )
                     if pause_note_id:
-                        state_obj = output.get("state")
-                        if isinstance(state_obj, dict):
-                            frontier_obj = state_obj.get("frontier")
-                            if not isinstance(frontier_obj, dict):
-                                frontier_obj = {}
-                                state_obj["frontier"] = frontier_obj
-                            frontier_obj["pause_request_id"] = pause_note_id
+                        if include_debug_fields:
+                            state_obj = output.get("state")
+                            if isinstance(state_obj, dict):
+                                frontier_obj = state_obj.get("frontier")
+                                if not isinstance(frontier_obj, dict):
+                                    frontier_obj = {}
+                                    state_obj["frontier"] = frontier_obj
+                                frontier_obj["pause_request_id"] = pause_note_id
                 if idempotency_key:
                     self._store_idempotent(str(idempotency_key), request_hash, output)
                 return output
@@ -2461,7 +2054,11 @@ class ContinuationEngine:
                     self._flow_store.rollback()
                 raise
 
-    def run_work(self, flow_id: str, work_id: str) -> dict[str, Any]:
+    def run_work(self, cursor: str, work_id: str) -> dict[str, Any]:
+        decoded = self._decode_cursor(cursor)
+        if decoded is None:
+            raise ValueError("invalid cursor")
+        flow_id, _ = decoded
         with self._lock:
             work = self._get_work(flow_id, work_id)
             if work is None:

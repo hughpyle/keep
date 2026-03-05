@@ -391,7 +391,7 @@ async def keep_prompt(
         "Run one continuation tick. Continuations are stateful multi-step memory interactions "
         "with automatic refinement and decision support. "
         "Pass a payload dict with the continuation request — see docs/CONTINUATIONS.md for the full schema. "
-        "Common fields: flow_id (omit to start new), state_version, program, frame_request, feedback."
+        "Common fields: cursor (omit to start new), top-level flow fields, overrides, work_results."
     ),
     annotations=_IDEMPOTENT,
 )
@@ -399,10 +399,9 @@ async def keep_continue(
     payload: Annotated[dict[str, Any], Field(
         description=(
             "Continuation request object. "
-            "To start a new flow: {\"program\": {\"goal\": \"...\", \"profile\": \"query.auto\"}}. "
-            "To continue: {\"flow_id\": \"...\", \"state_version\": N}. "
-            "To submit work results: {\"flow_id\": \"...\", \"state_version\": N, "
-            "\"feedback\": {\"work_results\": [...]}}."
+            "To start a new flow: {\"goal\": \"...\", \"profile\": \"query.auto\"}. "
+            "To continue: {\"cursor\": \"...\"}. "
+            "To submit work results: {\"cursor\": \"...\", \"work_results\": [...]}."
         ),
     )],
 ) -> str:
@@ -424,14 +423,14 @@ async def keep_continue(
     annotations=_IDEMPOTENT,
 )
 async def keep_continue_work(
-    flow_id: Annotated[str, Field(description="Flow containing the work item.")],
+    cursor: Annotated[str, Field(description="Cursor containing the flow context.")],
     work_id: Annotated[str, Field(description="Work item to execute.")],
 ) -> str:
     """Execute a pending continuation work item."""
     async with _lock:
         keeper = _get_keeper()
         try:
-            result = keeper.continue_run_work(flow_id, work_id)
+            result = keeper.continue_run_work(cursor, work_id)
         except (ValueError, OSError) as e:
             return f"Error: {e}"
     return json.dumps(result, indent=2)

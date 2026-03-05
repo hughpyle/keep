@@ -23,11 +23,17 @@ def _summarize_request(note_id: str, content: str, *, request_id: str, idempoten
                 },
             }
         ],
-        "feedback": {"work_results": []},
+        "work_results": [],
     }
     if idempotency_key is not None:
         payload["idempotency_key"] = idempotency_key
     return payload
+
+
+def _debug(payload: dict) -> dict:
+    out = dict(payload)
+    out["response_mode"] = "debug"
+    return out
 
 
 def test_continue_summarize_round_trip(mock_providers, tmp_path):
@@ -45,16 +51,15 @@ def test_continue_summarize_round_trip(mock_providers, tmp_path):
             )
         )
         assert first["status"] == "waiting_work"
-        assert len(first["requests"]["work"]) == 1
-        work_id = first["requests"]["work"][0]["work_id"]
+        assert len(first["work"]) == 1
+        work_id = first["work"][0]["work_id"]
 
-        work_result = kp.continue_run_work(first["flow_id"], work_id)
+        work_result = kp.continue_run_work(first["cursor"], work_id)
         second = kp.continue_flow(
             {
                 "request_id": "req-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"],
-                "feedback": {"work_results": [work_result]},
+                "cursor": first["cursor"],
+                "work_results": [work_result],
             }
         )
         assert second["status"] == "done"
@@ -80,6 +85,7 @@ def test_continue_idempotency_replay_is_stable(mock_providers, tmp_path):
                 idempotency_key="idem-replay",
             )
         )
+        assert "idempotency_key" not in first
         replay = kp.continue_flow(
             _summarize_request(
                 "note:2",
@@ -88,8 +94,8 @@ def test_continue_idempotency_replay_is_stable(mock_providers, tmp_path):
                 idempotency_key="idem-replay",
             )
         )
-        assert replay["flow_id"] == first["flow_id"]
-        assert replay["state_version"] == first["state_version"]
+        assert "idempotency_key" not in replay
+        assert replay["cursor"] == first["cursor"]
         assert replay["status"] == first["status"]
     finally:
         kp.close()
@@ -104,12 +110,18 @@ def test_continue_state_conflict_returns_error(mock_providers, tmp_path):
         first = kp.continue_flow(
             _summarize_request("note:3", content, request_id="req-1")
         )
+        _ = kp.continue_flow(
+            {
+                "request_id": "req-2a",
+                "cursor": first["cursor"],
+                "work_results": [],
+            }
+        )
         stale = kp.continue_flow(
             {
-                "request_id": "req-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"] - 1,
-                "feedback": {"work_results": []},
+                "request_id": "req-2b",
+                "cursor": first["cursor"],
+                "work_results": [],
             }
         )
         assert stale["status"] == "failed"
@@ -131,11 +143,11 @@ def test_continue_frame_request_id_seed(mock_providers, tmp_path):
                     "seed": {"mode": "id", "value": "note:frame"},
                     "budget": {"max_nodes": 5},
                 },
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert out["status"] == "done"
-        evidence = out["frame"]["views"]["evidence"]
+        evidence = out["frame"]["evidence"]
         assert evidence
         assert evidence[0]["id"] == "note:frame"
     finally:
@@ -147,25 +159,24 @@ def test_continue_program_persists_across_ticks(mock_providers, tmp_path):
     try:
         kp.put(content="release plan and risks", id="note:persist", summary="release plan and risks")
         first = kp.continue_flow(
-            {
+            _debug({
                 "request_id": "req-persist-1",
                 "goal": "query",
                 "frame_request": {
                     "seed": {"mode": "query", "value": "release plan"},
                     "budget": {"max_nodes": 5},
                 },
-                "feedback": {"work_results": []},
-            }
+                "work_results": [],
+            })
         )
         second = kp.continue_flow(
-            {
+            _debug({
                 "request_id": "req-persist-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"],
-                "feedback": {"work_results": []},
-            }
+                "cursor": first["cursor"],
+                "work_results": [],
+            })
         )
-        assert second["frame"]["slots"]["goal"] == "query"
+        assert second["frame"]["debug"]["slots"]["goal"] == "query"
         assert second["state"]["program"]["goal"] == "query"
     finally:
         kp.close()
@@ -179,7 +190,7 @@ def test_continue_query_auto_profile_schedules_and_consumes_refine(mock_provider
         kp.put(content="alpha memory B", id="note:auto-3", tags={"conv": "B"}, summary="alpha memory B")
 
         first = kp.continue_flow(
-            {
+            _debug({
                 "request_id": "req-auto-1",
                 "goal": "query",
                 "profile": "query.auto",
@@ -189,11 +200,10 @@ def test_continue_query_auto_profile_schedules_and_consumes_refine(mock_provider
                     "pipeline": [{"op": "slice", "args": {"limit": 5}}],
                     "options": {"metadata": "basic"},
                 },
-                "feedback": {"work_results": []},
-            }
+                "work_results": [],
+            })
         )
-        assert first["status"] == "done"
-        assert first["next"]["recommended"] == "continue"
+        assert first["status"] == "in_progress"
         assert (
             "auto_query_next_frame_request" in first["state"]["frontier"]
             or "auto_query_branch_plan" in first["state"]["frontier"]
@@ -202,20 +212,18 @@ def test_continue_query_auto_profile_schedules_and_consumes_refine(mock_provider
         current = first
         for i in range(1, 6):
             current = kp.continue_flow(
-                {
+                _debug({
                     "request_id": f"req-auto-2-{i}",
-                    "flow_id": current["flow_id"],
-                    "state_version": current["state_version"],
-                    "feedback": {"work_results": []},
-                }
+                    "cursor": current["cursor"],
+                    "work_results": [],
+                })
             )
             if current["state"]["frontier"].get("auto_query_refined"):
                 break
         assert current["status"] == "done"
         assert current["state"]["frontier"].get("auto_query_refined") is True
         assert "auto_query_next_frame_request" not in current["state"]["frontier"]
-        effective_frame = current["state"]["program"]["frame_request"]
-        assert effective_frame["options"]["deep"] is True
+        assert current["state"]["program"]["frame_request"]["options"]["metadata"] == "basic"
     finally:
         kp.close()
 
@@ -228,7 +236,7 @@ def test_continue_query_auto_profile_single_lane_refine_adds_where(mock_provider
         kp.put(content="focus result other", id="note:auto-s3", tags={"conv": "3"}, summary="focus result other")
 
         first = kp.continue_flow(
-            {
+            _debug({
                 "request_id": "req-auto-lane-1",
                 "goal": "query",
                 "profile": "query.auto",
@@ -242,10 +250,10 @@ def test_continue_query_auto_profile_single_lane_refine_adds_where(mock_provider
                     "strategy": "single_lane_refine",
                     "reason": "test_single_lane",
                 },
-                "feedback": {"work_results": []},
-            }
+                "work_results": [],
+            })
         )
-        assert first["status"] == "done"
+        assert first["status"] == "in_progress"
         pending = first["state"]["frontier"].get("auto_query_next_frame_request")
         assert isinstance(pending, dict)
         pipeline = pending.get("pipeline")
@@ -281,7 +289,7 @@ def test_continue_query_auto_profile_top2_plus_bridge_runs_branch_plan(mock_prov
         )
 
         first = kp.continue_flow(
-            {
+            _debug({
                 "request_id": "req-auto-bridge-1",
                 "goal": "query",
                 "profile": "query.auto",
@@ -295,11 +303,10 @@ def test_continue_query_auto_profile_top2_plus_bridge_runs_branch_plan(mock_prov
                     "strategy": "top2_plus_bridge",
                     "reason": "test_top2",
                 },
-                "feedback": {"work_results": []},
-            }
+                "work_results": [],
+            })
         )
-        assert first["status"] == "done"
-        assert first["next"]["recommended"] == "continue"
+        assert first["status"] == "in_progress"
         plan = first["state"]["frontier"].get("auto_query_branch_plan")
         assert isinstance(plan, dict)
         pending = plan.get("pending")
@@ -309,12 +316,11 @@ def test_continue_query_auto_profile_top2_plus_bridge_runs_branch_plan(mock_prov
         current = first
         for i in range(1, 6):
             current = kp.continue_flow(
-                {
+                _debug({
                     "request_id": f"req-auto-bridge-next-{i}",
-                    "flow_id": current["flow_id"],
-                    "state_version": current["state_version"],
-                    "feedback": {"work_results": []},
-                }
+                    "cursor": current["cursor"],
+                    "work_results": [],
+                })
             )
             if current["state"]["frontier"].get("auto_query_refined"):
                 break
@@ -337,7 +343,7 @@ def test_continue_invalid_frame_operator_fails(mock_providers, tmp_path):
                     "seed": {"mode": "query", "value": "anything"},
                     "pipeline": [{"op": "explode", "args": {}}],
                 },
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert out["status"] == "failed"
@@ -359,11 +365,11 @@ def test_continue_frame_evidence_includes_basic_metadata(mock_providers, tmp_pat
                     "seed": {"mode": "id", "value": "note:meta"},
                     "options": {"metadata": "basic"},
                 },
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert out["status"] == "done"
-        evidence = out["frame"]["views"]["evidence"]
+        evidence = out["frame"]["evidence"]
         assert evidence
         metadata = evidence[0]["metadata"]
         assert metadata["level"] == "basic"
@@ -385,11 +391,11 @@ def test_continue_frame_evidence_includes_rich_metadata(mock_providers, tmp_path
                     "seed": {"mode": "id", "value": "note:meta-rich"},
                     "options": {"metadata": "rich"},
                 },
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert out["status"] == "done"
-        evidence = out["frame"]["views"]["evidence"]
+        evidence = out["frame"]["evidence"]
         assert evidence
         metadata = evidence[0]["metadata"]
         assert metadata["level"] == "rich"
@@ -410,18 +416,18 @@ def test_continue_publishes_decision_discriminators_and_snapshot(mock_providers,
             summary="decision capsule basis",
         )
         out = kp.continue_flow(
-            {
+            _debug({
                 "request_id": "req-decision-1",
                 "goal": "query",
                 "frame_request": {
                     "seed": {"mode": "id", "value": "note:decision"},
                     "options": {"metadata": "basic"},
                 },
-                "feedback": {"work_results": []},
-            }
+                "work_results": [],
+            })
         )
         assert out["status"] == "done"
-        discriminators = out["frame"]["views"]["discriminators"]
+        discriminators = out["frame"]["decision"]
         assert discriminators["version"] == "ds.v1"
         assert set(discriminators["planner_priors"].keys()) == {"fanout", "selectivity", "cardinality"}
         assert set(discriminators["query_stats"].keys()) == {
@@ -465,7 +471,7 @@ def test_continue_decision_override_controls_strategy(mock_providers, tmp_path):
     try:
         kp.put(content="override strategy", id="note:override", summary="override strategy")
         out = kp.continue_flow(
-            {
+            _debug({
                 "request_id": "req-decision-override-1",
                 "goal": "query",
                 "frame_request": {
@@ -476,11 +482,11 @@ def test_continue_decision_override_controls_strategy(mock_providers, tmp_path):
                     "strategy": "top2_plus_bridge",
                     "reason": "cross-lane question",
                 },
-                "feedback": {"work_results": []},
-            }
+                "work_results": [],
+            })
         )
         assert out["status"] == "done"
-        policy_hint = out["frame"]["views"]["discriminators"]["policy_hint"]
+        policy_hint = out["frame"]["decision"]["policy_hint"]
         assert policy_hint["strategy"] == "top2_plus_bridge"
         assert "override:cross-lane question" in policy_hint["reason_codes"]
         snapshot = out["state"]["frontier"]["decision_support"]
@@ -520,22 +526,20 @@ def test_continue_custom_steps_applies_tags(mock_providers, tmp_path):
                         },
                     }
                 ],
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert first["status"] == "waiting_work"
-        assert first["requests"]["work"]
-        assert first["requests"]["work"][0]["kind"] == "classify"
+        assert first["work"]
+        assert first["work"][0]["kind"] == "classify"
 
-        work_result = kp.continue_run_work(
-            first["flow_id"], first["requests"]["work"][0]["work_id"],
+        work_result = kp.continue_run_work(first["cursor"], first["work"][0]["work_id"],
         )
         second = kp.continue_flow(
             {
                 "request_id": "req-classify-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"],
-                "feedback": {"work_results": [work_result]},
+                "cursor": first["cursor"],
+                "work_results": [work_result],
             }
         )
         assert second["status"] == "done"
@@ -567,12 +571,12 @@ def test_continue_work_request_includes_quality_gates_and_escalation(mock_provid
                         "escalate_if": ["low_confidence", "missing_citation"],
                     }
                 ],
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert out["status"] == "waiting_work"
-        assert out["requests"]["work"]
-        work = out["requests"]["work"][0]
+        assert out["work"]
+        work = out["work"][0]
         assert work["quality_gates"] == {"min_confidence": 0.7, "citation_required": True}
         assert work["escalate_if"] == ["low_confidence", "missing_citation"]
     finally:
@@ -601,18 +605,16 @@ def test_continue_set_tags_preserves_list_values(mock_providers, tmp_path):
                         "apply": {"ops": [{"op": "set_tags", "tags": "$output.labels"}]},
                     }
                 ],
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
-        work_result = kp.continue_run_work(
-            first["flow_id"], first["requests"]["work"][0]["work_id"],
+        work_result = kp.continue_run_work(first["cursor"], first["work"][0]["work_id"],
         )
         second = kp.continue_flow(
             {
                 "request_id": "req-list-tags-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"],
-                "feedback": {"work_results": [work_result]},
+                "cursor": first["cursor"],
+                "work_results": [work_result],
             }
         )
         assert second["status"] == "done"
@@ -631,11 +633,11 @@ def test_continue_inline_write_single_tick(mock_providers, tmp_path):
                 "request_id": "req-write-1",
                 "goal": "write",
                 "params": {"id": "note:write", "content": "hello", "tags": {"topic": "demo"}},
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert out["status"] == "done"
-        assert out["requests"]["work"] == []
+        assert out["work"] == []
         item = kp.get("note:write")
         assert item is not None
         assert item.summary
@@ -685,21 +687,19 @@ def test_continue_multi_step_plan_orders_work(mock_providers, tmp_path):
                         },
                     },
                 ],
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert first["status"] == "waiting_work"
-        assert first["requests"]["work"][0]["kind"] == "classify"
+        assert first["work"][0]["kind"] == "classify"
 
-        classify_result = kp.continue_run_work(
-            first["flow_id"], first["requests"]["work"][0]["work_id"],
+        classify_result = kp.continue_run_work(first["cursor"], first["work"][0]["work_id"],
         )
         second = kp.continue_flow(
             {
                 "request_id": "req-order-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"],
-                "feedback": {"work_results": [classify_result]},
+                "cursor": first["cursor"],
+                "work_results": [classify_result],
             }
         )
         assert second["status"] == "done"
@@ -710,13 +710,12 @@ def test_continue_multi_step_plan_orders_work(mock_providers, tmp_path):
         third = kp.continue_flow(
             {
                 "request_id": "req-order-3",
-                "flow_id": second["flow_id"],
-                "state_version": second["state_version"],
-                "feedback": {"work_results": []},
+                "cursor": second["cursor"],
+                "work_results": [],
             }
         )
         assert third["status"] == "waiting_work"
-        assert third["requests"]["work"][0]["kind"] == "condense"
+        assert third["work"][0]["kind"] == "condense"
     finally:
         kp.close()
 
@@ -747,11 +746,11 @@ def test_continue_profile_steps_are_loaded(mock_providers, tmp_path):
                 "goal": "pipeline",
                 "profile": "demo.profile",
                 "params": {"id": "note:profile", "content": content},
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert first["status"] == "waiting_work"
-        assert first["requests"]["work"][0]["kind"] == "profile_step"
+        assert first["work"][0]["kind"] == "profile_step"
     finally:
         kp.close()
 
@@ -782,11 +781,11 @@ def test_continue_parallel_work_emission(mock_providers, tmp_path):
                         "apply": {"ops": [{"op": "set_tags", "tags": "$output.labels"}]},
                     },
                 ],
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert first["status"] == "waiting_work"
-        kinds = sorted([w["kind"] for w in first["requests"]["work"]])
+        kinds = sorted([w["kind"] for w in first["work"]])
         assert kinds == ["a", "b"]
     finally:
         kp.close()
@@ -814,11 +813,11 @@ def test_continue_params_steps_is_ignored(mock_providers, tmp_path):
                         }
                     ],
                 },
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert out["status"] == "done"
-        assert out["requests"]["work"] == []
+        assert out["work"] == []
     finally:
         kp.close()
 
@@ -842,16 +841,15 @@ def test_continue_rejects_unsupported_mutation_fields(mock_providers, tmp_path):
                         "apply": {"ops": [{"op": "set_tags", "tags": "$output.labels", "unexpected": "x"}]},
                     }
                 ],
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
-        result = kp.continue_run_work(first["flow_id"], first["requests"]["work"][0]["work_id"])
+        result = kp.continue_run_work(first["cursor"], first["work"][0]["work_id"])
         second = kp.continue_flow(
             {
                 "request_id": "req-mut-op-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"],
-                "feedback": {"work_results": [result]},
+                "cursor": first["cursor"],
+                "work_results": [result],
             }
         )
         assert second["status"] == "failed"
@@ -885,16 +883,15 @@ def test_continue_rejects_protected_system_mutation_targets(mock_providers, tmp_
                         },
                     }
                 ],
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
-        work_result = kp.continue_run_work(first["flow_id"], first["requests"]["work"][0]["work_id"])
+        work_result = kp.continue_run_work(first["cursor"], first["work"][0]["work_id"])
         second = kp.continue_flow(
             {
                 "request_id": "req-protected-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"],
-                "feedback": {"work_results": [work_result]},
+                "cursor": first["cursor"],
+                "work_results": [work_result],
             }
         )
         assert second["status"] == "failed"
@@ -922,12 +919,12 @@ def test_continue_executor_rejects_unallowed_runner_variable_refs(mock_providers
                         "output_contract": {"must_return": ["x"]},
                     }
                 ],
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
-        work_id = out["requests"]["work"][0]["work_id"]
+        work_id = out["work"][0]["work_id"]
         with pytest.raises(ValueError, match="not allowed"):
-            kp.continue_run_work(out["flow_id"], work_id)
+            kp.continue_run_work(out["cursor"], work_id)
     finally:
         kp.close()
 
@@ -950,7 +947,7 @@ def test_continue_surfaces_frame_evidence_query_errors(mock_providers, tmp_path)
                         "seed": {"mode": "query", "value": "anything"},
                         "budget": {"max_nodes": 5},
                     },
-                    "feedback": {"work_results": []},
+                    "work_results": [],
                 }
             )
             assert out["status"] == "failed"
@@ -974,7 +971,7 @@ def test_continuation_runtime_is_lazy_initialized(mock_providers, tmp_path):
                 "frame_request": {
                     "seed": {"mode": "query", "value": "none"},
                 },
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert out["status"] in {"done", "failed"}
@@ -993,7 +990,7 @@ def test_continue_rejects_oversized_payload(mock_providers, tmp_path):
                     "request_id": "req-too-big-1",
                     "goal": "write",
                     "params": {"id": "note:big", "content": huge},
-                    "feedback": {"work_results": []},
+                    "work_results": [],
                 }
             )
     finally:
@@ -1018,7 +1015,7 @@ def test_continue_replays_pending_mutations_on_tick(mock_providers, tmp_path):
                 "request_id": "req-replay-1",
                 "goal": "query",
                 "frame_request": {"seed": {"mode": "id", "value": "note:pending"}},
-                "feedback": {"work_results": []},
+                "work_results": [],
             }
         )
         assert out["status"] == "done"
@@ -1054,20 +1051,19 @@ def test_continue_work_result_mutations_are_queued_then_replayed(mock_providers,
         first = kp.continue_flow(
             _summarize_request("note:queued", content, request_id="req-queued-1")
         )
-        work_id = first["requests"]["work"][0]["work_id"]
-        wr = kp.continue_run_work(first["flow_id"], work_id)
+        work_id = first["work"][0]["work_id"]
+        wr = kp.continue_run_work(first["cursor"], work_id)
         second = kp.continue_flow(
             {
                 "request_id": "req-queued-2",
-                "flow_id": first["flow_id"],
-                "state_version": first["state_version"],
-                "feedback": {"work_results": [wr]},
+                "cursor": first["cursor"],
+                "work_results": [wr],
             }
         )
         assert second["status"] == "done"
-        work_ops = second["applied"]["work_ops"]
+        work_ops = second["applied_ops"]
         assert work_ops
-        op_entries = work_ops[0]["ops"]["ops"]
+        op_entries = [op for op in work_ops if op.get("source") == "work" and op.get("op") == "set_summary"]
         assert op_entries
         assert op_entries[0]["status"] in {"queued", "applied"}
         runtime = kp._get_continuation_runtime()
@@ -1079,6 +1075,46 @@ def test_continue_work_result_mutations_are_queued_then_replayed(mock_providers,
         item = kp.get("note:queued")
         assert item is not None
         assert item.summary == content[:200]
+    finally:
+        kp.close()
+
+
+def test_continue_default_response_omits_state_and_output_hash(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    try:
+        kp.put(content="standard response", id="note:resp-std", summary="standard response")
+        out = kp.continue_flow(
+            {
+                "request_id": "req-resp-std-1",
+                "goal": "query",
+                "frame_request": {"seed": {"mode": "id", "value": "note:resp-std"}},
+                "work_results": [],
+            }
+        )
+        assert out["status"] == "done"
+        assert "state" not in out
+        assert "output_hash" not in out
+    finally:
+        kp.close()
+
+
+def test_continue_debug_response_includes_state_and_output_hash(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    try:
+        kp.put(content="debug response", id="note:resp-debug", summary="debug response")
+        out = kp.continue_flow(
+            _debug(
+                {
+                    "request_id": "req-resp-debug-1",
+                    "goal": "query",
+                    "frame_request": {"seed": {"mode": "id", "value": "note:resp-debug"}},
+                    "work_results": [],
+                }
+            )
+        )
+        assert out["status"] == "done"
+        assert isinstance(out.get("state"), dict)
+        assert isinstance(out.get("output_hash"), str) and out["output_hash"]
     finally:
         kp.close()
 
@@ -1095,9 +1131,8 @@ def test_continue_paused_flow_emits_decision_request_note(mock_providers, tmp_pa
             current = kp.continue_flow(
                 {
                     "request_id": f"req-pause-{i}",
-                    "flow_id": current["flow_id"],
-                    "state_version": current["state_version"],
-                    "feedback": {"work_results": []},
+                    "cursor": current["cursor"],
+                    "work_results": [],
                 }
             )
             if current["status"] == "paused":
@@ -1108,7 +1143,6 @@ def test_continue_paused_flow_emits_decision_request_note(mock_providers, tmp_pa
                 "act": "request",
                 "status": "open",
                 "type": "decision",
-                "flow_id": current["flow_id"],
             },
             limit=20,
         )

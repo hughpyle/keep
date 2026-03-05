@@ -41,14 +41,14 @@ def mock_remote_client(tmp_path):
 
 def test_remote_continue_flow_delegates_to_http(mock_remote_client):
     rk, client = mock_remote_client
-    payload = {"request_id": "req-1", "goal": "query", "feedback": {"work_results": []}}
+    payload = {"request_id": "req-1", "goal": "query", "work_results": []}
     client.post.return_value = FakeResponse(
-        json_data={"flow_id": "f_123", "state_version": 1, "status": "done"},
+        json_data={"cursor": "c_123", "status": "done"},
     )
 
     out = rk.continue_flow(payload)
 
-    assert out["flow_id"] == "f_123"
+    assert out["cursor"] == "c_123"
     client.post.assert_called_once_with("/v1/continue", json=payload)
 
 
@@ -58,12 +58,12 @@ def test_remote_continue_run_work_delegates_to_http(mock_remote_client):
         json_data={"work_id": "w_1", "status": "ok", "outputs": {"summary": "x"}},
     )
 
-    out = rk.continue_run_work("f_1", "w_1")
+    out = rk.continue_run_work("c_1", "w_1")
 
     assert out["work_id"] == "w_1"
     client.post.assert_called_once_with(
         "/v1/continue/work",
-        json={"flow_id": "f_1", "work_id": "w_1"},
+        json={"cursor": "c_1", "work_id": "w_1"},
     )
 
 
@@ -78,12 +78,12 @@ def test_remote_continue_work_validates_ids(mock_remote_client):
     with pytest.raises(ValueError, match="required"):
         rk.continue_run_work("", "w_1")
     with pytest.raises(ValueError, match="required"):
-        rk.continue_run_work("f_1", "")
+        rk.continue_run_work("c_1", "")
 
 
 def test_remote_continue_flow_requires_object_response(mock_remote_client):
     rk, client = mock_remote_client
-    client.post.return_value = FakeResponse(json_data=[{"flow_id": "f_123"}])
+    client.post.return_value = FakeResponse(json_data=[{"cursor": "c_123"}])
 
     with pytest.raises(ValueError, match="must be a JSON object"):
         rk.continue_flow({"request_id": "req-1"})

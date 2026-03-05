@@ -6544,9 +6544,9 @@ class Keeper:
         """Run one continuation tick for local API-first flows."""
         return self._get_continuation_runtime().continue_flow(payload)
 
-    def continue_run_work(self, flow_id: str, work_id: str) -> dict:
+    def continue_run_work(self, cursor: str, work_id: str) -> dict:
         """Execute a pending local work item and return a work_result envelope."""
-        return self._get_continuation_runtime().run_work(flow_id, work_id)
+        return self._get_continuation_runtime().run_work(cursor, work_id)
 
     @property
     def _processor_pid_path(self) -> Path:
