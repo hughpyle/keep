@@ -1010,11 +1010,8 @@ def test_continue_replays_pending_mutations_on_tick(mock_providers, tmp_path):
             work_id=None,
             op={"op": "set_tags", "target": "note:pending", "tags": {"replayed": "yes"}},
         )
-        row = runtime._conn.execute(
-            "SELECT status FROM continue_mutations WHERE mutation_id = ?",
-            (mutation_id,),
-        ).fetchone()
-        assert row is not None and row["status"] == "pending"
+        row = runtime._get_mutation(mutation_id)
+        assert row is not None and row.status == "pending"
 
         out = kp.continue_flow(
             {
@@ -1028,11 +1025,8 @@ def test_continue_replays_pending_mutations_on_tick(mock_providers, tmp_path):
         item = kp.get("note:pending")
         assert item is not None
         assert item.tags.get("replayed") == "yes"
-        status_row = runtime._conn.execute(
-            "SELECT status FROM continue_mutations WHERE mutation_id = ?",
-            (mutation_id,),
-        ).fetchone()
-        assert status_row is not None and status_row["status"] == "applied"
+        status_row = runtime._get_mutation(mutation_id)
+        assert status_row is not None and status_row.status == "applied"
     finally:
         kp.close()
 
@@ -1046,12 +1040,8 @@ def test_continue_mutation_journal_is_idempotent_for_duplicate_ops(mock_provider
         first = runtime._insert_pending_mutation(flow_id="f_dup", work_id="w_dup", op=op)
         second = runtime._insert_pending_mutation(flow_id="f_dup", work_id="w_dup", op=op)
         assert first == second
-        rows = runtime._conn.execute(
-            "SELECT COUNT(*) AS c FROM continue_mutations WHERE mutation_id = ?",
-            (first,),
-        ).fetchone()
-        assert rows is not None
-        assert int(rows["c"]) == 1
+        rows = runtime._list_pending_mutations(flow_id="f_dup", limit=20)
+        assert len([row for row in rows if row.mutation_id == first]) == 1
     finally:
         kp.close()
 
@@ -1081,12 +1071,11 @@ def test_continue_work_result_mutations_are_queued_then_replayed(mock_providers,
         assert op_entries
         assert op_entries[0]["status"] in {"queued", "applied"}
         runtime = kp._get_continuation_runtime()
-        rows = runtime._conn.execute(
-            "SELECT status FROM continue_mutations WHERE flow_id = ? ORDER BY created_at DESC LIMIT 1",
-            (first["flow_id"],),
-        ).fetchone()
-        assert rows is not None
-        assert rows["status"] == "applied"
+        mutation_id = op_entries[0].get("mutation_id")
+        assert isinstance(mutation_id, str) and mutation_id
+        row = runtime._get_mutation(mutation_id)
+        assert row is not None
+        assert row.status == "applied"
         item = kp.get("note:queued")
         assert item is not None
         assert item.summary == content[:200]

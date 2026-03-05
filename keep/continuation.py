@@ -11,16 +11,21 @@ import hashlib
 import json
 import logging
 import math
-import sqlite3
 import threading
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from .continuation_env import ContinuationRuntimeEnv
 from .continuation_executor import LocalWorkExecutor
+from .continuation_store import (
+    FlowRow,
+    FlowStore,
+    MutationRow,
+    SQLiteFlowStore,
+    WorkRow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,123 +49,14 @@ DEFAULT_DECISION_POLICY = {
     "max_pivots": 2,
 }
 
-
-@dataclass
-class _FlowRow:
-    flow_id: str
-    state_version: int
-    status: str
-    state_json: str
-
-
-@dataclass
-class _WorkRow:
-    work_id: str
-    flow_id: str
-    kind: str
-    status: str
-    input_json: str
-    output_contract_json: str
-    attempt: int
-
-
-@dataclass
-class _MutationRow:
-    mutation_id: str
-    flow_id: str
-    work_id: Optional[str]
-    status: str
-    op_json: str
-    attempts: int
-    error: Optional[str]
-
-
 class LocalContinuationRuntime:
     """Durable local continuation runtime."""
 
     def __init__(self, db_path: Path, env: ContinuationRuntimeEnv) -> None:
-        self._db_path = db_path
         self._env = env
         self._work_executor = LocalWorkExecutor(env)
-        self._conn: Optional[sqlite3.Connection] = None
+        self._flow_store: FlowStore = SQLiteFlowStore(db_path)
         self._lock = threading.RLock()
-        self._init_db()
-
-    def _init_db(self) -> None:
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(
-            str(self._db_path), check_same_thread=False, isolation_level=None,
-        )
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA busy_timeout=5000")
-
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS continue_flows (
-                flow_id TEXT PRIMARY KEY,
-                state_version INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                state_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS continue_work (
-                work_id TEXT PRIMARY KEY,
-                flow_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                status TEXT NOT NULL,
-                input_json TEXT NOT NULL,
-                output_contract_json TEXT NOT NULL,
-                result_json TEXT,
-                attempt INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_continue_work_flow_status
-            ON continue_work(flow_id, status)
-        """)
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS continue_idempotency (
-                idempotency_key TEXT PRIMARY KEY,
-                request_hash TEXT NOT NULL,
-                output_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS continue_events (
-                event_id TEXT PRIMARY KEY,
-                flow_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS continue_mutations (
-                mutation_id TEXT PRIMARY KEY,
-                flow_id TEXT NOT NULL,
-                work_id TEXT,
-                status TEXT NOT NULL,
-                op_json TEXT NOT NULL,
-                error TEXT,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_continue_mutations_status_created
-            ON continue_mutations(status, created_at)
-        """)
-
-    @staticmethod
-    def _now() -> str:
-        return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
     def _hash_json(payload: dict[str, Any]) -> str:
@@ -221,109 +117,31 @@ class LocalContinuationRuntime:
             },
         }
 
-    def _get_flow(self, flow_id: str) -> Optional[_FlowRow]:
-        row = self._conn.execute(
-            "SELECT flow_id, state_version, status, state_json FROM continue_flows WHERE flow_id = ?",
-            (flow_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return _FlowRow(
-            flow_id=row["flow_id"],
-            state_version=int(row["state_version"]),
-            status=row["status"],
-            state_json=row["state_json"],
-        )
+    def _get_flow(self, flow_id: str) -> Optional[FlowRow]:
+        return self._flow_store.get_flow(flow_id)
 
-    def _create_flow(self) -> _FlowRow:
-        flow_id = f"f_{uuid.uuid4().hex[:10]}"
-        now = self._now()
+    def _create_flow(self) -> FlowRow:
         state_json = json.dumps(self._initial_state(), ensure_ascii=False)
-        self._conn.execute(
-            """
-            INSERT INTO continue_flows(flow_id, state_version, status, state_json, created_at, updated_at)
-            VALUES (?, 0, 'running', ?, ?, ?)
-            """,
-            (flow_id, state_json, now, now),
-        )
-        return _FlowRow(flow_id=flow_id, state_version=0, status="running", state_json=state_json)
+        return self._flow_store.create_flow(state_json)
 
     def _load_idempotent(self, key: str) -> Optional[tuple[str, str]]:
-        row = self._conn.execute(
-            "SELECT request_hash, output_json FROM continue_idempotency WHERE idempotency_key = ?",
-            (key,),
-        ).fetchone()
-        if row is None:
-            return None
-        return str(row["request_hash"]), str(row["output_json"])
+        return self._flow_store.load_idempotent(key)
 
     def _store_idempotent(self, key: str, request_hash: str, output: dict[str, Any]) -> None:
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO continue_idempotency(idempotency_key, request_hash, output_json, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (key, request_hash, json.dumps(output, ensure_ascii=False), self._now()),
+        self._flow_store.store_idempotent(
+            key,
+            request_hash,
+            json.dumps(output, ensure_ascii=False),
         )
 
     def _prune_events(self, flow_id: str, *, keep_last: int = MAX_CONTINUE_EVENTS_PER_FLOW) -> None:
-        self._conn.execute(
-            """
-            DELETE FROM continue_events
-            WHERE flow_id = ?
-              AND event_id NOT IN (
-                SELECT event_id FROM continue_events
-                WHERE flow_id = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-              )
-            """,
-            (flow_id, flow_id, max(int(keep_last), 1)),
-        )
+        self._flow_store.prune_events(flow_id, keep_last=keep_last)
 
-    def _list_requested_work(self, flow_id: str) -> list[_WorkRow]:
-        rows = self._conn.execute(
-            """
-            SELECT work_id, flow_id, kind, status, input_json, output_contract_json, attempt
-            FROM continue_work
-            WHERE flow_id = ? AND status = 'requested'
-            ORDER BY created_at ASC
-            """,
-            (flow_id,),
-        ).fetchall()
-        return [
-            _WorkRow(
-                work_id=row["work_id"],
-                flow_id=row["flow_id"],
-                kind=row["kind"],
-                status=row["status"],
-                input_json=row["input_json"],
-                output_contract_json=row["output_contract_json"],
-                attempt=int(row["attempt"]),
-            )
-            for row in rows
-        ]
+    def _list_requested_work(self, flow_id: str) -> list[WorkRow]:
+        return self._flow_store.list_requested_work(flow_id)
 
-    def _get_work(self, flow_id: str, work_id: str) -> Optional[_WorkRow]:
-        row = self._conn.execute(
-            """
-            SELECT work_id, flow_id, kind, status, input_json, output_contract_json, attempt
-            FROM continue_work
-            WHERE flow_id = ? AND work_id = ?
-            """,
-            (flow_id, work_id),
-        ).fetchone()
-        if row is None:
-            return None
-        return _WorkRow(
-            work_id=row["work_id"],
-            flow_id=row["flow_id"],
-            kind=row["kind"],
-            status=row["status"],
-            input_json=row["input_json"],
-            output_contract_json=row["output_contract_json"],
-            attempt=int(row["attempt"]),
-        )
+    def _get_work(self, flow_id: str, work_id: str) -> Optional[WorkRow]:
+        return self._flow_store.get_work(flow_id, work_id)
 
     def _infer_note_id(self, program: dict[str, Any]) -> Optional[str]:
         params = program.get("params") or {}
@@ -721,26 +539,10 @@ class LocalContinuationRuntime:
         return f"step_{idx}"
 
     def _has_any_work_key(self, flow_id: str, key: str) -> bool:
-        row = self._conn.execute(
-            """
-            SELECT 1 FROM continue_work
-            WHERE flow_id = ? AND kind = ?
-            LIMIT 1
-            """,
-            (flow_id, key),
-        ).fetchone()
-        return row is not None
+        return self._flow_store.has_any_work_key(flow_id, key)
 
     def _has_completed_work_key(self, flow_id: str, key: str) -> bool:
-        row = self._conn.execute(
-            """
-            SELECT 1 FROM continue_work
-            WHERE flow_id = ? AND kind = ? AND status = 'completed'
-            LIMIT 1
-            """,
-            (flow_id, key),
-        ).fetchone()
-        return row is not None
+        return self._flow_store.has_completed_work_key(flow_id, key)
 
     @staticmethod
     def _param_value(program: dict[str, Any], key: str) -> Any:
@@ -805,24 +607,11 @@ class LocalContinuationRuntime:
         escalate_if: list[str],
         executor_id: str,
     ) -> dict[str, Any]:
-        work_id = f"w_{uuid.uuid4().hex[:10]}"
-        now = self._now()
-        self._conn.execute(
-            """
-            INSERT INTO continue_work(
-                work_id, flow_id, kind, status, input_json, output_contract_json,
-                result_json, attempt, created_at, updated_at
-            ) VALUES (?, ?, ?, 'requested', ?, ?, NULL, 1, ?, ?)
-            """,
-            (
-                work_id,
-                flow_id,
-                kind,
-                json.dumps(input_payload, ensure_ascii=False),
-                json.dumps(output_contract, ensure_ascii=False),
-                now,
-                now,
-            ),
+        work_id = self._flow_store.insert_work(
+            flow_id=flow_id,
+            kind=kind,
+            input_json=json.dumps(input_payload, ensure_ascii=False),
+            output_contract_json=json.dumps(output_contract, ensure_ascii=False),
         )
         return {
             "work_id": work_id,
@@ -955,7 +744,7 @@ class LocalContinuationRuntime:
         return created, None
 
     @staticmethod
-    def _work_request_from_row(row: _WorkRow) -> dict[str, Any]:
+    def _work_request_from_row(row: WorkRow) -> dict[str, Any]:
         work_input = json.loads(row.input_json)
         return {
             "work_id": row.work_id,
@@ -993,11 +782,11 @@ class LocalContinuationRuntime:
         if status not in {"ok", "failed", "partial"}:
             return {}, {"code": "invalid_input", "message": f"Invalid work_result.status: {status}"}
 
-        now = self._now()
         if status != "ok":
-            self._conn.execute(
-                "UPDATE continue_work SET status = 'failed', result_json = ?, updated_at = ? WHERE work_id = ?",
-                (json.dumps(work_result, ensure_ascii=False), now, work_id),
+            self._flow_store.update_work_result(
+                work_id=work_id,
+                status="failed",
+                result_json=json.dumps(work_result, ensure_ascii=False),
             )
             return {"work_id": work_id, "status": "failed"}, None
 
@@ -1010,9 +799,10 @@ class LocalContinuationRuntime:
         )
         if err is not None:
             return {}, err
-        self._conn.execute(
-            "UPDATE continue_work SET status = 'completed', result_json = ?, updated_at = ? WHERE work_id = ?",
-            (json.dumps(work_result, ensure_ascii=False), now, work_id),
+        self._flow_store.update_work_result(
+            work_id=work_id,
+            status="completed",
+            result_json=json.dumps(work_result, ensure_ascii=False),
         )
         return {"work_id": work_id, "status": "applied", "ops": applied}, None
 
@@ -1118,87 +908,26 @@ class LocalContinuationRuntime:
         self, *, flow_id: str, work_id: Optional[str], op: dict[str, Any],
     ) -> str:
         op_json = json.dumps(op, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        material = f"{flow_id}|{work_id or ''}|{op_json}"
-        mutation_id = f"m_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:20]}"
-        now = self._now()
-        self._conn.execute(
-            """
-            INSERT OR IGNORE INTO continue_mutations(
-                mutation_id, flow_id, work_id, status, op_json, error, attempts, created_at, updated_at
-            ) VALUES (?, ?, ?, 'pending', ?, NULL, 0, ?, ?)
-            """,
-            (mutation_id, flow_id, work_id, op_json, now, now),
+        return self._flow_store.insert_pending_mutation(
+            flow_id=flow_id,
+            work_id=work_id,
+            op_json=op_json,
         )
-        return mutation_id
 
-    def _get_mutation(self, mutation_id: str) -> Optional[_MutationRow]:
-        row = self._conn.execute(
-            """
-            SELECT mutation_id, flow_id, work_id, status, op_json, attempts, error
-            FROM continue_mutations
-            WHERE mutation_id = ?
-            """,
-            (mutation_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return _MutationRow(
-            mutation_id=str(row["mutation_id"]),
-            flow_id=str(row["flow_id"]),
-            work_id=str(row["work_id"]) if row["work_id"] is not None else None,
-            status=str(row["status"]),
-            op_json=str(row["op_json"]),
-            attempts=int(row["attempts"]),
-            error=str(row["error"]) if row["error"] is not None else None,
-        )
+    def _get_mutation(self, mutation_id: str) -> Optional[MutationRow]:
+        return self._flow_store.get_mutation(mutation_id)
 
     def _set_mutation_status(self, mutation_id: str, *, status: str, error: Optional[str] = None) -> None:
-        self._conn.execute(
-            """
-            UPDATE continue_mutations
-            SET status = ?, error = ?, attempts = attempts + 1, updated_at = ?
-            WHERE mutation_id = ?
-            """,
-            (status, error, self._now(), mutation_id),
+        self._flow_store.set_mutation_status(
+            mutation_id,
+            status=status,
+            error=error,
         )
 
     def _list_pending_mutations(
         self, *, flow_id: Optional[str] = None, limit: int = 100,
-    ) -> list[_MutationRow]:
-        if flow_id:
-            rows = self._conn.execute(
-                """
-                SELECT mutation_id, flow_id, work_id, status, op_json, attempts, error
-                FROM continue_mutations
-                WHERE status = 'pending' AND flow_id = ?
-                ORDER BY created_at ASC
-                LIMIT ?
-                """,
-                (flow_id, max(int(limit), 1)),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                """
-                SELECT mutation_id, flow_id, work_id, status, op_json, attempts, error
-                FROM continue_mutations
-                WHERE status = 'pending'
-                ORDER BY created_at ASC
-                LIMIT ?
-                """,
-                (max(int(limit), 1),),
-            ).fetchall()
-        return [
-            _MutationRow(
-                mutation_id=str(row["mutation_id"]),
-                flow_id=str(row["flow_id"]),
-                work_id=str(row["work_id"]) if row["work_id"] is not None else None,
-                status=str(row["status"]),
-                op_json=str(row["op_json"]),
-                attempts=int(row["attempts"]),
-                error=str(row["error"]) if row["error"] is not None else None,
-            )
-            for row in rows
-        ]
+    ) -> list[MutationRow]:
+        return self._flow_store.list_pending_mutations(flow_id=flow_id, limit=limit)
 
     def _apply_single_mutation(
         self, op: dict[str, Any],
@@ -1277,7 +1006,7 @@ class LocalContinuationRuntime:
         self, ops: list[dict[str, Any]], *, flow_id: str, work_id: Optional[str] = None,
     ) -> tuple[list[dict[str, Any]], Optional[dict[str, str]]]:
         applied: list[dict[str, Any]] = []
-        in_tx = bool(self._conn.in_transaction)
+        in_tx = self._flow_store.in_transaction()
         for raw_op in ops:
             if not isinstance(raw_op, dict):
                 return [], {"code": "invalid_input", "message": "mutation op entries must be objects"}
@@ -2231,7 +1960,7 @@ class LocalContinuationRuntime:
                     len(replay_failures),
                 )
 
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._flow_store.begin_immediate()
             try:
                 flow_id = payload.get("flow_id")
                 is_new_flow = flow_id is None
@@ -2246,8 +1975,8 @@ class LocalContinuationRuntime:
                     raise ValueError("flow state unavailable")
                 expected_version = payload.get("state_version")
                 if expected_version is not None and int(expected_version) != flow.state_version:
-                    if self._conn.in_transaction:
-                        self._conn.rollback()
+                    if self._flow_store.in_transaction():
+                        self._flow_store.rollback()
                     state = json.loads(flow.state_json)
                     program = state.get("program") or {}
                     if not isinstance(program, dict):
@@ -2595,14 +2324,11 @@ class LocalContinuationRuntime:
                     raise ValueError(
                         f"continuation state exceeds max size ({state_bytes} > {MAX_CONTINUE_STATE_BYTES} bytes)"
                     )
-                now = self._now()
-                self._conn.execute(
-                    """
-                    UPDATE continue_flows
-                    SET state_version = ?, status = ?, state_json = ?, updated_at = ?
-                    WHERE flow_id = ?
-                    """,
-                    (new_state_version, status, state_json, now, flow.flow_id),
+                self._flow_store.update_flow(
+                    flow.flow_id,
+                    state_version=new_state_version,
+                    status=status,
+                    state_json=state_json,
                 )
                 event_payload = {
                     "status": status,
@@ -2611,17 +2337,10 @@ class LocalContinuationRuntime:
                     "request_id": request_id,
                     "goal": goal,
                 }
-                self._conn.execute(
-                    """
-                    INSERT INTO continue_events(event_id, flow_id, event_type, payload_json, created_at)
-                    VALUES (?, ?, 'tick', ?, ?)
-                    """,
-                    (
-                        f"e_{uuid.uuid4().hex[:12]}",
-                        flow.flow_id,
-                        json.dumps(event_payload, ensure_ascii=False),
-                        now,
-                    ),
+                self._flow_store.insert_event(
+                    flow_id=flow.flow_id,
+                    event_type="tick",
+                    payload_json=json.dumps(event_payload, ensure_ascii=False),
                 )
                 self._prune_events(flow.flow_id)
 
@@ -2651,10 +2370,10 @@ class LocalContinuationRuntime:
                         }
                     ),
                 }
-                self._conn.commit()
+                self._flow_store.commit()
                 post_failures = self._replay_pending_mutations(flow_id=flow.flow_id, limit=200)
                 if post_failures:
-                    self._conn.execute("BEGIN IMMEDIATE")
+                    self._flow_store.begin_immediate()
                     try:
                         latest = self._get_flow(flow.flow_id)
                         if latest is not None:
@@ -2666,44 +2385,28 @@ class LocalContinuationRuntime:
                             corrected_errors = list(errors) + post_failures
                             corrected_status = "failed"
                             corrected_version = latest.state_version + 1
-                            corrected_now = self._now()
                             corrected_state_json = json.dumps(latest_state, ensure_ascii=False)
-                            self._conn.execute(
-                                """
-                                UPDATE continue_flows
-                                SET state_version = ?, status = ?, state_json = ?, updated_at = ?
-                                WHERE flow_id = ?
-                                """,
-                                (
-                                    corrected_version,
-                                    corrected_status,
-                                    corrected_state_json,
-                                    corrected_now,
-                                    flow.flow_id,
-                                ),
+                            self._flow_store.update_flow(
+                                flow.flow_id,
+                                state_version=corrected_version,
+                                status=corrected_status,
+                                state_json=corrected_state_json,
                             )
-                            self._conn.execute(
-                                """
-                                INSERT INTO continue_events(event_id, flow_id, event_type, payload_json, created_at)
-                                VALUES (?, ?, 'mutation_failure', ?, ?)
-                                """,
-                                (
-                                    f"e_{uuid.uuid4().hex[:12]}",
-                                    flow.flow_id,
-                                    json.dumps(
-                                        {
-                                            "status": corrected_status,
-                                            "errors": corrected_errors,
-                                            "request_id": request_id,
-                                            "goal": goal,
-                                        },
-                                        ensure_ascii=False,
-                                    ),
-                                    corrected_now,
+                            self._flow_store.insert_event(
+                                flow_id=flow.flow_id,
+                                event_type="mutation_failure",
+                                payload_json=json.dumps(
+                                    {
+                                        "status": corrected_status,
+                                        "errors": corrected_errors,
+                                        "request_id": request_id,
+                                        "goal": goal,
+                                    },
+                                    ensure_ascii=False,
                                 ),
                             )
                             self._prune_events(flow.flow_id)
-                            self._conn.commit()
+                            self._flow_store.commit()
                             output["status"] = corrected_status
                             output["state_version"] = corrected_version
                             output["errors"] = corrected_errors
@@ -2716,10 +2419,10 @@ class LocalContinuationRuntime:
                             if isinstance(frame_obj, dict):
                                 frame_obj["status"] = corrected_status
                         else:
-                            self._conn.rollback()
+                            self._flow_store.rollback()
                     except Exception:
-                        if self._conn.in_transaction:
-                            self._conn.rollback()
+                        if self._flow_store.in_transaction():
+                            self._flow_store.rollback()
                         raise
 
                 output["output_hash"] = self._output_hash(
@@ -2750,8 +2453,8 @@ class LocalContinuationRuntime:
                     self._store_idempotent(str(idempotency_key), request_hash, output)
                 return output
             except Exception:
-                if self._conn.in_transaction:
-                    self._conn.rollback()
+                if self._flow_store.in_transaction():
+                    self._flow_store.rollback()
                 raise
 
     def run_work(self, flow_id: str, work_id: str) -> dict[str, Any]:
@@ -2781,6 +2484,4 @@ class LocalContinuationRuntime:
         }
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        self._flow_store.close()
