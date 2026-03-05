@@ -46,47 +46,44 @@ def _get_system_doc_dir() -> Path:
 # Path to system documents
 SYSTEM_DOC_DIR = _get_system_doc_dir()
 
-# Stable IDs for system documents (path-independent)
-# Convention: filename sans .md, hyphens -> /, prefixed with .
-SYSTEM_DOC_IDS = {
-    "now.md": ".now",
-    "conversations.md": ".conversations",
-    "domains.md": ".domains",
-    "library.md": ".library",
-    "tag-act.md": ".tag/act",
-    "tag-act-commitment.md": ".tag/act/commitment",
-    "tag-act-request.md": ".tag/act/request",
-    "tag-act-offer.md": ".tag/act/offer",
-    "tag-act-assertion.md": ".tag/act/assertion",
-    "tag-act-assessment.md": ".tag/act/assessment",
-    "tag-act-declaration.md": ".tag/act/declaration",
-    "tag-status.md": ".tag/status",
-    "tag-status-open.md": ".tag/status/open",
-    "tag-status-blocked.md": ".tag/status/blocked",
-    "tag-status-fulfilled.md": ".tag/status/fulfilled",
-    "tag-status-declined.md": ".tag/status/declined",
-    "tag-status-withdrawn.md": ".tag/status/withdrawn",
-    "tag-status-renegotiated.md": ".tag/status/renegotiated",
-    "tag-project.md": ".tag/project",
-    "tag-speaker.md": ".tag/speaker",
-    "tag-topic.md": ".tag/topic",
-    "tag-type.md": ".tag/type",
-    "meta-todo.md": ".meta/todo",
-    "meta-learnings.md": ".meta/learnings",
-    "meta-genre.md": ".meta/genre",
-    "meta-artist.md": ".meta/artist",
-    "meta-album.md": ".meta/album",
-    "prompt-analyze-conversation.md": ".prompt/analyze/conversation",
-    "prompt-analyze-default.md": ".prompt/analyze/default",
-    "prompt-summarize-conversation.md": ".prompt/summarize/conversation",
-    "prompt-summarize-default.md": ".prompt/summarize/default",
-    "prompt-agent-reflect.md": ".prompt/agent/reflect",
-    "prompt-agent-conversation.md": ".prompt/agent/conversation",
-    "prompt-agent-session-start.md": ".prompt/agent/session-start",
-    "prompt-agent-subagent-start.md": ".prompt/agent/subagent-start",
-    "prompt-agent-query.md": ".prompt/agent/query",
-    "stop.md": ".stop",
+# Stable IDs for system documents — derived from filename.
+# Convention: strip .md, replace leading hyphens with / according to prefix
+# depth, keep remaining hyphens literal, prefix with a dot.
+#
+# Examples:
+#   tag-act-commitment.md                    -> .tag/act/commitment
+#   prompt-agent-session-start.md            -> .prompt/agent/session-start
+#   template-escalation-decision-request.md  -> .template/escalation/decision-request
+_PREFIX_DEPTH = {
+    "tag": 2,
+    "meta": 1,
+    "prompt": 2,
+    "template": 2,
 }
+
+
+def _filename_to_id(filename: str) -> str:
+    """Derive a stable document ID from a system doc filename."""
+    stem = filename.removesuffix(".md")
+    parts = stem.split("-")
+    depth = _PREFIX_DEPTH.get(parts[0], 0)
+    hierarchy = parts[:depth + 1]
+    remainder = parts[depth + 1:]
+    out = "/".join(hierarchy)
+    if remainder:
+        out += "-" + "-".join(remainder)
+    return "." + out
+
+
+def _all_system_doc_ids() -> dict[str, str]:
+    return {
+        p.name: _filename_to_id(p.name)
+        for p in sorted(SYSTEM_DOC_DIR.glob("*.md"))
+        if p.name != "__init__.py"
+    }
+
+
+SYSTEM_DOC_IDS = _all_system_doc_ids()
 
 # Migration renames from old ID prefixes to new stable IDs
 _OLD_ID_RENAMES = {
@@ -174,7 +171,7 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
     if keeper._config.system_docs_hash == current_hash:
         return stats
 
-    filename_to_id = {name: doc_id for name, doc_id in SYSTEM_DOC_IDS.items()}
+    filename_to_id = _all_system_doc_ids()
 
     # First pass: clean up old file:// URIs with category=system tag
     try:
@@ -252,10 +249,7 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
 
     # Fourth pass: create or update system docs from bundled content
     for path in SYSTEM_DOC_DIR.glob("*.md"):
-        new_id = SYSTEM_DOC_IDS.get(path.name)
-        if new_id is None:
-            logger.debug("Skipping unknown system doc: %s", path.name)
-            continue
+        new_id = _filename_to_id(path.name)
 
         try:
             content, tags = _load_frontmatter(path)
@@ -355,9 +349,9 @@ def reset_system_documents(keeper: "Keeper") -> dict:
     doc_coll = keeper._resolve_doc_collection()
 
     for path in SYSTEM_DOC_DIR.glob("*.md"):
-        new_id = SYSTEM_DOC_IDS.get(path.name)
-        if new_id is None:
+        if path.name == "__init__.py":
             continue
+        new_id = _filename_to_id(path.name)
 
         try:
             content, tags = _load_frontmatter(path)

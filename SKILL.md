@@ -1,6 +1,6 @@
 ---
 name: keep
-version: 0.79.0
+version: 0.81.1
 description: Reflective Memory
 homepage: https://github.com/hughpyle/keep
 runtime: python:3.12-slim
@@ -118,6 +118,13 @@ keep_put(content="https://example.com/doc", tags={"topic": "auth", "project": "m
 keep_put(content="file:///path/to/important.pdf", tags={"type": "reference", "topic": "security"})
 ```
 Ask: What is this document? Why is it important? Tag appropriately. Documents indexed during work become navigable knowledge.
+
+**Link sources to outcomes.** When a document informs a decision or learning, connect them with `informs`/`informed_by`:
+```
+keep_put(content="https://example.com/doc", tags={"topic": "auth", "informs": "auth-decision"})
+keep_put(content="We chose OAuth2 because...", tags={"type": "learning", "informed_by": "https://example.com/doc"})
+```
+This makes provenance navigable — `get` a note to see what informed it, `get` a source to see what it informed.
 
 **Move when pivoting.** When a string of work is complete, or the conversation shifts topic, move the now history before moving on:
 ```

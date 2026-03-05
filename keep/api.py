@@ -14,9 +14,10 @@ import re
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 logger = logging.getLogger(__name__)
+_ESCALATION_PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}")
 
 
 def _parse_date_param(value: str) -> str:
@@ -225,6 +226,8 @@ from .types import (
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     MAX_TAG_VALUE_LENGTH,
 )
+from .continuation import LocalContinuationRuntime
+from .continuation_env import LocalContinuationEnvironment
 
 
 class FindResults(list):
@@ -768,6 +771,10 @@ class Keeper:
             self._config.system_docs_hash != _bundled_docs_hash()
         )
 
+        # Local continuation runtime (API-first path), initialized lazily on first use.
+        self._continuation = None
+        self._continuation_lock = threading.Lock()
+
     def _apply_file_size_limit(self, provider: DocumentProvider) -> None:
         """Apply max_file_size config to file-based providers."""
         from .providers.documents import FileDocumentProvider, CompositeDocumentProvider
@@ -1273,6 +1280,109 @@ class Keeper:
                     break
 
         return best_prompt
+
+    @staticmethod
+    def _resolve_template_path_value(context: dict[str, Any], path: str) -> Any:
+        current: Any = context
+        for part in str(path).split("."):
+            if not isinstance(current, dict):
+                return ""
+            if part not in current:
+                return ""
+            current = current.get(part)
+        return current
+
+    def _render_escalation_template_value(self, value: Any, context: dict[str, Any]) -> Any:
+        if isinstance(value, str):
+            def _sub(match: re.Match[str]) -> str:
+                key = match.group(1)
+                resolved = self._resolve_template_path_value(context, key)
+                if resolved is None:
+                    return ""
+                if isinstance(resolved, (dict, list)):
+                    return json.dumps(resolved, ensure_ascii=False)
+                return str(resolved)
+
+            return _ESCALATION_PLACEHOLDER_RE.sub(_sub, value)
+        if isinstance(value, list):
+            return [self._render_escalation_template_value(v, context) for v in value]
+        if isinstance(value, dict):
+            return {
+                str(k): self._render_escalation_template_value(v, context)
+                for k, v in value.items()
+            }
+        return value
+
+    def _resolve_escalation_template(self, template_ref: str) -> dict[str, Any]:
+        template_id = (
+            template_ref
+            if template_ref.startswith(".template/")
+            else f".template/escalation/{template_ref}"
+        )
+        doc = self.get(template_id)
+        if doc is None:
+            raise ValueError(f"Escalation template not found: {template_id}")
+        raw = str(doc.summary or "").strip()
+        if not raw:
+            raise ValueError(f"Escalation template is empty: {template_id}")
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Escalation template is not valid JSON: {template_id}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"Escalation template must be a JSON object: {template_id}")
+        return parsed
+
+    def emit_escalation_note(
+        self,
+        template_ref: str,
+        *,
+        context: dict[str, Any],
+    ) -> Optional[str]:
+        """Render a store-backed escalation template and upsert the resulting note."""
+        try:
+            template = self._resolve_escalation_template(template_ref)
+            rendered = self._render_escalation_template_value(template, context)
+            if not isinstance(rendered, dict):
+                raise ValueError("Rendered escalation template must be an object")
+            note_id = str(rendered.get("id") or "").strip()
+            content = str(rendered.get("content") or "").strip()
+            if not note_id:
+                raise ValueError("Escalation template missing rendered id")
+            if not content:
+                raise ValueError("Escalation template missing rendered content")
+
+            tags_raw = rendered.get("tags")
+            tags: dict[str, Any] = {}
+            if isinstance(tags_raw, dict):
+                for raw_key, raw_value in tags_raw.items():
+                    key = str(raw_key).strip()
+                    if not key:
+                        continue
+                    if isinstance(raw_value, str):
+                        val = raw_value.strip()
+                        if not val:
+                            continue
+                        tags[key] = val
+                    elif isinstance(raw_value, list):
+                        vals = [str(v).strip() for v in raw_value if str(v).strip()]
+                        if vals:
+                            tags[key] = vals
+                    elif raw_value is not None:
+                        tags[key] = str(raw_value)
+
+            summary_raw = rendered.get("summary")
+            summary = str(summary_raw).strip() if summary_raw is not None else None
+            self.put(
+                content=content,
+                id=note_id,
+                tags=tags or None,
+                summary=summary if summary else None,
+            )
+            return note_id
+        except Exception as exc:
+            logger.warning("Could not emit escalation note using %s: %s", template_ref, exc)
+            return None
 
     def _gather_context(
         self,
@@ -1796,6 +1906,33 @@ class Keeper:
         docs = self._document_store.query_by_id_prefix(doc_coll, prefix)
         return [doc.id[len(prefix):] for doc in docs]
 
+    def _get_singular_keys(self, keys: Iterable[str]) -> set[str]:
+        """Return the subset of *keys* whose tagdoc has ``_singular=true``.
+
+        For each non-system key, looks up ``.tag/{key}`` in the document
+        store.  If the tagdoc exists and carries ``_singular: "true"``,
+        the key is included in the result set.
+        """
+        doc_coll = self._resolve_doc_collection()
+        singular: set[str] = set()
+        for key in keys:
+            if key.startswith(SYSTEM_TAG_PREFIX):
+                continue
+            parent = self._document_store.get(doc_coll, f".tag/{key}")
+            if parent is not None and parent.tags.get("_singular") == "true":
+                singular.add(key)
+        return singular
+
+    def _validate_singular_tags(self, add_changes: dict, singular_keys: set[str]) -> None:
+        """Raise if any singular key has more than one incoming value."""
+        for key in singular_keys:
+            values = tag_values(add_changes, key)
+            if len(values) > 1:
+                raise ValueError(
+                    f"Tag '{key}' is singular (at most one value allowed), "
+                    f"but got {len(values)} values: {values!r}"
+                )
+
     # -------------------------------------------------------------------------
     # Edge processing (tag-driven relationship edges)
     # -------------------------------------------------------------------------
@@ -2094,14 +2231,22 @@ class Keeper:
 
         if tags:
             user_tags = casefold_tags(filter_non_system_tags(tags))
+            # Validate constrained tags (only user-provided, not existing/env)
+            self._validate_constrained_tags(user_tags)
+            # Singular enforcement: clear existing values so merge replaces
+            singular_keys = self._get_singular_keys(
+                k for k in user_tags if tag_values(user_tags, k) != [""]
+            )
+            if singular_keys:
+                self._validate_singular_tags(user_tags, singular_keys)
             for key in user_tags:
                 values = tag_values(user_tags, key)
                 if values == [""]:
                     merged_tags.pop(key, None)
                 else:
+                    if key in singular_keys:
+                        merged_tags.pop(key, None)
                     _merge_tags_additive(merged_tags, {key: values})
-            # Validate constrained tags (only user-provided, not existing/env)
-            self._validate_constrained_tags(user_tags)
 
         _merge_tags_additive(merged_tags, system_tags, replace_system=True)
 
@@ -2469,8 +2614,8 @@ class Keeper:
         else:
             # Inline mode: store content directly
             if id is None:
-                timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
-                id = f"mem:{timestamp}"
+                # Match CLI/MCP behavior: default inline IDs are content-addressed.
+                id = _text_content_id(content)
             else:
                 id = normalize_id(id)
 
@@ -4887,6 +5032,11 @@ class Keeper:
         # Apply tag changes (filter out system tags from input)
         if add_changes:
             self._validate_constrained_tags(add_changes)
+            singular_keys = self._get_singular_keys(add_changes)
+            if singular_keys:
+                self._validate_singular_tags(add_changes, singular_keys)
+                for sk in singular_keys:
+                    user_tags.pop(sk, None)
         if add_changes or remove_keys or remove_value_changes:
             user_tags = _apply_tag_mutations(
                 user_tags,
@@ -4967,6 +5117,11 @@ class Keeper:
             }
         if add_changes:
             self._validate_constrained_tags(add_changes)
+            singular_keys = self._get_singular_keys(add_changes)
+            if singular_keys:
+                self._validate_singular_tags(add_changes, singular_keys)
+                for sk in singular_keys:
+                    merged.pop(sk, None)
         if add_changes or remove_keys or remove_value_changes:
             merged = _apply_tag_mutations(
                 merged,
@@ -5518,6 +5673,29 @@ class Keeper:
         self._spawn_processor()
         return True
 
+    def _emit_processing_breakdown(
+        self,
+        *,
+        item: Any,
+        error: str,
+        failure_class: str,
+    ) -> Optional[str]:
+        event_material = f"{item.collection}|{item.task_type}|{item.id}"
+        event_id = hashlib.sha256(event_material.encode("utf-8")).hexdigest()[:16]
+        context = {
+            "event_id": event_id,
+            "task_type": str(item.task_type or ""),
+            "item_id": str(item.id or ""),
+            "collection": str(item.collection or ""),
+            "attempt": int(getattr(item, "attempts", 0) or 0),
+            "error": str(error or ""),
+            "failure_class": str(failure_class or "unknown"),
+        }
+        return self.emit_escalation_note(
+            "breakdown",
+            context=context,
+        )
+
     def process_pending(self, limit: int = 10) -> dict:
         """
         Process pending work items (embedding, summaries, OCR, and analysis).
@@ -5550,6 +5728,11 @@ class Keeper:
                 self._pending_queue.abandon(
                     item.id, item.collection, item.task_type,
                     error=f"Exhausted {item.attempts} attempts",
+                )
+                self._emit_processing_breakdown(
+                    item=item,
+                    error=f"Exhausted {item.attempts} attempts",
+                    failure_class="exhausted_attempts",
                 )
                 result["abandoned"] += 1
                 logger.warning(
@@ -5642,6 +5825,11 @@ class Keeper:
                     self._pending_queue.abandon(
                         item.id, item.collection, item.task_type,
                         error=f"Permanent: {error_msg}",
+                    )
+                    self._emit_processing_breakdown(
+                        item=item,
+                        error=error_msg,
+                        failure_class="permanent_failure",
                     )
                     result["abandoned"] = result.get("abandoned", 0) + 1
                     logger.info(
@@ -5989,34 +6177,46 @@ class Keeper:
                 self._store.update_tags(chroma_coll, item_id,
                                         casefold_tags_for_index(updated_tags))
 
+    def _run_local_task_workflow(
+        self,
+        *,
+        task_type: str,
+        item_id: str,
+        collection: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> dict:
+        """Run shared local workflow for summarize/ocr/analyze tasks.
+
+        Returns a small status envelope:
+        {"status": "applied|skipped", "details": {...}}
+        """
+        from .task_workflows import TaskRequest, run_local_task
+
+        outcome = run_local_task(
+            self,
+            TaskRequest(
+                task_type=task_type,
+                id=item_id,
+                collection=collection,
+                content=content,
+                metadata=dict(metadata or {}),
+            ),
+        )
+        return {"status": outcome.status, "details": dict(outcome.details)}
+
     def _process_pending_summarize(self, item) -> None:
         """Process a pending summarization work item."""
-        from .processors import process_summarize
-
-        doc = self._document_store.get(item.collection, item.id)
-        if doc is None:
-            # Doc was deleted/moved since enqueue — skip (no point retrying)
-            logger.info("Skipping summary for deleted doc: %s", item.id)
-            return
-
-        # Resolve summarization prompt from .prompt/summarize/* docs
-        summarize_prompt = None
-        try:
-            summarize_prompt = self._resolve_prompt_doc("summarize", doc.tags)
-        except Exception as e:
-            logger.debug("Summarize prompt doc resolution failed: %s", e)
-
-        context = None
-        user_tags = filter_non_system_tags(doc.tags)
-        if user_tags:
-            context = self._gather_context(item.id, user_tags)
-
-        result = process_summarize(
-            item.content, context=context,
-            summarization_provider=self._get_summarization_provider(),
-            system_prompt_override=summarize_prompt,
+        outcome = self._run_local_task_workflow(
+            task_type="summarize",
+            item_id=item.id,
+            collection=item.collection,
+            content=item.content,
+            metadata=item.metadata,
         )
-        self.apply_result(item.id, item.collection, result)
+        if outcome.get("status") == "skipped":
+            reason = outcome.get("details", {}).get("reason") or "skipped"
+            logger.info("Skipping summary for %s: %s", item.id, reason)
 
     def _process_pending_embed(self, item) -> None:
         """Process a deferred embedding task (cloud mode).
@@ -6072,10 +6272,19 @@ class Keeper:
 
     def _process_pending_analyze(self, item) -> None:
         """Process a pending analysis work item."""
-        tags = item.metadata.get("tags") if item.metadata else None
-        force = item.metadata.get("force", False) if item.metadata else False
-        parts = self.analyze(item.id, tags=tags, force=force)
-        logger.info("Analyzed %s into %d parts", item.id, len(parts))
+        outcome = self._run_local_task_workflow(
+            task_type="analyze",
+            item_id=item.id,
+            collection=item.collection,
+            content=item.content,
+            metadata=item.metadata,
+        )
+        if outcome.get("status") == "applied":
+            parts_count = int(outcome.get("details", {}).get("parts_count") or 0)
+            logger.info("Analyzed %s into %d parts", item.id, parts_count)
+        else:
+            reason = outcome.get("details", {}).get("reason") or "skipped"
+            logger.info("Skipping analyze for %s: %s", item.id, reason)
 
     def _process_pending_reindex(self, item) -> None:
         """Process a reindex task: embed summary and write to vector store.
@@ -6267,94 +6476,25 @@ class Keeper:
 
         Then updates the document summary and embedding with the content.
         """
-        from .processors import process_ocr
-        meta = item.metadata or {}
-        uri = meta.get("uri") or item.id
-        ocr_pages = meta.get("ocr_pages", [])
-        content_type = meta.get("content_type", "")
-
-        if not ocr_pages:
-            return
-
-        # Cap page count to prevent unbounded OCR on huge documents
-        MAX_OCR_PAGES = 1000
-        if len(ocr_pages) > MAX_OCR_PAGES:
-            logger.warning(
-                "OCR page count %d exceeds limit %d for %s — truncating",
-                len(ocr_pages), MAX_OCR_PAGES, uri,
-            )
-            ocr_pages = ocr_pages[:MAX_OCR_PAGES]
-
-        # Load content extractor
-        extractor = self._get_content_extractor()
-        if not extractor:
-            raise IOError("No content extractor configured for OCR")
-
-        path = Path(uri.removeprefix("file://")).resolve()
-        if not path.exists():
-            logger.warning("File no longer exists for OCR: %s", path)
-            return
-
-        # Re-validate path is within home directory (may differ from enqueue time)
-        home = Path.home().resolve()
-        if not path.is_relative_to(home):
-            logger.warning("OCR path outside home directory, skipping: %s", path)
-            return
-
-        is_image = content_type.startswith("image/") if content_type else False
-        # Fallback: detect from extension if content_type not in metadata
-        if not content_type:
-            from .providers.documents import FileDocumentProvider
-            ext = path.suffix.lower()
-            ct = FileDocumentProvider.EXTENSION_TYPES.get(ext, "")
-            is_image = ct.startswith("image/")
-            if is_image:
-                content_type = ct
-
-        if is_image:
-            full_content = self._ocr_image(path, content_type, extractor)
-        else:
-            full_content = self._ocr_pdf(path, ocr_pages, extractor)
-
-        if not full_content or not full_content.strip():
-            logger.info("OCR produced no usable text for %s", uri)
-            return
-
-        # Get existing document for context + tags
-        doc_coll = item.collection
-        existing = self._document_store.get(doc_coll, item.id)
-        if not existing:
-            return  # deleted since enqueue
-
-        context = None
-        user_tags = filter_non_system_tags(existing.tags)
-        if user_tags:
-            context = self._gather_context(item.id, user_tags)
-
-        # Process (pure function)
-        try:
-            result = process_ocr(
-                full_content,
-                max_summary_length=self._config.max_summary_length,
-                context=context,
-                summarization_provider=self._get_summarization_provider(),
-            )
-        except Exception as e:
-            logger.warning("OCR summarization failed for %s: %s", uri, e)
-            result = process_ocr(
-                full_content,
-                max_summary_length=self._config.max_summary_length,
-                context=context,
-                summarization_provider=None,
-            )
-
-        # Apply to store
-        self.apply_result(item.id, doc_coll, result, existing_tags=existing.tags)
-
-        logger.info(
-            "OCR complete for %s: %d chars, type=%s",
-            uri, len(full_content), content_type or "pdf",
+        outcome = self._run_local_task_workflow(
+            task_type="ocr",
+            item_id=item.id,
+            collection=item.collection,
+            content=item.content,
+            metadata=item.metadata,
         )
+        if outcome.get("status") == "applied":
+            details = outcome.get("details", {})
+            uri = (item.metadata or {}).get("uri") or item.id
+            logger.info(
+                "OCR complete for %s: %d chars, type=%s",
+                uri,
+                int(details.get("chars") or 0),
+                details.get("content_type") or "pdf",
+            )
+        else:
+            reason = outcome.get("details", {}).get("reason") or "skipped"
+            logger.info("Skipping OCR for %s: %s", item.id, reason)
 
     def pending_count(self) -> int:
         """Get count of pending summaries awaiting processing."""
@@ -6381,6 +6521,32 @@ class Keeper:
         queue implementation that supports get_status().
         """
         return self._pending_queue.get_status(id)
+
+    # -------------------------------------------------------------------------
+    # Continuation API (local-only preview)
+    # -------------------------------------------------------------------------
+
+    def _get_continuation_runtime(self) -> LocalContinuationRuntime:
+        runtime = self._continuation
+        if runtime is not None:
+            return runtime
+        with self._continuation_lock:
+            runtime = self._continuation
+            if runtime is None:
+                runtime = LocalContinuationRuntime(
+                    self._store_path / "continuation.db",
+                    LocalContinuationEnvironment(self),
+                )
+                self._continuation = runtime
+        return runtime
+
+    def continue_flow(self, payload: dict) -> dict:
+        """Run one continuation tick for local API-first flows."""
+        return self._get_continuation_runtime().continue_flow(payload)
+
+    def continue_run_work(self, flow_id: str, work_id: str) -> dict:
+        """Execute a pending local work item and return a work_result envelope."""
+        return self._get_continuation_runtime().run_work(flow_id, work_id)
 
     @property
     def _processor_pid_path(self) -> Path:
@@ -6628,6 +6794,13 @@ class Keeper:
         if hasattr(self, '_task_client') and self._task_client is not None:
             self._task_client.close()
             self._task_client = None
+
+        # Close continuation runtime
+        if hasattr(self, "_continuation") and self._continuation is not None:
+            try:
+                self._continuation.close()
+            except Exception:
+                pass
 
         # Remove ops log handler to avoid handler accumulation
         if hasattr(self, '_ops_log_handler') and self._ops_log_handler:
