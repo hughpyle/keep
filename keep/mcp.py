@@ -398,7 +398,8 @@ async def keep_continue(
     payload: Annotated[dict[str, Any], Field(
         description=(
             "Continuation request object. "
-            "To start a new flow: {\"goal\": \"...\", \"profile\": \"query.auto\"}. "
+            "To start a new flow: {\"goal\": \"...\", \"profile\": \"query.auto\"} "
+            "or {\"goal\": \"...\", \"template\": \"...\"}. "
             "To continue: {\"cursor\": \"...\"}. "
             "To submit work results: {\"cursor\": \"...\", \"work_results\": [...]}."
         ),

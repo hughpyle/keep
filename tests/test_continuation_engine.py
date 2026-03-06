@@ -166,3 +166,81 @@ def test_engine_process_requested_work_batch_dead_letters_after_max_attempts(moc
     finally:
         engine.close()
         kp.close()
+
+
+def test_engine_local_task_runner_invokes_task_workflow(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    flow_store = SQLiteFlowStore(tmp_path / "engine-continuation.db")
+    engine = ContinuationEngine(
+        flow_store=flow_store,
+        env=LocalContinuationEnvironment(kp),
+    )
+    calls: list[dict] = []
+    original = kp._run_local_task_workflow
+    try:
+        kp.put(content="task input", id="note:task", summary="task input")
+
+        def _fake_run_local_task_workflow(
+            *,
+            task_type: str,
+            item_id: str,
+            collection: str,
+            content: str,
+            metadata: dict | None = None,
+        ) -> dict:
+            calls.append(
+                {
+                    "task_type": task_type,
+                    "item_id": item_id,
+                    "collection": collection,
+                    "content": content,
+                    "metadata": dict(metadata or {}),
+                }
+            )
+            return {"status": "applied", "details": {"ok": True}}
+
+        kp._run_local_task_workflow = _fake_run_local_task_workflow  # type: ignore[assignment]
+        doc_coll = kp._resolve_doc_collection()
+        first = engine.continue_flow(
+            {
+                "request_id": "task-runner-1",
+                "goal": "task.analyze",
+                "params": {"id": "note:task"},
+                "steps": [
+                    {
+                        "kind": "analyze",
+                        "runner": {"type": "local.task", "task_type": "analyze"},
+                        "input_mode": "none",
+                        "input": {
+                            "task_type": "analyze",
+                            "item_id": "note:task",
+                            "collection": doc_coll,
+                            "content": "",
+                            "metadata": {"force": True},
+                        },
+                        "output_contract": {"must_return": ["status"]},
+                    }
+                ],
+                "work_results": [],
+            }
+        )
+        assert first["status"] == "waiting_work"
+        work_id = first["work"][0]["work_id"]
+        work_result = engine.run_work(first["cursor"], work_id)
+        assert work_result["outputs"]["status"] == "applied"
+        second = engine.continue_flow(
+            {
+                "request_id": "task-runner-2",
+                "cursor": first["cursor"],
+                "work_results": [work_result],
+            }
+        )
+        assert second["status"] == "done"
+        assert len(calls) == 1
+        assert calls[0]["task_type"] == "analyze"
+        assert calls[0]["item_id"] == "note:task"
+        assert calls[0]["metadata"].get("force") is True
+    finally:
+        kp._run_local_task_workflow = original  # type: ignore[assignment]
+        engine.close()
+        kp.close()

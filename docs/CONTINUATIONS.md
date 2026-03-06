@@ -131,7 +131,7 @@ This means keep's processing capabilities grow with your needs, not with its rel
 
 ### Starting a flow
 
-Omit `cursor` and provide at least one of `goal`, `profile`, `steps`, or `frame_request`:
+Omit `cursor` and provide at least one of `goal`, `profile`, `template`, `steps`, or `frame_request`:
 
 ```json
 {
@@ -147,9 +147,15 @@ Omit `cursor` and provide at least one of `goal`, `profile`, `steps`, or `frame_
 
 **`goal`** — what kind of flow: `"query"`, `"write"`, `"ingest"`, etc.
 
-**`profile`** — a named behavior preset. `"query.auto"` enables automatic multi-step refinement. Without a profile, the flow completes in one tick and leaves strategy decisions to the caller.
+**`profile`** — named built-in behavior presets. `"query.auto"` enables automatic multi-step refinement.
+
+**`template`** — data-defined continuation spec stored in `.template/continuation/*`. If omitted, the runtime defaults to `.template/continuation/{goal}` when that document exists.
+Templates may compose reusable fragments via `"include": ["other-template"]`.
+Included templates are merged depth-first; `steps` and `followups` append, object fields merge with local override.
 
 **`params`** — goal-specific inputs. For queries, `text` is the search string. For writes, `id` and `content`. For ingest, `id` and optional `steps`.
+
+For write flows, template `followups` can queue background tasks (`summarize`, `ocr`, `analyze`, `tag`) via typed `enqueue_task` ops, so alternate write templates can swap processing behavior without changing code.
 
 **`frame_request`** — controls what evidence is retrieved on this tick:
 - `seed.mode` — `"query"` (semantic search), `"id"` (fetch by ID), or `"similar_to"` (find similar items)
@@ -161,7 +167,7 @@ If you provide `params.text` without a `frame_request`, the runtime builds one f
 
 ### Resuming a flow
 
-Pass back the `cursor` from the previous response. Program fields (`goal`, `profile`, `steps`) are locked after flow start — use `overrides` to adjust per-tick behavior:
+Pass back the `cursor` from the previous response. Program fields (`goal`, `profile`, `template`, `steps`) are locked after flow start — use `overrides` to adjust per-tick behavior:
 
 ```json
 {

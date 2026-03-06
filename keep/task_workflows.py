@@ -154,6 +154,36 @@ def _run_ocr(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
     )
 
 
+def _run_tag(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
+    content = str(req.content or "").strip()
+    if not content:
+        return TaskRunResult(status="skipped", details={"reason": "no_content"})
+
+    provider_name = str(req.metadata.get("provider") or "noop").strip()
+    provider_params = req.metadata.get("provider_params")
+    if provider_params is not None and not isinstance(provider_params, dict):
+        provider_params = None
+
+    from .providers.base import get_registry
+
+    registry = get_registry()
+    provider = registry.create_tagging(provider_name, provider_params)
+    tag_method = getattr(provider, "tag", None)
+    if not callable(tag_method):
+        return TaskRunResult(status="skipped", details={"reason": "provider_has_no_tag"})
+
+    tags = tag_method(content)
+    if not isinstance(tags, dict):
+        return TaskRunResult(status="skipped", details={"reason": "invalid_provider_output"})
+
+    normalized = {str(k): str(v) for k, v in tags.items() if str(k).strip() and str(v).strip()}
+    if not normalized:
+        return TaskRunResult(status="skipped", details={"reason": "empty_tags"})
+
+    keeper.tag(req.id, tags=normalized)
+    return TaskRunResult(status="applied", details={"tag_count": len(normalized)})
+
+
 def run_local_task(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
     """Run one local task workflow."""
     task_type = str(req.task_type or "").strip()
@@ -163,5 +193,6 @@ def run_local_task(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
         return _run_analyze(keeper, req)
     if task_type == "ocr":
         return _run_ocr(keeper, req)
+    if task_type == "tag":
+        return _run_tag(keeper, req)
     raise ValueError(f"unsupported local task workflow: {task_type}")
-

@@ -297,6 +297,38 @@ def _run_echo(
     )
 
 
+def _run_local_task(
+    executor: LocalWorkExecutor, payload: dict[str, Any], runner: dict[str, Any],
+) -> RunnerExecution:
+    task_type = str(runner.get("task_type") or payload.get("task_type") or "").strip()
+    if not task_type:
+        raise ValueError("runner local.task requires task_type")
+    item_id = str(payload.get("item_id") or "").strip()
+    if not item_id:
+        raise ValueError("runner local.task requires item_id")
+    collection = str(payload.get("collection") or executor._env.resolve_doc_collection())
+    content = str(payload.get("content") or "")
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    outcome = executor._env.run_local_task_workflow(
+        task_type=task_type,
+        item_id=item_id,
+        collection=collection,
+        content=content,
+        metadata=metadata,
+    )
+    status = str((outcome or {}).get("status") or "applied")
+    details = (outcome or {}).get("details")
+    if not isinstance(details, dict):
+        details = {}
+    return RunnerExecution(
+        outputs={"status": status, "details": details},
+        executor_id=str(runner.get("executor_id") or f"local.task.{task_type}"),
+        quality=LocalWorkExecutor.default_quality(),
+    )
+
+
 DEFAULT_CONTINUATION_EXECUTOR_REGISTRY.register_provider_kind("summarization", _resolve_summarization_provider)
 DEFAULT_CONTINUATION_EXECUTOR_REGISTRY.register_provider_kind("tagging", _resolve_tagging_provider)
 DEFAULT_CONTINUATION_EXECUTOR_REGISTRY.register_provider_kind("analyzer", _resolve_analyzer_provider)
@@ -305,6 +337,7 @@ DEFAULT_CONTINUATION_EXECUTOR_REGISTRY.register_runner("provider.summarize", _ru
 DEFAULT_CONTINUATION_EXECUTOR_REGISTRY.register_runner("provider.tag", _run_provider_tag)
 DEFAULT_CONTINUATION_EXECUTOR_REGISTRY.register_runner("provider.generate_json", _run_provider_generate_json)
 DEFAULT_CONTINUATION_EXECUTOR_REGISTRY.register_runner("echo", _run_echo)
+DEFAULT_CONTINUATION_EXECUTOR_REGISTRY.register_runner("local.task", _run_local_task)
 
 
 def register_continuation_runner(runner_type: str, handler: RunnerHandler) -> None:

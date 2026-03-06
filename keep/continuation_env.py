@@ -43,8 +43,6 @@ class ContinuationRuntimeEnv(Protocol):
 
     def get_document(self, id: str, *, collection: Optional[str] = None) -> Any | None: ...
 
-    def get_profile_document(self, profile_id: str) -> Any | None: ...
-
     def upsert_item(
         self,
         *,
@@ -64,7 +62,22 @@ class ContinuationRuntimeEnv(Protocol):
         tags: dict[str, Any] | None = None,
         created_at: str | None = None,
         force: bool = False,
+        queue_background_tasks: bool = True,
+        capture_write_context: bool = False,
     ) -> Any: ...
+
+    def enqueue_task(
+        self,
+        *,
+        task_type: str,
+        item_id: str,
+        collection: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> None: ...
+
+    def consume_write_context(self, item_id: str) -> dict[str, Any] | None: ...
 
     def set_tags(self, target: str, tags: dict[str, Any]) -> None: ...
 
@@ -85,6 +98,16 @@ class ContinuationRuntimeEnv(Protocol):
     ) -> str | None: ...
 
     def get_default_summarization_provider(self) -> Any: ...
+
+    def run_local_task_workflow(
+        self,
+        *,
+        task_type: str,
+        item_id: str,
+        collection: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
 
 
 class LocalContinuationEnvironment:
@@ -137,9 +160,6 @@ class LocalContinuationEnvironment:
         doc_coll = collection or self.resolve_doc_collection()
         return self._keeper._document_store.get(doc_coll, id)
 
-    def get_profile_document(self, profile_id: str) -> Any | None:
-        return self._keeper.get(profile_id)
-
     def upsert_item(
         self,
         *,
@@ -165,6 +185,8 @@ class LocalContinuationEnvironment:
         tags: dict[str, Any] | None = None,
         created_at: str | None = None,
         force: bool = False,
+        queue_background_tasks: bool = True,
+        capture_write_context: bool = False,
     ) -> Any:
         return self._keeper._put_direct(
             content=content,
@@ -174,7 +196,31 @@ class LocalContinuationEnvironment:
             tags=tags,
             created_at=created_at,
             force=force,
+            queue_background_tasks=queue_background_tasks,
+            capture_write_context=capture_write_context,
         )
+
+    def enqueue_task(
+        self,
+        *,
+        task_type: str,
+        item_id: str,
+        collection: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> None:
+        self._keeper._enqueue_task_background(
+            task_type=task_type,
+            id=item_id,
+            doc_coll=collection,
+            content=content,
+            metadata=metadata,
+            tags=tags,
+        )
+
+    def consume_write_context(self, item_id: str) -> dict[str, Any] | None:
+        return self._keeper._consume_write_context(item_id)
 
     def set_tags(self, target: str, tags: dict[str, Any]) -> None:
         self._keeper.tag(target, tags=tags)
@@ -219,3 +265,20 @@ class LocalContinuationEnvironment:
 
     def get_default_summarization_provider(self) -> Any:
         return self._keeper._get_summarization_provider()
+
+    def run_local_task_workflow(
+        self,
+        *,
+        task_type: str,
+        item_id: str,
+        collection: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._keeper._run_local_task_workflow(
+            task_type=task_type,
+            item_id=item_id,
+            collection=collection,
+            content=content,
+            metadata=metadata,
+        )

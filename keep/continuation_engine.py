@@ -253,8 +253,23 @@ class ContinuationEngine:
     def _profile_from_program(program: dict[str, Any]) -> str:
         return str(program.get("profile") or "").strip()
 
+    @staticmethod
+    def _template_from_program(program: dict[str, Any]) -> str:
+        return str(program.get("template") or "").strip()
+
     def _is_query_auto_profile(self, program: dict[str, Any]) -> bool:
         return self._profile_from_program(program) in BUILTIN_QUERY_AUTO_PROFILES
+
+    @staticmethod
+    def _template_id_from_value(value: str) -> str:
+        template = value.strip()
+        if not template:
+            return ""
+        if template.startswith(".template/"):
+            return template
+        if template.startswith("template/"):
+            return "." + template
+        return f".template/continuation/{template}"
 
     @staticmethod
     def _as_int(value: Any, default: int) -> int:
@@ -270,6 +285,7 @@ class ContinuationEngine:
             for key in (
                 "goal",
                 "profile",
+                "template",
                 "params",
                 "frame_request",
                 "decision_policy",
@@ -283,6 +299,8 @@ class ContinuationEngine:
             program["goal"] = str(payload.get("goal") or "").strip().lower()
         if "profile" in payload:
             program["profile"] = str(payload.get("profile") or "").strip()
+        if "template" in payload:
+            program["template"] = str(payload.get("template") or "").strip()
         if "params" in payload:
             params = payload.get("params")
             program["params"] = params if isinstance(params, dict) else {}
@@ -602,48 +620,202 @@ class ContinuationEngine:
             return [step for step in plan if isinstance(step, dict)]
         return []
 
-    def _profile_steps(
-        self, program: dict[str, Any],
-    ) -> tuple[list[dict[str, Any]], Optional[dict[str, str]]]:
-        if self._is_query_auto_profile(program):
-            return [], None
+    def _default_write_template_config(self) -> dict[str, Any]:
+        return {
+            "steps": [],
+            "write_inline": {
+                "op": "put_item",
+                "fields": ["content", "uri", "id", "summary", "tags", "created_at", "force"],
+                "require_exactly_one": [["content", "uri"]],
+                "set": {
+                    "queue_background_tasks": False,
+                    "capture_write_context": True,
+                },
+            },
+            "followups": [
+                {
+                    "task_type": "summarize",
+                    "when": {"param_true": "processing.summarize"},
+                    "content": "$write.content",
+                    "tags": "$params.tags",
+                },
+                {
+                    "task_type": "ocr",
+                    "when": {"param_true": "processing.ocr"},
+                    "content": "",
+                    "metadata": {
+                        "uri": "$write.uri",
+                        "ocr_pages": "$write.ocr_pages",
+                        "content_type": "$write.content_type",
+                    },
+                },
+                {
+                    "task_type": "analyze",
+                    "when": {"param_true": "processing.analyze"},
+                    "content": "",
+                    "metadata": {
+                        "tags": "$params.processing.analyze_tags",
+                        "force": "$params.processing.analyze_force",
+                    },
+                },
+                {
+                    "task_type": "tag",
+                    "when": {"param_true": "processing.tag"},
+                    "content": "$write.content",
+                    "metadata": {
+                        "provider": "$params.processing.tag_provider",
+                        "provider_params": "$params.processing.tag_provider_params",
+                    },
+                },
+            ],
+        }
 
-        profile = str(program.get("profile") or "").strip()
-        if not profile:
-            return [], None
-
-        profile_id = profile if profile.startswith(".profile/") else f".profile/{profile}"
-        doc = self._env.get(profile_id)
-        if doc is None:
-            return [], {"code": "unknown_profile", "message": f"Profile not found: {profile_id}"}
-
-        raw = str(doc.summary or "").strip()
-        if not raw:
-            return [], {"code": "invalid_input", "message": f"Profile is empty: {profile_id}"}
-
+    @staticmethod
+    def _parse_template_document(raw: str, *, template_id: str) -> tuple[Optional[dict[str, Any]], Optional[dict[str, str]]]:
+        text = str(raw or "").strip()
+        if not text:
+            return None, {"code": "invalid_input", "message": f"Template is empty: {template_id}"}
         parsed: Any = None
         try:
-            parsed = json.loads(raw)
+            parsed = json.loads(text)
         except Exception:
             try:
                 import yaml
 
-                parsed = yaml.safe_load(raw)
+                parsed = yaml.safe_load(text)
             except Exception:
                 parsed = None
         if not isinstance(parsed, dict):
-            return [], {"code": "invalid_input", "message": f"Profile must parse to an object: {profile_id}"}
+            return None, {"code": "invalid_input", "message": f"Template must parse to an object: {template_id}"}
+        return {str(k): v for k, v in parsed.items()}, None
+
+    @staticmethod
+    def _merge_template_config(base: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(base)
+        for key, value in current.items():
+            if key in {"steps", "followups"}:
+                existing = merged.get(key)
+                out: list[Any] = []
+                if isinstance(existing, list):
+                    out.extend(existing)
+                if isinstance(value, list):
+                    out.extend(value)
+                merged[key] = out
+                continue
+            if key in {"write_inline", "decision_policy"}:
+                if isinstance(merged.get(key), dict) and isinstance(value, dict):
+                    combined = dict(merged.get(key) or {})
+                    combined.update(value)
+                    merged[key] = combined
+                else:
+                    merged[key] = value
+                continue
+            merged[key] = value
+        return merged
+
+    def _load_template_document(
+        self,
+        template_id: str,
+        *,
+        ancestry: Optional[list[str]] = None,
+    ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, str]]]:
+        ancestry = list(ancestry or [])
+        if template_id in ancestry:
+            chain = " -> ".join(ancestry + [template_id])
+            return None, {"code": "invalid_input", "message": f"Template include cycle: {chain}"}
+
+        doc = self._env.get(template_id)
+        if doc is None:
+            return None, None
+        parsed, parse_err = self._parse_template_document(str(doc.summary or ""), template_id=template_id)
+        if parse_err is not None:
+            return None, parse_err
+        assert isinstance(parsed, dict)
+
+        include_refs = parsed.get("include")
+        include_list: list[str] = []
+        if include_refs is not None:
+            if not isinstance(include_refs, list):
+                return None, {"code": "invalid_input", "message": f"Template include must be a list: {template_id}"}
+            for ref in include_refs:
+                if not isinstance(ref, str) or not ref.strip():
+                    return None, {"code": "invalid_input", "message": f"Template include entries must be non-empty strings: {template_id}"}
+                include_list.append(ref.strip())
+
+        merged: dict[str, Any] = {}
+        for ref in include_list:
+            child_id = self._template_id_from_value(ref)
+            child, child_err = self._load_template_document(
+                child_id,
+                ancestry=ancestry + [template_id],
+            )
+            if child_err is not None:
+                return None, child_err
+            if child is None:
+                return None, {"code": "unknown_template", "message": f"Template not found: {child_id}"}
+            merged = self._merge_template_config(merged, child)
+
+        current = dict(parsed)
+        current.pop("include", None)
+        merged = self._merge_template_config(merged, current)
+        return merged, None
+
+    def _load_template_config(
+        self, program: dict[str, Any],
+    ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, str]]]:
+        if self._is_query_auto_profile(program):
+            return None, None
+
+        goal = self._goal_from_program(program)
+        template_value = self._template_from_program(program)
+        explicit_template = bool(template_value)
+
+        if explicit_template:
+            template_id = self._template_id_from_value(template_value)
+        elif goal:
+            template_id = f".template/continuation/{goal}"
+        else:
+            return None, None
+
+        parsed, template_err = self._load_template_document(template_id)
+        if parsed is None:
+            if not explicit_template and template_id == ".template/continuation/write":
+                # Bootstrap default for first write before system-doc migration creates
+                # .template/continuation/write. Persisted system doc remains source of truth once present.
+                return self._default_write_template_config(), None
+            if template_err is not None:
+                return None, template_err
+            if explicit_template:
+                return None, {"code": "unknown_template", "message": f"Template not found: {template_id}"}
+            return None, None
 
         if not isinstance(program.get("decision_policy"), dict):
-            profile_policy = parsed.get("decision_policy")
-            if isinstance(profile_policy, dict):
-                program["decision_policy"] = dict(profile_policy)
+            template_policy = parsed.get("decision_policy")
+            if isinstance(template_policy, dict):
+                program["decision_policy"] = dict(template_policy)
 
+        return {str(k): v for k, v in parsed.items()}, None
+
+    def _template_steps(
+        self, program: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], Optional[dict[str, str]]]:
+        parsed, template_err = self._load_template_config(program)
+        if template_err is not None:
+            return [], template_err
+        if parsed is None:
+            return [], None
         steps = parsed.get("steps")
-        if isinstance(steps, list):
-            normalized_steps = [dict(step) for step in steps if isinstance(step, dict)]
-            return normalized_steps, None
-        return [], {"code": "invalid_input", "message": f"Profile missing steps: {profile_id}"}
+        if steps is None:
+            return [], None
+        if not isinstance(steps, list):
+            template_value = self._template_from_program(program)
+            if template_value:
+                template_id = self._template_id_from_value(template_value)
+            else:
+                template_id = f".template/continuation/{self._goal_from_program(program)}"
+            return [], {"code": "invalid_input", "message": f"Template steps must be a list: {template_id}"}
+        normalized_steps = [dict(step) for step in steps if isinstance(step, dict)]
+        return normalized_steps, None
 
     def _resolved_plan(
         self, program: dict[str, Any],
@@ -651,7 +823,29 @@ class ContinuationEngine:
         inline = self._program_steps(program)
         if inline:
             return inline, None
-        return self._profile_steps(program)
+        return self._template_steps(program)
+
+    def _template_followups(
+        self, program: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], Optional[dict[str, str]]]:
+        parsed, template_err = self._load_template_config(program)
+        if template_err is not None:
+            return [], template_err
+        if parsed is None:
+            return [], None
+        followups = parsed.get("followups")
+        if followups is None:
+            return [], None
+        if not isinstance(followups, list):
+            template_value = self._template_from_program(program)
+            template_id = (
+                self._template_id_from_value(template_value)
+                if template_value
+                else f".template/continuation/{self._goal_from_program(program)}"
+            )
+            return [], {"code": "invalid_input", "message": f"Template followups must be a list: {template_id}"}
+        normalized = [dict(entry) for entry in followups if isinstance(entry, dict)]
+        return normalized, None
 
     @staticmethod
     def _work_step_key(step: dict[str, Any], idx: int) -> str:
@@ -956,6 +1150,156 @@ class ContinuationEngine:
             }
         return value
 
+    @staticmethod
+    def _resolve_followup_ref(
+        ref: str,
+        *,
+        program: dict[str, Any],
+        write_context: dict[str, Any],
+        target_id: str,
+    ) -> Any:
+        path = str(ref or "").strip()
+        if path == "$target":
+            return target_id
+        if path.startswith("$params."):
+            return ContinuationEngine._param_value(program, path[8:])
+        if path == "$params":
+            params = program.get("params")
+            return dict(params) if isinstance(params, dict) else {}
+        if path == "$write":
+            return dict(write_context)
+        if path.startswith("$write."):
+            current: Any = write_context
+            for part in path[7:].split("."):
+                if not isinstance(current, dict):
+                    return None
+                current = current.get(part)
+            return current
+        return ref
+
+    def _resolve_followup_value(
+        self,
+        value: Any,
+        *,
+        program: dict[str, Any],
+        write_context: dict[str, Any],
+        target_id: str,
+    ) -> Any:
+        if isinstance(value, str) and value.startswith("$"):
+            return self._resolve_followup_ref(
+                value,
+                program=program,
+                write_context=write_context,
+                target_id=target_id,
+            )
+        if isinstance(value, list):
+            return [
+                self._resolve_followup_value(
+                    item,
+                    program=program,
+                    write_context=write_context,
+                    target_id=target_id,
+                )
+                for item in value
+            ]
+        if isinstance(value, dict):
+            return {
+                str(k): self._resolve_followup_value(
+                    v,
+                    program=program,
+                    write_context=write_context,
+                    target_id=target_id,
+                )
+                for k, v in value.items()
+            }
+        return value
+
+    @staticmethod
+    def _coerce_ocr_pages(value: Any) -> list[int]:
+        if isinstance(value, list):
+            out: list[int] = []
+            for item in value:
+                try:
+                    out.append(int(item))
+                except Exception:
+                    continue
+            return out
+        return []
+
+    def _followup_ops_from_template(
+        self,
+        *,
+        flow_id: str,
+        program: dict[str, Any],
+        followups: list[dict[str, Any]],
+        target_id: str,
+        write_context: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], Optional[dict[str, str]]]:
+        if not followups:
+            return [], None
+
+        ops: list[dict[str, Any]] = []
+        doc_coll = self._env.resolve_doc_collection()
+        for raw in followups:
+            if not isinstance(raw, dict):
+                continue
+            when = raw.get("when")
+            if not self._when_matches(when, flow_id=flow_id, program=program):
+                continue
+            task_type = str(raw.get("task_type") or "").strip()
+            if not task_type:
+                return [], {"code": "invalid_input", "message": "followup entry missing task_type"}
+
+            resolved_content = self._resolve_followup_value(
+                raw.get("content") or "",
+                program=program,
+                write_context=write_context,
+                target_id=target_id,
+            )
+            content = "" if resolved_content is None else str(resolved_content)
+            resolved_metadata = self._resolve_followup_value(
+                raw.get("metadata") or {},
+                program=program,
+                write_context=write_context,
+                target_id=target_id,
+            )
+            metadata = resolved_metadata if isinstance(resolved_metadata, dict) else {}
+            resolved_tags = self._resolve_followup_value(
+                raw.get("tags") or {},
+                program=program,
+                write_context=write_context,
+                target_id=target_id,
+            )
+            tags = resolved_tags if isinstance(resolved_tags, dict) else {}
+
+            if task_type == "summarize":
+                max_len = self._param_value(program, "processing.max_summary_length")
+                if isinstance(max_len, int) and len(content) <= max_len:
+                    continue
+                if not content:
+                    continue
+
+            if task_type == "ocr":
+                metadata["ocr_pages"] = self._coerce_ocr_pages(metadata.get("ocr_pages"))
+                if not metadata["ocr_pages"]:
+                    continue
+                if not metadata.get("uri"):
+                    continue
+
+            op: dict[str, Any] = {
+                "op": "enqueue_task",
+                "task_type": task_type,
+                "target": target_id,
+                "collection": doc_coll,
+                "content": content,
+            }
+            if metadata:
+                op["metadata"] = metadata
+            if tags:
+                op["tags"] = tags
+            ops.append(op)
+        return ops, None
+
     def _mutation_ops_from_work(
         self, work_input: dict[str, Any], outputs: dict[str, Any],
     ) -> tuple[list[dict[str, Any]], Optional[dict[str, str]]]:
@@ -992,9 +1336,21 @@ class ContinuationEngine:
     ) -> tuple[dict[str, Any], Optional[dict[str, str]]]:
         allowed_fields: dict[str, set[str]] = {
             "upsert_item": {"op", "target", "content", "tags", "summary"},
-            "put_item": {"op", "content", "uri", "id", "tags", "summary", "created_at", "force"},
+            "put_item": {
+                "op",
+                "content",
+                "uri",
+                "id",
+                "tags",
+                "summary",
+                "created_at",
+                "force",
+                "queue_background_tasks",
+                "capture_write_context",
+            },
             "set_tags": {"op", "target", "tags"},
             "set_summary": {"op", "target", "summary"},
+            "enqueue_task": {"op", "task_type", "target", "collection", "content", "metadata", "tags"},
         }
         normalized = {str(k): v for k, v in op.items()}
         op_name = str(normalized.get("op") or "")
@@ -1036,6 +1392,10 @@ class ContinuationEngine:
                 return {}, {"code": "invalid_input", "message": "put_item.tags must be an object"}
             if "force" in normalized and not isinstance(normalized.get("force"), bool):
                 return {}, {"code": "invalid_input", "message": "put_item.force must be a boolean"}
+            if "queue_background_tasks" in normalized and not isinstance(normalized.get("queue_background_tasks"), bool):
+                return {}, {"code": "invalid_input", "message": "put_item.queue_background_tasks must be a boolean"}
+            if "capture_write_context" in normalized and not isinstance(normalized.get("capture_write_context"), bool):
+                return {}, {"code": "invalid_input", "message": "put_item.capture_write_context must be a boolean"}
         elif op_name == "set_tags":
             if not target:
                 return {}, {"code": "missing_required_field", "message": "set_tags requires target"}
@@ -1046,6 +1406,15 @@ class ContinuationEngine:
                 return {}, {"code": "missing_required_field", "message": "set_summary requires target"}
             if normalized.get("summary") is None:
                 return {}, {"code": "missing_required_field", "message": "set_summary requires summary"}
+        elif op_name == "enqueue_task":
+            if not target:
+                return {}, {"code": "missing_required_field", "message": "enqueue_task requires target"}
+            if not str(normalized.get("task_type") or "").strip():
+                return {}, {"code": "missing_required_field", "message": "enqueue_task requires task_type"}
+            if "metadata" in normalized and not isinstance(normalized.get("metadata"), dict):
+                return {}, {"code": "invalid_input", "message": "enqueue_task.metadata must be an object"}
+            if "tags" in normalized and not isinstance(normalized.get("tags"), dict):
+                return {}, {"code": "invalid_input", "message": "enqueue_task.tags must be an object"}
         return normalized, None
 
     def _insert_pending_mutation(
@@ -1100,6 +1469,8 @@ class ContinuationEngine:
                 tags=tags if isinstance(tags, dict) else None,
                 created_at=str(op.get("created_at")) if op.get("created_at") else None,
                 force=bool(op.get("force", False)),
+                queue_background_tasks=bool(op.get("queue_background_tasks", True)),
+                capture_write_context=bool(op.get("capture_write_context", False)),
             )
             changed = getattr(item, "changed", None)
             status = "noop" if changed is False else "applied"
@@ -1124,6 +1495,26 @@ class ContinuationEngine:
                 return {"op": op_name, "target": target, "status": "noop"}, None
             self._env.set_summary(target, str(summary))
             return {"op": op_name, "target": target, "status": "applied"}, None
+        if op_name == "enqueue_task":
+            task_type = str(op.get("task_type") or "").strip()
+            metadata = op.get("metadata") if isinstance(op.get("metadata"), dict) else {}
+            tags = op.get("tags") if isinstance(op.get("tags"), dict) else {}
+            collection = str(op.get("collection") or self._env.resolve_doc_collection())
+            content = str(op.get("content") or "")
+            self._env.enqueue_task(
+                task_type=task_type,
+                item_id=target,
+                collection=collection,
+                content=content,
+                metadata=metadata,
+                tags=tags,
+            )
+            return {
+                "op": op_name,
+                "target": target,
+                "status": "queued",
+                "task_type": task_type,
+            }, None
         return {}, {"code": "invalid_input", "message": f"Unsupported mutation op: {op_name}"}
 
     def _replay_pending_mutations(
@@ -1195,7 +1586,7 @@ class ContinuationEngine:
                     "code": "mutation_failed",
                     "message": existing.error or "previous mutation attempt failed",
                 }
-            apply_in_tx = str(op.get("op") or "") == "put_item"
+            apply_in_tx = str(op.get("op") or "") in {"put_item", "enqueue_task"}
             if in_tx and not apply_in_tx:
                 applied.append(self._applied_entry(
                     source=source,
@@ -1451,21 +1842,124 @@ class ContinuationEngine:
         params = program.get("params") or {}
         if not isinstance(params, dict):
             return [], {"code": "invalid_input", "message": "write goal requires params object"}
-        has_content = params.get("content") is not None
-        has_uri = bool(params.get("uri"))
-        if has_content == has_uri:
-            return [], {
-                "code": "missing_required_field",
-                "message": "write goal requires exactly one of params.content or params.uri",
-            }
-        op: dict[str, Any] = {"op": "put_item"}
-        for key in ("content", "uri", "id", "summary", "tags", "created_at", "force"):
+
+        parsed_template, template_err = self._load_template_config(program)
+        if template_err is not None:
+            return [], template_err
+        write_inline = parsed_template.get("write_inline") if isinstance(parsed_template, dict) else None
+        if write_inline is not None and not isinstance(write_inline, dict):
+            return [], {"code": "invalid_input", "message": "template.write_inline must be an object"}
+
+        op_name = "put_item"
+        op_fields = ["content", "uri", "id", "summary", "tags", "created_at", "force"]
+        require_exactly_one: list[list[str]] = [["content", "uri"]]
+        inline_set: dict[str, Any] = {}
+
+        if isinstance(write_inline, dict):
+            op_name = str(write_inline.get("op") or op_name).strip()
+            fields = write_inline.get("fields")
+            if fields is not None:
+                if not isinstance(fields, list) or not all(isinstance(field, str) and field.strip() for field in fields):
+                    return [], {"code": "invalid_input", "message": "template.write_inline.fields must be a string list"}
+                op_fields = [str(field).strip() for field in fields]
+            rules = write_inline.get("require_exactly_one")
+            if rules is not None:
+                normalized_rules: list[list[str]] = []
+                if isinstance(rules, list):
+                    for rule in rules:
+                        if isinstance(rule, str) and rule.strip():
+                            normalized_rules.append([str(rule).strip()])
+                        elif isinstance(rule, list):
+                            group = [str(key).strip() for key in rule if isinstance(key, str) and str(key).strip()]
+                            if group:
+                                normalized_rules.append(group)
+                        else:
+                            return [], {"code": "invalid_input", "message": "template.write_inline.require_exactly_one entries must be strings or string lists"}
+                else:
+                    return [], {"code": "invalid_input", "message": "template.write_inline.require_exactly_one must be a list"}
+                require_exactly_one = normalized_rules
+            static_fields = write_inline.get("set")
+            if static_fields is not None:
+                if not isinstance(static_fields, dict):
+                    return [], {"code": "invalid_input", "message": "template.write_inline.set must be an object"}
+                inline_set = {str(k): v for k, v in static_fields.items()}
+
+        def _present(key: str) -> bool:
+            if key == "content":
+                return params.get("content") is not None
+            return bool(params.get(key))
+
+        for group in require_exactly_one:
+            present = sum(1 for key in group if _present(key))
+            if present != 1:
+                joined = ", ".join(f"params.{k}" for k in group)
+                return [], {
+                    "code": "missing_required_field",
+                    "message": f"write goal requires exactly one of {joined}",
+                }
+
+        op: dict[str, Any] = {"op": op_name}
+        for key in op_fields:
             if key in params:
                 op[key] = params.get(key)
+        if inline_set:
+            op.update(inline_set)
         ops = [op]
         applied, err = self._apply_mutation_ops(ops, flow_id=flow_id, work_id=None)
         if err is not None:
             return [], err
+
+        target_id = ""
+        write_status = ""
+        for entry in reversed(applied):
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("op") or "") not in {"put_item", "upsert_item"}:
+                continue
+            target_id = str(entry.get("target") or "").strip()
+            write_status = str(entry.get("status") or "").strip()
+            if target_id:
+                break
+        if not target_id:
+            if params.get("id"):
+                target_id = str(params.get("id"))
+            elif params.get("uri"):
+                target_id = str(params.get("uri"))
+
+        followups, followup_err = self._template_followups(program)
+        if followup_err is not None:
+            return [], followup_err
+        if followups and target_id and write_status != "noop":
+            write_context = self._env.consume_write_context(target_id) or {}
+            if not isinstance(write_context, dict):
+                write_context = {}
+            if "content" not in write_context and params.get("content") is not None:
+                write_context["content"] = params.get("content")
+            if "uri" not in write_context and params.get("uri"):
+                write_context["uri"] = params.get("uri")
+            if "ocr_pages" not in write_context:
+                write_context["ocr_pages"] = []
+            if "content_type" not in write_context:
+                write_context["content_type"] = ""
+
+            followup_ops, followup_build_err = self._followup_ops_from_template(
+                flow_id=flow_id,
+                program=program,
+                followups=followups,
+                target_id=target_id,
+                write_context=write_context,
+            )
+            if followup_build_err is not None:
+                return [], followup_build_err
+            if followup_ops:
+                followup_applied, followup_apply_err = self._apply_mutation_ops(
+                    followup_ops,
+                    flow_id=flow_id,
+                    work_id=None,
+                )
+                if followup_apply_err is not None:
+                    return [], followup_apply_err
+                applied.extend(followup_applied)
         state.setdefault("frontier", {})["write_applied"] = True
         return applied, None
 
