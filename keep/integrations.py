@@ -112,6 +112,8 @@ def detect_new_tools(already_known: dict[str, Any]) -> dict[str, Path]:
 
     for key, dirname in TOOL_CONFIGS.items():
         known_version = already_known.get(key)
+        if isinstance(known_version, int) and known_version < 0:
+            continue  # Explicitly opted out via wizard — skip permanently
         if isinstance(known_version, int) and known_version >= HOOKS_VERSION:
             continue  # Up to date — skip the stat
         # True (legacy boolean) or missing or old version → check for tool

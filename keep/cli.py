@@ -918,6 +918,20 @@ def main_callback(
     """Reflective memory with semantic search."""
     # If no subcommand provided, show the current intentions (now)
     if ctx.invoked_subcommand is None:
+        # On first run, the wizard handles everything — exit after setup
+        from .paths import get_config_dir
+        from .setup_wizard import needs_wizard
+        override = _get_store_override()
+        if os.environ.get("KEEP_CONFIG"):
+            config_dir = get_config_dir()
+        elif override:
+            config_dir = Path(override).resolve()
+        else:
+            config_dir = get_config_dir()
+        if needs_wizard(config_dir):
+            _get_keeper(None)  # triggers wizard
+            return
+
         from .api import NOWDOC_ID
         kp = _get_keeper(None)
         ctx_item = kp.get_context(NOWDOC_ID, similar_limit=3, meta_limit=3)
@@ -1131,7 +1145,21 @@ def _get_keeper(store: Optional[Path]) -> Keeper:
     # Check global override from --store on main command
     actual_store = store if store is not None else _get_store_override()
     try:
-        kp = Keeper(actual_store)
+        # Run setup wizard on first use (no existing config)
+        from .paths import get_config_dir
+        from .setup_wizard import needs_wizard, run_wizard
+        if os.environ.get("KEEP_CONFIG"):
+            wizard_config_dir = get_config_dir()
+        elif actual_store is not None:
+            wizard_config_dir = Path(actual_store).resolve()
+        else:
+            wizard_config_dir = get_config_dir()
+        wizard_config = None
+        if needs_wizard(wizard_config_dir):
+            store_path = Path(actual_store).resolve() if actual_store else None
+            wizard_config = run_wizard(wizard_config_dir, store_path)
+
+        kp = Keeper(actual_store, config=wizard_config)
         # Ensure close() runs before interpreter shutdown to release model locks
         atexit.register(kp.close)
 
@@ -1150,8 +1178,8 @@ def _get_keeper(store: Optional[Path]) -> Keeper:
         # Warn (don't exit) if no embedding provider — read-only ops still work
         if kp.config and kp.config.embedding is None:
             typer.echo(NO_PROVIDER_ERROR.strip(), err=True)
-        # Check tool integrations (fast path: dict lookup, no I/O)
-        if kp.config:
+        # Check tool integrations (fast path: dict lookup, no I/O if wizard ran)
+        if kp.config and not wizard_config:
             from .integrations import check_and_install
             try:
                 check_and_install(kp.config)
@@ -2912,6 +2940,10 @@ def config(
         "--reset-system-docs",
         help="Force reload system documents from bundled content (overwrites modifications)"
     )] = False,
+    setup: Annotated[bool, typer.Option(
+        "--setup",
+        help="Run interactive setup wizard (provider and tool selection)"
+    )] = False,
     store: StoreOption = None,
 ):
     """
@@ -2927,8 +2959,24 @@ def config(
         keep config store        # Store path
         keep config providers    # All provider config
         keep config providers.embedding  # Embedding provider name
+        keep config --setup      # Re-run interactive setup wizard
         keep config --reset-system-docs  # Reset bundled system docs
     """
+    # Handle setup wizard
+    if setup:
+        from .paths import get_config_dir
+        from .setup_wizard import run_wizard
+        actual_store = store if store is not None else _get_store_override()
+        if os.environ.get("KEEP_CONFIG"):
+            config_dir = get_config_dir()
+        elif actual_store:
+            config_dir = Path(actual_store).resolve()
+        else:
+            config_dir = get_config_dir()
+        store_path = Path(actual_store).resolve() if actual_store else None
+        run_wizard(config_dir, store_path, restart_command="keep config --setup")
+        return
+
     # Handle system docs reset - requires full Keeper initialization
     if reset_system_docs:
         kp = _get_keeper(store)
