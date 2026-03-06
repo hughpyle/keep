@@ -3,6 +3,7 @@ import json
 import pytest
 
 from keep.api import Keeper
+from keep.api import _text_content_id
 
 
 def _summarize_request(note_id: str, content: str, *, request_id: str, idempotency_key: str | None = None) -> dict:
@@ -646,6 +647,27 @@ def test_continue_inline_write_single_tick(mock_providers, tmp_path):
         kp.close()
 
 
+def test_continue_inline_write_without_id_uses_content_addressed_id(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    try:
+        content = "hello without explicit id"
+        out = kp.continue_flow(
+            {
+                "request_id": "req-write-no-id-1",
+                "goal": "write",
+                "params": {"content": content, "tags": {"topic": "demo"}},
+                "work_results": [],
+            }
+        )
+        assert out["status"] == "done"
+        expected_id = _text_content_id(content)
+        item = kp.get(expected_id)
+        assert item is not None
+        assert item.tags.get("topic") == "demo"
+    finally:
+        kp.close()
+
+
 def test_continue_multi_step_plan_orders_work(mock_providers, tmp_path):
     kp = Keeper(store_path=tmp_path)
     try:
@@ -975,6 +997,18 @@ def test_continuation_runtime_is_lazy_initialized(mock_providers, tmp_path):
             }
         )
         assert out["status"] in {"done", "failed"}
+        assert continuation_path.exists()
+    finally:
+        kp.close()
+
+
+def test_put_routes_through_continuation_runtime(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    continuation_path = tmp_path / "continuation.db"
+    try:
+        assert not continuation_path.exists()
+        item = kp.put(content="put via continuation", id="note:put-via-cont")
+        assert item.id == "note:put-via-cont"
         assert continuation_path.exists()
     finally:
         kp.close()

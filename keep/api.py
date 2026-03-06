@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import replace
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
@@ -2385,7 +2386,7 @@ class Keeper:
 
         return _record_to_item(result, changed=not content_unchanged)
 
-    def put(
+    def _put_direct(
         self,
         content: Optional[str] = None,
         *,
@@ -2416,27 +2417,6 @@ class Keeper:
             tags: Tag map to attach to the item.
             created_at: Override creation timestamp (ISO 8601).
             force: Re-process even if content is unchanged.
-        - Supports file://, http://, https:// URIs.
-        - Non-text content (images, audio, PDF) gets media description.
-
-        **Tag and summary behavior:**
-        - Tags are merged with existing tags (new override on collision).
-        - System tags (_prefixed) are managed automatically.
-        - If summary is provided, it's used directly (skips auto-summarization).
-
-        Args:
-            content: Inline text to store
-            uri: URI of document to fetch and index
-            id: Custom ID (auto-generated for inline content if None)
-            summary: User-provided summary (skips auto-summarization)
-            tags: User-provided tags to merge with existing tags
-            created_at: Override creation timestamp (ISO 8601).
-                        For importing historical data via the Python API.
-                        When updating an existing item, sets the head's
-                        created_at so version archives carry accurate dates.
-
-        Returns:
-            The stored Item with merged tags and summary
         """
         if content is not None and uri is not None:
             raise ValueError("Provide content or uri, not both")
@@ -2615,6 +2595,110 @@ class Keeper:
                 created_at=created_at,
                 force=force,
             )
+
+    def _put_via_continuation(
+        self,
+        content: Optional[str] = None,
+        *,
+        uri: Optional[str] = None,
+        id: Optional[str] = None,
+        summary: Optional[str] = None,
+        tags: Optional[TagMap] = None,
+        created_at: Optional[str] = None,
+        force: bool = False,
+    ) -> Item:
+        payload = {
+            "goal": "write",
+            "params": {
+                "content": content,
+                "uri": uri,
+                "id": id,
+                "summary": summary,
+                "tags": tags,
+                "created_at": created_at,
+                "force": force,
+            },
+            "work_results": [],
+        }
+        out = self.continue_flow(payload)
+
+        if str(out.get("status") or "") == "failed":
+            errors = out.get("errors") or []
+            if isinstance(errors, list) and errors:
+                first = errors[0] if isinstance(errors[0], dict) else {}
+                code = str(first.get("code") or "write_failed")
+                message = str(first.get("message") or "Continuation write failed")
+                raise ValueError(f"{code}: {message}")
+            raise ValueError("Continuation write failed")
+
+        work = out.get("work") or []
+        if isinstance(work, list) and work:
+            raise ValueError("put() cannot require deferred continuation work")
+
+        applied_ops = out.get("applied_ops") or []
+        put_op = None
+        if isinstance(applied_ops, list):
+            for op in reversed(applied_ops):
+                if not isinstance(op, dict):
+                    continue
+                if str(op.get("op") or "") in {"put_item", "upsert_item"}:
+                    put_op = op
+                    break
+
+        target_id: Optional[str] = None
+        op_status: Optional[str] = None
+        if isinstance(put_op, dict):
+            target_raw = put_op.get("target")
+            if target_raw is not None:
+                target_id = str(target_raw)
+            status_raw = put_op.get("status")
+            if status_raw is not None:
+                op_status = str(status_raw)
+
+        if not target_id:
+            if id is not None:
+                target_id = normalize_id(id)
+            elif uri is not None:
+                target_id = normalize_id(uri)
+            elif content is not None:
+                target_id = _text_content_id(content)
+
+        if not target_id:
+            raise ValueError("Continuation write did not return an item id")
+
+        item = self.get(target_id)
+        if item is None:
+            raise ValueError(f"Continuation write item not found: {target_id}")
+
+        if op_status == "noop":
+            return replace(item, changed=False)
+        if op_status in {"applied", "queued"}:
+            return replace(item, changed=(op_status == "applied"))
+        return item
+
+    def put(
+        self,
+        content: Optional[str] = None,
+        *,
+        uri: Optional[str] = None,
+        id: Optional[str] = None,
+        summary: Optional[str] = None,
+        tags: Optional[TagMap] = None,
+        created_at: Optional[str] = None,
+        force: bool = False,
+    ) -> Item:
+        """
+        Store content in memory through continuation write execution.
+        """
+        return self._put_via_continuation(
+            content=content,
+            uri=uri,
+            id=id,
+            summary=summary,
+            tags=tags,
+            created_at=created_at,
+            force=force,
+        )
 
     # -------------------------------------------------------------------------
     # Query Operations

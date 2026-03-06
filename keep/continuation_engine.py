@@ -992,6 +992,7 @@ class ContinuationEngine:
     ) -> tuple[dict[str, Any], Optional[dict[str, str]]]:
         allowed_fields: dict[str, set[str]] = {
             "upsert_item": {"op", "target", "content", "tags", "summary"},
+            "put_item": {"op", "content", "uri", "id", "tags", "summary", "created_at", "force"},
             "set_tags": {"op", "target", "tags"},
             "set_summary": {"op", "target", "summary"},
         }
@@ -1007,7 +1008,7 @@ class ContinuationEngine:
                 "message": f"Unsupported fields for {op_name}: " + ", ".join(unknown_fields),
             }
         target = normalized.get("target")
-        if target:
+        if target and op_name in {"upsert_item", "set_tags", "set_summary"}:
             target_id = str(target)
             if self._is_protected_note_id(target_id):
                 return {}, {
@@ -1022,6 +1023,19 @@ class ContinuationEngine:
             tags = normalized.get("tags")
             if tags is not None and not isinstance(tags, dict):
                 return {}, {"code": "invalid_input", "message": "upsert_item.tags must be an object"}
+        elif op_name == "put_item":
+            has_content = normalized.get("content") is not None
+            has_uri = bool(normalized.get("uri"))
+            if has_content == has_uri:
+                return {}, {
+                    "code": "missing_required_field",
+                    "message": "put_item requires exactly one of content or uri",
+                }
+            tags = normalized.get("tags")
+            if tags is not None and not isinstance(tags, dict):
+                return {}, {"code": "invalid_input", "message": "put_item.tags must be an object"}
+            if "force" in normalized and not isinstance(normalized.get("force"), bool):
+                return {}, {"code": "invalid_input", "message": "put_item.force must be a boolean"}
         elif op_name == "set_tags":
             if not target:
                 return {}, {"code": "missing_required_field", "message": "set_tags requires target"}
@@ -1075,6 +1089,25 @@ class ContinuationEngine:
                 summary=str(summary) if summary is not None else None,
             )
             return {"op": op_name, "target": target, "status": "applied"}, None
+        if op_name == "put_item":
+            tags = op.get("tags")
+            summary = op.get("summary")
+            item = self._env.put_item(
+                content=str(op.get("content")) if op.get("content") is not None else None,
+                uri=str(op.get("uri")) if op.get("uri") else None,
+                id=str(op.get("id")) if op.get("id") else None,
+                summary=str(summary) if summary is not None else None,
+                tags=tags if isinstance(tags, dict) else None,
+                created_at=str(op.get("created_at")) if op.get("created_at") else None,
+                force=bool(op.get("force", False)),
+            )
+            changed = getattr(item, "changed", None)
+            status = "noop" if changed is False else "applied"
+            return {
+                "op": op_name,
+                "target": str(getattr(item, "id", "") or op.get("id") or ""),
+                "status": status,
+            }, None
         if op_name == "set_tags":
             tags = op.get("tags")
             if not isinstance(tags, dict):
@@ -1144,6 +1177,7 @@ class ContinuationEngine:
             op, err = self._validate_mutation_op(raw_op)
             if err is not None:
                 return [], err
+            target_hint = str(op.get("target") or op.get("id") or "")
             mutation_id = self._insert_pending_mutation(flow_id=flow_id, work_id=work_id, op=op)
             existing = self._get_mutation(mutation_id)
             if existing is not None and existing.status == "applied":
@@ -1151,7 +1185,7 @@ class ContinuationEngine:
                     source=source,
                     work_id=work_id,
                     op=str(op.get("op") or ""),
-                    target=str(op.get("target") or ""),
+                    target=target_hint,
                     status="applied",
                     mutation_id=mutation_id,
                 ))
@@ -1161,12 +1195,13 @@ class ContinuationEngine:
                     "code": "mutation_failed",
                     "message": existing.error or "previous mutation attempt failed",
                 }
-            if in_tx:
+            apply_in_tx = str(op.get("op") or "") == "put_item"
+            if in_tx and not apply_in_tx:
                 applied.append(self._applied_entry(
                     source=source,
                     work_id=work_id,
                     op=str(op.get("op") or ""),
-                    target=str(op.get("target") or ""),
+                    target=target_hint,
                     status="queued",
                     mutation_id=mutation_id,
                 ))
@@ -1416,21 +1451,18 @@ class ContinuationEngine:
         params = program.get("params") or {}
         if not isinstance(params, dict):
             return [], {"code": "invalid_input", "message": "write goal requires params object"}
-
-        item_id = params.get("id")
-        content = params.get("content")
-        if not item_id or content is None:
+        has_content = params.get("content") is not None
+        has_uri = bool(params.get("uri"))
+        if has_content == has_uri:
             return [], {
                 "code": "missing_required_field",
-                "message": "write goal requires params.id and params.content",
+                "message": "write goal requires exactly one of params.content or params.uri",
             }
-        ops = [{
-            "op": "upsert_item",
-            "target": str(item_id),
-            "content": str(content),
-            "tags": params.get("tags"),
-            "summary": params.get("summary"),
-        }]
+        op: dict[str, Any] = {"op": "put_item"}
+        for key in ("content", "uri", "id", "summary", "tags", "created_at", "force"):
+            if key in params:
+                op[key] = params.get(key)
+        ops = [op]
         applied, err = self._apply_mutation_ops(ops, flow_id=flow_id, work_id=None)
         if err is not None:
             return [], err

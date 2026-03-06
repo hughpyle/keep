@@ -54,6 +54,18 @@ class ContinuationRuntimeEnv(Protocol):
         summary: str | None = None,
     ) -> None: ...
 
+    def put_item(
+        self,
+        *,
+        content: str | None = None,
+        uri: str | None = None,
+        id: str | None = None,
+        summary: str | None = None,
+        tags: dict[str, Any] | None = None,
+        created_at: str | None = None,
+        force: bool = False,
+    ) -> Any: ...
+
     def set_tags(self, target: str, tags: dict[str, Any]) -> None: ...
 
     def set_summary(self, target: str, summary: str) -> None: ...
@@ -136,11 +148,32 @@ class LocalContinuationEnvironment:
         tags: dict[str, Any] | None = None,
         summary: str | None = None,
     ) -> None:
-        self._keeper.put(
+        self._keeper._put_direct(
             content=content,
             id=target,
             tags=tags,
             summary=summary,
+        )
+
+    def put_item(
+        self,
+        *,
+        content: str | None = None,
+        uri: str | None = None,
+        id: str | None = None,
+        summary: str | None = None,
+        tags: dict[str, Any] | None = None,
+        created_at: str | None = None,
+        force: bool = False,
+    ) -> Any:
+        return self._keeper._put_direct(
+            content=content,
+            uri=uri,
+            id=id,
+            summary=summary,
+            tags=tags,
+            created_at=created_at,
+            force=force,
         )
 
     def set_tags(self, target: str, tags: dict[str, Any]) -> None:
