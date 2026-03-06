@@ -11,7 +11,7 @@ uv tool install keep-skill
 That's it. If [Ollama](https://ollama.com/) is running, keep auto-detects it — no API keys needed, models pulled automatically. Otherwise set any provider API key:
 
 ```bash
-export OPENAI_API_KEY=...             # or GEMINI_API_KEY, VOYAGE_API_KEY, etc.
+export OPENAI_API_KEY=...             # or GEMINI_API_KEY, VOYAGE_API_KEY, MISTRAL_API_KEY, etc.
 ```
 
 Or use the [hosted service](https://keepnotes.ai) — no local models, no database setup:

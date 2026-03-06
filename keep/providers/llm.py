@@ -641,17 +641,203 @@ class OllamaContentExtractor:
         return text if len(text) > 10 else None
 
 
+class MistralSummarization:
+    """
+    Summarization provider using Mistral AI's chat API.
+
+    Requires: MISTRAL_API_KEY environment variable.
+
+    Default model is mistral-small-latest (cost-effective).
+    """
+
+    def __init__(
+        self,
+        model: str = "mistral-small-latest",
+        api_key: str | None = None,
+        max_tokens: int = 200,
+    ):
+        try:
+            from mistralai import Mistral
+        except ImportError:
+            raise RuntimeError(
+                "MistralSummarization requires 'mistralai' library. "
+                "Install with: pip install mistralai"
+            )
+
+        self.model = model
+        self.max_tokens = max_tokens
+
+        key = api_key or os.environ.get("MISTRAL_API_KEY")
+        if not key:
+            raise ValueError(
+                "Mistral API key required. Set MISTRAL_API_KEY environment variable.\n"
+                "Get your API key at: https://console.mistral.ai/"
+            )
+
+        self._client = Mistral(api_key=key)
+
+    def summarize(
+        self,
+        content: str,
+        *,
+        max_length: int = 500,
+        context: str | None = None,
+    ) -> str:
+        truncated = content[:50000] if len(content) > 50000 else content
+        prompt = build_summarization_prompt(truncated, context)
+        result = self.generate(SUMMARIZATION_SYSTEM_PROMPT, prompt)
+        return result if result else truncated[:max_length]
+
+    def generate(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        response = self._client.chat.complete(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens,
+        )
+        if response.choices:
+            return response.choices[0].message.content
+        return None
+
+
+class MistralTagging:
+    """
+    Tagging provider using Mistral AI's chat API with JSON output.
+
+    Requires: MISTRAL_API_KEY environment variable.
+    """
+
+    def __init__(
+        self,
+        model: str = "mistral-small-latest",
+        api_key: str | None = None,
+    ):
+        try:
+            from mistralai import Mistral
+        except ImportError:
+            raise RuntimeError(
+                "MistralTagging requires 'mistralai' library. "
+                "Install with: pip install mistralai"
+            )
+
+        self.model = model
+
+        key = api_key or os.environ.get("MISTRAL_API_KEY")
+        if not key:
+            raise ValueError(
+                "Mistral API key required. Set MISTRAL_API_KEY environment variable.\n"
+                "Get your API key at: https://console.mistral.ai/"
+            )
+
+        self._client = Mistral(api_key=key)
+
+    def tag(self, content: str) -> dict[str, str]:
+        truncated = content[:20000] if len(content) > 20000 else content
+        try:
+            response = self._client.chat.complete(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": TAGGING_SYSTEM_PROMPT},
+                    {"role": "user", "content": truncated},
+                ],
+                max_tokens=200,
+                temperature=0.2,
+                response_format={"type": "json_object"},
+            )
+            text = response.choices[0].message.content if response.choices else None
+        except Exception:
+            return {}
+        return parse_tag_json(text)
+
+
+class MistralContentExtractor:
+    """
+    Content extraction (OCR) using Mistral's OCR API.
+
+    Supports images (PNG, JPEG, etc.) and PDFs.
+    Uses mistral-ocr-latest model which returns structured markdown.
+
+    Requires: MISTRAL_API_KEY environment variable.
+    """
+
+    def __init__(
+        self,
+        model: str = "mistral-ocr-latest",
+        api_key: str | None = None,
+    ):
+        try:
+            from mistralai import Mistral
+        except ImportError:
+            raise RuntimeError(
+                "MistralContentExtractor requires 'mistralai' library. "
+                "Install with: pip install mistralai"
+            )
+
+        self.model = model
+
+        key = api_key or os.environ.get("MISTRAL_API_KEY")
+        if not key:
+            raise ValueError(
+                "Mistral API key required. Set MISTRAL_API_KEY environment variable.\n"
+                "Get your API key at: https://console.mistral.ai/"
+            )
+
+        self._client = Mistral(api_key=key)
+
+    def extract(self, path: str, content_type: str) -> str | None:
+        if not (content_type.startswith("image/") or content_type == "application/pdf"):
+            return None
+
+        import base64
+        from mistralai.models import ImageURLChunk, DocumentURLChunk
+
+        with open(path, "rb") as f:
+            data = base64.b64encode(f.read()).decode("utf-8")
+
+        data_url = f"data:{content_type};base64,{data}"
+
+        if content_type.startswith("image/"):
+            document = ImageURLChunk(image_url=data_url)
+        else:
+            document = DocumentURLChunk(document_url=data_url)
+
+        response = self._client.ocr.process(
+            model=self.model,
+            document=document,
+        )
+
+        # Combine markdown from all pages
+        pages = []
+        for page in response.pages:
+            if page.markdown and page.markdown.strip():
+                pages.append(page.markdown.strip())
+
+        text = "\n\n".join(pages)
+        return text if len(text) > 10 else None
+
+
 # Register providers
 _registry = get_registry()
 _registry.register_summarization("anthropic", AnthropicSummarization)
 _registry.register_summarization("openai", OpenAISummarization)
 _registry.register_summarization("ollama", OllamaSummarization)
 _registry.register_summarization("gemini", GeminiSummarization)
+_registry.register_summarization("mistral", MistralSummarization)
 _registry.register_summarization("passthrough", PassthroughSummarization)
 _registry.register_tagging("anthropic", AnthropicTagging)
 _registry.register_tagging("openai", OpenAITagging)
 _registry.register_tagging("ollama", OllamaTagging)
 _registry.register_tagging("gemini", GeminiTagging)
+_registry.register_tagging("mistral", MistralTagging)
 _registry.register_tagging("noop", NoopTagging)
 _registry.register_media("ollama", OllamaMediaDescriber)
 _registry.register_content_extractor("ollama", OllamaContentExtractor)
+_registry.register_content_extractor("mistral", MistralContentExtractor)

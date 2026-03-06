@@ -49,11 +49,11 @@ version = 2
 max_summary_length = 1000
 
 [embedding]
-name = "ollama"                        # or "voyage", "openai", "mlx", "sentence-transformers"
+name = "ollama"                        # or "voyage", "openai", "mistral", "mlx", "sentence-transformers"
 model = "nomic-embed-text"
 
 [summarization]
-name = "ollama"                        # or "anthropic", "openai", "mlx"
+name = "ollama"                        # or "anthropic", "openai", "mistral", "mlx"
 model = "gemma3:1b"
 
 [media]
@@ -115,6 +115,7 @@ Set environment variables for your preferred providers:
 | **Anthropic** | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`* | [console.anthropic.com](https://console.anthropic.com/) | - | yes |
 | **OpenAI** | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/) | yes | yes |
 | **Google Gemini** | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com/) | yes | yes |
+| **Mistral** | `MISTRAL_API_KEY` | [console.mistral.ai](https://console.mistral.ai/) | yes | yes |
 | **Vertex AI** | `GOOGLE_CLOUD_PROJECT` | GCP Workload Identity / ADC | yes | yes |
 
 \* **Anthropic Authentication Methods:**
@@ -170,6 +171,9 @@ Alternatively, for best quality embeddings with Anthropic summarization:
 | **OpenAI** | Summarization | `gpt-4o-mini` (default), `gpt-4o` |
 | **Gemini** | Embeddings | `text-embedding-004` (default) |
 | **Gemini** | Summarization | `gemini-2.5-flash` (default), `gemini-2.5-pro` |
+| **Mistral** | Embeddings | `mistral-embed` (default, 1024 dims) |
+| **Mistral** | Summarization | `mistral-small-latest` (default), `mistral-large-latest` |
+| **Mistral** | OCR | `mistral-ocr-latest` — cloud OCR for images and PDFs |
 | **Ollama** | Embeddings | `nomic-embed-text` (recommended), `mxbai-embed-large` |
 | **Ollama** | Summarization | `gemma3:1b` (fast), `llama3.2:3b`, `mistral`, `phi3` |
 | **Ollama** | Media | Vision models: `llava`, `moondream`, `bakllava` (images only) |
@@ -209,6 +213,7 @@ GOOGLE_CLOUD_PROJECT=my-project      # Vertex AI via Workload Identity / ADC
 GOOGLE_CLOUD_LOCATION=us-east1       # Vertex AI region (default: us-east1)
 VOYAGE_API_KEY=pa-...                # For Voyage embeddings only
 ANTHROPIC_API_KEY=sk-ant-...         # For Anthropic summarization only
+MISTRAL_API_KEY=...                  # For Mistral (embeddings + summarization + OCR)
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  # OAuth token alternative
 KEEPNOTES_API_KEY=kn_...             # For hosted keepnotes.ai service
 ```

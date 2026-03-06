@@ -91,6 +91,7 @@ class EmbeddingIdentity:
             "gemini": "gemini",
             "ollama": "ollama",
             "voyage": "voyage",
+            "mistral": "mistral",
         }.get(self.provider, self.provider[:6])
         
         return f"{provider_short}_{model_slug}"
@@ -241,9 +242,13 @@ def _ollama_pick_models(models: list[str]) -> tuple[str, str | None]:
 def _detect_content_extractor() -> "ProviderConfig | None":
     """Auto-detect a content extractor (OCR) provider.
 
-    Priority: Ollama (glm-ocr auto-pulled on first use) > MLX > None.
+    Priority: Mistral (cloud OCR) > Ollama (glm-ocr) > MLX > None.
     """
-    # 1. Ollama
+    # 1. Mistral OCR (high-quality cloud OCR)
+    if not os.environ.get("KEEP_LOCAL_ONLY") and os.environ.get("MISTRAL_API_KEY"):
+        return ProviderConfig("mistral")
+
+    # 2. Ollama
     ollama = _detect_ollama()
     if ollama:
         params: dict[str, Any] = {"model": "glm-ocr"}
@@ -251,7 +256,7 @@ def _detect_content_extractor() -> "ProviderConfig | None":
             params["base_url"] = ollama["base_url"]
         return ProviderConfig("ollama", params)
 
-    # 2. MLX (Apple Silicon with mlx-vlm)
+    # 3. MLX (Apple Silicon with mlx-vlm)
     if platform.system() == "Darwin" and platform.machine() == "arm64":
         try:
             import mlx_vlm  # noqa
@@ -307,6 +312,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         os.environ.get("GOOGLE_CLOUD_PROJECT")
     )
     has_voyage_key = not local_only and bool(os.environ.get("VOYAGE_API_KEY"))
+    has_mistral_key = not local_only and bool(os.environ.get("MISTRAL_API_KEY"))
 
     # Check for Ollama (lazy — only probed when no API key covers both)
     _ollama_info: dict | None = None
@@ -330,6 +336,8 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         embedding_provider = ProviderConfig("openai")
     elif has_gemini_key:
         embedding_provider = ProviderConfig("gemini")
+    elif has_mistral_key:
+        embedding_provider = ProviderConfig("mistral")
 
     # 2. Ollama (local server, no API key needed)
     if embedding_provider is None:
@@ -372,6 +380,8 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         summarization_provider = ProviderConfig("openai")
     elif has_gemini_key:
         summarization_provider = ProviderConfig("gemini")
+    elif has_mistral_key:
+        summarization_provider = ProviderConfig("mistral")
 
     # 2. Ollama (needs a generative model, not embedding-only)
     if summarization_provider is None:
@@ -604,7 +614,7 @@ def load_config(config_dir: Path) -> StoreConfig:
 
     # KEEP_LOCAL_ONLY=1 overrides remote providers to None/fallback
     if os.environ.get("KEEP_LOCAL_ONLY"):
-        _REMOTE_PROVIDERS = {"voyage", "openai", "gemini", "anthropic"}
+        _REMOTE_PROVIDERS = {"voyage", "openai", "gemini", "anthropic", "mistral"}
         if embedding_config and embedding_config.name in _REMOTE_PROVIDERS:
             embedding_config = None
         if summarization_config and summarization_config.name in _REMOTE_PROVIDERS:

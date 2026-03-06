@@ -484,6 +484,71 @@ class VoyageEmbedding:
         return [d["embedding"] for d in sorted_data]
 
 
+class MistralEmbedding:
+    """
+    Embedding provider using Mistral AI's API.
+
+    Requires: MISTRAL_API_KEY environment variable.
+    Requires: pip install mistralai
+    """
+
+    MODEL_DIMENSIONS = {
+        "mistral-embed": 1024,
+    }
+
+    def __init__(
+        self,
+        model: str = "mistral-embed",
+        api_key: str | None = None,
+    ):
+        try:
+            from mistralai import Mistral
+        except ImportError:
+            raise RuntimeError(
+                "MistralEmbedding requires 'mistralai' library. "
+                "Install with: pip install mistralai"
+            )
+
+        self.model_name = model
+        self._dimension = self.MODEL_DIMENSIONS.get(model)
+
+        key = api_key or os.environ.get("MISTRAL_API_KEY")
+        if not key:
+            raise ValueError(
+                "Mistral API key required. Set MISTRAL_API_KEY environment variable.\n"
+                "Get your API key at: https://console.mistral.ai/"
+            )
+
+        self._client = Mistral(api_key=key)
+
+    @property
+    def dimension(self) -> int:
+        if self._dimension is None:
+            test_embedding = self.embed("dimension test")
+            self._dimension = len(test_embedding)
+        return self._dimension
+
+    def embed(self, text: str) -> list[float]:
+        response = self._client.embeddings.create(
+            model=self.model_name,
+            inputs=[text],
+        )
+        embedding = response.data[0].embedding
+        if self._dimension is None:
+            self._dimension = len(embedding)
+        return embedding
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        response = self._client.embeddings.create(
+            model=self.model_name,
+            inputs=texts,
+        )
+        sorted_data = sorted(response.data, key=lambda x: x.index)
+        return [d.embedding for d in sorted_data]
+
+
 # Register providers
 _registry = get_registry()
 _registry.register_embedding("sentence-transformers", SentenceTransformerEmbedding)
@@ -491,3 +556,4 @@ _registry.register_embedding("openai", OpenAIEmbedding)
 _registry.register_embedding("gemini", GeminiEmbedding)
 _registry.register_embedding("ollama", OllamaEmbedding)
 _registry.register_embedding("voyage", VoyageEmbedding)
+_registry.register_embedding("mistral", MistralEmbedding)
