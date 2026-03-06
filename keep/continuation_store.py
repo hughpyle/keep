@@ -37,6 +37,13 @@ class WorkRow:
     input_json: str
     output_contract_json: str
     attempt: int
+    claimed_by: Optional[str] = None
+    claimed_at: Optional[str] = None
+    lease_until: Optional[str] = None
+    retry_after: Optional[str] = None
+    last_error: Optional[str] = None
+    max_attempts: int = 5
+    dead_lettered_at: Optional[str] = None
 
 
 @dataclass
@@ -77,6 +84,37 @@ class FlowStore(Protocol):
         self, *, flow_id: str, kind: str, input_json: str, output_contract_json: str,
     ) -> str: ...
     def update_work_result(self, *, work_id: str, status: str, result_json: str) -> None: ...
+    def claim_requested_work(
+        self,
+        *,
+        worker_id: str,
+        limit: int = 10,
+        lease_seconds: int = 120,
+        flow_id: Optional[str] = None,
+    ) -> list[WorkRow]: ...
+    def renew_work_lease(
+        self,
+        *,
+        work_id: str,
+        worker_id: str,
+        lease_seconds: int = 120,
+    ) -> bool: ...
+    def release_work_for_retry(
+        self,
+        *,
+        work_id: str,
+        worker_id: str,
+        error: Optional[str] = None,
+        backoff_base_seconds: int = 30,
+        backoff_max_seconds: int = 3600,
+    ) -> bool: ...
+    def dead_letter_work(
+        self,
+        *,
+        work_id: str,
+        worker_id: str,
+        error: Optional[str] = None,
+    ) -> bool: ...
 
     def insert_event(self, *, flow_id: str, event_type: str, payload_json: str) -> None: ...
     def prune_events(self, flow_id: str, *, keep_last: int) -> None: ...
@@ -134,9 +172,14 @@ class SQLiteFlowStore:
                 updated_at TEXT NOT NULL
             )
         """)
+        self._migrate_continue_work()
         self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_continue_work_flow_status
             ON continue_work(flow_id, status)
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_continue_work_claimable
+            ON continue_work(status, retry_after, lease_until, created_at)
         """)
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS continue_idempotency (
@@ -172,6 +215,57 @@ class SQLiteFlowStore:
             CREATE INDEX IF NOT EXISTS idx_continue_mutations_status_created
             ON continue_mutations(status, created_at)
         """)
+
+    def _migrate_continue_work(self) -> None:
+        columns = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(continue_work)").fetchall()
+        }
+
+        def _add_column(column: str, coldef: str) -> None:
+            try:
+                self._conn.execute(f"ALTER TABLE continue_work ADD COLUMN {column} {coldef}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
+        if "claimed_by" not in columns:
+            _add_column("claimed_by", "TEXT")
+        if "claimed_at" not in columns:
+            _add_column("claimed_at", "TEXT")
+        if "lease_until" not in columns:
+            _add_column("lease_until", "TEXT")
+        if "retry_after" not in columns:
+            _add_column("retry_after", "TEXT")
+        if "last_error" not in columns:
+            _add_column("last_error", "TEXT")
+        if "max_attempts" not in columns:
+            _add_column("max_attempts", "INTEGER NOT NULL DEFAULT 5")
+        if "dead_lettered_at" not in columns:
+            _add_column("dead_lettered_at", "TEXT")
+
+    @staticmethod
+    def _work_row(row: sqlite3.Row) -> WorkRow:
+        return WorkRow(
+            work_id=str(row["work_id"]),
+            flow_id=str(row["flow_id"]),
+            kind=str(row["kind"]),
+            status=str(row["status"]),
+            input_json=str(row["input_json"]),
+            output_contract_json=str(row["output_contract_json"]),
+            attempt=int(row["attempt"]),
+            claimed_by=str(row["claimed_by"]) if row["claimed_by"] is not None else None,
+            claimed_at=str(row["claimed_at"]) if row["claimed_at"] is not None else None,
+            lease_until=str(row["lease_until"]) if row["lease_until"] is not None else None,
+            retry_after=str(row["retry_after"]) if row["retry_after"] is not None else None,
+            last_error=str(row["last_error"]) if row["last_error"] is not None else None,
+            max_attempts=int(row["max_attempts"]) if row["max_attempts"] is not None else 5,
+            dead_lettered_at=(
+                str(row["dead_lettered_at"])
+                if row["dead_lettered_at"] is not None
+                else None
+            ),
+        )
 
     def begin_immediate(self) -> None:
         self._conn.execute("BEGIN IMMEDIATE")
@@ -244,30 +338,23 @@ class SQLiteFlowStore:
     def list_requested_work(self, flow_id: str) -> list[WorkRow]:
         rows = self._conn.execute(
             """
-            SELECT work_id, flow_id, kind, status, input_json, output_contract_json, attempt
+            SELECT
+                work_id, flow_id, kind, status, input_json, output_contract_json, attempt,
+                claimed_by, claimed_at, lease_until, retry_after, last_error, max_attempts, dead_lettered_at
             FROM continue_work
             WHERE flow_id = ? AND status = 'requested'
             ORDER BY created_at ASC
             """,
             (flow_id,),
         ).fetchall()
-        return [
-            WorkRow(
-                work_id=str(row["work_id"]),
-                flow_id=str(row["flow_id"]),
-                kind=str(row["kind"]),
-                status=str(row["status"]),
-                input_json=str(row["input_json"]),
-                output_contract_json=str(row["output_contract_json"]),
-                attempt=int(row["attempt"]),
-            )
-            for row in rows
-        ]
+        return [self._work_row(row) for row in rows]
 
     def get_work(self, flow_id: str, work_id: str) -> Optional[WorkRow]:
         row = self._conn.execute(
             """
-            SELECT work_id, flow_id, kind, status, input_json, output_contract_json, attempt
+            SELECT
+                work_id, flow_id, kind, status, input_json, output_contract_json, attempt,
+                claimed_by, claimed_at, lease_until, retry_after, last_error, max_attempts, dead_lettered_at
             FROM continue_work
             WHERE flow_id = ? AND work_id = ?
             """,
@@ -275,15 +362,7 @@ class SQLiteFlowStore:
         ).fetchone()
         if row is None:
             return None
-        return WorkRow(
-            work_id=str(row["work_id"]),
-            flow_id=str(row["flow_id"]),
-            kind=str(row["kind"]),
-            status=str(row["status"]),
-            input_json=str(row["input_json"]),
-            output_contract_json=str(row["output_contract_json"]),
-            attempt=int(row["attempt"]),
-        )
+        return self._work_row(row)
 
     def has_any_work_key(self, flow_id: str, key: str) -> bool:
         row = self._conn.execute(
@@ -325,9 +404,213 @@ class SQLiteFlowStore:
 
     def update_work_result(self, *, work_id: str, status: str, result_json: str) -> None:
         self._conn.execute(
-            "UPDATE continue_work SET status = ?, result_json = ?, updated_at = ? WHERE work_id = ?",
+            """
+            UPDATE continue_work
+            SET status = ?, result_json = ?, updated_at = ?,
+                claimed_by = NULL, claimed_at = NULL, lease_until = NULL, retry_after = NULL
+            WHERE work_id = ?
+            """,
             (status, result_json, self._now(), work_id),
         )
+
+    def claim_requested_work(
+        self,
+        *,
+        worker_id: str,
+        limit: int = 10,
+        lease_seconds: int = 120,
+        flow_id: Optional[str] = None,
+    ) -> list[WorkRow]:
+        worker = str(worker_id or "").strip()
+        if not worker:
+            raise ValueError("worker_id is required")
+
+        lease_seconds = max(int(lease_seconds), 1)
+        now = self._now()
+        lease_until = (
+            datetime.now(timezone.utc).timestamp() + lease_seconds
+        )
+        lease_until_iso = datetime.fromtimestamp(lease_until, tz=timezone.utc).isoformat()
+
+        self.begin_immediate()
+        try:
+            params: list[object] = [now, now]
+            flow_filter = ""
+            if flow_id:
+                flow_filter = "AND flow_id = ?"
+                params.append(str(flow_id))
+            params.append(max(int(limit), 1))
+            rows = self._conn.execute(
+                f"""
+                SELECT work_id
+                FROM continue_work
+                WHERE status = 'requested'
+                  AND dead_lettered_at IS NULL
+                  AND (retry_after IS NULL OR retry_after <= ?)
+                  AND (
+                        claimed_by IS NULL
+                        OR lease_until IS NULL
+                        OR lease_until <= ?
+                  )
+                  {flow_filter}
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+            work_ids = [str(row["work_id"]) for row in rows]
+            if not work_ids:
+                self.commit()
+                return []
+
+            self._conn.executemany(
+                """
+                UPDATE continue_work
+                SET claimed_by = ?, claimed_at = ?, lease_until = ?, updated_at = ?
+                WHERE work_id = ?
+                """,
+                [(worker, now, lease_until_iso, now, wid) for wid in work_ids],
+            )
+
+            placeholders = ", ".join("?" for _ in work_ids)
+            claimed_rows = self._conn.execute(
+                f"""
+                SELECT
+                    work_id, flow_id, kind, status, input_json, output_contract_json, attempt,
+                    claimed_by, claimed_at, lease_until, retry_after, last_error, max_attempts, dead_lettered_at
+                FROM continue_work
+                WHERE work_id IN ({placeholders})
+                ORDER BY created_at ASC
+                """,
+                tuple(work_ids),
+            ).fetchall()
+            self.commit()
+            return [self._work_row(row) for row in claimed_rows]
+        except Exception:
+            self.rollback()
+            raise
+
+    def renew_work_lease(
+        self,
+        *,
+        work_id: str,
+        worker_id: str,
+        lease_seconds: int = 120,
+    ) -> bool:
+        lease_seconds = max(int(lease_seconds), 1)
+        now = self._now()
+        lease_until = datetime.fromtimestamp(
+            datetime.now(timezone.utc).timestamp() + lease_seconds,
+            tz=timezone.utc,
+        ).isoformat()
+        cursor = self._conn.execute(
+            """
+            UPDATE continue_work
+            SET lease_until = ?, updated_at = ?
+            WHERE work_id = ?
+              AND status = 'requested'
+              AND dead_lettered_at IS NULL
+              AND claimed_by = ?
+            """,
+            (lease_until, now, work_id, worker_id),
+        )
+        return cursor.rowcount > 0
+
+    def release_work_for_retry(
+        self,
+        *,
+        work_id: str,
+        worker_id: str,
+        error: Optional[str] = None,
+        backoff_base_seconds: int = 30,
+        backoff_max_seconds: int = 3600,
+    ) -> bool:
+        row = self._conn.execute(
+            """
+            SELECT attempt, max_attempts
+            FROM continue_work
+            WHERE work_id = ?
+              AND status = 'requested'
+              AND dead_lettered_at IS NULL
+              AND claimed_by = ?
+            """,
+            (work_id, worker_id),
+        ).fetchone()
+        if row is None:
+            return False
+
+        attempt = int(row["attempt"]) if row["attempt"] is not None else 1
+        max_attempts = int(row["max_attempts"]) if row["max_attempts"] is not None else 5
+        now = self._now()
+
+        if attempt >= max_attempts:
+            self._conn.execute(
+                """
+                UPDATE continue_work
+                SET status = 'dead_letter',
+                    dead_lettered_at = ?,
+                    last_error = ?,
+                    claimed_by = NULL,
+                    claimed_at = NULL,
+                    lease_until = NULL,
+                    retry_after = NULL,
+                    updated_at = ?
+                WHERE work_id = ? AND claimed_by = ?
+                """,
+                (now, error, now, work_id, worker_id),
+            )
+            return True
+
+        base = max(int(backoff_base_seconds), 1)
+        max_delay = max(int(backoff_max_seconds), base)
+        delay = min(base * (2 ** max(attempt - 1, 0)), max_delay)
+        retry_after = datetime.fromtimestamp(
+            datetime.now(timezone.utc).timestamp() + delay,
+            tz=timezone.utc,
+        ).isoformat()
+        self._conn.execute(
+            """
+            UPDATE continue_work
+            SET retry_after = ?,
+                last_error = ?,
+                attempt = attempt + 1,
+                claimed_by = NULL,
+                claimed_at = NULL,
+                lease_until = NULL,
+                updated_at = ?
+            WHERE work_id = ? AND claimed_by = ?
+            """,
+            (retry_after, error, now, work_id, worker_id),
+        )
+        return True
+
+    def dead_letter_work(
+        self,
+        *,
+        work_id: str,
+        worker_id: str,
+        error: Optional[str] = None,
+    ) -> bool:
+        now = self._now()
+        cursor = self._conn.execute(
+            """
+            UPDATE continue_work
+            SET status = 'dead_letter',
+                dead_lettered_at = ?,
+                last_error = ?,
+                claimed_by = NULL,
+                claimed_at = NULL,
+                lease_until = NULL,
+                retry_after = NULL,
+                updated_at = ?
+            WHERE work_id = ?
+              AND status = 'requested'
+              AND dead_lettered_at IS NULL
+              AND claimed_by = ?
+            """,
+            (now, error, now, work_id, worker_id),
+        )
+        return cursor.rowcount > 0
 
     def insert_event(self, *, flow_id: str, event_type: str, payload_json: str) -> None:
         self._conn.execute(
