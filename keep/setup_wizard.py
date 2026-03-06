@@ -53,6 +53,14 @@ EMBEDDING_PROVIDERS: list[dict[str, Any]] = [
         "env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT"],
         "env_hint": "GEMINI_API_KEY",
     },
+    {
+        "key": "mistral",
+        "name": "Mistral",
+        "model": "mistral-embed",
+        "provider": "mistral",
+        "env_keys": ["MISTRAL_API_KEY"],
+        "env_hint": "MISTRAL_API_KEY",
+    },
 ]
 
 SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
@@ -83,6 +91,15 @@ SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
         "provider": "gemini",
         "env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT"],
         "env_hint": "GEMINI_API_KEY",
+    },
+    {
+        "key": "mistral",
+        "name": "Mistral",
+        "model_display": "mistral-small-latest",
+        "model": "mistral-small-latest",
+        "provider": "mistral",
+        "env_keys": ["MISTRAL_API_KEY"],
+        "env_hint": "MISTRAL_API_KEY",
     },
 ]
 
