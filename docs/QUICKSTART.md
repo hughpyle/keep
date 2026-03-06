@@ -5,22 +5,22 @@ This guide gets you from zero to semantic search in five minutes.
 ## Install
 
 ```bash
-uv tool install keep-skill
+uv tool install keep-skill --upgrade
 ```
 
-That's it. If [Ollama](https://ollama.com/) is running, keep auto-detects it — no API keys needed, models pulled automatically. Otherwise set any provider API key:
+Then run `keep` — it walks you through first-time setup: choosing embedding and summarization providers, and installing hooks for your coding tools.
 
 ```bash
-export OPENAI_API_KEY=...             # or GEMINI_API_KEY, VOYAGE_API_KEY, etc.
+keep
 ```
 
-Or use the [hosted service](https://keepnotes.ai) — no local models, no database setup:
+If [Ollama](https://ollama.com/) is running, it's offered as the default — no API keys needed. Otherwise choose from any detected provider (OpenAI, Voyage, Gemini, etc.) or use the [hosted service](https://keepnotes.ai):
 
 ```bash
 export KEEPNOTES_API_KEY=kn_...
 ```
 
-See [Configuration](KEEP-CONFIG.md) for all provider options, model selection, and advanced setup.
+Re-run setup anytime with `keep config --setup`. See [Configuration](KEEP-CONFIG.md) for all provider options and advanced setup.
 
 ## Store a note
 
