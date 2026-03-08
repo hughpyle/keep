@@ -2920,6 +2920,84 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
 
 
 @app.command()
+def validate(
+    id: Annotated[Optional[list[str]], typer.Argument(
+        help="System doc ID(s) to validate (e.g. '.tag/act', '.meta/related')"
+    )] = None,
+    all_docs: Annotated[bool, typer.Option(
+        "--all", "-a",
+        help="Validate all system docs"
+    )] = False,
+    store: StoreOption = None,
+):
+    r"""Validate system documents with parser-based semantics.
+
+    Checks .tag/*, .meta/*, and .prompt/* documents for structural
+    correctness. Reports errors (will cause runtime failures) and
+    warnings (may cause unexpected behavior).
+
+    \b
+    Examples:
+        keep validate .tag/act               # Validate one doc
+        keep validate .tag/act .meta/related  # Validate several
+        keep validate --all                   # Validate all system docs
+    """
+    from .validate import validate_system_doc
+
+    kp = _get_keeper(store)
+
+    ids_to_check: list[str] = []
+    if all_docs:
+        doc_coll = kp._resolve_doc_collection()
+        for prefix in (".tag/", ".meta/", ".prompt/"):
+            docs = kp._document_store.query_by_id_prefix(doc_coll, prefix)
+            for rec in docs:
+                doc_id = rec.id if hasattr(rec, "id") else rec.get("id", "")
+                if doc_id:
+                    ids_to_check.append(doc_id)
+    elif id:
+        ids_to_check = list(id)
+    else:
+        typer.echo("Provide doc IDs or use --all. See: keep validate --help", err=True)
+        raise typer.Exit(1)
+
+    if not ids_to_check:
+        typer.echo("No system docs found.")
+        return
+
+    total_errors = 0
+    total_warnings = 0
+    for doc_id in sorted(ids_to_check):
+        item = kp.get(doc_id)
+        if item is None:
+            typer.echo(f"{doc_id}: not found", err=True)
+            total_errors += 1
+            continue
+
+        content = str(getattr(item, "summary", "") or "")
+        tags = getattr(item, "tags", None)
+        tags = dict(tags) if isinstance(tags, dict) else {}
+
+        result = validate_system_doc(doc_id, content, tags)
+
+        if result.diagnostics:
+            for d in result.diagnostics:
+                typer.echo(f"{doc_id}: {d}")
+            total_errors += len(result.errors)
+            total_warnings += len(result.warnings)
+        else:
+            typer.echo(f"{doc_id}: ok")
+
+    if total_errors:
+        typer.echo(f"\n{total_errors} error(s), {total_warnings} warning(s)")
+        raise typer.Exit(1)
+    elif total_warnings:
+        typer.echo(f"\n{total_warnings} warning(s)")
+    else:
+        typer.echo(f"\n{len(ids_to_check)} doc(s) ok")
+
+
+@app.command()
 def config(
     path: Annotated[Optional[str], typer.Argument(
         help="Config path to get (e.g., 'file', 'tool', 'store', 'providers.embedding')"
