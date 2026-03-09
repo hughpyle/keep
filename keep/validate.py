@@ -14,14 +14,22 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+from .analyzers import _PROMPT_SECTION_RE
+from .api import _META_CONTEXT_KEY, _META_PREREQ_KEY, _META_QUERY_PAIR
+
+Severity = Literal["error", "warning", "info"]
+DocType = Literal["tag", "meta", "prompt", "unknown"]
+
+_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 @dataclass
 class Diagnostic:
     """A single validation finding."""
 
-    severity: str  # "error", "warning", "info"
+    severity: Severity
     message: str
     location: str = ""  # e.g. "line 3" or "## Prompt section"
 
@@ -35,7 +43,7 @@ class ValidationResult:
     """Collected diagnostics from validating a system doc."""
 
     doc_id: str
-    doc_type: str  # "tag", "meta", "prompt", "unknown"
+    doc_type: DocType
     diagnostics: list[Diagnostic] = field(default_factory=list)
 
     @property
@@ -52,16 +60,50 @@ class ValidationResult:
 
 
 # ---------------------------------------------------------------------------
-# Regex patterns (mirrored from api.py and analyzers.py)
+# Shared: meta/prompt line classification
 # ---------------------------------------------------------------------------
 
-_META_QUERY_PAIR = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*=\S+$")
-_META_CONTEXT_KEY = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*)=$")
-_META_PREREQ_KEY = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*)=\*$")
-_PROMPT_SECTION_RE = re.compile(
-    r"^## Prompt\s*\n(.*?)(?=^## |\Z)",
-    re.MULTILINE | re.DOTALL,
-)
+def _classify_rule_lines(
+    text: str,
+) -> tuple[int, int, int, list[tuple[int, str]]]:
+    """Classify lines using the same logic as ``_parse_meta_doc`` in api.py.
+
+    Returns ``(query_count, context_count, prereq_count, suspect_lines)``
+    where suspect_lines are ``(line_num, line)`` tuples for lines
+    containing ``=`` that don't parse as valid rules.
+    """
+    query_count = 0
+    context_count = 0
+    prereq_count = 0
+    suspect_lines: list[tuple[int, str]] = []
+
+    for line_num, raw_line in enumerate(text.split("\n"), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # Markdown headers and frontmatter delimiters are prose —
+        # the runtime also skips them (they fail every rule regex).
+        if line.startswith("#") or line.startswith("---"):
+            continue
+
+        if _META_PREREQ_KEY.match(line):
+            prereq_count += 1
+            continue
+
+        if _META_CONTEXT_KEY.match(line):
+            context_count += 1
+            continue
+
+        tokens = line.split()
+        is_query = all(_META_QUERY_PAIR.match(t) for t in tokens)
+
+        if is_query and tokens:
+            query_count += 1
+        elif "=" in line:
+            suspect_lines.append((line_num, line))
+
+    return query_count, context_count, prereq_count, suspect_lines
 
 
 # ---------------------------------------------------------------------------
@@ -73,16 +115,7 @@ def validate_system_doc(
     content: str,
     tags: dict[str, Any] | None = None,
 ) -> ValidationResult:
-    """Validate a system doc by ID prefix dispatch.
-
-    Args:
-        doc_id: The document ID (e.g. ".tag/act", ".meta/related").
-        content: The document body (summary field content).
-        tags: The document's tags dict.
-
-    Returns:
-        ValidationResult with diagnostics.
-    """
+    """Validate a system doc by ID prefix dispatch."""
     tags = tags or {}
 
     if doc_id.startswith(".tag/"):
@@ -126,19 +159,16 @@ def _validate_tag_doc(
         )
         return result
 
-    # Validate tag key format
     key = parts[1]
-    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", key):
+    if not _IDENTIFIER_RE.match(key):
         result.diagnostics.append(
             Diagnostic("error", f"invalid tag key {key!r}: must be identifier (letters, digits, underscores)")
         )
 
-    if is_value:
-        value = parts[2]
-        if not value:
-            result.diagnostics.append(
-                Diagnostic("error", "tag value name cannot be empty")
-            )
+    if is_value and not parts[2]:
+        result.diagnostics.append(
+            Diagnostic("error", "tag value name cannot be empty")
+        )
 
     if not content.strip():
         result.diagnostics.append(
@@ -148,7 +178,7 @@ def _validate_tag_doc(
     if is_parent:
         _validate_tag_parent(result, content, tags)
     elif is_value:
-        _validate_tag_value(result, content, tags)
+        _validate_tag_value(result, content)
 
     return result
 
@@ -164,7 +194,6 @@ def _validate_tag_parent(
     inverse = tags.get("_inverse")
 
     if constrained == "true":
-        # Constrained tags should have a ## Prompt section for classification
         prompt = _PROMPT_SECTION_RE.search(content)
         if not prompt or not prompt.group(1).strip():
             result.diagnostics.append(
@@ -180,7 +209,7 @@ def _validate_tag_parent(
             result.diagnostics.append(
                 Diagnostic("error", "_inverse tag must be a non-empty string")
             )
-        elif not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", str(inverse).strip()):
+        elif not _IDENTIFIER_RE.match(str(inverse).strip()):
             result.diagnostics.append(
                 Diagnostic(
                     "warning",
@@ -202,10 +231,8 @@ def _validate_tag_parent(
 def _validate_tag_value(
     result: ValidationResult,
     content: str,
-    tags: dict[str, Any],
 ) -> None:
     """Validate a tag value doc (.tag/key/value)."""
-    # Value docs can have a ## Prompt section for classification detail
     prompt = _PROMPT_SECTION_RE.search(content)
     if prompt and not prompt.group(1).strip():
         result.diagnostics.append(
@@ -237,42 +264,7 @@ def _validate_meta_doc(
         )
         return result
 
-    query_count = 0
-    context_count = 0
-    prereq_count = 0
-    suspect_lines = []
-
-    for line_num, raw_line in enumerate(content.split("\n"), start=1):
-        line = raw_line.strip()
-        if not line:
-            continue
-
-        # Skip markdown headers, frontmatter delimiters, and comments
-        if line.startswith("#") or line.startswith("---"):
-            continue
-
-        if _META_PREREQ_KEY.match(line):
-            prereq_count += 1
-            continue
-
-        if _META_CONTEXT_KEY.match(line):
-            context_count += 1
-            continue
-
-        # Try as query line (space-separated key=value pairs)
-        tokens = line.split()
-        is_query = True
-        for token in tokens:
-            if not _META_QUERY_PAIR.match(token):
-                is_query = False
-                break
-
-        if is_query and tokens:
-            query_count += 1
-        elif "=" in line:
-            # Line contains = but doesn't parse — likely a malformed rule
-            suspect_lines.append((line_num, line))
-        # else: pure prose line, matches runtime behavior (silently skipped)
+    query_count, context_count, prereq_count, suspect_lines = _classify_rule_lines(content)
 
     if not query_count and not context_count and not prereq_count:
         result.diagnostics.append(
@@ -334,50 +326,12 @@ def _validate_prompt_doc(
         return result
 
     # Validate match rules (content before ## Prompt, same syntax as .meta/*)
-    prompt_start = prompt_match.start()
-    preamble = content[:prompt_start].strip()
+    preamble = content[:prompt_match.start()].strip()
     if preamble:
-        _validate_prompt_match_rules(result, preamble)
-
-    return result
-
-
-def _validate_prompt_match_rules(
-    result: ValidationResult,
-    preamble: str,
-) -> None:
-    """Validate the match-rule section of a prompt doc (before ## Prompt).
-
-    Prose lines are expected (descriptions, documentation). Only lines
-    containing ``=`` that don't parse as valid rules are flagged.
-    """
-    rule_count = 0
-    for line_num, raw_line in enumerate(preamble.split("\n"), start=1):
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("#") or line.startswith("---"):
-            continue
-
-        # Same parsing as meta docs
-        if _META_PREREQ_KEY.match(line):
-            rule_count += 1
-            continue
-        if _META_CONTEXT_KEY.match(line):
-            rule_count += 1
-            continue
-
-        tokens = line.split()
-        is_query = True
-        for token in tokens:
-            if not _META_QUERY_PAIR.match(token):
-                is_query = False
-                break
-        if is_query and tokens:
-            rule_count += 1
-        elif "=" in line:
-            # Contains = but doesn't parse — likely a malformed rule
+        _, _, _, suspect_lines = _classify_rule_lines(preamble)
+        for line_num, line in suspect_lines:
             result.diagnostics.append(
                 Diagnostic("warning", f"possible malformed match rule: {line!r}", f"line {line_num}")
             )
-        # else: prose line, expected and harmless
+
+    return result

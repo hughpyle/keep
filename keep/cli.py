@@ -2946,38 +2946,42 @@ def validate(
 
     kp = _get_keeper(store)
 
-    ids_to_check: list[str] = []
+    # Collect docs to validate: either from --all prefix scan or explicit IDs.
+    # The prefix scan returns full records (id, summary, tags) — use them
+    # directly to avoid N redundant kp.get() calls and accessed_at writes.
+    docs_by_id: dict[str, tuple[str, dict]] = {}  # id -> (summary, tags)
     if all_docs:
         doc_coll = kp._resolve_doc_collection()
         for prefix in (".tag/", ".meta/", ".prompt/"):
-            docs = kp._document_store.query_by_id_prefix(doc_coll, prefix)
-            for rec in docs:
-                doc_id = rec.id if hasattr(rec, "id") else rec.get("id", "")
+            for rec in kp._document_store.query_by_id_prefix(doc_coll, prefix):
+                doc_id = str(getattr(rec, "id", ""))
                 if doc_id:
-                    ids_to_check.append(doc_id)
+                    summary = str(getattr(rec, "summary", "") or "")
+                    raw_tags = getattr(rec, "tags", None)
+                    tags = dict(raw_tags) if isinstance(raw_tags, dict) else {}
+                    docs_by_id[doc_id] = (summary, tags)
     elif id:
-        ids_to_check = list(id)
+        for doc_id in id:
+            item = kp.get(doc_id)
+            if item is None:
+                typer.echo(f"{doc_id}: not found", err=True)
+                continue
+            summary = str(getattr(item, "summary", "") or "")
+            raw_tags = getattr(item, "tags", None)
+            tags = dict(raw_tags) if isinstance(raw_tags, dict) else {}
+            docs_by_id[doc_id] = (summary, tags)
     else:
         typer.echo("Provide doc IDs or use --all. See: keep validate --help", err=True)
         raise typer.Exit(1)
 
-    if not ids_to_check:
+    if not docs_by_id:
         typer.echo("No system docs found.")
         return
 
     total_errors = 0
     total_warnings = 0
-    for doc_id in sorted(ids_to_check):
-        item = kp.get(doc_id)
-        if item is None:
-            typer.echo(f"{doc_id}: not found", err=True)
-            total_errors += 1
-            continue
-
-        content = str(getattr(item, "summary", "") or "")
-        tags = getattr(item, "tags", None)
-        tags = dict(tags) if isinstance(tags, dict) else {}
-
+    for doc_id in sorted(docs_by_id):
+        content, tags = docs_by_id[doc_id]
         result = validate_system_doc(doc_id, content, tags)
 
         if result.diagnostics:
@@ -2994,7 +2998,7 @@ def validate(
     elif total_warnings:
         typer.echo(f"\n{total_warnings} warning(s)")
     else:
-        typer.echo(f"\n{len(ids_to_check)} doc(s) ok")
+        typer.echo(f"\n{len(docs_by_id)} doc(s) ok")
 
 
 @app.command()
