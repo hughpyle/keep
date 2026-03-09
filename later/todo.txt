@@ -3,6 +3,8 @@
 
 * debounce
 
+* type: code
+
 * poc: "an append-only journal narrated in first person (experiences, not task logs)"
     (also: "with periodic consolidation that compresses episodes into thematic structures" - our `analyze`)
 

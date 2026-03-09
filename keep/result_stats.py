@@ -77,7 +77,6 @@ def _entropy(scores: list[float]) -> float:
 # ---------------------------------------------------------------------------
 
 _LINEAGE_KEYS = ("_base_id", "_version_of")
-_SYSTEM_TAG_PREFIXES = ("_",)
 
 
 def _lineage(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -151,7 +150,7 @@ def _top_facet_tags(
             continue
         for key, raw in tags.items():
             k = str(key).strip()
-            if not k or any(k.startswith(p) for p in _SYSTEM_TAG_PREFIXES):
+            if not k or k.startswith("_"):
                 continue
             values = _tag_values(raw)
             for val in values[:4]:
@@ -161,20 +160,14 @@ def _top_facet_tags(
     if not pair_counts:
         return []
 
-    # Rank by count descending, then by key/value for stability
-    ranked = sorted(
-        pair_counts.items(),
-        key=lambda item: (-item[1], item[0][0], item[0][1]),
-    )
+    # Filter to pairs appearing 2+ times, then rank
+    frequent = [(pair, count) for pair, count in pair_counts.items() if count >= 2]
+    if not frequent:
+        return []
 
-    out: list[dict[str, Any]] = []
-    for (key, value), count in ranked:
-        if count < 2:
-            break
-        out.append({key: value})
-        if len(out) >= max_tags:
-            break
-    return out
+    frequent.sort(key=lambda item: (-item[1], item[0][0], item[0][1]))
+
+    return [{key: value} for (key, value), _ in frequent[:max_tags]]
 
 
 def _tag_values(raw: Any) -> list[str]:

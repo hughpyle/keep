@@ -7110,6 +7110,40 @@ class Keeper:
         """Execute a pending local work item and return a work_result envelope."""
         return self._get_continuation_runtime().run_work(cursor, work_id)
 
+    def _run_read_flow(
+        self,
+        state: str,
+        params: dict[str, Any],
+        *,
+        budget: int = 5,
+    ) -> "FlowResult":
+        """Run a synchronous state-doc flow for the read/query path.
+
+        Creates a read-only environment, wires up a state doc loader
+        (with builtin fallbacks) and action runner, then evaluates the
+        flow to completion.
+
+        Args:
+            state: Name of the starting state doc (e.g. "get-context").
+            params: Caller-supplied parameters.
+            budget: Maximum ticks before forced stop.
+
+        Returns:
+            FlowResult with terminal status and accumulated bindings.
+        """
+        from .builtin_state_docs import BUILTIN_STATE_DOCS
+        from .state_doc_runtime import (
+            FlowResult,
+            make_action_runner,
+            make_state_doc_loader,
+            run_flow,
+        )
+
+        env = LocalContinuationEnvironment(self)
+        loader = make_state_doc_loader(env, builtins=BUILTIN_STATE_DOCS)
+        runner = make_action_runner(env)
+        return run_flow(state, params, budget=budget, load_state_doc=loader, run_action=runner)
+
     @property
     def _processor_pid_path(self) -> Path:
         """Path to the processor PID file."""

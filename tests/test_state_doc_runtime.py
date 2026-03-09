@@ -398,6 +398,56 @@ class TestMakeStateDocLoader:
         loader = make_state_doc_loader(FakeEnv())
         assert loader("nonexistent") is None
 
+    def test_falls_back_to_builtins(self):
+        from keep.state_doc_runtime import make_state_doc_loader
+
+        class FakeEnv:
+            def get(self, id):
+                return None
+
+        builtins = {"fallback": "rules:\n  - return: done"}
+        loader = make_state_doc_loader(FakeEnv(), builtins=builtins)
+        doc = loader("fallback")
+        assert doc is not None
+        assert doc.name == "fallback"
+
+    def test_store_overrides_builtin(self):
+        from keep.state_doc_runtime import make_state_doc_loader
+
+        class FakeNote:
+            id = ".state/override"
+            summary = "rules:\n  - return: error"
+            tags = {}
+
+        class FakeEnv:
+            def get(self, id):
+                if id == ".state/override":
+                    return FakeNote()
+                return None
+
+        builtins = {"override": "rules:\n  - return: done"}
+        loader = make_state_doc_loader(FakeEnv(), builtins=builtins)
+        # Run a flow to verify we got the store version (error) not builtin (done)
+        result = run_flow("override", {}, load_state_doc=loader, run_action=_make_runner())
+        assert result.status == "error"
+
+    def test_builtin_used_when_store_summary_empty(self):
+        from keep.state_doc_runtime import make_state_doc_loader
+
+        class FakeNote:
+            id = ".state/empty"
+            summary = ""
+            tags = {}
+
+        class FakeEnv:
+            def get(self, id):
+                return FakeNote()
+
+        builtins = {"empty": "rules:\n  - return: done"}
+        loader = make_state_doc_loader(FakeEnv(), builtins=builtins)
+        doc = loader("empty")
+        assert doc is not None
+
     def test_returns_none_for_empty_summary(self):
         from keep.state_doc_runtime import make_state_doc_loader
 

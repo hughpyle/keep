@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 from .result_stats import enrich_find_output
 from .state_doc import StateDoc, evaluate_state_doc
@@ -78,6 +78,13 @@ def run_flow(
     ticks = 0
     history: list[str] = []
 
+    # Wrap run_action to enrich find output with statistics
+    def _action_callback(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
+        output = run_action(action_name, action_params)
+        if action_name == "find" and isinstance(output, dict):
+            output = enrich_find_output(output)
+        return output
+
     while ticks < budget:
         doc = load_state_doc(current_state)
         if doc is None:
@@ -93,13 +100,6 @@ def run_flow(
 
         # Build evaluation context
         eval_ctx = _build_eval_context(current_params, budget=budget, tick=ticks)
-
-        # Create the run_action callback that enriches find output
-        def _action_callback(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
-            output = run_action(action_name, action_params)
-            if action_name == "find" and isinstance(output, dict):
-                output = enrich_find_output(output)
-            return output
 
         # Evaluate state doc
         try:
@@ -211,28 +211,43 @@ def _parse_transition(
 # Factory helpers for wiring into the keep system
 # ---------------------------------------------------------------------------
 
-def make_state_doc_loader(env: Any) -> StateDocLoader:
+def make_state_doc_loader(
+    env: Any,
+    *,
+    builtins: dict[str, str] | None = None,
+) -> StateDocLoader:
     """Create a state doc loader backed by a ContinuationRuntimeEnv.
 
     Loads ``.state/{name}`` notes from the store, parses their summary
-    field as YAML state doc body.
+    field as YAML state doc body.  Falls back to ``builtins`` (a dict
+    of ``{name: yaml_body}``) when the store has no override.
     """
     from .state_doc import parse_state_doc
 
     def _load(name: str) -> Optional[StateDoc]:
-        note_id = f".state/{name}" if not name.startswith(".state/") else name
+        bare_name = name.removeprefix(".state/")
+        note_id = f".state/{bare_name}"
+
+        # Try store first (user overrides)
         doc_note = env.get(note_id)
-        if doc_note is None:
-            return None
-        body = str(getattr(doc_note, "summary", "") or "").strip()
-        if not body:
-            return None
-        try:
-            bare_name = name.removeprefix(".state/")
-            return parse_state_doc(bare_name, body)
-        except (ValueError, RuntimeError) as exc:
-            logger.warning("Failed to compile state doc %r: %s", note_id, exc)
-            return None
+        if doc_note is not None:
+            body = str(getattr(doc_note, "summary", "") or "").strip()
+            if body:
+                try:
+                    return parse_state_doc(bare_name, body)
+                except (ValueError, RuntimeError) as exc:
+                    logger.warning("Failed to compile state doc %r: %s", note_id, exc)
+
+        # Fall back to builtins
+        if builtins is not None:
+            builtin_body = builtins.get(bare_name)
+            if builtin_body is not None:
+                try:
+                    return parse_state_doc(bare_name, builtin_body)
+                except (ValueError, RuntimeError) as exc:
+                    logger.warning("Failed to compile builtin state doc %r: %s", bare_name, exc)
+
+        return None
 
     return _load
 

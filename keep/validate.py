@@ -17,6 +17,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import yaml
+
 from .analyzers import _PROMPT_SECTION_RE
 from .api import _META_CONTEXT_KEY, _META_PREREQ_KEY, _META_QUERY_PAIR
 
@@ -347,7 +349,6 @@ def _validate_prompt_doc(
 _VALID_MATCH = {"sequence", "all"}
 _VALID_TERMINALS = {"done", "error", "stopped"}
 _TEMPLATE_REF_RE = re.compile(r"\{([^}]+)\}")
-_KNOWN_NAMESPACES = {"item", "params", "budget", "flow", "tags", "write"}
 
 
 def _validate_state_doc(
@@ -373,7 +374,6 @@ def _validate_state_doc(
 
     # Parse YAML
     try:
-        import yaml
         parsed = yaml.safe_load(content)
     except Exception as exc:
         result.diagnostics.append(
@@ -560,17 +560,22 @@ def _validate_state_rule(
         )
 
 
+_known_actions: set[str] | None = None
+
+
 def _check_action_name(result: ValidationResult, name: str, loc: str) -> None:
     """Check if an action name is known."""
-    try:
-        from .actions import list_actions
-        known = list_actions()
-        if name not in known:
-            result.diagnostics.append(
-                Diagnostic("warning", f"unknown action {name!r} (known: {', '.join(known)})", loc)
-            )
-    except ImportError:
-        pass
+    global _known_actions
+    if _known_actions is None:
+        try:
+            from .actions import list_actions
+            _known_actions = set(list_actions())
+        except ImportError:
+            return
+    if name not in _known_actions:
+        result.diagnostics.append(
+            Diagnostic("warning", f"unknown action {name!r} (known: {', '.join(sorted(_known_actions))})", loc)
+        )
 
 
 def _check_template_refs(result: ValidationResult, params: dict, loc: str) -> None:
