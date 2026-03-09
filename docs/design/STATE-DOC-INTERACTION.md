@@ -68,7 +68,7 @@ flow = store.get_flow(result.flow_id)
 #   summary generated, tags assigned, work results
 ```
 
-The continuation store (`continuation_store.py`) already records
+The work store (`work_store.py`) already records
 every mutation, every work result, every state transition. The
 `flow_id` is the existing handle to all of it. Nothing new needed.
 
@@ -329,7 +329,7 @@ Every `continue()` call returns a status. Flows that dispatch
 async work, apply mutations, or suspend with `stopped` are
 **persisted** — the `flow_id` in the response is the handle
 to the full execution trace (mutations, work results, state
-transitions) stored in `continuation_store`.
+transitions) stored in `work_store`.
 
 Flows that complete synchronously with no mutations and no
 async work (e.g. a pure-query `match: sequence` that returns

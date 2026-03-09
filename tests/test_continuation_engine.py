@@ -4,7 +4,7 @@ from keep.api import Keeper
 from keep.continuation_engine import ContinuationEngine
 from keep.continuation_env import LocalContinuationEnvironment
 from keep.continuation_executor import WorkExecutor
-from keep.continuation_store import SQLiteFlowStore
+from keep.work_store import SQLiteFlowStore
 
 
 def _summarize_request(note_id: str, content: str, *, request_id: str, idempotency_key: str | None = None) -> dict:

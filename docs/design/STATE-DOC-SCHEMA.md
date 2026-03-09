@@ -462,7 +462,7 @@ config, not flow budgets.
 The draft branch (`feat/continuation-store-foundation`) is throwaway.
 Code worth reusing:
 
-- `continuation_store.py` — flow/work/mutation persistence
+- `work_store.py` — flow/work/mutation persistence
 - `continuation_env.py` — environment adapter pattern
 - Wire contract shape (`continue(input) -> output`)
 - Optimistic concurrency, idempotency, mutation dedup primitives

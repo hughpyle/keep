@@ -1,4 +1,4 @@
-"""Continuation flow store adapters.
+"""Work store adapters.
 
 Defines the persistence boundary for continuation runtime state so the runtime
 logic can be shared across local and hosted implementations.

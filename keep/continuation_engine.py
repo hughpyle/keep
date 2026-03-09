@@ -23,7 +23,7 @@ from .continuation_policy import (
     DEFAULT_DECISION_POLICY,
     ContinuationDecisionPolicy,
 )
-from .continuation_store import (
+from .work_store import (
     FlowRow,
     FlowStore,
     MutationRow,

@@ -1,7 +1,7 @@
 import json
 import sqlite3
 
-from keep.continuation_store import SQLiteFlowStore
+from keep.work_store import SQLiteFlowStore
 
 
 def test_sqlite_flow_store_transaction_rollback(tmp_path):

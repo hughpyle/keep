@@ -24,7 +24,7 @@ from .continuation_engine import (
 )
 from .continuation_env import ContinuationRuntimeEnv
 from .continuation_executor import LocalWorkExecutor
-from .continuation_store import SQLiteFlowStore
+from .work_store import SQLiteFlowStore
 
 
 class LocalContinuationRuntime(ContinuationEngine):
