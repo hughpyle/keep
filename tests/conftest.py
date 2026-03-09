@@ -361,6 +361,13 @@ class MockDocumentStore:
     def exists(self, collection: str, id: str) -> bool:
         return collection in self._data and id in self._data[collection]
 
+    def insert_if_absent(self, collection: str, id: str, summary: str,
+                         tags: dict, created_at: str = None) -> bool:
+        if self.exists(collection, id):
+            return False
+        self.upsert(collection, id, summary, tags, created_at=created_at)
+        return True
+
     def find_by_content_hash(self, collection: str, content_hash: str, *,
                              content_hash_full: str = "", exclude_id: str = ""):
         if collection not in self._data or not content_hash:

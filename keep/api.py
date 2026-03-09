@@ -644,6 +644,7 @@ class Keeper:
         self._closing = threading.Event()  # signals reconcile to abort
         self._provider_init_lock = threading.Lock()
         self._last_spawn_time: float = 0.0
+        self._tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
 
         # Check store consistency and reconcile in background if needed
         # (safe for all backends — uses abstract store interface)
@@ -964,6 +965,7 @@ class Keeper:
         """Migrate system documents to stable IDs and current version."""
         from .system_docs import migrate_system_documents
         result = migrate_system_documents(self)
+        self._tagdoc_cache.clear()  # tagdocs may have changed
         self._scan_tagdoc_backfills()
         return result
 
@@ -1856,14 +1858,11 @@ class Keeper:
         if not all_keys:
             return  # no user tags → no edges possible
 
-        # Collect tagdoc lookups (cache within this call)
-        tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
-
         def _get_tagdoc_tags(key: str) -> Optional[dict[str, str]]:
-            if key not in tagdoc_cache:
+            if key not in self._tagdoc_cache:
                 parent = self._document_store.get(doc_coll, f".tag/{key}")
-                tagdoc_cache[key] = parent.tags if parent else None
-            return tagdoc_cache[key]
+                self._tagdoc_cache[key] = parent.tags if parent else None
+            return self._tagdoc_cache[key]
 
         # Collect batch operations across all edge-tag keys
         edges_to_delete: list[tuple[str, str, str]] = []  # (source_id, predicate, target_id)
@@ -1905,24 +1904,27 @@ class Keeper:
                     ) from e
                 if target_id.startswith("."):
                     continue
-                # Auto-vivify: create target as empty doc if it doesn't exist
-                if not self._document_store.exists(doc_coll, target_id):
-                    reference_created = (
-                        merged_tags.get("_created")
-                        or merged_tags.get("_updated")
-                        or utc_now()
-                    )
-                    now = utc_now()
-                    self._document_store.upsert(
-                        doc_coll, target_id,
-                        summary="",
-                        tags={
-                            "_created": reference_created,
-                            "_updated": now,
-                            "_source": "auto-vivify",
-                        },
-                        created_at=reference_created,
-                    )
+                # Auto-vivify: create target as empty doc if it doesn't exist.
+                # Uses atomic INSERT OR IGNORE to avoid TOCTOU race where a
+                # concurrent writer creates the real document between check
+                # and write (upsert would overwrite it with the empty stub).
+                reference_created = (
+                    merged_tags.get("_created")
+                    or merged_tags.get("_updated")
+                    or utc_now()
+                )
+                now = utc_now()
+                inserted = self._document_store.insert_if_absent(
+                    doc_coll, target_id,
+                    summary="",
+                    tags={
+                        "_created": reference_created,
+                        "_updated": now,
+                        "_source": "auto-vivify",
+                    },
+                    created_at=reference_created,
+                )
+                if inserted:
                     self._pending_queue.enqueue(
                         target_id, doc_coll, target_id,
                         task_type="reindex",
@@ -2508,6 +2510,9 @@ class Keeper:
         if id.startswith(".tag/"):
             old_tagdoc_tags = existing_doc.tags if existing_doc else {}
             self._process_tagdoc_inverse_change(id, merged_tags, old_tagdoc_tags, doc_coll)
+            # Invalidate cached tagdoc for this key
+            tag_key = id.removeprefix(".tag/").split("/")[0]
+            self._tagdoc_cache.pop(tag_key, None)
 
         # Save old embedding before ChromaDB upsert overwrites it (for version archival)
         old_embedding = None
@@ -3744,8 +3749,17 @@ class Keeper:
                                     id=gk, summary="", tags={}, score=0.5,
                                 ))
             else:
-                deep_groups = self._deep_tag_follow(
-                    items, chroma_coll, doc_coll, embedding=embedding,
+                # For similar_to mode, use the anchor item's summary
+                # as the flow query since the find action requires one.
+                flow_query = query or ""
+                if not flow_query and similar_to:
+                    anchor = self._document_store.get(doc_coll, similar_to)
+                    if anchor:
+                        flow_query = getattr(anchor, "summary", "") or ""
+                deep_groups = self._deep_follow_via_flow(
+                    query=flow_query,
+                    limit=limit,
+                    embedding=embedding,
                 )
 
         # Apply common filters
@@ -7041,6 +7055,7 @@ class Keeper:
         params: dict[str, Any],
         *,
         budget: int = 5,
+        query_embedding: Any = None,
     ) -> "FlowResult":
         """Run a synchronous state-doc flow for the read/query path.
 
@@ -7052,6 +7067,8 @@ class Keeper:
             state: Name of the starting state doc (e.g. "get-context").
             params: Caller-supplied parameters.
             budget: Maximum ticks before forced stop.
+            query_embedding: Optional embedding vector for semantic
+                tiebreaking in traverse actions.
 
         Returns:
             FlowResult with terminal status and accumulated bindings.
@@ -7065,16 +7082,19 @@ class Keeper:
         )
 
         env = LocalContinuationEnvironment(self)
+        if query_embedding is not None:
+            env._query_embedding = query_embedding
         loader = make_state_doc_loader(env, builtins=BUILTIN_STATE_DOCS)
         runner = make_action_runner(env)
         return run_flow(state, params, budget=budget, load_state_doc=loader, run_action=runner)
 
     def _deep_follow_via_flow(
         self,
-        primary_items: list["Item"],
         *,
         query: str,
+        limit: int = 10,
         deep_limit: int = 5,
+        embedding: Any = None,
     ) -> dict[str, list["Item"]]:
         """Run the find-deep state-doc flow for deep follow.
 
@@ -7089,9 +7109,10 @@ class Keeper:
             "find-deep",
             {
                 "query": query,
-                "limit": len(primary_items) or 10,
+                "limit": limit,
                 "deep_limit": deep_limit,
             },
+            query_embedding=embedding,
         )
         if result.status != "done":
             return {}

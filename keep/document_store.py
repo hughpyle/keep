@@ -1854,6 +1854,37 @@ class DocumentStore:
         """, (id, collection))
         return cursor.fetchone() is not None
 
+    def insert_if_absent(
+        self,
+        collection: str,
+        id: str,
+        summary: str,
+        tags: dict[str, Any],
+        created_at: Optional[str] = None,
+    ) -> bool:
+        """Insert a document only if it doesn't already exist.
+
+        Atomic INSERT OR IGNORE — avoids the TOCTOU race of
+        exists() + upsert() where a concurrent writer could create
+        the real document between check and write.
+
+        Returns:
+            True if a new row was inserted, False if it already existed.
+        """
+        now = self._now()
+        tags = normalize_tag_map(tags)
+        tags_json = json.dumps(tags, ensure_ascii=False)
+        ts = created_at or now
+
+        with self._lock:
+            cursor = self._conn.execute("""
+                INSERT OR IGNORE INTO documents
+                    (id, collection, summary, tags_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (id, collection, summary, tags_json, ts, now))
+            self._conn.commit()
+        return cursor.rowcount > 0
+
     def find_by_content_hash(
         self,
         collection: str,

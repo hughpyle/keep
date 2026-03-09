@@ -139,6 +139,7 @@ class LocalContinuationEnvironment:
 
     def __init__(self, keeper: "Keeper") -> None:
         self._keeper = keeper
+        self._query_embedding: Any = None  # set by caller for deep-find flows
 
     def get(self, id: str) -> Any | None:
         return self._keeper.get(id)
@@ -196,31 +197,38 @@ class LocalContinuationEnvironment:
         *,
         limit_per_source: int = 5,
     ) -> dict[str, list[Any]]:
+        from .api import _record_to_item
+
         limit = max(int(limit_per_source), 1)
-        source_items: list[Any] = []
-        for source_id in source_ids:
-            sid = str(source_id).strip()
-            if not sid:
-                continue
-            item = self._keeper.get(sid)
-            if item is not None:
-                source_items.append(item)
+        doc_coll = self._keeper._resolve_doc_collection()
+        ds = self._keeper._document_store
+
+        # Batch-fetch source items (no touch — internal traversal)
+        clean_ids = [s for s in (str(sid).strip() for sid in source_ids) if s]
+        if not clean_ids:
+            return {}
+        source_records = ds.get_many(doc_coll, clean_ids)
+        source_items = [
+            _record_to_item(source_records[sid])
+            for sid in clean_ids if sid in source_records
+        ]
         if not source_items:
             return {}
 
         source_set = {str(item.id) for item in source_items}
-        doc_coll = self._keeper._resolve_doc_collection()
 
         groups: dict[str, list[Any]] = {}
         tagfollow_items: list[Any] = []  # items needing Tier 2 batch
 
         # Tier 1: Direct edge follow (forward + inverse)
+        # Collect all related IDs first, then batch-fetch.
+        per_source_related: dict[str, list[str]] = {}
+        all_related_ids: list[str] = []
         for item in source_items:
             source_id = str(item.id)
-            candidates: list[Any] = []
             try:
-                fwd = self._keeper._document_store.get_forward_edges(doc_coll, source_id)
-                inv = self._keeper._document_store.get_inverse_edges(doc_coll, source_id)
+                fwd = ds.get_forward_edges(doc_coll, source_id)
+                inv = ds.get_inverse_edges(doc_coll, source_id)
                 related_ids: list[str] = []
                 seen_ids: set[str] = set()
                 for _pred, target_id, _created in fwd:
@@ -231,13 +239,23 @@ class LocalContinuationEnvironment:
                     if edge_source_id not in seen_ids and edge_source_id not in source_set:
                         seen_ids.add(edge_source_id)
                         related_ids.append(edge_source_id)
-                for rid in related_ids[:limit * 3]:
-                    related_item = self._keeper.get(rid)
-                    if related_item is not None:
-                        candidates.append(related_item)
+                related_ids = related_ids[:limit * 3]
+                per_source_related[source_id] = related_ids
+                all_related_ids.extend(related_ids)
             except Exception:
                 logger.debug("Edge follow failed for %s", source_id, exc_info=True)
-                candidates = []
+                per_source_related[source_id] = []
+
+        # Batch-fetch all edge targets at once (no touch)
+        related_records = ds.get_many(doc_coll, all_related_ids) if all_related_ids else {}
+
+        for item in source_items:
+            source_id = str(item.id)
+            related_ids = per_source_related.get(source_id, [])
+            candidates = [
+                _record_to_item(related_records[rid])
+                for rid in related_ids if rid in related_records
+            ]
 
             if candidates:
                 deduped: list[Any] = []
@@ -264,7 +282,7 @@ class LocalContinuationEnvironment:
                     tagfollow_items,
                     chroma_coll,
                     doc_coll,
-                    embedding=None,
+                    embedding=self._query_embedding,
                     max_per_group=limit,
                 )
                 if isinstance(tag_groups, dict):
