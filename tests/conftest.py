@@ -673,6 +673,19 @@ class MockDocumentStore:
             "inverse": inverse, "created": created,
         })
 
+    def upsert_edges_batch(self, collection: str,
+                           edges: list[tuple[str, str, str, str, str]]) -> int:
+        for source_id, predicate, target_id, inverse, created in edges:
+            self.upsert_edge(collection, source_id, predicate, target_id, inverse, created)
+        return len(edges)
+
+    def delete_edges_batch(self, collection: str,
+                           edges: list[tuple[str, str, str]]) -> int:
+        count = 0
+        for source_id, predicate, target_id in edges:
+            count += self.delete_edge(collection, source_id, predicate, target_id)
+        return count
+
     def delete_edge(
         self, collection: str, source_id: str, predicate: str, target_id: str | None = None
     ) -> int:

@@ -8,18 +8,24 @@ Related:
 
 ## 1) What ships
 
-These are the state docs that ship as `category: system` notes. They
-implement the core `put`, `get`, and `find` paths. Users can fork or
-override them.
+Three state docs are **live** — wired into the get/put/find paths
+and exercised by tests. They implement the core behaviors.
+
+| State doc | Entry for | Wired in |
+|-----------|-----------|----------|
+| `.state/after-write` | `put` | `continuation_engine.py` |
+| `.state/get-context` | `get` (display) | `api.py:get_context()` |
+| `.state/find-deep` | `find(deep)` | `api.py:_deep_follow_via_flow()` |
+
+Users can fork or override any of them by creating a `.state/*`
+note with the same name.
 
 ---
 
 ## 2) Write path: after-write
 
 Entry point for all `put` calls. Runs post-write processing
-(summarize, tag, OCR) based on item properties. The state doc
-determines what runs — the caller passes only the item ID and
-config thresholds.
+(summarize, tag, OCR, analyze) based on item properties.
 
 **Caller**: `Keeper.put()` after storing the item.
 
@@ -34,11 +40,6 @@ continue({
 })
 ```
 
-No `processing` flags. The state doc's `when:` predicates inspect
-the item and decide what to do. Users customize behavior by
-editing the state doc (add/remove/reorder rules), not by passing
-flags from the caller.
-
 ### .state/after-write
 
 ```yaml
@@ -48,10 +49,13 @@ rules:
   - when: "item.content_length > params.max_summary_length && !item.has_summary"
     id: summary
     do: summarize
-  - when: "item.has_tag('_ocr_pages') && item.has_uri"
+  - when: "'_ocr_pages' in item.tags && item.has_uri"
     id: extracted
     do: ocr
-  - when: "!item.has_tag('category', 'system')"
+  - when: "!item.is_system_note"
+    id: analyzed
+    do: analyze
+  - when: "!item.is_system_note"
     id: tagged
     do: tag
 post:
@@ -60,85 +64,52 @@ post:
 
 One state. All matching rules fire in parallel. The runtime
 applies mutations (set_summary, set_tags, content update) from
-each action's output. The caller gets `{status: "stopped",
-reason: "background", flow_id: "..."}` immediately —
-fire-and-forget.
+each action's output. Fire-and-forget from the caller's perspective.
 
 **Summarize** fires when item content exceeds the configured
-threshold and no summary exists yet. The threshold comes from
-`config.max_summary_length` via params.
+threshold and no summary exists yet.
 
 **OCR** fires when the item was indexed from a file that needs
 text extraction (identified by `_ocr_pages` tag from indexing).
 
+**Analyze** fires for non-system items. Decomposes content into
+parts using the analysis provider.
+
 **Tag** fires for all non-system items. The `tag` action discovers
 `.tag/*` spec docs from the store and applies each matching
-taxonomy. What gets tagged (and how) is determined by which
-`.tag/*` specs exist — not by caller flags. Users add new tagging
-by creating spec docs (e.g. `.tag/sentiment/*`), remove tagging
-by deleting or disabling specs, and customize existing tagging by
-editing the spec doc content. See STATE-ACTIONS.md §tag for
-details.
+taxonomy. See STATE-ACTIONS.md §tag for details.
+
+> **Note (transitional):** The current implementation gates each
+> rule on `params.processing.*` flags for backward compatibility
+> with the template followup system. These flags will be removed
+> once the template system is fully replaced by state docs.
 
 ---
 
-## 3) Query path: get
+## 3) Read path: get-context
 
-Entry point for `keep get`. Two phases: **resolution** (find the
-target item) and **context assembly** (gather related items for
-display). Both are state docs — both customizable.
+Context assembly for `keep get`. Gathers similar items, parts,
+and meta-doc sections in parallel. Edges and version navigation
+are resolved inline by the caller.
 
-Direct ID gets (`keep get %abc`) skip resolution and go straight to
-context assembly.
-
-### How the caller initiates
+**Caller**: `Keeper.get_context()` after resolving the target item.
 
 ```python
-# In Keeper.get_context():
-def get_context(self, id, **kwargs):
-    # 1. Resolve target (may use query-resolve flow for queries)
-    item_id = self._resolve_target(id)
-
-    # 2. Assemble context via state doc
-    result = continue({
-        "state": "get-context",
-        "params": {
-            "item_id": item_id,
-            "similar_limit": kwargs.get("similar_limit", 3),
-            "meta_limit": kwargs.get("meta_limit", 3),
-        },
-        "budget": {"ticks": 5},
-    })
-
-    # 3. result contains similar, parts, edges, meta
-    return ItemContext.from_flow_result(result)
-```
-
-When the get is query-based, resolution runs first:
-
-```python
-# Query-based get — resolve, then assemble context
-target = continue({
-    "state": "query-resolve",
-    "params": {
-        "query": "authentication patterns",
-        "limit": 10,
-        # Thresholds from config — see continuation_policy.py
-        **config.continuation.thresholds,
+result = run_flow(
+    "get-context",
+    {
+        "item_id": item_id,
+        "similar_limit": 3,
+        "meta_limit": 3,
+        "parts_limit": 100,
     },
-    "budget": {"ticks": 5},
-})
-
-# target.status == "done" → pass target.results[0].id to get-context
+    budget=5,
+)
+# Edges resolved inline (structural DB queries)
+# Version nav computed inline (versions_limit=5)
 ```
 
 ### .state/get-context
-
-Assembles display context for a resolved item. Four parallel queries
-— all sync store operations, ~10ms total, zero persistence.
-
-Users fork this to customize what context appears: remove similar
-items, add custom sections, change limits.
 
 ```yaml
 # .state/get-context
@@ -153,11 +124,7 @@ rules:
     do: find
     with:
       prefix: "{params.item_id}@p"
-      limit: 100
-  - id: edges
-    do: traverse
-    with:
-      items: ["{params.item_id}"]
+      limit: "{params.parts_limit}"
   - id: meta
     do: resolve_meta
     with:
@@ -168,142 +135,41 @@ post:
 ```
 
 **Similar** (`find` with `similar_to`): semantic search using the
-item's stored embedding. Returns items with highest cosine
-similarity, deduplicated to distinct base documents.
+item's stored embedding.
 
-**Parts** (`find` with `prefix`): lists the item's decomposition
-parts by ID prefix convention (`id@p{N}`).
-
-**Edges** (`traverse`): follows both explicit edges (tag values
-referencing other items) and inverse edges (items whose tags point
-to this item). This is the logic previously hidden inside `deep`
-mode — now explicitly customizable. Remove this rule to skip
-edge display; increase the limit for deeper traversal.
+**Parts** (`find` with `prefix`): lists decomposition parts by
+ID prefix convention (`id@p{N}`).
 
 **Meta** (`resolve_meta`): resolves `.meta/*` document definitions
-against the current item. Each meta-doc defines tag-based queries;
-the action evaluates them against the item's tags and returns
-matching items grouped by meta-doc name. Wraps
-`Keeper.resolve_meta()`. New action — see STATE-ACTIONS.md.
+against the item's tags. See STATE-ACTIONS.md §resolve_meta.
 
-Version navigation is computed by the runtime from the requested
-version offset. It's structural (which other versions exist), not
-content-derived, so it stays outside the state doc.
+**Edges** are resolved inline by the caller — they require direct
+database queries (inverse edges, explicit edge-tag lookup) that the
+generic `traverse` action doesn't support.
 
-### .state/query-resolve
-
-The main resolution state. Searches, evaluates statistics, and
-either returns (clear winner) or routes to specialized states.
-
-```yaml
-# .state/query-resolve
-# match: sequence
-rules:
-  - id: search
-    do: find
-    with: { query: "{params.query}", limit: "{params.limit}" }
-  - when: "search.margin > params.margin_high"
-    return: done
-  - when: "search.lineage_strong > params.lineage_strong"
-    do: find
-    with: { query: "{params.query}", tags: "{search.dominant_lineage_tags}", limit: 5 }
-    then: query-resolve
-  - when: "search.margin < params.margin_low || search.entropy > params.entropy_high"
-    then:
-      state: query-branch
-      with:
-        facets_1: "{search.top_facet_tags(1)}"
-        facets_2: "{search.top_facet_tags(2)}"
-  - when: "search.entropy < params.entropy_low"
-    do: find
-    with: { query: "{params.query}", tags: "{search.top_facet_tags(1)}", limit: 5 }
-    then: query-resolve
-  - then: query-explore
-```
-
-**Fast path**: search returns a dominant result (rule 2) → `done` on
-first tick. This is the common case — no overhead beyond a single
-`find`. Zero persistence (pure sync query).
-
-**Lineage path**: strong version/part concentration (rule 3) →
-re-search constrained to dominant lineage tags, loop back.
-
-**Ambiguous path**: low margin or high entropy (rule 4) → branch
-into parallel pivots.
-
-**Concentrated path**: low entropy but no dominant (rule 5) →
-re-search with top facet tags, loop back.
-
-**Fallback**: none of the above → explore with wider limit.
-
-### .state/query-branch
-
-Ambiguous results — two strong candidates, no clear winner. Three
-parallel re-searches to break the tie.
-
-```yaml
-# .state/query-branch
-# match: all
-rules:
-  - id: pivot1
-    do: find
-    with: { query: "{params.query}", tags: "{params.facets_1}", limit: "{params.pivot_limit}" }
-  - id: pivot2
-    do: find
-    with: { query: "{params.query}", tags: "{params.facets_2}", limit: "{params.pivot_limit}" }
-  - id: bridge
-    do: find
-    with: { query: "{params.query}", limit: "{params.bridge_limit}" }
-post:
-  - when: "pivot1.margin > params.margin_high || pivot2.margin > params.margin_high || bridge.margin > params.margin_high"
-    return: done
-  - when: "budget.remaining > 0"
-    then: query-resolve
-  - return: stopped
-    with:
-      reason: "ambiguous"
-      results: "{best_of(pivot1, pivot2, bridge)}"
-```
-
-The caller injects `pivot_limit` (default 5) and `bridge_limit`
-(default `limit + 5`) via params from config.
-
-### .state/query-explore
-
-Mixed signals — broaden the search and try again.
-
-```yaml
-# .state/query-explore
-# match: sequence
-rules:
-  - id: search
-    do: find
-    with: { query: "{params.query}", limit: "{params.explore_limit}" }
-  - when: "search.margin > params.margin_high"
-    return: done
-  - when: "budget.remaining > 0"
-    do: find
-    with: { query: "{params.query}", limit: "{params.explore_limit_wide}" }
-    then: query-resolve
-  - return: stopped
-    with: { reason: "budget" }
-```
-
-The caller injects `explore_limit` (default `limit + 5`) and
-`explore_limit_wide` (default `limit + 10`) via params from config.
+**Version navigation** is computed by the caller from the requested
+version offset (`versions_limit`, default 5). Structural, not
+content-derived.
 
 ---
 
-## 4) Query path: find
+## 4) Find path: find-deep
 
-`keep find` returns a list of results, not a single resolved item.
-The same `query-resolve` states handle resolution, but the caller
-interprets the result differently (full list, not single item).
+Deep find chains a flat search with edge traversal. The CEL
+predicate `search.count == 0` short-circuits when search returns
+nothing.
 
-For deep find (edge-following), the caller uses `.state/find-deep`
-instead. This chains a flat search with a `traverse` action —
-the same edge-following logic that `get-context` uses, but without
-similar/meta/parts assembly:
+**Caller**: `Keeper.find(deep=True)`.
+
+```python
+result = run_flow(
+    "find-deep",
+    {"query": "...", "limit": 10, "deep_limit": 5},
+    budget=5,
+)
+```
+
+### .state/find-deep
 
 ```yaml
 # .state/find-deep
@@ -322,45 +188,153 @@ rules:
   - return: done
 ```
 
-```python
-# Keeper.find() — flat search, uses query-resolve for resolution
-result = continue({
-    "state": "query-resolve",
-    "params": {
-        "query": "authentication patterns",
-        "limit": 10,
-        ...thresholds...
-    },
-    "budget": {"ticks": 5},
-})
-
-# Keeper.find(deep=True) — search + edge traversal
-result = continue({
-    "state": "find-deep",
-    "params": {
-        "query": "authentication patterns",
-        "limit": 10,
-        "deep_limit": 5,
-    },
-    "budget": {"ticks": 5},
-})
-```
-
-The same resolution states serve both `get` and `find`. Deep mode
-is where they diverge: `get` uses `get-context` (which includes
-traverse among other context); `find(deep=True)` uses `find-deep`
-(traverse only, no similar/meta/parts).
+> **Wiring note:** `_deep_follow_via_flow()` exists in `api.py`
+> but is not yet called from `find()`. The existing
+> `_deep_tag_follow` path remains active because it processes items
+> as a batch (computing shared tag statistics for discriminative
+> tags), while the `traverse` action processes items individually.
+> Wiring this requires the traverse action to support batch
+> tag-follow semantics.
 
 ---
 
-## 5) Design rationale: mapping from current code
+## 5) Available statistics
 
-The query resolution states express the existing strategy selection
-logic from `continuation_policy.py`. The current code uses three
-named strategies; the state docs express the same logic as `when:`
-predicates with threshold params from config.
+The runtime computes statistics from `find` action results via
+`enrich_find_output()` (`result_stats.py`). These are precomputed
+and available as `{id}.*` bindings in state doc predicates:
 
-### Current thresholds (from `choose_strategy()`)
+| Statistic | Type | Meaning |
+|-----------|------|---------|
+| `margin` | float | Score gap between #1 and #2 result |
+| `entropy` | float | Score distribution spread (high = scattered) |
+| `lineage_strong` | float | Version/part concentration in top-K |
+| `dominant_lineage_tags` | dict | Tags from dominant lineage item |
+| `top_facet_tags` | dict | Tags from top discriminative facet |
+
+These statistics are computed today for every `find` action in a
+flow. They are consumed by `get-context` (via enrichment on the
+`similar` binding) but not yet used for decision-making predicates
+like `when: "search.margin > 0.18"`.
+
+---
+
+## 6) Summary
+
+| State doc | Actions | Match | Status |
+|-----------|---------|-------|--------|
+| `.state/after-write` | summarize, tag, ocr, analyze | all | live |
+| `.state/get-context` | find, resolve_meta | all | live |
+| `.state/find-deep` | find, traverse | sequence | live (not yet called) |
+
+## 7) Resolved questions
+
+- [x] Should version navigation become a state doc rule? **No.**
+      Structural, not content-derived. The caller applies
+      `versions_limit` (default 5) inline.
+- [x] `resolve_meta` action: standalone action or a mode of `find`?
+      **Standalone.** Wraps `Keeper.resolve_meta()`. Separate action
+      is cleaner.
+- [x] Should edges be a state doc rule? **No.** Edge resolution
+      requires structural database queries (inverse edges, explicit
+      edge-tag lookup) that the generic `traverse` action can't
+      replicate. Kept inline in the caller.
+
+## 8) Open questions
+
+- [ ] `traverse` action needs batch tag-follow mode to replace
+      `_deep_tag_follow` — discriminative tag stats require seeing
+      the full result set, not individual items.
+- [ ] Render hints: should the state doc return render hints, or
+      should the rendering layer compute them post-flow?
+
+---
+
+## Appendix: aspirational — query resolution state docs
+
+> **Status: unproven.** These state docs express the strategy
+> selection logic from the first-draft continuations work
+> (`continuation_policy.choose_strategy()`). That code path exists
+> but has never been validated against real get/find behavior. The
+> thresholds and branching strategies below are hypothetical — they
+> may or may not reflect useful decision boundaries.
+>
+> These are included as design sketches, not as implementation
+> targets. The actual query resolution path should be derived from
+> observed get/find behavior, not from these drafts.
+
+Three state docs — `query-resolve`, `query-branch`,
+`query-explore` — are defined in `builtin_state_docs.py` but have
+no callers. They reference threshold params (`margin_high`,
+`entropy_low`, etc.) from `continuation_policy.py` defaults.
+
+### .state/query-resolve (draft)
+
+```yaml
+# match: sequence
+rules:
+  - id: search
+    do: find
+    with: { query: "{params.query}", limit: "{params.limit}" }
+  - when: "search.margin > params.margin_high"
+    return: done
+  - when: "search.lineage_strong > params.lineage_strong"
+    do: find
+    with: { query: "{params.query}", tags: "{search.dominant_lineage_tags}", limit: 5 }
+    then: query-resolve
+  - when: "search.margin < params.margin_low || search.entropy > params.entropy_high"
+    then:
+      state: query-branch
+      with:
+        facets_1: "{search.top_facet_tags}"
+  - when: "search.entropy < params.entropy_low"
+    do: find
+    with: { query: "{params.query}", limit: 5 }
+    then: query-resolve
+  - then: query-explore
+```
+
+### .state/query-branch (draft)
+
+```yaml
+# match: all
+rules:
+  - id: pivot1
+    do: find
+    with: { query: "{params.query}", limit: "{params.pivot_limit}" }
+  - id: bridge
+    do: find
+    with: { query: "{params.query}", limit: "{params.bridge_limit}" }
+post:
+  - when: "pivot1.margin > params.margin_high || bridge.margin > params.margin_high"
+    return: done
+  - when: "budget.remaining > 0"
+    then: query-resolve
+  - return:
+      status: stopped
+      with:
+        reason: "ambiguous"
+```
+
+### .state/query-explore (draft)
+
+```yaml
+# match: sequence
+rules:
+  - id: search
+    do: find
+    with: { query: "{params.query}", limit: "{params.explore_limit}" }
+  - when: "search.margin > params.margin_high"
+    return: done
+  - when: "budget.remaining > 0"
+    do: find
+    with: { query: "{params.query}", limit: "{params.explore_limit_wide}" }
+    then: query-resolve
+  - return: stopped
+    with: { reason: "budget" }
+```
+
+### Hypothetical thresholds
 
 ```python
 margin_high:    0.18    # confident winner
@@ -370,56 +344,5 @@ entropy_high:   0.72    # scattered results
 lineage_strong: 0.75    # version/part concentration
 ```
 
-### Strategy mapping
-
-| Strategy | State doc path | When |
-|----------|---------------|------|
-| `single_lane_refine` | query-resolve rules 3, 5 | high margin + low entropy, or strong lineage |
-| `top2_plus_bridge` | query-branch | low margin or high entropy |
-| `explore_more` | query-explore | mixed signals (fallback) |
-
-All strategies are just different calls to `find` with different
-parameters — no separate "refine" action needed.
-
-### Parity requirements
-
-The state docs must reproduce current behavior:
-
-- **Simple get/find**: `find` returns dominant result → `done` on
-  first tick. No continuation overhead for clear matches.
-- **Ambiguous get**: close results → `query-branch` fires parallel
-  searches → resolves or escalates.
-- **Deep mode**: `find-deep` chains flat search + traverse.
-- **Budget exhaustion**: after N ticks → `stopped` with reason `"budget"`.
-
----
-
-## 6) Summary: what ships
-
-| State doc | Entry for | Match | Actions used |
-|-----------|-----------|-------|-------------|
-| `.state/after-write` | `put` | all | summarize, tag, ocr |
-| `.state/query-resolve` | `get`, `find` | sequence | find |
-| `.state/query-branch` | (internal) | all | find |
-| `.state/query-explore` | (internal) | sequence | find |
-| `.state/get-context` | `get` (display) | all | find, traverse, resolve_meta |
-| `.state/find-deep` | `find(deep)` | sequence | find, traverse |
-
-Six state docs. Five actions. Resolution uses only `find` — all
-variation is in parameters and routing predicates. Context assembly
-uses `find`, `traverse`, and `resolve_meta` in parallel.
-
-## 7) Open questions
-
-- [ ] Should version navigation become a state doc rule? Currently
-      computed by the runtime from version offset — structural, not
-      content-based. But a user might want to customize how many
-      previous versions to show.
-- [ ] `resolve_meta` action: standalone action or a mode of `find`?
-      Wraps `Keeper.resolve_meta()` (specialized tag-query
-      resolution). Separate action is cleaner; folding into `find`
-      keeps the action count lower.
-- [ ] Render hints: should the state doc return render hints, or
-      should the rendering layer compute them post-flow?
-- [ ] How do lineage signals (version/part concentration) propagate
-      across ticks? Runtime tracks them in frontier state?
+These values come from `continuation_policy.DEFAULT_DECISION_POLICY`.
+They have not been validated against real query patterns.

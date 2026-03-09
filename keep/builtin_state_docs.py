@@ -48,7 +48,7 @@ rules:
     do: find
     with:
       prefix: "{params.item_id}@p"
-      limit: 100
+      limit: "{params.parts_limit}"
   - id: meta
     do: resolve_meta
     with:

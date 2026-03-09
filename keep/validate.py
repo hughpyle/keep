@@ -348,7 +348,7 @@ def _validate_prompt_doc(
 
 _VALID_MATCH = {"sequence", "all"}
 _VALID_TERMINALS = {"done", "error", "stopped"}
-_TEMPLATE_REF_RE = re.compile(r"\{([^}]+)\}")
+
 
 
 def _validate_state_doc(
@@ -499,9 +499,6 @@ def _validate_state_rule(
             result.diagnostics.append(
                 Diagnostic("error", "with must be a mapping", loc)
             )
-        else:
-            _check_template_refs(result, with_params, loc)
-
     # return
     if has_return:
         ret = raw["return"]
@@ -546,8 +543,6 @@ def _validate_state_rule(
                     result.diagnostics.append(
                         Diagnostic("error", "then.with must be a mapping", loc)
                     )
-                else:
-                    _check_template_refs(result, then_with, loc + ".then.with")
         else:
             result.diagnostics.append(
                 Diagnostic("error", "then must be a string or mapping", loc)
@@ -576,20 +571,6 @@ def _check_action_name(result: ValidationResult, name: str, loc: str) -> None:
         result.diagnostics.append(
             Diagnostic("warning", f"unknown action {name!r} (known: {', '.join(sorted(_known_actions))})", loc)
         )
-
-
-def _check_template_refs(result: ValidationResult, params: dict, loc: str) -> None:
-    """Check template references for syntactic validity."""
-    for key, value in params.items():
-        if not isinstance(value, str):
-            continue
-        for match in _TEMPLATE_REF_RE.finditer(value):
-            ref = match.group(1).strip()
-            parts = ref.split(".")
-            if not parts or not parts[0]:
-                result.diagnostics.append(
-                    Diagnostic("warning", f"empty template reference in {key!r}", loc)
-                )
 
 
 def _try_compile_state_doc(result: ValidationResult, doc_id: str, content: str) -> None:

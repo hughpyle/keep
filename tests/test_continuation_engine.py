@@ -340,7 +340,7 @@ def test_state_doc_after_write_skips_short_content(_engine_with_state_doc):
 
 
 def test_system_notes_skip_state_doc_eval(_engine_with_state_doc):
-    """System notes (id starts with '.') skip state-doc eval, use template fallback."""
+    """System notes (id starts with '.') skip state-doc eval entirely."""
     kp, engine = _engine_with_state_doc
     enqueued: list[dict] = []
     original = kp._enqueue_task_background
@@ -357,14 +357,10 @@ def test_system_notes_skip_state_doc_eval(_engine_with_state_doc):
             "params": {
                 "content": long_content,
                 "id": ".system/test-note",
-                # Template followups use these processing flags
-                "processing": {"summarize": True, "tag": False},
             },
         })
-        task_types = [e["task_type"] for e in enqueued]
-        # Falls through to template followups (not state doc)
-        assert "summarize" in task_types  # processing.summarize=True
-        assert "tag" not in task_types  # processing.tag=False
+        # System notes skip all processing — no followups enqueued
+        assert enqueued == []
     finally:
         kp._enqueue_task_background = original  # type: ignore[assignment]
 

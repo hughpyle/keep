@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 logger = logging.getLogger(__name__)
-_ESCALATION_PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}")
 
 
 def _parse_date_param(value: str) -> str:
@@ -1273,109 +1272,6 @@ class Keeper:
 
         return best_prompt
 
-    @staticmethod
-    def _resolve_template_path_value(context: dict[str, Any], path: str) -> Any:
-        current: Any = context
-        for part in str(path).split("."):
-            if not isinstance(current, dict):
-                return ""
-            if part not in current:
-                return ""
-            current = current.get(part)
-        return current
-
-    def _render_escalation_template_value(self, value: Any, context: dict[str, Any]) -> Any:
-        if isinstance(value, str):
-            def _sub(match: re.Match[str]) -> str:
-                key = match.group(1)
-                resolved = self._resolve_template_path_value(context, key)
-                if resolved is None:
-                    return ""
-                if isinstance(resolved, (dict, list)):
-                    return json.dumps(resolved, ensure_ascii=False)
-                return str(resolved)
-
-            return _ESCALATION_PLACEHOLDER_RE.sub(_sub, value)
-        if isinstance(value, list):
-            return [self._render_escalation_template_value(v, context) for v in value]
-        if isinstance(value, dict):
-            return {
-                str(k): self._render_escalation_template_value(v, context)
-                for k, v in value.items()
-            }
-        return value
-
-    def _resolve_escalation_template(self, template_ref: str) -> dict[str, Any]:
-        template_id = (
-            template_ref
-            if template_ref.startswith(".template/")
-            else f".template/escalation/{template_ref}"
-        )
-        doc = self.get(template_id)
-        if doc is None:
-            raise ValueError(f"Escalation template not found: {template_id}")
-        raw = str(doc.summary or "").strip()
-        if not raw:
-            raise ValueError(f"Escalation template is empty: {template_id}")
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Escalation template is not valid JSON: {template_id}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError(f"Escalation template must be a JSON object: {template_id}")
-        return parsed
-
-    def emit_escalation_note(
-        self,
-        template_ref: str,
-        *,
-        context: dict[str, Any],
-    ) -> Optional[str]:
-        """Render a store-backed escalation template and upsert the resulting note."""
-        try:
-            template = self._resolve_escalation_template(template_ref)
-            rendered = self._render_escalation_template_value(template, context)
-            if not isinstance(rendered, dict):
-                raise ValueError("Rendered escalation template must be an object")
-            note_id = str(rendered.get("id") or "").strip()
-            content = str(rendered.get("content") or "").strip()
-            if not note_id:
-                raise ValueError("Escalation template missing rendered id")
-            if not content:
-                raise ValueError("Escalation template missing rendered content")
-
-            tags_raw = rendered.get("tags")
-            tags: dict[str, Any] = {}
-            if isinstance(tags_raw, dict):
-                for raw_key, raw_value in tags_raw.items():
-                    key = str(raw_key).strip()
-                    if not key:
-                        continue
-                    if isinstance(raw_value, str):
-                        val = raw_value.strip()
-                        if not val:
-                            continue
-                        tags[key] = val
-                    elif isinstance(raw_value, list):
-                        vals = [str(v).strip() for v in raw_value if str(v).strip()]
-                        if vals:
-                            tags[key] = vals
-                    elif raw_value is not None:
-                        tags[key] = str(raw_value)
-
-            summary_raw = rendered.get("summary")
-            summary = str(summary_raw).strip() if summary_raw is not None else None
-            self.put(
-                content=content,
-                id=note_id,
-                tags=tags or None,
-                summary=summary if summary else None,
-            )
-            return note_id
-        except Exception as exc:
-            logger.warning("Could not emit escalation note using %s: %s", template_ref, exc)
-            return None
-
     def _gather_context(
         self,
         id: str,
@@ -1969,6 +1865,11 @@ class Keeper:
                 tagdoc_cache[key] = parent.tags if parent else None
             return tagdoc_cache[key]
 
+        # Collect batch operations across all edge-tag keys
+        edges_to_delete: list[tuple[str, str, str]] = []  # (source_id, predicate, target_id)
+        edges_to_add: list[tuple[str, str, str, str, str]] = []  # (source_id, predicate, target_id, inverse, created)
+        backfill_checks: list[tuple[str, str]] = []  # (predicate, inverse)
+
         for key in all_keys:
             td_tags = _get_tagdoc_tags(key)
             if td_tags is None:
@@ -1983,19 +1884,16 @@ class Keeper:
             removed_values = previous_values - current_values
             added_values = current_values - previous_values
 
-            # Tag values removed → delete old edges for this predicate/target.
+            # Tag values removed → queue edge deletions.
             for removed in removed_values:
                 target_id = removed
                 try:
                     target_id = normalize_id(removed)
                 except ValueError:
-                    # Best-effort cleanup for legacy/non-canonical rows.
                     pass
-                self._document_store.delete_edge(doc_coll, id, key, target_id)
+                edges_to_delete.append((id, key, target_id))
 
-            # Tag present → upsert edge + auto-vivify target.
-            # Skip sysdoc targets (names starting with '.'): this prevents
-            # non-system writes from indirectly creating/updating system docs.
+            # Tag present → queue edge upsert + auto-vivify target.
             for current_value in sorted(added_values):
                 if not current_value:
                     continue
@@ -2008,8 +1906,6 @@ class Keeper:
                 if target_id.startswith("."):
                     continue
                 # Auto-vivify: create target as empty doc if it doesn't exist
-                # Only writes to document store — embedding is deferred to
-                # avoid loading the model on the write path.
                 if not self._document_store.exists(doc_coll, target_id):
                     reference_created = (
                         merged_tags.get("_created")
@@ -2040,17 +1936,21 @@ class Keeper:
                     )
 
                 created = merged_tags.get("_created") or merged_tags.get("_updated") or utc_now()
-                self._document_store.upsert_edge(
-                    collection=doc_coll,
-                    source_id=id,
-                    predicate=key,
-                    target_id=target_id,
-                    inverse=inverse,
-                    created=created,
-                )
+                edges_to_add.append((id, key, target_id, inverse, created))
+                backfill_checks.append((key, inverse))
 
-                # Trigger backfill check for this predicate
-                self._check_edge_backfill(key, inverse, doc_coll)
+        # Execute batched edge mutations
+        if edges_to_delete:
+            self._document_store.delete_edges_batch(doc_coll, edges_to_delete)
+        if edges_to_add:
+            self._document_store.upsert_edges_batch(doc_coll, edges_to_add)
+
+        # Trigger backfill checks (deduplicated by predicate)
+        seen_predicates: set[str] = set()
+        for predicate, inverse in backfill_checks:
+            if predicate not in seen_predicates:
+                seen_predicates.add(predicate)
+                self._check_edge_backfill(predicate, inverse, doc_coll)
 
     def _check_edge_backfill(
         self, predicate: str, inverse: str, doc_coll: str,
@@ -4217,28 +4117,6 @@ class Keeper:
             ))
         return refs
 
-    @staticmethod
-    def _map_flow_edges(binding: dict) -> dict:
-        """Map traverse action output to EdgeRef dict."""
-        edge_refs: dict[str, list] = {}
-        groups = binding.get("groups") or {}
-        for source_id, items in groups.items():
-            if not isinstance(items, list) or not items:
-                continue
-            refs = []
-            for r in items:
-                if not isinstance(r, dict):
-                    continue
-                tags = r.get("tags") or {}
-                refs.append(EdgeRef(
-                    source_id=r.get("id", ""),
-                    date=local_date(tags.get("_updated") or tags.get("_created", "")),
-                    summary=r.get("summary", ""),
-                ))
-            if refs:
-                edge_refs[source_id] = refs
-        return edge_refs
-
     def get_context(
         self,
         id: str,
@@ -4246,6 +4124,8 @@ class Keeper:
         version: int | None = None,
         similar_limit: int = 3,
         meta_limit: int = 3,
+        parts_limit: int = 100,
+        versions_limit: int = 5,
         include_similar: bool = True,
         include_meta: bool = True,
         include_parts: bool = True,
@@ -4265,6 +4145,8 @@ class Keeper:
                 - N < 0: archived ordinal from oldest (-1=oldest)
             similar_limit: Max similar items to include
             meta_limit: Max items per meta-doc section
+            parts_limit: Max parts to include
+            versions_limit: Max prev/next versions to include
             include_similar: Whether to resolve similar items
             include_meta: Whether to resolve meta-doc sections
             include_parts: Whether to include parts manifest
@@ -4294,7 +4176,7 @@ class Keeper:
         if include_versions:
             if offset == 0:
                 nav = self.get_version_nav(id, None)
-                for i, v in enumerate(nav.get("prev", [])):
+                for i, v in enumerate(nav.get("prev", [])[:versions_limit]):
                     prev_refs.append(VersionRef(
                         offset=i + 1,
                         date=local_date(v.tags.get("_created") or v.created_at or ""),
@@ -4329,22 +4211,29 @@ class Keeper:
         edge_refs: dict[str, list[EdgeRef]] = {}
 
         if offset == 0:
-            flow_result = self._run_read_flow(
-                "get-context",
-                {
-                    "item_id": id,
-                    "similar_limit": similar_limit if include_similar else 0,
-                    "meta_limit": meta_limit if include_meta else 0,
-                },
-            )
-            if flow_result.status == "done":
-                bindings = flow_result.bindings
-                if include_similar:
-                    similar_refs = self._map_flow_similar(bindings.get("similar", {}))
-                if include_meta:
-                    meta_refs = self._map_flow_meta(bindings.get("meta", {}))
-                if include_parts:
-                    part_refs = self._map_flow_parts(bindings.get("parts", {}))
+            if include_similar or include_meta or include_parts:
+                flow_result = self._run_read_flow(
+                    "get-context",
+                    {
+                        "item_id": id,
+                        "similar_limit": similar_limit if include_similar else 0,
+                        "meta_limit": meta_limit if include_meta else 0,
+                        "parts_limit": parts_limit if include_parts else 0,
+                    },
+                )
+                if flow_result.status == "done":
+                    bindings = flow_result.bindings
+                    if include_similar:
+                        similar_refs = self._map_flow_similar(bindings.get("similar", {}))
+                    if include_meta:
+                        meta_refs = self._map_flow_meta(bindings.get("meta", {}))
+                    if include_parts:
+                        part_refs = self._map_flow_parts(bindings.get("parts", {}))
+                else:
+                    logger.warning(
+                        "get-context flow returned %s for %r: %s",
+                        flow_result.status, id, flow_result.data,
+                    )
 
             # Edge resolution (inline — structural edge queries)
             edge_refs = self._resolve_edge_refs(item, id)
@@ -6271,21 +6160,10 @@ class Keeper:
         item: Any,
         error: str,
         failure_class: str,
-    ) -> Optional[str]:
-        event_material = f"{item.collection}|{item.task_type}|{item.id}"
-        event_id = hashlib.sha256(event_material.encode("utf-8")).hexdigest()[:16]
-        context = {
-            "event_id": event_id,
-            "task_type": str(item.task_type or ""),
-            "item_id": str(item.id or ""),
-            "collection": str(item.collection or ""),
-            "attempt": int(getattr(item, "attempts", 0) or 0),
-            "error": str(error or ""),
-            "failure_class": str(failure_class or "unknown"),
-        }
-        return self.emit_escalation_note(
-            "breakdown",
-            context=context,
+    ) -> None:
+        logger.warning(
+            "Processing breakdown for %s/%s (%s): %s",
+            item.id, item.task_type, failure_class, error,
         )
 
     def process_pending(self, limit: int = 10) -> dict:

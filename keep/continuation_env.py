@@ -113,13 +113,6 @@ class ContinuationRuntimeEnv(Protocol):
         candidates: list[str] | None = None,
     ) -> dict[str, Any]: ...
 
-    def emit_escalation_note(
-        self,
-        template_ref: str,
-        *,
-        context: dict[str, Any] | None = None,
-    ) -> str | None: ...
-
     def get_default_summarization_provider(self) -> Any: ...
     def get_default_document_provider(self) -> Any: ...
     def get_default_tagging_provider(self) -> Any: ...
@@ -213,48 +206,45 @@ class LocalContinuationEnvironment:
 
         source_set = {str(item.id) for item in source_items}
         doc_coll = self._keeper._resolve_doc_collection()
-        chroma_coll = self._keeper._resolve_chroma_collection()
-        try:
-            embedder = self._keeper._get_embedding_provider()
-        except Exception:
-            embedder = None
 
         groups: dict[str, list[Any]] = {}
         for item in source_items:
             source_id = str(item.id)
-            query = str(item.summary or source_id).strip() or source_id
-            embedding = None
-            if embedder is not None:
-                try:
-                    embedding = embedder.embed(query)
-                except Exception:
-                    embedding = None
-
             candidates: list[Any] = []
-            if embedding is not None:
-                try:
-                    edge_groups = self._keeper._deep_edge_follow(
-                        [item],
-                        chroma_coll,
-                        doc_coll,
-                        query=query,
-                        embedding=embedding,
-                        top_k=1,
-                        exclude_ids=source_set,
-                    )
-                    group = edge_groups.get(source_id) if isinstance(edge_groups, dict) else None
-                    if isinstance(group, list):
-                        candidates = group
-                except Exception:
-                    candidates = []
 
+            # Tier 1: Direct edge follow (forward + inverse)
+            try:
+                fwd = self._keeper._document_store.get_forward_edges(doc_coll, source_id)
+                inv = self._keeper._document_store.get_inverse_edges(doc_coll, source_id)
+                related_ids: list[str] = []
+                seen_ids: set[str] = set()
+                # Forward edges: source → target
+                for _pred, target_id, _created in fwd:
+                    if target_id not in seen_ids and target_id not in source_set:
+                        seen_ids.add(target_id)
+                        related_ids.append(target_id)
+                # Inverse edges: other docs → this source
+                for _inv, edge_source_id, _created in inv:
+                    if edge_source_id not in seen_ids and edge_source_id not in source_set:
+                        seen_ids.add(edge_source_id)
+                        related_ids.append(edge_source_id)
+                # Resolve IDs to items
+                for rid in related_ids[:limit * 3]:
+                    related_item = self._keeper.get(rid)
+                    if related_item is not None:
+                        candidates.append(related_item)
+            except Exception:
+                candidates = []
+
+            # Tier 2: Tag-facet grouping (no embedding needed)
             if not candidates:
+                chroma_coll = self._keeper._resolve_chroma_collection()
                 try:
                     tag_groups = self._keeper._deep_tag_follow(
                         [item],
                         chroma_coll,
                         doc_coll,
-                        embedding=embedding,
+                        embedding=None,
                         top_k=1,
                         max_per_group=limit,
                     )
@@ -264,11 +254,7 @@ class LocalContinuationEnvironment:
                 except Exception:
                     candidates = []
 
-            if not candidates:
-                try:
-                    candidates = self._keeper.find(similar_to=source_id, limit=limit + len(source_set))
-                except Exception:
-                    candidates = []
+            # No similarity fallback — spec says empty group if no edges/tags
 
             deduped: list[Any] = []
             seen: set[str] = set()
@@ -398,17 +384,6 @@ class LocalContinuationEnvironment:
         return self._keeper.get_planner_priors(
             scope_key=scope_key,
             candidates=candidates,
-        )
-
-    def emit_escalation_note(
-        self,
-        template_ref: str,
-        *,
-        context: dict[str, Any] | None = None,
-    ) -> str | None:
-        return self._keeper.emit_escalation_note(
-            template_ref,
-            context=context,
         )
 
     def get_default_summarization_provider(self) -> Any:

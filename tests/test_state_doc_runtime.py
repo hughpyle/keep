@@ -588,3 +588,115 @@ class TestCELPredicates:
         assert "find" in calls
         assert "traverse" in calls
         assert "related" in result.bindings
+
+
+class TestQueryResolveFlow:
+    """Test query-resolve state doc with CEL conditions and transitions."""
+
+    def test_high_margin_returns_done(self):
+        """High margin result (dominant top-1) short-circuits to done."""
+        from keep.builtin_state_docs import BUILTIN_STATE_DOCS
+        loader = _make_loader({
+            k: v for k, v in BUILTIN_STATE_DOCS.items()
+            if k.startswith("query")
+        })
+
+        def _runner(action_name, params):
+            if action_name == "find":
+                return {
+                    "results": [
+                        {"id": "a", "summary": "best", "tags": {}, "score": 0.95},
+                        {"id": "b", "summary": "weak", "tags": {}, "score": 0.10},
+                    ],
+                    "count": 2,
+                }
+            return {}
+
+        result = run_flow(
+            "query-resolve",
+            {"query": "test", "limit": 10, "margin_high": 0.18,
+             "margin_low": 0.08, "entropy_high": 0.72, "entropy_low": 0.45,
+             "lineage_strong": 0.75},
+            load_state_doc=loader, run_action=_runner,
+        )
+        assert result.status == "done"
+        assert result.history == ["query-resolve"]
+        assert "search" in result.bindings
+
+    def test_low_margin_transitions_to_branch(self):
+        """Low margin (ambiguous top results) transitions to query-branch."""
+        from keep.builtin_state_docs import BUILTIN_STATE_DOCS
+        loader = _make_loader({
+            k: v for k, v in BUILTIN_STATE_DOCS.items()
+            if k.startswith("query")
+        })
+
+        call_count = {"find": 0}
+
+        def _runner(action_name, params):
+            if action_name == "find":
+                call_count["find"] += 1
+                return {
+                    "results": [
+                        {"id": "a", "summary": "x", "tags": {"topic": "auth"}, "score": 0.51},
+                        {"id": "b", "summary": "y", "tags": {"topic": "auth"}, "score": 0.50},
+                        {"id": "c", "summary": "z", "tags": {"topic": "db"}, "score": 0.49},
+                    ],
+                    "count": 3,
+                }
+            return {}
+
+        result = run_flow(
+            "query-resolve",
+            {"query": "test", "limit": 10, "margin_high": 0.18,
+             "margin_low": 0.08, "entropy_high": 0.72, "entropy_low": 0.45,
+             "lineage_strong": 0.75, "pivot_limit": 5, "bridge_limit": 5},
+            budget=10,
+            load_state_doc=loader, run_action=_runner,
+        )
+        # Should have transitioned through multiple states
+        assert "query-branch" in result.history or "query-explore" in result.history
+
+
+class TestBatchEdges:
+    """Test batch edge operations on DocumentStore."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        from keep.document_store import DocumentStore
+        db_path = tmp_path / "documents.db"
+        with DocumentStore(db_path) as s:
+            yield s
+
+    def test_upsert_edges_batch(self, store):
+        edges = [
+            ("doc1", "speaker", "alice", "said", "2025-01-01T00:00:00"),
+            ("doc1", "speaker", "bob", "said", "2025-01-01T00:00:00"),
+            ("doc2", "topic", "ai", "discussed_in", "2025-01-02T00:00:00"),
+        ]
+        count = store.upsert_edges_batch("default", edges)
+        assert count == 3
+
+        alice_edges = store.get_inverse_edges("default", "alice")
+        assert len(alice_edges) == 1
+        bob_edges = store.get_inverse_edges("default", "bob")
+        assert len(bob_edges) == 1
+        ai_edges = store.get_inverse_edges("default", "ai")
+        assert len(ai_edges) == 1
+
+    def test_delete_edges_batch(self, store):
+        store.upsert_edge("default", "doc1", "speaker", "alice", "said", "2025-01-01T00:00:00")
+        store.upsert_edge("default", "doc1", "speaker", "bob", "said", "2025-01-01T00:00:00")
+        store.upsert_edge("default", "doc2", "speaker", "alice", "said", "2025-01-02T00:00:00")
+
+        deleted = store.delete_edges_batch("default", [
+            ("doc1", "speaker", "alice"),
+            ("doc1", "speaker", "bob"),
+        ])
+        assert deleted == 2
+        # doc2's edge remains
+        assert len(store.get_inverse_edges("default", "alice")) == 1
+
+    def test_empty_batch_is_noop(self, store):
+        assert store.upsert_edges_batch("default", []) == 0
+        assert store.delete_edges_batch("default", []) == 0

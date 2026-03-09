@@ -2928,6 +2928,64 @@ class DocumentStore:
         )
         self._conn.commit()
 
+    def upsert_edges_batch(
+        self,
+        collection: str,
+        edges: list[tuple[str, str, str, str, str]],
+    ) -> int:
+        """Batch insert/replace edge rows in a single transaction.
+
+        Each tuple is (source_id, predicate, target_id, inverse, created).
+        """
+        if not edges:
+            return 0
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO edges
+                        (source_id, collection, predicate, target_id, inverse, created)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [(s, collection, p, t, inv, c) for s, p, t, inv, c in edges],
+                )
+                self._conn.commit()
+                return len(edges)
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def delete_edges_batch(
+        self,
+        collection: str,
+        edges: list[tuple[str, str, str]],
+    ) -> int:
+        """Batch delete edge rows in a single transaction.
+
+        Each tuple is (source_id, predicate, target_id).
+        """
+        if not edges:
+            return 0
+        count = 0
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                for source_id, predicate, target_id in edges:
+                    cur = self._conn.execute(
+                        """
+                        DELETE FROM edges
+                        WHERE source_id = ? AND collection = ? AND predicate = ? AND target_id = ?
+                        """,
+                        (source_id, collection, predicate, target_id),
+                    )
+                    count += cur.rowcount
+                self._conn.commit()
+                return count
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def delete_edge(
         self,
         collection: str,
