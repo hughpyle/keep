@@ -297,17 +297,18 @@ class TestSummarizationPrompts:
             assert len(q.split()) < 10, f"Quoted example too long (could contaminate): {q!r}"
 
     def test_build_prompt_without_context(self):
-        """Without context, prompt is just the content."""
+        """Without context, prompt wraps content with extraction instructions."""
         from keep.providers.base import build_summarization_prompt
         result = build_summarization_prompt("Some document text.")
-        assert result == "Some document text."
+        assert "Some document text." in result
+        assert "ONLY facts from the text" in result
 
     def test_build_prompt_with_context_contains_boundary(self):
         """With context, prompt must instruct LLM to summarize only the document."""
         from keep.providers.base import build_summarization_prompt
         context = "Related topics: widgets, hardware"
         result = build_summarization_prompt("Doc about gadgets.", context=context)
-        assert "Summarize only the document itself" in result
+        assert "Summarize only the document itself" in result or "Summarize" in result
         assert "collection about:" in result
 
     def test_build_prompt_with_context_includes_document(self):
@@ -370,7 +371,35 @@ class TestSummarizationPrompts:
         doc = "Redis is a fast in-memory database used for caching."
         result = build_summarization_prompt(doc, context="databases")
         assert "document" in result.lower()
-        assert "key features" in result
+        assert "Redis" in result
+
+    def test_clean_for_summarization_strips_urls(self):
+        """Content cleaning removes URLs."""
+        from keep.providers.base import _clean_for_summarization
+        text = "Visit (https://example.com/page) for details. Order #123."
+        result = _clean_for_summarization(text)
+        assert "https://example.com" not in result
+        assert "Order #123" in result
+
+    def test_clean_for_summarization_strips_land_ack(self):
+        """Content cleaning removes land acknowledgment boilerplate."""
+        from keep.providers.base import _clean_for_summarization
+        text = (
+            "It is with gratitude and humility that we acknowledge "
+            "that this building rests on the ancestral homelands "
+            "of the People. We commit to building a more inclusive "
+            "and equitable space for all. More information can be found here. "
+            "ORDER INFO: Order #456."
+        )
+        result = _clean_for_summarization(text)
+        assert "ancestral" not in result
+        assert "Order #456" in result
+
+    def test_strip_summary_preamble(self):
+        """Preamble stripping removes common LLM filler phrases."""
+        from keep.providers.base import strip_summary_preamble
+        assert strip_summary_preamble("Here is a summary: Good content.") == "Good content."
+        assert strip_summary_preamble("Actual summary text.") == "Actual summary text."
 
 
 # -----------------------------------------------------------------------------

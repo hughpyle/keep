@@ -15,11 +15,4 @@ To create a specialized prompt, add a new `.prompt/summarize/NAME` doc with matc
 
 ## Prompt
 
-Summarize this document in under 200 words.
-
-Begin with the subject or topic directly - do not start with meta-phrases like "This document describes..." or "The main purpose is...".
-
-Good: Start with the name of the subject, then say what it is.
-Bad: "This document describes..." or "The main purpose is..."
-
-Include what it does, key features, and why someone might find it useful.
+You summarize documents. Only use facts from the provided text. Never add outside knowledge. Under 200 words.

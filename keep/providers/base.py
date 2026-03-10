@@ -145,14 +145,7 @@ class EmbeddingProvider(Protocol):
 # -----------------------------------------------------------------------------
 
 # Shared system prompt for all LLM-based summarization providers
-SUMMARIZATION_SYSTEM_PROMPT = """Summarize this document in under 200 words.
-
-Begin with the subject or topic directly - do not start with meta-phrases like "This document describes..." or "The main purpose is...".
-
-Good: Start with the name of the subject, then say what it is.
-Bad: "This document describes..." or "The main purpose is..."
-
-Include what it does, key features, and why someone might find it useful."""
+SUMMARIZATION_SYSTEM_PROMPT = """You summarize documents. Only use facts from the provided text. Never add outside knowledge. Under 200 words."""
 
 _SPEAKER_RE = re.compile(
     r"^(?:User|Assistant|Human|AI|System)\s*:",
@@ -163,6 +156,37 @@ _SPEAKER_RE = re.compile(
 def _is_conversation(content: str) -> bool:
     """Detect if content looks like a conversation transcript."""
     return len(_SPEAKER_RE.findall(content[:5000])) >= 4
+
+
+_URL_RE = re.compile(
+    r"\(?\s*https?://[^\s\)]{5,}\s*\)?",
+    re.IGNORECASE,
+)
+_NAV_LINE_RE = re.compile(
+    r"^(?:LOGIN|ABOUT|TAKE PART|EDUCATION|HOST EVENTS|PERFORMING ARTS|"
+    r"EXHIBITIONS|©|Copyright)\b.*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_LAND_ACK_RE = re.compile(
+    r"(?:It is with gratitude and humility|We (?:respectfully )?acknowledge)"
+    r"(?:(?!ORDER |THANK YOU|BILLING).)*"
+    r"(?:found here|land acknowledgment|equitable)[^.]*\.\s*",
+    re.IGNORECASE | re.DOTALL,
+)
+_BLANK_RUNS_RE = re.compile(r"\n{3,}")
+_MAILTO_RE = re.compile(r"\(mailto:[^\)]+\)")
+
+
+def _clean_for_summarization(content: str) -> str:
+    """Strip URLs, navigation, boilerplate, and excess whitespace for summarization."""
+    text = _URL_RE.sub("", content)
+    text = _MAILTO_RE.sub("", text)
+    text = _NAV_LINE_RE.sub("", text)
+    text = _LAND_ACK_RE.sub("", text)
+    text = _BLANK_RUNS_RE.sub("\n\n", text)
+    # Collapse runs of whitespace-only lines
+    lines = [line for line in text.split("\n") if line.strip()]
+    return "\n".join(lines)
 
 
 def build_summarization_prompt(content: str, context: str | None = None) -> str:
@@ -179,6 +203,7 @@ def build_summarization_prompt(content: str, context: str | None = None) -> str:
     Returns:
         The complete prompt string for the LLM
     """
+    cleaned = _clean_for_summarization(content)
     if context:
         if _is_conversation(content):
             return f"""Summarize this conversation in under 300 words.
@@ -190,22 +215,21 @@ Summarize only this conversation.
 Preserve ALL specific dates, times, names, locations, and factual claims stated by the user. Preserve the chronological order of events.
 
 Conversation:
-{content}"""
+{cleaned}"""
         else:
-            return f"""Summarize this document in under 200 words.
+            return f"""Summarize in under 200 words.
 
 This document is part of a collection about: {context}
 
-Summarize only the document itself.
-
-Begin with the subject or topic directly - do not start with meta-phrases like "This document describes..." or "The main purpose is...".
-
-Include what it does, key features, and why someone might find it useful.
+Summarize only the document itself. Start with the document type or subject. Include all specific facts (dates, names, amounts, locations). Ignore boilerplate and navigation.
 
 Document:
-{content}"""
+{cleaned}"""
     else:
-        return content
+        return f"""Read the text below. What type of document is it? What are the specific facts (names, dates, numbers, amounts, places)? Write a short summary using ONLY facts from the text.
+
+Text:
+{cleaned}"""
 
 
 def strip_summary_preamble(text: str) -> str:

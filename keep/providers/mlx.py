@@ -9,6 +9,7 @@ Requires: pip install mlx-lm mlx
 from .base import (
     get_registry,
     build_summarization_prompt,
+    strip_summary_preamble,
     SUMMARIZATION_SYSTEM_PROMPT,
     TAGGING_SYSTEM_PROMPT,
     parse_tag_json,
@@ -144,7 +145,9 @@ class MLXSummarization:
         truncated = content[:12000] if len(content) > 12000 else content
         prompt = build_summarization_prompt(truncated, context)
         result = self.generate(SUMMARIZATION_SYSTEM_PROMPT, prompt)
-        return result if result else truncated[:max_length]
+        if not result:
+            return truncated[:max_length]
+        return strip_summary_preamble(result)
 
     def generate(
         self,
