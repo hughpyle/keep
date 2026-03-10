@@ -168,6 +168,7 @@ The existing `keep get`, `keep find`, and `keep put` commands work exactly as be
 
 ## See also
 
+- [FLOW-INVOCATION.md](FLOW-INVOCATION.md) — Running, resuming, and steering flows from CLI/MCP
 - [FLOW_STATE_DOCS.md](FLOW_STATE_DOCS.md) — Built-in state doc reference
 - [API-SCHEMA.md](API-SCHEMA.md) — General keep API reference
 - [AGENT-GUIDE.md](AGENT-GUIDE.md) — Working session patterns

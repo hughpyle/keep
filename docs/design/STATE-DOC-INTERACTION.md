@@ -68,9 +68,9 @@ flow = store.get_flow(result.flow_id)
 #   summary generated, tags assigned, work results
 ```
 
-The work store (`work_store.py`) already records
-every mutation, every work result, every state transition. The
-`flow_id` is the existing handle to all of it. Nothing new needed.
+The work queue (`work_queue.py`) records work items and their
+results. The flow runtime itself is stateless — cursors carry
+accumulated bindings, and work items track execution status.
 
 The item itself also shows the results — `get` it later and it
 has its summary, tags, etc. The flow trace is for when you want
@@ -327,9 +327,8 @@ and which require Judgment (interactive)?**
 
 Every `continue()` call returns a status. Flows that dispatch
 async work, apply mutations, or suspend with `stopped` are
-**persisted** — the `flow_id` in the response is the handle
-to the full execution trace (mutations, work results, state
-transitions) stored in `work_store`.
+**persisted** — work items are tracked in the work queue
+with their execution status and results.
 
 Flows that complete synchronously with no mutations and no
 async work (e.g. a pure-query `match: sequence` that returns

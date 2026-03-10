@@ -60,6 +60,10 @@ Searches, then follows edges from results to discover related items.
 
 ## .state/query-resolve
 
+> Thresholds for query resolution are configurable but not yet tuned
+> against real query patterns. Results are functional but may route
+> suboptimally in edge cases.
+
 **Trigger:** Internal query resolution (multi-step search).
 **Mode:** `match: sequence` — first matching rule wins.
 **Path:** Synchronous, with tick budget.
@@ -128,6 +132,7 @@ Changes take effect on the next flow invocation. The built-in versions are compi
 ## See also
 
 - [FLOWS.md](FLOWS.md) — How flows work, with narrative and diagram
+- [FLOW-INVOCATION.md](FLOW-INVOCATION.md) — Running, resuming, and steering flows
 - [design/STATE-DOC-SCHEMA.md](design/STATE-DOC-SCHEMA.md) — Full schema specification
 - [design/STATE-ACTIONS.md](design/STATE-ACTIONS.md) — Available actions reference
 - [design/BUILTIN-STATE-DOCS.md](design/BUILTIN-STATE-DOCS.md) — Design rationale

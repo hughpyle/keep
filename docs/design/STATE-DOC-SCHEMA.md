@@ -25,8 +25,8 @@ to run in sequence, in parallel, or conditionally:
   good enough, optionally re-search with different parameters,
   decide when to stop.
 
-Today this logic is hardcoded in Python (`flow_engine.py`,
-`flow_policy.py`). The goal is to move it into **state docs**:
+Previously this logic was hardcoded in Python (`flow_engine.py`,
+`flow_policy.py`). The goal was to move it into **state docs**:
 editable documents in the keep store that define what processing
 happens and under what conditions.
 
@@ -461,6 +461,8 @@ config, not flow budgets.
 
 The draft branch (`feat/continuation-store-foundation`) is throwaway.
 Code worth reusing:
+
+**Historical note:** These references are from the original design phase. The modules listed below have since been removed or replaced.
 
 - `work_store.py` — flow/work/mutation persistence
 - `flow_env.py` — environment adapter pattern
