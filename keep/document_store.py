@@ -797,11 +797,13 @@ class DocumentStore:
         content_hash: Optional[str] = None,
         content_hash_full: Optional[str] = None,
         created_at: Optional[str] = None,
+        archive: bool = True,
     ) -> tuple[DocumentRecord, bool]:
         """Insert or update a document record.
 
         Preserves created_at on update. Updates updated_at always.
-        Archives the current version to history before updating.
+        Archives the current version to history before updating (unless
+        archive=False, which updates in-place without creating a version).
 
         Args:
             collection: Collection name
@@ -812,6 +814,9 @@ class DocumentStore:
             content_hash_full: Full SHA256 hash (for dedup verification)
             created_at: Optional override for created_at timestamp
                         (for importing historical data with original timestamps)
+            archive: If True (default), archive the current version before
+                     updating. If False, update in-place without creating
+                     a version entry.
 
         Returns:
             Tuple of (stored DocumentRecord, content_changed bool).
@@ -837,7 +842,8 @@ class DocumentStore:
 
                 if existing:
                     # Archive current version before updating
-                    self._archive_current_unlocked(collection, id, existing)
+                    if archive:
+                        self._archive_current_unlocked(collection, id, existing)
                     # Detect content change
                     content_changed = (
                         content_hash is not None
@@ -1273,6 +1279,95 @@ class DocumentStore:
                 (collection, id, version),
             )
             return cursor.rowcount > 0
+
+    def replace_version_content(
+        self,
+        collection: str,
+        id: str,
+        version: int,
+        summary: str,
+        tags: dict[str, Any],
+        content_hash: Optional[str] = None,
+    ) -> bool:
+        """Replace the content of a specific archived version in-place.
+
+        Used to update the bundled base version of system docs without
+        affecting user override versions above it.
+
+        Returns:
+            True if the version existed and was updated.
+        """
+        tags = normalize_tag_map(tags)
+        tags_json = json.dumps(tags, ensure_ascii=False)
+        with self._lock:
+            cursor = self._execute("""
+                UPDATE document_versions
+                SET summary = ?, tags_json = ?, content_hash = ?
+                WHERE id = ? AND collection = ? AND version = ?
+            """, (summary, tags_json, content_hash, id, collection, version))
+            return cursor.rowcount > 0
+
+    def find_version_by_content_hash(
+        self,
+        collection: str,
+        id: str,
+        content_hash: str,
+    ) -> Optional[int]:
+        """Find the oldest archived version with a given content_hash.
+
+        Returns:
+            The version number, or None if not found.
+        """
+        cursor = self._execute("""
+            SELECT version FROM document_versions
+            WHERE id = ? AND collection = ? AND content_hash = ?
+            ORDER BY version ASC LIMIT 1
+        """, (id, collection, content_hash))
+        row = cursor.fetchone()
+        return row["version"] if row else None
+
+    def delete_all_versions(self, collection: str, id: str) -> int:
+        """Delete all archived versions for a document.
+
+        Returns:
+            Number of versions deleted.
+        """
+        with self._lock:
+            cursor = self._execute("""
+                DELETE FROM document_versions
+                WHERE id = ? AND collection = ?
+            """, (id, collection))
+            self._execute("""
+                DELETE FROM version_edges
+                WHERE collection = ? AND source_id = ?
+            """, (collection, id))
+            return cursor.rowcount
+
+    def patch_head_tags(
+        self,
+        collection: str,
+        id: str,
+        patch: dict[str, Any],
+    ) -> bool:
+        """Merge patch into the head document's tags without creating a version.
+
+        Only updates tags; content and timestamps are unchanged.
+
+        Returns:
+            True if the document existed and was updated.
+        """
+        with self._lock:
+            existing = self._get_unlocked(collection, id)
+            if not existing:
+                return False
+            tags = dict(existing.tags)
+            tags.update(patch)
+            tags = normalize_tag_map(tags)
+            self._execute("""
+                UPDATE documents SET tags_json = ?
+                WHERE id = ? AND collection = ?
+            """, (json.dumps(tags, ensure_ascii=False), id, collection))
+            return True
 
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         """Delete a document record and optionally its version history.

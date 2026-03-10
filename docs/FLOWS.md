@@ -40,6 +40,8 @@ This matters for two reasons:
 - **Processing is customizable.** State docs are editable documents in the store, not hardcoded logic. You can change how documents get processed after writes, build entirely new processing paths, and trigger them from updates, explicit API calls, or scheduled jobs.
 - **Flows are collaborative.** A flow can run several steps, then return to the caller — human or agent — with partial results and a reason for stopping. The caller inspects what was found, decides what to do next, and directs the flow further. This works for query refinement, bulk retagging, document review, or any other memory-centric workflow where decisions belong to the caller, not the runtime.
 
+Because storing, processing, and finding memory data is always a dynamic process. Information is a verb.
+
 ## State transitions
 
 Here's how the built-in flows connect:

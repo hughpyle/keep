@@ -591,6 +591,177 @@ class TestVersioning:
         assert len(versions) == 0
 
 
+class TestSystemDocVersioning:
+    """System doc versioning: upgrade, reset, and delete behavior."""
+
+    @pytest.fixture
+    def store(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "documents.db"
+            with DocumentStore(db_path) as store:
+                yield store
+
+    def test_upsert_archive_false_no_version_created(self, store: DocumentStore) -> None:
+        """upsert(archive=False) updates head without creating a version."""
+        store.upsert("default", "doc:1", "V1", {"t": "a"}, content_hash="h1")
+        store.upsert("default", "doc:1", "V2", {"t": "b"}, content_hash="h2", archive=False)
+
+        # No version archived
+        assert store.version_count("default", "doc:1") == 0
+        # Head updated
+        current = store.get("default", "doc:1")
+        assert current.summary == "V2"
+        assert current.tags["t"] == "b"
+
+    def test_find_version_by_content_hash(self, store: DocumentStore) -> None:
+        """find_version_by_content_hash returns oldest matching version."""
+        store.upsert("default", "doc:1", "V1", {}, content_hash="base_hash")
+        store.upsert("default", "doc:1", "V2", {}, content_hash="user_hash")
+
+        ver = store.find_version_by_content_hash("default", "doc:1", "base_hash")
+        assert ver == 1
+
+        # Not found
+        ver = store.find_version_by_content_hash("default", "doc:1", "nonexistent")
+        assert ver is None
+
+    def test_replace_version_content(self, store: DocumentStore) -> None:
+        """replace_version_content updates an archived version in-place."""
+        store.upsert("default", "doc:1", "bundled-v1", {"bundled_hash": "bh1"}, content_hash="bh1")
+        store.upsert("default", "doc:1", "user-edit", {"bundled_hash": "bh1"}, content_hash="uh1")
+
+        # V1 in archive = bundled-v1
+        v1 = store.get_version("default", "doc:1", offset=1)
+        assert v1.summary == "bundled-v1"
+        assert v1.content_hash == "bh1"
+
+        # Replace V1 with new bundled content
+        ok = store.replace_version_content(
+            "default", "doc:1", v1.version,
+            summary="bundled-v2", tags={"bundled_hash": "bh2"},
+            content_hash="bh2",
+        )
+        assert ok is True
+
+        # Verify replaced
+        v1_updated = store.get_version("default", "doc:1", offset=1)
+        assert v1_updated.summary == "bundled-v2"
+        assert v1_updated.content_hash == "bh2"
+
+        # Head unchanged
+        current = store.get("default", "doc:1")
+        assert current.summary == "user-edit"
+
+    def test_delete_all_versions(self, store: DocumentStore) -> None:
+        """delete_all_versions removes all archived versions."""
+        store.upsert("default", "doc:1", "V1", {}, content_hash="h1")
+        store.upsert("default", "doc:1", "V2", {}, content_hash="h2")
+        store.upsert("default", "doc:1", "V3", {}, content_hash="h3")
+        assert store.version_count("default", "doc:1") == 2
+
+        n = store.delete_all_versions("default", "doc:1")
+        assert n == 2
+        assert store.version_count("default", "doc:1") == 0
+
+        # Head still exists
+        current = store.get("default", "doc:1")
+        assert current.summary == "V3"
+
+    def test_patch_head_tags(self, store: DocumentStore) -> None:
+        """patch_head_tags merges tags without creating a version."""
+        store.upsert("default", "doc:1", "content", {"a": "1", "bundled_hash": "old"})
+
+        ok = store.patch_head_tags("default", "doc:1", {"bundled_hash": "new"})
+        assert ok is True
+
+        current = store.get("default", "doc:1")
+        assert current.tags["bundled_hash"] == "new"
+        assert current.tags["a"] == "1"  # preserved
+        assert current.summary == "content"  # unchanged
+        assert store.version_count("default", "doc:1") == 0  # no version created
+
+    def test_upgrade_no_user_edit_updates_head_in_place(self, store: DocumentStore) -> None:
+        """Simulates upgrade when user hasn't edited: head updated, no version."""
+        # Initial system doc
+        store.upsert("default", ".state/foo", "bundled-v1",
+                      {"category": "system", "bundled_hash": "bh1"},
+                      content_hash="bh1")
+
+        # Upgrade: no user edit (content_hash == bundled_hash), use archive=False
+        store.upsert("default", ".state/foo", "bundled-v2",
+                      {"category": "system", "bundled_hash": "bh2"},
+                      content_hash="bh2", archive=False)
+
+        current = store.get("default", ".state/foo")
+        assert current.summary == "bundled-v2"
+        assert store.version_count("default", ".state/foo") == 0
+
+    def test_upgrade_with_user_edit_updates_base_version(self, store: DocumentStore) -> None:
+        """Simulates upgrade when user has customized: base version updated."""
+        # Initial system doc
+        store.upsert("default", ".state/foo", "bundled-v1",
+                      {"category": "system", "bundled_hash": "bh1"},
+                      content_hash="bh1")
+
+        # User edits → archives bundled-v1 as V1, head = user content
+        store.upsert("default", ".state/foo", "my-custom-rules",
+                      {"category": "system", "bundled_hash": "bh1"},
+                      content_hash="user1")
+
+        # Upgrade: find base version and replace it
+        base_ver = store.find_version_by_content_hash("default", ".state/foo", "bh1")
+        assert base_ver is not None
+        store.replace_version_content(
+            "default", ".state/foo", base_ver,
+            summary="bundled-v2",
+            tags={"category": "system", "bundled_hash": "bh2"},
+            content_hash="bh2",
+        )
+        store.patch_head_tags("default", ".state/foo", {"bundled_hash": "bh2"})
+
+        # Head unchanged (user's content)
+        current = store.get("default", ".state/foo")
+        assert current.summary == "my-custom-rules"
+        assert current.tags["bundled_hash"] == "bh2"  # updated to track new base
+
+        # Base version updated
+        v1 = store.get_version("default", ".state/foo", offset=1)
+        assert v1.summary == "bundled-v2"
+        assert v1.content_hash == "bh2"
+
+    def test_revert_after_upgrade_restores_current_bundled(self, store: DocumentStore) -> None:
+        """After upgrade updates base, reverting user edit restores current bundled."""
+        # Setup: system doc → user edit → upgrade base
+        store.upsert("default", ".state/foo", "bundled-v1", {}, content_hash="bh1")
+        store.upsert("default", ".state/foo", "user-edit", {}, content_hash="uh1")
+        base_ver = store.find_version_by_content_hash("default", ".state/foo", "bh1")
+        store.replace_version_content(
+            "default", ".state/foo", base_ver,
+            summary="bundled-v2", tags={}, content_hash="bh2",
+        )
+
+        # Revert user edit → should restore bundled-v2 (not stale bundled-v1)
+        restored = store.restore_latest_version("default", ".state/foo")
+        assert restored.summary == "bundled-v2"
+
+    def test_reset_clears_versions_and_restores_head(self, store: DocumentStore) -> None:
+        """Simulates reset: all versions cleared, head = fresh bundled."""
+        store.upsert("default", ".state/foo", "bundled-v1", {}, content_hash="bh1")
+        store.upsert("default", ".state/foo", "user-edit-1", {}, content_hash="uh1")
+        store.upsert("default", ".state/foo", "user-edit-2", {}, content_hash="uh2")
+        assert store.version_count("default", ".state/foo") == 2
+
+        # Reset
+        store.delete_all_versions("default", ".state/foo")
+        store.upsert("default", ".state/foo", "bundled-v2",
+                      {"category": "system", "bundled_hash": "bh2"},
+                      content_hash="bh2", archive=False)
+
+        assert store.version_count("default", ".state/foo") == 0
+        current = store.get("default", ".state/foo")
+        assert current.summary == "bundled-v2"
+
+
 class TestAccessedAt:
     """Last-accessed timestamp tracking."""
 

@@ -252,7 +252,7 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
             tags["category"] = "system"
             tags["bundled_hash"] = bundled_hash
 
-            # Check existing doc: skip if unchanged, preserve user edits
+            # Check existing doc: skip if unchanged, update base if user edited
             existing_doc = keeper._document_store.get(doc_coll, new_id)
             if existing_doc:
                 prev_hash = existing_doc.tags.get("bundled_hash")
@@ -260,12 +260,29 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
                     # Content unchanged — skip to avoid creating spurious versions
                     continue
                 if prev_hash and existing_doc.content_hash != prev_hash:
-                    stats["skipped"] += 1
-                    logger.info("Preserving user-edited system doc: %s", new_id)
+                    # User has modified the doc — update the archived base
+                    # version so reverting restores the latest bundled content.
+                    base_ver = keeper._document_store.find_version_by_content_hash(
+                        doc_coll, new_id, prev_hash,
+                    )
+                    if base_ver is not None:
+                        keeper._document_store.replace_version_content(
+                            doc_coll, new_id, base_ver,
+                            summary=content, tags=tags,
+                            content_hash=bundled_hash,
+                        )
+                    # Update bundled_hash on head so next upgrade knows current base
+                    keeper._document_store.patch_head_tags(
+                        doc_coll, new_id, {"bundled_hash": bundled_hash},
+                    )
+                    stats["migrated"] += 1
+                    logger.info("Updated base version of user-edited system doc: %s", new_id)
                     continue
 
             # Store to DocumentStore directly (always works, no embedding needed).
             # System docs are reference material - store full verbatim content.
+            # Use archive=False to update in-place without creating spurious
+            # version history (the old bundled content is not worth keeping).
             from .types import utc_now as _utc_now
             now_ts = _utc_now()
             tags.setdefault("_created", now_ts)
@@ -275,6 +292,7 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
             keeper._document_store.upsert(
                 collection=doc_coll, id=new_id, summary=content,
                 tags=tags, content_hash=bundled_hash,
+                archive=False,
             )
             # Enqueue embedding as background work instead of blocking
             # the first write. System docs are reference material —
@@ -329,17 +347,19 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
 
 
 def reset_system_documents(keeper: "Keeper") -> dict:
-    """Force reload all system documents from bundled content.
+    """Reset all system documents to bundled content.
 
-    This overwrites any user modifications to system documents.
-    Use with caution - primarily for recovery or testing.
+    Deletes any user override versions and restores the head to
+    the current bundled content.  The document's creation timestamp
+    is preserved; only version history is cleared.
 
     Returns:
-        Dict with stats: reset count
+        Dict with stats: reset count, versions_deleted count
     """
     from .config import save_config
+    from .types import utc_now as _utc_now
 
-    stats = {"reset": 0}
+    stats = {"reset": 0, "versions_deleted": 0}
     doc_coll = keeper._resolve_doc_collection()
 
     for path in SYSTEM_DOC_DIR.glob("*.md"):
@@ -353,15 +373,26 @@ def reset_system_documents(keeper: "Keeper") -> dict:
             tags["category"] = "system"
             tags["bundled_hash"] = bundled_hash
 
-            keeper.delete(new_id)
-            keeper.put(content, id=new_id, tags=tags)
+            now_ts = _utc_now()
+            tags.setdefault("_created", now_ts)
+            tags["_updated"] = now_ts
+            tags["_updated_date"] = now_ts[:10]
+            tags["_source"] = "inline"
+
+            # Delete all archived versions (user overrides)
+            n_deleted = keeper._document_store.delete_all_versions(
+                doc_coll, new_id,
+            )
+            stats["versions_deleted"] += n_deleted
+
+            # Update head in-place with fresh bundled content (no archiving)
             keeper._document_store.upsert(
                 collection=doc_coll, id=new_id, summary=content,
-                tags=keeper._document_store.get(doc_coll, new_id).tags,
-                content_hash=bundled_hash,
+                tags=tags, content_hash=bundled_hash,
+                archive=False,
             )
             stats["reset"] += 1
-            logger.info("Reset system doc: %s", new_id)
+            logger.info("Reset system doc: %s (removed %d versions)", new_id, n_deleted)
 
         except FileNotFoundError:
             logger.warning("System doc file not found: %s", path)
