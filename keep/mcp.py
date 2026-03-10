@@ -444,43 +444,6 @@ async def keep_flow(
     return json.dumps(output, indent=2)
 
 
-@mcp.tool(
-    description="Deprecated: use keep_flow instead.",
-    annotations=_IDEMPOTENT,
-)
-async def keep_continue(
-    payload: Annotated[dict[str, Any], Field(
-        description="Flow request object (deprecated — use keep_flow).",
-    )],
-) -> str:
-    """Deprecated: use keep_flow instead."""
-    async with _lock:
-        keeper = _get_keeper()
-        try:
-            result = keeper.continue_flow(payload)
-        except (ValueError, OSError) as e:
-            return f"Error: {e}"
-    return json.dumps(result, indent=2)
-
-
-@mcp.tool(
-    description="Deprecated: use keep_flow instead.",
-    annotations=_IDEMPOTENT,
-)
-async def keep_continue_work(
-    cursor: Annotated[str, Field(description="Cursor containing the flow context.")],
-    work_id: Annotated[str, Field(description="Work item to execute.")],
-) -> str:
-    """Deprecated: use keep_flow instead."""
-    async with _lock:
-        keeper = _get_keeper()
-        try:
-            result = keeper.continue_run_work(cursor, work_id)
-        except (ValueError, OSError) as e:
-            return f"Error: {e}"
-    return json.dumps(result, indent=2)
-
-
 # ---------------------------------------------------------------------------
 # Startup hints
 # ---------------------------------------------------------------------------

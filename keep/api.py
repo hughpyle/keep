@@ -224,7 +224,6 @@ from .types import (
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     MAX_TAG_VALUE_LENGTH,
 )
-from .flow import LocalFlowRuntime
 from .flow_env import LocalFlowEnvironment
 
 
@@ -762,9 +761,6 @@ class Keeper:
             self._config.system_docs_hash != _bundled_docs_hash()
         )
 
-        # Local flow runtime (API-first path), initialized lazily on first use.
-        self._flow_runtime = None
-        self._flow_runtime_lock = threading.Lock()
         # Direct work queue (replaces FlowEngine for background tasks).
         self._work_queue = None
         self._work_queue_lock = threading.Lock()
@@ -6701,32 +6697,6 @@ class Keeper:
                 self._work_queue = queue
         return queue
 
-    # -------------------------------------------------------------------------
-    # Flow API (local-only preview)
-    # -------------------------------------------------------------------------
-
-    def _get_flow_runtime(self) -> LocalFlowRuntime:
-        runtime = self._flow_runtime
-        if runtime is not None:
-            return runtime
-        with self._flow_runtime_lock:
-            runtime = self._flow_runtime
-            if runtime is None:
-                runtime = LocalFlowRuntime(
-                    self._store_path / "continuation.db",
-                    LocalFlowEnvironment(self),
-                )
-                self._flow_runtime = runtime
-        return runtime
-
-    def continue_flow(self, payload: dict) -> dict:
-        """Run one flow tick for local API-first flows."""
-        return self._get_flow_runtime().continue_flow(payload)
-
-    def continue_run_work(self, cursor: str, work_id: str) -> dict:
-        """Execute a pending local work item and return a work_result envelope."""
-        return self._get_flow_runtime().run_work(cursor, work_id)
-
     def _run_read_flow(
         self,
         state: str,
@@ -7132,13 +7102,6 @@ class Keeper:
         if hasattr(self, "_work_queue") and self._work_queue is not None:
             try:
                 self._work_queue.close()
-            except Exception:
-                pass
-
-        # Close flow runtime
-        if hasattr(self, "_flow_runtime") and self._flow_runtime is not None:
-            try:
-                self._flow_runtime.close()
             except Exception:
                 pass
 

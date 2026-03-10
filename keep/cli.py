@@ -3564,68 +3564,6 @@ def flow_cmd(
         typer.echo(json.dumps(output, ensure_ascii=False, indent=2))
 
 
-@app.command("continue", hidden=True, deprecated=True)
-def continue_cmd(
-    payload: Annotated[str, typer.Argument(
-        help="JSON payload, @file.json, or '-' for stdin",
-    )],
-    store: StoreOption = None,
-):
-    """Run one local flow tick (API-first preview)."""
-    kp = _get_keeper(store)
-    if not hasattr(kp, "continue_flow"):
-        typer.echo(
-            "Error: flow API is only available in local mode for now.",
-            err=True,
-        )
-        kp.close()
-        raise typer.Exit(1)
-    try:
-        data = _parse_json_arg(payload)
-        result = kp.continue_flow(data)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        kp.close()
-        raise typer.Exit(1)
-    finally:
-        kp.close()
-
-    if _get_json_output():
-        typer.echo(json.dumps(result, ensure_ascii=False))
-    else:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
-
-
-@app.command("continue-work", hidden=True, deprecated=True)
-def continue_work_cmd(
-    cursor: Annotated[str, typer.Argument(help="Flow cursor")],
-    work_id: Annotated[str, typer.Argument(help="Work item ID")],
-    store: StoreOption = None,
-):
-    """Execute a pending local flow work item and return work_result JSON."""
-    kp = _get_keeper(store)
-    if not hasattr(kp, "continue_run_work"):
-        typer.echo(
-            "Error: flow work runner is only available in local mode for now.",
-            err=True,
-        )
-        kp.close()
-        raise typer.Exit(1)
-    try:
-        result = kp.continue_run_work(cursor, work_id)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        kp.close()
-        raise typer.Exit(1)
-    finally:
-        kp.close()
-
-    if _get_json_output():
-        typer.echo(json.dumps(result, ensure_ascii=False))
-    else:
-        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
-
-
 # -----------------------------------------------------------------------------
 # Data Management
 # -----------------------------------------------------------------------------
