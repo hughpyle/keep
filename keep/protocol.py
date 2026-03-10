@@ -183,6 +183,24 @@ class KeeperProtocol(Protocol):
 
     def count(self) -> int: ...
 
+    # -- Flows --
+
+    def run_flow_command(
+        self,
+        state: str,
+        *,
+        params: dict[str, Any] | None = None,
+        budget: int | None = None,
+        cursor_token: str | None = None,
+        state_doc_yaml: str | None = None,
+        writable: bool = True,
+    ) -> Any:
+        """Run a state-doc flow synchronously.
+
+        Returns a FlowResult with status, bindings, cursor (if stopped).
+        """
+        ...
+
     # -- Data export / import --
 
     def export_iter(self, *, include_system: bool = True) -> Iterator[dict]:

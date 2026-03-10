@@ -559,5 +559,37 @@ class RemoteKeeper:
         """Import is not yet supported for hosted stores."""
         raise NotImplementedError("Export/import not yet supported for hosted stores")
 
+    # -- Flows --
+
+    def run_flow_command(
+        self,
+        state: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        budget: Optional[int] = None,
+        cursor_token: Optional[str] = None,
+        state_doc_yaml: Optional[str] = None,
+        writable: bool = True,
+    ) -> Any:
+        """Run a state-doc flow on the remote server."""
+        from .state_doc_runtime import FlowResult
+
+        resp = self._post("/v1/flow", json={
+            "state": state,
+            "params": params,
+            "budget": budget,
+            "cursor_token": cursor_token,
+            "state_doc_yaml": state_doc_yaml,
+            "writable": writable,
+        })
+        return FlowResult(
+            status=resp.get("status", "error"),
+            bindings=resp.get("bindings", {}),
+            data=resp.get("data"),
+            ticks=resp.get("ticks", 0),
+            history=resp.get("history", []),
+            cursor=resp.get("cursor"),
+        )
+
     def close(self) -> None:
         self._client.close()
