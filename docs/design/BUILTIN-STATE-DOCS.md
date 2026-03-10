@@ -13,9 +13,9 @@ and exercised by tests. They implement the core behaviors.
 
 | State doc | Entry for | Wired in |
 |-----------|-----------|----------|
-| `.state/after-write` | `put` | `flow_engine.py` |
-| `.state/get-context` | `get` (display) | `api.py:get_context()` |
-| `.state/find-deep` | `find(deep)` | `api.py:_deep_follow_via_flow()` |
+| `.state/after-write` | `put` | `api.py:_enqueue_after_write_tasks()` |
+| `.state/get-context` | `get` (display) | `api.py:_run_read_flow()` via `get_context()` |
+| `.state/find-deep` | `find(deep)` | `api.py:_run_read_flow()` via `_deep_follow_via_flow()` |
 
 Users can fork or override any of them by creating a `.state/*`
 note with the same name.
@@ -183,14 +183,6 @@ rules:
   - return: done
 ```
 
-> **Wiring note:** `_deep_follow_via_flow()` exists in `api.py`
-> but is not yet called from `find()`. The existing
-> `_deep_tag_follow` path remains active because it processes items
-> as a batch (computing shared tag statistics for discriminative
-> tags), while the `traverse` action processes items individually.
-> Wiring this requires the traverse action to support batch
-> tag-follow semantics.
-
 ---
 
 ## 5) Available statistics
@@ -220,7 +212,7 @@ like `when: "search.margin > 0.18"`.
 |-----------|---------|-------|--------|
 | `.state/after-write` | summarize, tag, ocr, analyze | all | live |
 | `.state/get-context` | find, resolve_meta | all | live |
-| `.state/find-deep` | find, traverse | sequence | live (not yet called) |
+| `.state/find-deep` | find, traverse | sequence | live |
 
 ## 7) Resolved questions
 
@@ -248,15 +240,14 @@ like `when: "search.margin > 0.18"`.
 ## Appendix: query resolution state docs
 
 > **Status: wired but thresholds untuned.** These state docs are
-> bundled as `.md` files and loaded into the store. The flow runtime
-> evaluates them via `state_doc_runtime.run_flow()`. Thresholds
-> come from `flow_policy.DEFAULT_DECISION_POLICY` and have not yet
-> been validated against real query patterns.
+> bundled and loaded into the store. The flow runtime evaluates them
+> via `state_doc_runtime.run_flow()`. Thresholds come from config
+> defaults and have not yet been validated against real query patterns.
 
 Three state docs — `query-resolve`, `query-branch`,
 `query-explore` — form the multi-step query resolution loop.
 They reference threshold params (`margin_high`,
-`entropy_low`, etc.) from `flow_policy.py` defaults.
+`entropy_low`, etc.) from config defaults.
 
 ### .state/query-resolve
 
@@ -334,5 +325,5 @@ entropy_high:   0.72    # scattered results
 lineage_strong: 0.75    # version/part concentration
 ```
 
-These values come from `flow_policy.DEFAULT_DECISION_POLICY`.
-They have not yet been validated against real query patterns.
+These values come from config defaults and have not yet been
+validated against real query patterns.

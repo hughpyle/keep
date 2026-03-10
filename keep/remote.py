@@ -559,26 +559,5 @@ class RemoteKeeper:
         """Import is not yet supported for hosted stores."""
         raise NotImplementedError("Export/import not yet supported for hosted stores")
 
-    # -- Continuation API --
-
-    def continue_flow(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(payload, dict):
-            raise ValueError("continue payload must be a JSON object")
-        resp = self._post("/v1/continue", json=payload)
-        if not isinstance(resp, dict):
-            raise ValueError("Remote /v1/continue response must be a JSON object")
-        return resp
-
-    def continue_run_work(self, cursor: str, work_id: str) -> dict[str, Any]:
-        if not cursor or not work_id:
-            raise ValueError("cursor and work_id are required")
-        resp = self._post(
-            "/v1/continue/work",
-            json={"cursor": str(cursor), "work_id": str(work_id)},
-        )
-        if not isinstance(resp, dict):
-            raise ValueError("Remote /v1/continue/work response must be a JSON object")
-        return resp
-
     def close(self) -> None:
         self._client.close()

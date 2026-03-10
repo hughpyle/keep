@@ -32,9 +32,8 @@ def kp(mock_providers, tmp_path):
 # ---------------------------------------------------------------------------
 
 class TestWritePathFlow:
-    def test_put_invokes_flow_engine(self, kp):
-        """put() routes through _put_via_flow, which evaluates the
-        after-write state doc and enqueues background tasks."""
+    def test_put_enqueues_background_tasks(self, kp):
+        """put() enqueues background tasks (analyze, tag) for non-system items."""
         kp.put("Short note", id="s1")
         # Short content skips summarize but still fires analyze+tag
         count = kp.pending_work_count()

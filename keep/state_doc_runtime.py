@@ -4,7 +4,7 @@ Evaluates state docs with inline action execution, handling transitions
 between states and enforcing tick budgets.  This is the runtime for the
 read/query path where flows run synchronously and return immediately.
 
-The write path uses background task dispatch (flow_engine.py);
+The write path uses background task dispatch (work_queue.py);
 this runtime is for flows that must complete before returning to the
 caller: query resolution, context assembly, deep find.
 

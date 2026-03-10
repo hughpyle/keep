@@ -4,7 +4,7 @@ Date: 2026-03-07
 Status: Draft
 Related:
 - `docs/design/STATE-DOC-SCHEMA.md`
-- `keep/flow_executor.py` (current runner system)
+- `keep/actions/` (action registry)
 - `keep/flow_env.py` (current env protocol)
 
 ## 1) What is an action?
@@ -60,7 +60,7 @@ class ActionContext(Protocol):
     def item_content(self) -> str | None: ...
 ```
 
-This replaces `ContinuationRuntimeEnv` as the surface actions see.
+This replaces the former `ContinuationRuntimeEnv` as the surface actions see.
 Read-only: no `put_item`, no `upsert_item`, no `enqueue_task` —
 mutations go through the output dict. Methods and signatures are
 defined by this protocol, not inherited from the current env.
@@ -362,7 +362,6 @@ its current content to the summarization provider.
 
 **Implementation**: wraps `SummarizationProvider.summarize(content,
 max_length, context)`. Provider selection uses the configured default.
-Current code: `flow_executor.py:180`.
 
 ### tag
 
@@ -527,7 +526,7 @@ This is the escape hatch for custom processing not covered by
 other actions.
 
 **Implementation**: wraps `SummarizationProvider.generate(system,
-user, max_tokens)`. Current code: `flow_executor.py:231`.
+user, max_tokens)`.
 
 ### put
 
@@ -634,6 +633,8 @@ class Transcribe:
 ```
 
 ## 6) Mapping from current code
+
+**Note:** Some source locations below refer to modules removed in the FlowEngine deletion. The action implementations now live in `keep/actions/`.
 
 | Current | New |
 |---------|-----|
