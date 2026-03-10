@@ -14,7 +14,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from typing_extensions import Annotated
@@ -3459,7 +3459,112 @@ def _tail_ops_log(log_path: Path, kp) -> None:
         )
 
 
-@app.command("continue")
+@app.command("flow")
+def flow_cmd(
+    state: Annotated[Optional[str], typer.Argument(
+        help="State doc name (e.g. 'after-write', 'query-resolve')",
+    )] = None,
+    target: Annotated[Optional[str], typer.Option(
+        "--target", "-t", help="Target note ID to operate on",
+    )] = None,
+    file: Annotated[Optional[str], typer.Option(
+        "--file", "-f", help="YAML state doc file path, or '-' for stdin",
+    )] = None,
+    budget: Annotated[Optional[int], typer.Option(
+        "--budget", "-b", help="Max ticks for this invocation (default: from config)",
+    )] = None,
+    cursor: Annotated[Optional[str], typer.Option(
+        "--cursor", "-c", help="Cursor from a previous stopped flow to resume",
+    )] = None,
+    param: Annotated[Optional[list[str]], typer.Option(
+        "--param", "-p", help="Flow parameter as key=value",
+    )] = None,
+    store: StoreOption = None,
+):
+    """Run a state-doc flow synchronously.
+
+    \b
+    Examples:
+        keep flow after-write --target %abc123
+        keep flow query-resolve -p query="auth patterns"
+        keep flow --file review.yaml --target myproject
+        echo 'match: all' | keep flow --file - --target myproject
+        keep flow --cursor <token> --budget 5
+    """
+    if state is None and file is None and cursor is None:
+        typer.echo("Error: provide a state name, --file, or --cursor", err=True)
+        raise typer.Exit(1)
+
+    # Parse params
+    flow_params: dict[str, Any] = {}
+    if target:
+        flow_params["id"] = target
+    for p in (param or []):
+        if "=" not in p:
+            typer.echo(f"Error: param must be key=value, got: {p!r}", err=True)
+            raise typer.Exit(1)
+        k, v = p.split("=", 1)
+        # Try to parse as number/bool for convenience
+        try:
+            flow_params[k] = json.loads(v)
+        except (json.JSONDecodeError, ValueError):
+            flow_params[k] = v
+
+    # Load inline state doc YAML if --file provided
+    state_doc_yaml: Optional[str] = None
+    if file is not None:
+        if file == "-":
+            import sys
+            state_doc_yaml = sys.stdin.read()
+        else:
+            try:
+                state_doc_yaml = Path(file).read_text()
+            except FileNotFoundError:
+                typer.echo(f"Error: file not found: {file}", err=True)
+                raise typer.Exit(1)
+        if state is None:
+            state = "inline"
+
+    # When resuming, state comes from the cursor
+    if cursor and state is None:
+        state = "__cursor__"  # placeholder; run_flow uses cursor.state
+
+    kp = _get_keeper(store)
+    try:
+        result = kp.run_flow_command(
+            state,
+            params=flow_params,
+            budget=budget,
+            cursor_token=cursor,
+            state_doc_yaml=state_doc_yaml,
+        )
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        kp.close()
+        raise typer.Exit(1)
+    finally:
+        kp.close()
+
+    output: dict[str, Any] = {
+        "status": result.status,
+        "ticks": result.ticks,
+    }
+    if result.data:
+        output["data"] = result.data
+    if result.bindings:
+        output["bindings"] = result.bindings
+    if result.history:
+        output["history"] = result.history
+    if result.cursor:
+        output["cursor"] = result.cursor
+
+    if _get_json_output():
+        typer.echo(json.dumps(output, ensure_ascii=False))
+    else:
+        typer.echo(json.dumps(output, ensure_ascii=False, indent=2))
+
+
+@app.command("continue", hidden=True, deprecated=True)
 def continue_cmd(
     payload: Annotated[str, typer.Argument(
         help="JSON payload, @file.json, or '-' for stdin",
@@ -3491,7 +3596,7 @@ def continue_cmd(
         typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-@app.command("continue-work")
+@app.command("continue-work", hidden=True, deprecated=True)
 def continue_work_cmd(
     cursor: Annotated[str, typer.Argument(help="Flow cursor")],
     work_id: Annotated[str, typer.Argument(help="Work item ID")],

@@ -23,6 +23,8 @@ Usage::
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
@@ -42,6 +44,44 @@ class FlowResult:
     data: Optional[dict[str, Any]] = None  # return.with payload
     ticks: int = 0
     history: list[str] = field(default_factory=list)  # state names visited
+    cursor: Optional[str] = None  # resumable cursor (set when stopped)
+
+
+@dataclass
+class FlowCursor:
+    """Decoded cursor — checkpoint state for resuming a stopped flow."""
+
+    state: str  # state doc name to resume at
+    ticks: int  # ticks consumed in previous invocations
+    bindings: dict[str, dict[str, Any]]  # accumulated results
+
+
+def encode_cursor(state: str, ticks: int, bindings: dict) -> str:
+    """Encode a flow checkpoint as a self-contained cursor token."""
+    payload = {"s": state, "t": ticks, "b": bindings}
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_cursor(token: str) -> Optional[FlowCursor]:
+    """Decode a cursor token, returning None if invalid."""
+    token = (token or "").strip()
+    if not token:
+        return None
+    try:
+        padded = token + ("=" * (-len(token) % 4))
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(raw.decode("utf-8"))
+        state = str(payload.get("s") or "").strip()
+        if not state:
+            return None
+        return FlowCursor(
+            state=state,
+            ticks=int(payload.get("t", 0)),
+            bindings=payload.get("b") or {},
+        )
+    except Exception:
+        return None
 
 
 class StateDocLoader(Protocol):
@@ -59,21 +99,35 @@ def run_flow(
     *,
     load_state_doc: StateDocLoader,
     run_action: ActionRunner,
+    cursor: Optional[FlowCursor] = None,
 ) -> FlowResult:
     """Run a state-doc flow synchronously to completion.
 
     Args:
         initial_state: Name of the starting state doc (e.g. "query-resolve").
         params: Caller-supplied parameters (thresholds, query, limits).
-        budget: Maximum ticks before forced stop.
+        budget: Maximum ticks before forced stop (per invocation).
         load_state_doc: Callback to load a compiled StateDoc by name.
         run_action: Callback to execute an action and return its output.
+        cursor: Optional cursor from a previous stopped flow to resume.
 
     Returns:
         FlowResult with terminal status, accumulated bindings, and
-        optional return data.
+        optional return data. When status is "stopped", the cursor
+        field contains a resumable token.
     """
-    current_state = initial_state
+    # Resume from cursor or start fresh
+    if cursor is not None:
+        current_state = cursor.state
+        prior_ticks = cursor.ticks
+        accumulated_bindings: dict[str, dict[str, Any]] = dict(cursor.bindings)
+        logger.info("flow: resume %s (prior ticks: %d)", current_state, prior_ticks)
+    else:
+        current_state = initial_state
+        prior_ticks = 0
+        accumulated_bindings = {}
+        logger.info("flow: start %s", initial_state)
+
     current_params = dict(params)
     ticks = 0
     history: list[str] = []
@@ -85,8 +139,6 @@ def run_flow(
             output = enrich_find_output(output)
         return output
 
-    logger.info("flow: start %s", initial_state)
-
     while ticks < budget:
         doc = load_state_doc(current_state)
         if doc is None:
@@ -94,7 +146,7 @@ def run_flow(
             return FlowResult(
                 status="error",
                 data={"reason": f"state doc not found: {current_state}"},
-                ticks=ticks,
+                ticks=prior_ticks + ticks,
                 history=history,
             )
 
@@ -112,21 +164,21 @@ def run_flow(
             return FlowResult(
                 status="error",
                 data={"reason": f"evaluation failed: {exc}"},
-                ticks=ticks,
+                ticks=prior_ticks + ticks,
                 history=history,
             )
 
-        # Collect bindings
-        all_bindings = dict(result.bindings)
+        # Collect bindings (merge with accumulated from cursor)
+        accumulated_bindings.update(result.bindings)
 
         # Terminal
         if result.terminal is not None:
             logger.info("flow: %s -> %s (%d ticks)", current_state, result.terminal, ticks)
             return FlowResult(
                 status=result.terminal,
-                bindings=all_bindings,
+                bindings=accumulated_bindings,
                 data=result.terminal_data,
-                ticks=ticks,
+                ticks=prior_ticks + ticks,
                 history=history,
             )
 
@@ -138,7 +190,7 @@ def run_flow(
                 return FlowResult(
                     status="error",
                     data={"reason": f"invalid transition: {result.transition}"},
-                    ticks=ticks,
+                    ticks=prior_ticks + ticks,
                     history=history,
                 )
             logger.info("flow: %s -> %s", current_state, next_state)
@@ -152,18 +204,22 @@ def run_flow(
         logger.info("flow: %s -> done (implicit, %d ticks)", current_state, ticks)
         return FlowResult(
             status="done",
-            bindings=all_bindings,
-            ticks=ticks,
+            bindings=accumulated_bindings,
+            ticks=prior_ticks + ticks,
             history=history,
         )
 
-    # Budget exhausted
-    logger.info("flow: %s -> stopped (budget, %d ticks)", current_state, ticks)
+    # Budget exhausted — return cursor for resumption
+    total_ticks = prior_ticks + ticks
+    cursor_token = encode_cursor(current_state, total_ticks, accumulated_bindings)
+    logger.info("flow: %s -> stopped (budget, %d ticks)", current_state, total_ticks)
     return FlowResult(
         status="stopped",
+        bindings=accumulated_bindings,
         data={"reason": "budget"},
-        ticks=ticks,
+        ticks=total_ticks,
         history=history,
+        cursor=cursor_token,
     )
 
 
@@ -280,16 +336,18 @@ def make_state_doc_loader(
     return _load
 
 
-def make_action_runner(env: Any) -> ActionRunner:
+def make_action_runner(env: Any, *, writable: bool = False) -> ActionRunner:
     """Create an action runner backed by a FlowRuntimeEnv.
 
-    Wraps the action registry with a read-only context that delegates
-    store operations to the environment.  Suitable for the read/query
-    path where actions only need read access.
+    Args:
+        env: FlowRuntimeEnv providing store operations.
+        writable: If True, enable provider resolution for write actions
+                  (summarize, tag, analyze). If False (default), provider
+                  resolution raises NotImplementedError.
     """
     from .actions import get_action
 
-    ctx = _EnvActionContext(env)
+    ctx = _EnvActionContext(env, writable=writable)
 
     def _run(action_name: str, params: dict[str, Any]) -> dict[str, Any]:
         act = get_action(action_name)
@@ -300,10 +358,11 @@ def make_action_runner(env: Any) -> ActionRunner:
 
 
 class _EnvActionContext:
-    """Read-only ActionContext backed by a FlowRuntimeEnv."""
+    """ActionContext backed by a FlowRuntimeEnv."""
 
-    def __init__(self, env: Any) -> None:
+    def __init__(self, env: Any, *, writable: bool = False) -> None:
         self._env = env
+        self._writable = writable
 
     def get(self, id: str) -> Any:
         return self._env.get(id)
@@ -361,6 +420,22 @@ class _EnvActionContext:
         return self._env.traverse_related(source_ids, limit_per_source=limit)
 
     def resolve_provider(self, kind: str, name: str | None = None) -> Any:
-        raise NotImplementedError(
-            "provider resolution not available in sync read runtime"
-        )
+        if not self._writable:
+            raise NotImplementedError(
+                "provider resolution not available in read-only flow context"
+            )
+        # Delegate to the environment's default providers
+        _PROVIDER_MAP = {
+            "summarization": "get_default_summarization_provider",
+            "document": "get_default_document_provider",
+            "tagging": "get_default_tagging_provider",
+            "analyzer": "get_default_analyzer_provider",
+            "content_extractor": "get_default_content_extractor_provider",
+        }
+        method_name = _PROVIDER_MAP.get(kind)
+        if method_name is None:
+            raise ValueError(f"unknown provider kind: {kind!r}")
+        method = getattr(self._env, method_name, None)
+        if method is None:
+            raise NotImplementedError(f"environment does not support provider kind: {kind!r}")
+        return method()

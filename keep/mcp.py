@@ -393,25 +393,67 @@ async def keep_prompt(
 
 @mcp.tool(
     description=(
-        "Run one flow tick. Flows are stateful multi-step memory interactions "
-        "with automatic refinement and decision support. "
-        "Pass a payload dict with the flow request — see docs/FLOWS.md for the full schema. "
-        "Common fields: cursor (omit to start new), top-level flow fields, overrides, work_results."
+        "Run a state-doc flow synchronously. Flows evaluate state doc rules, "
+        "execute actions (find, get, tag, summarize, etc.), and follow transitions. "
+        "Returns when done, on error, or when budget is exhausted (with a resumable cursor)."
     ),
+    annotations=_IDEMPOTENT,
+)
+async def keep_flow(
+    state: Annotated[str, Field(
+        description="State doc name (e.g. 'after-write', 'query-resolve').",
+    )],
+    params: Annotated[Optional[dict[str, Any]], Field(
+        description="Flow parameters. Use 'id' key to target a specific note.",
+    )] = None,
+    budget: Annotated[Optional[int], Field(
+        description="Max ticks for this invocation (default: from config).",
+    )] = None,
+    cursor: Annotated[Optional[str], Field(
+        description="Cursor from a previous stopped flow to resume.",
+    )] = None,
+    state_doc_yaml: Annotated[Optional[str], Field(
+        description="Inline YAML state doc (instead of loading from store).",
+    )] = None,
+) -> str:
+    """Run a state-doc flow."""
+    async with _lock:
+        keeper = _get_keeper()
+        try:
+            result = keeper.run_flow_command(
+                state,
+                params=params,
+                budget=budget,
+                cursor_token=cursor,
+                state_doc_yaml=state_doc_yaml,
+            )
+        except (ValueError, OSError) as e:
+            return f"Error: {e}"
+    output: dict[str, Any] = {
+        "status": result.status,
+        "ticks": result.ticks,
+    }
+    if result.data:
+        output["data"] = result.data
+    if result.bindings:
+        output["bindings"] = result.bindings
+    if result.history:
+        output["history"] = result.history
+    if result.cursor:
+        output["cursor"] = result.cursor
+    return json.dumps(output, indent=2)
+
+
+@mcp.tool(
+    description="Deprecated: use keep_flow instead.",
     annotations=_IDEMPOTENT,
 )
 async def keep_continue(
     payload: Annotated[dict[str, Any], Field(
-        description=(
-            "Flow request object. "
-            "To start a new flow: {\"goal\": \"...\", \"profile\": \"query.auto\"} "
-            "or {\"goal\": \"...\", \"template\": \"...\"}. "
-            "To continue: {\"cursor\": \"...\"}. "
-            "To submit work results: {\"cursor\": \"...\", \"work_results\": [...]}."
-        ),
+        description="Flow request object (deprecated — use keep_flow).",
     )],
 ) -> str:
-    """Run one flow tick."""
+    """Deprecated: use keep_flow instead."""
     async with _lock:
         keeper = _get_keeper()
         try:
@@ -422,17 +464,14 @@ async def keep_continue(
 
 
 @mcp.tool(
-    description=(
-        "Execute a pending work item from a flow. "
-        "Returns a work_result envelope with outputs and quality metrics."
-    ),
+    description="Deprecated: use keep_flow instead.",
     annotations=_IDEMPOTENT,
 )
 async def keep_continue_work(
     cursor: Annotated[str, Field(description="Cursor containing the flow context.")],
     work_id: Annotated[str, Field(description="Work item to execute.")],
 ) -> str:
-    """Execute a pending flow work item."""
+    """Deprecated: use keep_flow instead."""
     async with _lock:
         keeper = _get_keeper()
         try:

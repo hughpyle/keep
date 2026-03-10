@@ -7098,6 +7098,73 @@ class Keeper:
         runner = make_action_runner(env)
         return run_flow(state, params, budget=budget, load_state_doc=loader, run_action=runner)
 
+    def run_flow_command(
+        self,
+        state: str,
+        *,
+        params: dict[str, Any] | None = None,
+        budget: int | None = None,
+        cursor_token: str | None = None,
+        state_doc_yaml: str | None = None,
+        writable: bool = True,
+    ) -> "FlowResult":
+        """Run a state-doc flow synchronously.
+
+        This is the public API behind ``keep flow``. Supports starting
+        new flows, resuming stopped flows via cursor, and loading state
+        docs from YAML or the store.
+
+        Args:
+            state: State doc name (e.g. "after-write", "query-resolve").
+            params: Caller-supplied parameters.
+            budget: Max ticks this invocation. Defaults to config.budget_per_flow.
+            cursor_token: Opaque cursor from a previous stopped flow.
+            state_doc_yaml: If provided, parse this YAML as the state doc
+                instead of loading from the store.
+            writable: If True, enable write actions (summarize, tag, etc.).
+
+        Returns:
+            FlowResult with status, bindings, cursor (if stopped), etc.
+        """
+        from .state_doc import parse_state_doc
+        from .state_doc_runtime import (
+            FlowResult,
+            decode_cursor,
+            make_action_runner,
+            make_state_doc_loader,
+            run_flow,
+        )
+
+        if budget is None:
+            budget = self._config.budget_per_flow
+
+        env = LocalFlowEnvironment(self)
+        runner = make_action_runner(env, writable=writable)
+
+        # Build loader: inline YAML overrides store lookup
+        if state_doc_yaml is not None:
+            inline_doc = parse_state_doc(state, state_doc_yaml)
+
+            def _loader(name: str):
+                if name == state:
+                    return inline_doc
+                # Fall through to store for transitions to other states
+                return make_state_doc_loader(env)(name)
+        else:
+            _loader = make_state_doc_loader(env)
+
+        # Decode cursor if resuming
+        cursor = decode_cursor(cursor_token) if cursor_token else None
+
+        return run_flow(
+            state,
+            params or {},
+            budget=budget,
+            load_state_doc=_loader,
+            run_action=runner,
+            cursor=cursor,
+        )
+
     def _deep_follow_via_flow(
         self,
         *,

@@ -5,6 +5,8 @@ through the public API, not just that individual components work in
 isolation.
 """
 
+import json
+
 import pytest
 from unittest.mock import patch
 
@@ -275,3 +277,284 @@ class TestAutoVivify:
         doc = kp._document_store.get(doc_coll, "alice")
         assert doc.summary == "Real document about Alice"
         assert doc.tags.get("type") == "person"
+
+
+# ---------------------------------------------------------------------------
+# Cursor encoding/decoding and flow resumption
+# ---------------------------------------------------------------------------
+
+class TestFlowCursor:
+    def test_cursor_round_trip(self):
+        """encode_cursor / decode_cursor are symmetric."""
+        from keep.state_doc_runtime import encode_cursor, decode_cursor
+
+        token = encode_cursor("query-explore", 3, {"search": {"count": 5}})
+        assert isinstance(token, str)
+        assert len(token) > 0
+
+        decoded = decode_cursor(token)
+        assert decoded is not None
+        assert decoded.state == "query-explore"
+        assert decoded.ticks == 3
+        assert decoded.bindings == {"search": {"count": 5}}
+
+    def test_decode_invalid_cursor(self):
+        """decode_cursor returns None for garbage input."""
+        from keep.state_doc_runtime import decode_cursor
+
+        assert decode_cursor("") is None
+        assert decode_cursor("not-valid-base64!!!") is None
+        assert decode_cursor(None) is None
+
+    def test_stopped_flow_returns_cursor(self):
+        """A budget-exhausted flow returns a cursor for resumption."""
+        compiled = {
+            "loop": parse_state_doc("loop", """\
+match: sequence
+rules:
+  - id: search
+    do: find
+    with:
+      query: "test"
+      limit: 5
+  - then: loop
+"""),
+        }
+
+        result = run_flow(
+            "loop", {"query": "test"}, budget=2,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=lambda n, p: {"results": [], "count": 0},
+        )
+        assert result.status == "stopped"
+        assert result.cursor is not None
+        assert result.ticks == 2
+
+    def test_resume_from_cursor(self):
+        """Resuming a stopped flow continues from the checkpoint."""
+        from keep.state_doc_runtime import decode_cursor
+
+        compiled = {
+            "counter": parse_state_doc("counter", """\
+match: sequence
+rules:
+  - id: s
+    do: find
+    with:
+      query: "test"
+  - then: counter
+"""),
+        }
+
+        tick_counts = []
+        def runner(name, params):
+            tick_counts.append(1)
+            return {"results": [], "count": 0}
+
+        # First run: budget=2
+        r1 = run_flow(
+            "counter", {}, budget=2,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=runner,
+        )
+        assert r1.status == "stopped"
+        assert r1.ticks == 2
+        assert r1.cursor is not None
+
+        # Resume with budget=3
+        cursor = decode_cursor(r1.cursor)
+        r2 = run_flow(
+            "counter", {}, budget=3,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=runner,
+            cursor=cursor,
+        )
+        assert r2.status == "stopped"
+        assert r2.ticks == 5  # 2 prior + 3 new
+        assert len(tick_counts) == 5  # total action calls
+
+    def test_done_flow_no_cursor(self):
+        """A completed flow does not include a cursor."""
+        compiled = {
+            "simple": parse_state_doc("simple", """\
+match: sequence
+rules:
+  - id: s
+    do: find
+    with:
+      query: "test"
+  - return: done
+"""),
+        }
+
+        result = run_flow(
+            "simple", {}, budget=5,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=lambda n, p: {"results": [], "count": 0},
+        )
+        assert result.status == "done"
+        assert result.cursor is None
+
+    def test_bindings_accumulate_across_resume(self):
+        """Bindings from previous ticks are preserved on resume."""
+        from keep.state_doc_runtime import decode_cursor, FlowCursor
+
+        compiled = {
+            "accum": parse_state_doc("accum", """\
+match: sequence
+rules:
+  - id: search
+    do: find
+    with:
+      query: "test"
+  - then: accum
+"""),
+        }
+
+        call_count = [0]
+        def runner(name, params):
+            call_count[0] += 1
+            return {"results": [f"r{call_count[0]}"], "count": 1}
+
+        r1 = run_flow(
+            "accum", {}, budget=1,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=runner,
+        )
+        assert r1.status == "stopped"
+        assert "search" in r1.bindings
+
+        cursor = decode_cursor(r1.cursor)
+        assert cursor.bindings.get("search") is not None
+
+        r2 = run_flow(
+            "accum", {}, budget=1,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=runner,
+            cursor=cursor,
+        )
+        # Bindings should have the latest search result
+        assert "search" in r2.bindings
+
+
+# ---------------------------------------------------------------------------
+# CLI: keep flow
+# ---------------------------------------------------------------------------
+
+class TestFlowCLI:
+    @pytest.fixture
+    def cli(self, mock_providers, tmp_path):
+        """CLI runner targeting a fresh store."""
+        from keep.cli import app
+        from typer.testing import CliRunner
+        runner = CliRunner()
+        def invoke(*args):
+            env = {"KEEP_STORE": str(tmp_path)}
+            return runner.invoke(app, list(args), env=env, catch_exceptions=False)
+        return invoke
+
+    def test_flow_help(self, cli):
+        result = cli("flow", "--help")
+        assert result.exit_code == 0
+        assert "state-doc flow" in result.stdout.lower() or "state doc" in result.stdout.lower()
+
+    def test_flow_requires_argument(self, cli):
+        result = cli("flow")
+        assert result.exit_code != 0
+
+    def test_flow_inline_yaml(self, cli, tmp_path):
+        """Run a flow from an inline YAML file."""
+        state_doc = tmp_path / "test.yaml"
+        state_doc.write_text("""\
+match: sequence
+rules:
+  - id: s
+    do: find
+    with:
+      query: "hello"
+  - return: done
+""")
+        result = cli("flow", "--file", str(state_doc))
+        assert result.exit_code == 0
+        output = json.loads(result.stdout)
+        assert output["status"] == "done"
+
+    def test_flow_with_budget(self, cli, tmp_path):
+        """--budget flag limits ticks."""
+        state_doc = tmp_path / "loop.yaml"
+        state_doc.write_text("""\
+match: sequence
+rules:
+  - id: s
+    do: find
+    with:
+      query: "test"
+  - then: inline
+""")
+        result = cli("flow", "--file", str(state_doc), "--budget", "2")
+        assert result.exit_code == 0
+        output = json.loads(result.stdout)
+        assert output["status"] == "stopped"
+        assert output["ticks"] == 2
+        assert "cursor" in output
+
+
+# ---------------------------------------------------------------------------
+# API: run_flow_command
+# ---------------------------------------------------------------------------
+
+class TestRunFlowCommand:
+    @pytest.fixture
+    def kp(self, mock_providers, tmp_path):
+        kp = Keeper(store_path=tmp_path)
+        kp._get_embedding_provider()
+        return kp
+
+    def test_run_stored_state_doc(self, kp):
+        """run_flow_command with a built-in state doc name."""
+        result = kp.run_flow_command(
+            "get-context",
+            params={"id": "nonexistent"},
+            budget=1,
+        )
+        # get-context on nonexistent ID still completes
+        assert result.status in ("done", "error")
+
+    def test_run_inline_yaml(self, kp):
+        """run_flow_command with inline YAML state doc."""
+        yaml_doc = """\
+match: sequence
+rules:
+  - id: s
+    do: find
+    with:
+      query: "hello"
+  - return: done
+"""
+        result = kp.run_flow_command(
+            "test",
+            params={},
+            state_doc_yaml=yaml_doc,
+        )
+        assert result.status == "done"
+        assert result.ticks == 1
+
+    def test_run_with_cursor_resume(self, kp):
+        """run_flow_command can resume via cursor."""
+        yaml_loop = """\
+match: sequence
+rules:
+  - id: s
+    do: find
+    with:
+      query: "test"
+  - then: test
+"""
+        r1 = kp.run_flow_command("test", params={}, budget=1, state_doc_yaml=yaml_loop)
+        assert r1.status == "stopped"
+        assert r1.cursor is not None
+
+        r2 = kp.run_flow_command("test", params={}, budget=2,
+                                  cursor_token=r1.cursor, state_doc_yaml=yaml_loop)
+        assert r2.status == "stopped"
+        assert r2.ticks == 3  # 1 prior + 2 new

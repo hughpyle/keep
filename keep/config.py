@@ -167,6 +167,9 @@ class StoreConfig:
     backend: str = "local"
     backend_params: dict[str, Any] = field(default_factory=dict)
 
+    # Default tick budget for `keep flow` invocations
+    budget_per_flow: int = 5
+
     @property
     def config_path(self) -> Path:
         """Path to the TOML config file."""
@@ -622,6 +625,8 @@ def load_config(config_dir: Path) -> StoreConfig:
             summarization_config = ProviderConfig("truncate")
         remote = None
 
+    budget_per_flow = int(data.get("store", {}).get("budget_per_flow", 5))
+
     return StoreConfig(
         path=actual_store,
         config_dir=config_dir,
@@ -647,6 +652,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         remote=remote,
         backend=backend,
         backend_params=backend_params,
+        budget_per_flow=budget_per_flow,
     )
 
 
@@ -703,6 +709,8 @@ def save_config(config: StoreConfig) -> None:
         store_section["backend"] = config.backend
     if config.backend_params:
         store_section["backend_params"] = config.backend_params
+    if config.budget_per_flow != 5:
+        store_section["budget_per_flow"] = config.budget_per_flow
 
     data: dict[str, Any] = {
         "store": store_section,
