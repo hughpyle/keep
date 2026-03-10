@@ -14,7 +14,7 @@ class Summarize:
 
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         """Summarize item content and emit a `set_summary` mutation."""
-        item_id, _item, content = resolve_item_content(params, context)
+        item_id, item, content = resolve_item_content(params, context)
 
         provider = context.resolve_provider("summarization")
         summarize = getattr(provider, "summarize", None)
@@ -23,11 +23,24 @@ class Summarize:
 
         max_length = int(params.get("max_length", 500))
         context_text = params.get("context")
+
+        # Resolve prompt doc (.prompt/summarize/*) matching item tags
+        prompt_text = params.get("system_prompt")
+        if prompt_text is None:
+            item_tags = getattr(item, "tags", None) or {}
+            resolve_prompt = getattr(context, "resolve_prompt", None)
+            if resolve_prompt is not None:
+                try:
+                    prompt_text = resolve_prompt("summarize", item_tags)
+                except Exception:
+                    pass
+
         try:
             summary = summarize(
                 str(content),
                 max_length=max(max_length, 1),
                 context=str(context_text) if context_text is not None else None,
+                system_prompt=prompt_text,
             )
         except TypeError:
             try:

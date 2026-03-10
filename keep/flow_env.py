@@ -117,6 +117,8 @@ class FlowRuntimeEnv(Protocol):
         candidates: list[str] | None = None,
     ) -> dict[str, Any]: ...
 
+    def resolve_prompt(self, prefix: str, doc_tags: dict[str, Any]) -> str | None: ...
+
     def get_default_summarization_provider(self) -> Any: ...
     def get_default_document_provider(self) -> Any: ...
     def get_default_tagging_provider(self) -> Any: ...
@@ -415,6 +417,13 @@ class LocalFlowEnvironment:
             scope_key=scope_key,
             candidates=candidates,
         )
+
+    def resolve_prompt(self, prefix: str, doc_tags: dict[str, Any]) -> str | None:
+        """Resolve a prompt doc (e.g. .prompt/summarize/default) matching tags."""
+        try:
+            return self._keeper._resolve_prompt_doc(prefix, doc_tags)
+        except Exception:
+            return None
 
     def get_default_summarization_provider(self) -> Any:
         return self._keeper._get_summarization_provider()

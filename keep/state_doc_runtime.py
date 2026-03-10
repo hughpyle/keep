@@ -419,6 +419,13 @@ class _EnvActionContext:
     def traverse(self, source_ids: list[str], *, limit: int = 5) -> dict[str, list[Any]]:
         return self._env.traverse_related(source_ids, limit_per_source=limit)
 
+    def resolve_prompt(self, prefix: str, doc_tags: dict[str, Any] | None = None) -> str | None:
+        """Resolve a prompt doc matching tags (e.g. .prompt/summarize/*)."""
+        resolve = getattr(self._env, "resolve_prompt", None)
+        if resolve is None:
+            return None
+        return resolve(prefix, doc_tags or {})
+
     def resolve_provider(self, kind: str, name: str | None = None) -> Any:
         if not self._writable:
             raise NotImplementedError(

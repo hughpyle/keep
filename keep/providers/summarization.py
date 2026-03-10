@@ -29,10 +29,11 @@ class TruncationSummarizer:
         *,
         max_length: int | None = None,
         context: str | None = None,
+        system_prompt: str | None = None,
     ) -> str:
         """Summarize by taking first N characters.
 
-        Tries to break at word boundaries. Context is ignored (non-LLM provider).
+        Tries to break at word boundaries. Context and system_prompt are ignored (non-LLM provider).
         """
         limit = max_length or self.max_length
 
@@ -69,8 +70,9 @@ class FirstParagraphSummarizer:
         *,
         max_length: int | None = None,
         context: str | None = None,
+        system_prompt: str | None = None,
     ) -> str:
-        """Extract first paragraph, falling back to truncation. Context is ignored."""
+        """Extract first paragraph, falling back to truncation. Context/system_prompt ignored."""
         limit = max_length or self.max_length
 
         # Strip leading whitespace and find first paragraph

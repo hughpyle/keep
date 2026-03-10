@@ -139,12 +139,13 @@ class MLXSummarization:
         *,
         max_length: int = 500,
         context: str | None = None,
+        system_prompt: str | None = None,
     ) -> str:
         """Generate a summary using MLX-LM."""
         # MLX models have smaller context windows (4k-8k)
         truncated = content[:12000] if len(content) > 12000 else content
         prompt = build_summarization_prompt(truncated, context)
-        result = self.generate(SUMMARIZATION_SYSTEM_PROMPT, prompt)
+        result = self.generate(system_prompt or SUMMARIZATION_SYSTEM_PROMPT, prompt)
         if not result:
             return truncated[:max_length]
         return strip_summary_preamble(result)
