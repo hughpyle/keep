@@ -13,6 +13,10 @@ ChromaDB cross-process safety is handled at the store layer.
 
 import asyncio
 import json
+import os
+import platform
+import signal
+import sys
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
@@ -440,9 +444,6 @@ async def keep_flow(
 
 def _check_mcp_setup():
     """Print setup hints for detected tools missing keep MCP config."""
-    import json
-    import sys
-
     home = Path.home()
     hints: list[str] = []
 
@@ -515,7 +516,6 @@ def _check_mcp_setup():
             )
 
     # VS Code: user-level mcp.json → servers.keep
-    import platform
     if platform.system() == "Darwin":
         vscode_dir = home / "Library" / "Application Support" / "Code"
     else:
@@ -559,8 +559,6 @@ def _check_integrations():
 
 def main():
     """Run the MCP stdio server."""
-    import os
-    import signal
     # anyio's stdin reader uses abandon_on_cancel=False, which shields the
     # blocking readline from task cancellation.  The first Ctrl+C only cancels
     # the task (which can't take effect), so install our own handler.

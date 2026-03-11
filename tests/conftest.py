@@ -170,20 +170,31 @@ class MockChromaStore:
             conditions = where
         return all(tags.get(k) == v for k, v in conditions.items())
 
+    @staticmethod
+    def _cosine_distance(a: list[float], b: list[float]) -> float:
+        """Compute cosine distance between two vectors."""
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = sum(x * x for x in a) ** 0.5
+        norm_b = sum(x * x for x in b) ** 0.5
+        if norm_a == 0 or norm_b == 0:
+            return 1.0
+        return 1.0 - dot / (norm_a * norm_b)
+
     def query_embedding(self, collection: str, embedding: list[float],
                        limit: int = 10, where: dict = None) -> list:
         from keep.store import StoreResult
         if collection not in self._data:
             return []
-        results = []
+        scored = []
         for id, rec in list(self._data[collection].items()):
             if self._match_where(rec.get("metadata", {}), where):
-                results.append(StoreResult(
-                    id=id, summary=rec["summary"], tags=rec["tags"], distance=0.1
+                stored_emb = rec.get("embedding")
+                dist = self._cosine_distance(embedding, stored_emb) if stored_emb else 1.0
+                scored.append(StoreResult(
+                    id=id, summary=rec["summary"], tags=rec["tags"], distance=dist
                 ))
-            if len(results) >= limit:
-                break
-        return results
+        scored.sort(key=lambda r: r.distance)
+        return scored[:limit]
 
     def query_metadata(self, collection: str, where: dict, limit: int = 100, offset: int = 0) -> list:
         from keep.store import StoreResult

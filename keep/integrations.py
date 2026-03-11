@@ -10,6 +10,7 @@ Set KEEP_NO_SETUP=1 to skip entirely.
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -129,8 +130,6 @@ def _strip_protocol_block(content: str) -> str:
     Strips from the PROTOCOL_BLOCK_MARKER line to the next `## ` heading
     or end of file. Removes trailing blank lines left by the removal.
     """
-    import re
-
     # Match from the marker line to the next ## heading or EOF
     pattern = re.compile(
         r"(?m)^" + re.escape(PROTOCOL_BLOCK_MARKER) + r".*?"

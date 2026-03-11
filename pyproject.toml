@@ -133,3 +133,22 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning:importlib._bootstrap",
 ]
+
+[tool.coverage.run]
+source = ["keep"]
+omit = [
+    "keep/providers/mlx*.py",
+    "keep/providers/whisper*.py",
+    "keep/setup_wizard.py",
+    "keep/data/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__",
+    "raise NotImplementedError",
+]

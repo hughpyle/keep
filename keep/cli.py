@@ -6,12 +6,17 @@ Usage:
     keep get file:///path/to/doc.md
 """
 
+import importlib.metadata
+import importlib.resources
 import json
 import os
+import platform
 import re
 import select
 import shutil
+import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -2850,7 +2855,7 @@ def _get_config_value(cfg, store_path: Path, path: str):
     if path == "tool":
         return str(get_tool_directory())
     if path == "openclaw-plugin":
-        import importlib.resources
+
         return str(Path(str(importlib.resources.files("keep"))) / "data" / "openclaw-plugin")
     if path == "docs":
         return str(get_tool_directory() / "docs")
@@ -2909,7 +2914,7 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
     lines.append(f"tool: {get_tool_directory()}")
     lines.append(f"docs: {get_tool_directory() / 'docs'}")
     lines.append(f"store: {store_path}")
-    import importlib.resources
+
     lines.append(f"openclaw-plugin: {Path(str(importlib.resources.files('keep'))) / 'data' / 'openclaw-plugin'}")
 
     if cfg:
@@ -3209,7 +3214,7 @@ def config(
 
     # Full config output
     if _get_json_output():
-        import importlib.resources
+
         result = {
             "file": str(config_path) if config_path else None,
             "tool": str(get_tool_directory()),
@@ -3256,7 +3261,6 @@ def pending_cmd(
     progress. Ctrl-C detaches without stopping the processor.
     Use --reindex to re-embed all items with the current embedding provider.
     """
-    import signal
     kp = _get_keeper(store)
 
     # --stop: send SIGTERM to the daemon
@@ -3476,8 +3480,6 @@ def _queue_status_line(kp, queue_stats: dict) -> str:
 
 def _tail_ops_log(log_path: Path, kp) -> None:
     """Tail the ops log, showing new lines until daemon finishes or Ctrl-C."""
-    import time
-
     # Grace period for daemon startup (takes a moment to acquire lock)
     time.sleep(1.0)
 
@@ -3737,9 +3739,6 @@ def doctor(
     )] = False,
 ):
     """Diagnostic checks for debugging setup and crash issues."""
-    import platform
-    import time
-
     if log:
         from .paths import get_config_dir, get_default_store_path
         from .config import load_or_create_config
@@ -3780,9 +3779,8 @@ def doctor(
         typer.echo(f"  [WARN] {msg}")
 
     # 1. Environment
-    from importlib.metadata import version as pkg_version
     try:
-        kv = pkg_version("keep-skill")
+        kv = importlib.metadata.version("keep-skill")
     except Exception:
         kv = "?"
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
@@ -4021,8 +4019,6 @@ def doctor(
         ok("Lock: skipped (no store path)")
 
     # 11. Round-trip (temp store, isolates stack from store data)
-    import tempfile
-    import shutil
     from .config import StoreConfig, ProviderConfig
     tmp_dir = None
     try:

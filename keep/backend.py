@@ -15,6 +15,7 @@ and register it in their pyproject.toml::
     my-backend = "my_package.backend:create_stores"
 """
 
+from importlib.metadata import entry_points
 from typing import NamedTuple, Optional
 
 from .config import StoreConfig
@@ -145,8 +146,6 @@ def _create_local_stores(config: StoreConfig) -> StoreBundle:
 
 def _load_backend(name: str, config: StoreConfig) -> StoreBundle:
     """Load a backend by entry point name."""
-    from importlib.metadata import entry_points
-
     eps = entry_points(group="keep.backends")
     for ep in eps:
         if ep.name == name:

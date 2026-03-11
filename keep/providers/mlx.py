@@ -6,6 +6,8 @@ run entirely locally with no API keys required.
 Requires: pip install mlx-lm mlx
 """
 
+import platform
+
 from .base import (
     get_registry,
     build_summarization_prompt,
@@ -482,7 +484,6 @@ class MLXMediaDescriber:
 
 def is_apple_silicon() -> bool:
     """Check if running on Apple Silicon."""
-    import platform
     return platform.system() == "Darwin" and platform.machine() == "arm64"
 
 

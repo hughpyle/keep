@@ -20,6 +20,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -506,6 +507,5 @@ class PlannerStatsStore:
 # ---------------------------------------------------------------------------
 
 def _utc_now() -> str:
-    """UTC timestamp without importing keep.types (avoids circular deps)."""
-    from datetime import datetime, timezone
+    """UTC timestamp."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")

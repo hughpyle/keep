@@ -5,9 +5,11 @@ It specifies which providers to use and their parameters.
 """
 
 import importlib.resources
+import json
 import os
 import platform
 import tomllib
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -192,9 +194,6 @@ def _detect_ollama() -> dict | None:
     Returns dict with 'base_url' and 'models' if Ollama is reachable
     with at least one model, None otherwise.
     """
-    import json
-    import urllib.request
-
     base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
     if not base_url.startswith("http"):
         base_url = f"http://{base_url}"
@@ -229,9 +228,6 @@ def ollama_pull(model: str, base_url: str | None = None,
     Returns True if model pulled successfully, False on error.
     on_progress receives status strings like "pulling abc123... 45%".
     """
-    import json
-    import urllib.request
-
     url = (base_url or os.environ.get("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
     if not url.startswith("http"):
         url = f"http://{url}"

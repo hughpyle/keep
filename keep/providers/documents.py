@@ -1,5 +1,6 @@
 """Document providers for fetching content from various URI schemes."""
 
+import tempfile
 from pathlib import Path
 
 from .base import Document, DocumentProvider, get_registry
@@ -814,8 +815,6 @@ def _extract_via_file_provider(
 
     Returns (extracted_content, content_type).
     """
-    import tempfile
-
     ext = _EXTRACTABLE_TYPES.get(content_type) or _EXTRACTABLE_SUFFIXES.get(url_suffix, "")
 
     # Write inside home dir to satisfy FileDocumentProvider's path guard.

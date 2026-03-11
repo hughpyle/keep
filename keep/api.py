@@ -641,7 +641,7 @@ class Keeper:
         self._reconcile_lock = threading.Lock()
         self._reconcile_done = threading.Event()
         self._closing = threading.Event()  # signals reconcile to abort
-        self._provider_init_lock = threading.Lock()
+        self._provider_init_lock = threading.RLock()
         self._last_spawn_time: float = 0.0
         self._tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
 
@@ -1074,8 +1074,16 @@ class Keeper:
         return donor_embedding
 
     def _get_summarization_provider(self) -> SummarizationProvider:
-        """Get summarization provider, creating it lazily on first use."""
-        if self._summarization_provider is None:
+        """Get summarization provider, creating it lazily on first use.
+
+        Thread-safe: uses _provider_init_lock with double-checked locking.
+        """
+        if self._summarization_provider is not None:
+            return self._summarization_provider
+
+        with self._provider_init_lock:
+            if self._summarization_provider is not None:
+                return self._summarization_provider
             registry = get_registry()
             provider = registry.create_summarization(
                 self._config.summarization.name,
@@ -1099,10 +1107,13 @@ class Keeper:
 
         Safe to call at any time.
         """
-        if self._summarization_provider is not None:
-            if hasattr(self._summarization_provider, 'release'):
-                self._summarization_provider.release()
+        with self._provider_init_lock:
+            provider = self._summarization_provider
             self._summarization_provider = None
+
+        if provider is not None:
+            if hasattr(provider, 'release'):
+                provider.release()
 
     def _release_embedding_provider(self) -> None:
         """Release embedding model to free GPU/unified memory.
@@ -1132,11 +1143,17 @@ class Keeper:
     def _get_media_describer(self) -> Optional[MediaDescriber]:
         """Get media describer, creating it lazily on first use.
 
+        Thread-safe: uses _provider_init_lock with double-checked locking.
         Returns None if no media provider is configured or creation fails.
         """
-        if self._media_describer is None:
-            if self._config.media is None:
-                return None
+        if self._media_describer is not None:
+            return self._media_describer
+        if self._config.media is None:
+            return None
+
+        with self._provider_init_lock:
+            if self._media_describer is not None:
+                return self._media_describer
             registry = get_registry()
             try:
                 provider = registry.create_media(
@@ -1158,12 +1175,18 @@ class Keeper:
     def _get_content_extractor(self):
         """Get content extractor, creating it lazily on first use.
 
+        Thread-safe: uses _provider_init_lock with double-checked locking.
         Used by the background OCR processor. Returns None if no content
         extractor is configured or creation fails.
         """
-        if self._content_extractor is None:
-            if self._config.content_extractor is None:
-                return None
+        if self._content_extractor is not None:
+            return self._content_extractor
+        if self._config.content_extractor is None:
+            return None
+
+        with self._provider_init_lock:
+            if self._content_extractor is not None:
+                return self._content_extractor
             registry = get_registry()
             try:
                 provider = registry.create_content_extractor(
@@ -1184,14 +1207,25 @@ class Keeper:
 
     def _release_content_extractor(self) -> None:
         """Release content extractor to free GPU/unified memory."""
-        if self._content_extractor is not None:
-            if hasattr(self._content_extractor, 'release'):
-                self._content_extractor.release()
+        with self._provider_init_lock:
+            provider = self._content_extractor
             self._content_extractor = None
 
+        if provider is not None:
+            if hasattr(provider, 'release'):
+                provider.release()
+
     def _get_analyzer(self):
-        """Get analyzer provider, creating it lazily on first use."""
-        if self._analyzer is None:
+        """Get analyzer provider, creating it lazily on first use.
+
+        Thread-safe: uses _provider_init_lock with double-checked locking.
+        """
+        if self._analyzer is not None:
+            return self._analyzer
+
+        with self._provider_init_lock:
+            if self._analyzer is not None:
+                return self._analyzer
             if self._config.analyzer:
                 registry = get_registry()
                 self._analyzer = registry.create_analyzer(
