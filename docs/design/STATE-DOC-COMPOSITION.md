@@ -46,6 +46,9 @@ rules:
   - when: "item.content_type == 'text/markdown'"
     id: obsidian-links
     do: extract_links
+    with:
+      tag: references
+      create_targets: "true"
 ```
 
 The optional `order` field controls insertion point (defaults to `"after"`

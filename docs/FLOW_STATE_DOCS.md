@@ -14,17 +14,25 @@ To view the state diagram: `keep config --state-diagram`
 **Mode:** `match: all` — all matching rules fire in parallel.
 **Path:** Background (returns immediately, work runs async).
 
-Runs post-write processing on new or updated items. Five rules evaluate independently:
+Runs post-write processing on new or updated items. The base doc defines core rules; additional rules are loaded from builtin fragments at `.state/after-write/*`.
+
+**Base rules:**
 
 | Rule | Condition | Action |
 |------|-----------|--------|
 | `summary` | Content exceeds max summary length and no summary exists | `summarize` |
-| `extracted` | Item has `_ocr_pages` tag and a URI | `ocr` |
 | `described` | Item has a URI, media content, and a media provider configured | `describe` |
-| `analyzed` | Non-system item | `analyze` (decompose into parts) |
-| `tagged` | Non-system item with content | `tag` (classify against `.tag/*` specs) |
 
-System notes (IDs starting with `.`) skip analysis and tagging to avoid recursive processing.
+**Builtin fragments:**
+
+| Fragment | Rule | Condition | Action |
+|----------|------|-----------|--------|
+| `ocr` | `extracted` | Item has `_ocr_pages` tag and a URI | `ocr` |
+| `analyze` | `analyzed` | Non-system item | `analyze` (decompose into parts) |
+| `tag` | `tagged` | Non-system item with content | `tag` (classify against `.tag/*` specs) |
+| `links` | `linked` | Non-system markdown item with content | `extract_links` (wiki/markdown links → `references` edges) |
+
+System notes (IDs starting with `.`) skip analysis, tagging, and link extraction to avoid recursive processing. Fragments can be disabled individually (see [Extending state docs](#extending-state-docs) below).
 
 ---
 
@@ -127,7 +135,10 @@ You can add processing steps to any state doc without editing the original. Crea
 keep put --id .state/after-write/obsidian-links 'rules:
   - when: "item.content_type == '\''text/markdown'\''"
     id: obsidian-links
-    do: extract_links'
+    do: extract_links
+    with:
+      tag: references
+      create_targets: "true"'
 ```
 
 Child fragments are discovered automatically and merged into the base doc. Each fragment has a `rules:` list (same syntax as a full state doc) and an optional `order:` field.

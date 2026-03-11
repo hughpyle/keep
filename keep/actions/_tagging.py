@@ -103,5 +103,11 @@ def classify_parts_with_specs(parts: list[dict[str, Any]], context: Any) -> list
     if not specs:
         return parts
     provider = context.resolve_provider("summarization")
+    # Resolve prompt template from .prompt/tag/* docs
+    prompt_template = None
+    try:
+        prompt_template = context.resolve_prompt("tag") if hasattr(context, "resolve_prompt") else None
+    except Exception:
+        pass
     classifier = TagClassifier(provider=provider)
-    return classifier.classify(parts, specs=specs)
+    return classifier.classify(parts, specs=specs, prompt_template=prompt_template)

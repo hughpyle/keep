@@ -138,9 +138,16 @@ class TestAfterWriteStateDoc:
 
     @pytest.fixture
     def after_write_doc(self):
-        from keep.state_doc import parse_state_doc
-        from keep.builtin_state_docs import BUILTIN_STATE_DOCS
-        return parse_state_doc("after-write", BUILTIN_STATE_DOCS["after-write"])
+        from keep.state_doc import parse_state_doc, parse_fragment, merge_fragments
+        from keep.builtin_state_docs import BUILTIN_STATE_DOCS, BUILTIN_STATE_FRAGMENTS
+        base = parse_state_doc("after-write", BUILTIN_STATE_DOCS["after-write"])
+        builtin_frags = BUILTIN_STATE_FRAGMENTS.get("after-write", {})
+        fragments = []
+        for name in sorted(builtin_frags):
+            fragments.append(parse_fragment(name, builtin_frags[name]))
+        if fragments:
+            base = merge_fragments(base, fragments)
+        return base
 
     def _eval(self, doc, system=None, **item_overrides):
         from keep.state_doc import evaluate_state_doc
@@ -152,6 +159,7 @@ class TestAfterWriteStateDoc:
             "tags": {},
             "has_media_content": False,
             "has_content": True,
+            "content_type": "",
         }
         item.update(item_overrides)
         sys = {"has_media_provider": True}
@@ -200,6 +208,16 @@ class TestAfterWriteStateDoc:
         actions = self._eval(after_write_doc, has_content=False)
         assert "tag" not in actions
         assert "analyze" in actions  # analyze still fires
+
+    def test_markdown_fires_extract_links(self, after_write_doc):
+        """Markdown content fires extract_links."""
+        actions = self._eval(after_write_doc, content_type="text/markdown")
+        assert "extract_links" in actions
+
+    def test_non_markdown_skips_extract_links(self, after_write_doc):
+        """Non-markdown content does NOT fire extract_links."""
+        actions = self._eval(after_write_doc, content_type="text/plain")
+        assert "extract_links" not in actions
 
 
 # -----------------------------------------------------------------------------

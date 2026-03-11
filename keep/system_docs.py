@@ -73,11 +73,26 @@ def _filename_to_id(filename: str) -> str:
 
 
 def _all_system_doc_ids() -> dict[str, str]:
-    return {
-        p.name: _filename_to_id(p.name)
-        for p in sorted(SYSTEM_DOC_DIR.glob("*.md"))
-        if p.name != "__init__.py"
-    }
+    """Build mapping of relative paths to stable IDs for all system docs.
+
+    Scans top-level .md files and also subdirectories (for state doc
+    fragments).  Subdirectory files get IDs derived from the parent
+    dir name + child filename, e.g.::
+
+        state-after-write/ocr.md  ->  .state/after-write/ocr
+    """
+    result: dict[str, str] = {}
+    for p in sorted(SYSTEM_DOC_DIR.glob("*.md")):
+        if p.name != "__init__.py":
+            result[p.name] = _filename_to_id(p.name)
+    # Subdirectories: state doc fragment files
+    for d in sorted(SYSTEM_DOC_DIR.iterdir()):
+        if d.is_dir() and not d.name.startswith(("_", ".")):
+            parent_id = _filename_to_id(d.name + ".md")
+            for p in sorted(d.glob("*.md")):
+                rel_key = f"{d.name}/{p.name}"
+                result[rel_key] = f"{parent_id}/{p.stem}"
+    return result
 
 
 SYSTEM_DOC_IDS = _all_system_doc_ids()
@@ -131,13 +146,17 @@ def _bundled_docs_hash() -> str:
     """Composite hash of all bundled system doc files.
 
     Computed from sorted filenames + content so any change to any
-    bundled doc produces a different hash.  Used as a gate to skip
-    the per-file migration scan when nothing has changed.
+    bundled doc produces a different hash.  Includes subdirectory
+    fragment files.  Used as a gate to skip the per-file migration
+    scan when nothing has changed.
     """
     h = hashlib.sha256()
-    for path in sorted(SYSTEM_DOC_DIR.glob("*.md")):
-        h.update(path.name.encode("utf-8"))
-        h.update(path.read_bytes())
+    # Use SYSTEM_DOC_IDS keys (sorted rel paths) to ensure stable ordering
+    for rel_path in sorted(SYSTEM_DOC_IDS.keys()):
+        path = SYSTEM_DOC_DIR / rel_path
+        if path.exists():
+            h.update(rel_path.encode("utf-8"))
+            h.update(path.read_bytes())
     return h.hexdigest()[-10:]
 
 
@@ -243,8 +262,12 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
             logger.debug("Error removing retired doc %s: %s", old_id, e)
 
     # Fourth pass: create or update system docs from bundled content
-    for path in SYSTEM_DOC_DIR.glob("*.md"):
-        new_id = _filename_to_id(path.name)
+    # Iterates over SYSTEM_DOC_IDS to include both top-level docs and
+    # subdirectory fragment files.
+    for rel_path, new_id in sorted(filename_to_id.items()):
+        path = SYSTEM_DOC_DIR / rel_path
+        if not path.exists():
+            continue
 
         try:
             content, tags = _load_frontmatter(path)

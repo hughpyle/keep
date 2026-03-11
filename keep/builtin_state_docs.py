@@ -20,18 +20,9 @@ rules:
   - when: "item.content_length > params.max_summary_length && !item.has_summary"
     id: summary
     do: summarize
-  - when: "'_ocr_pages' in item.tags && item.has_uri"
-    id: extracted
-    do: ocr
   - when: "item.has_uri && item.has_media_content && system.has_media_provider"
     id: described
     do: describe
-  - when: "!item.is_system_note"
-    id: analyzed
-    do: analyze
-  - when: "!item.is_system_note && item.has_content"
-    id: tagged
-    do: tag
 post:
   - return: done
 """,
@@ -161,4 +152,39 @@ rules:
       limit: "{params.deep_limit}"
   - return: done
 """,
+}
+
+# Builtin state doc fragments — fallback for test environments and
+# the brief window before migration runs on a fresh store.
+# Keyed by parent state doc name → fragment name → YAML body.
+BUILTIN_STATE_FRAGMENTS: dict[str, dict[str, str]] = {
+    "after-write": {
+        "ocr": """\
+rules:
+  - when: "'_ocr_pages' in item.tags && item.has_uri"
+    id: extracted
+    do: ocr
+""",
+        "analyze": """\
+rules:
+  - when: "!item.is_system_note"
+    id: analyzed
+    do: analyze
+""",
+        "tag": """\
+rules:
+  - when: "!item.is_system_note && item.has_content"
+    id: tagged
+    do: tag
+""",
+        "links": """\
+rules:
+  - when: "!item.is_system_note && item.has_content && item.content_type == 'text/markdown'"
+    id: linked
+    do: extract_links
+    with:
+      tag: references
+      create_targets: "true"
+""",
+    },
 }

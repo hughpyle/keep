@@ -102,13 +102,13 @@ rules:
         with pytest.raises(ValueError, match="match must be"):
             parse_state_doc("test", body)
 
-    def test_default_match_is_sequence(self):
+    def test_missing_match_raises(self):
         body = """
 rules:
   - do: find
 """
-        doc = parse_state_doc("test", body)
-        assert doc.match == "sequence"
+        with pytest.raises(ValueError, match="missing 'match' field"):
+            parse_state_doc("test", body)
 
     def test_unconditional_rule(self):
         body = """

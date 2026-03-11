@@ -519,6 +519,27 @@ def extract_prompt_section(content: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+_DEFAULT_TAG_PROMPT = """\
+Classify each numbered text fragment.
+
+{taxonomy}
+
+Output one line per fragment. Format — one or more tag=value(confidence) pairs:
+NUMBER: tag1=value1(CONFIDENCE) tag2=value2(CONFIDENCE)
+
+CONFIDENCE is 0.0 to 1.0. If no tags apply, write:
+NUMBER: NONE
+
+Examples:
+{examples}
+
+Rules:
+- ONLY use these values — {valid_values}
+- Do NOT invent new values
+- If a fragment is just a preamble, heading, or meta-commentary with no substantive content, output NONE
+- 0.9+ = unambiguous, 0.7-0.9 = likely"""
+
+
 class TagClassifier:
     """Data-driven tag classification for analyzed parts.
 
@@ -623,22 +644,51 @@ class TagClassifier:
         self._tag_specs = specs
         return specs
 
-    def build_prompt(self, specs: list[dict] | None = None) -> str:
+    def build_prompt(
+        self,
+        specs: list[dict] | None = None,
+        *,
+        template: str | None = None,
+    ) -> str:
         """Build a classification system prompt from tag specs.
 
-        The prompt is generated entirely from store data — no hardcoded
+        The taxonomy section is generated from store data — no hardcoded
         tag names or values.  If a spec or value has a ``prompt`` field
         (from a ``## Prompt`` section in the tag doc), it is used as the
         classifier-facing description.
+
+        Args:
+            specs: Tag specs (uses loaded specs if not provided).
+            template: Optional prompt template from ``.prompt/tag/*``.
+                Supports ``{taxonomy}``, ``{examples}``, ``{valid_values}``
+                placeholders. If None, uses a built-in default.
         """
         specs = specs or self._tag_specs
         if not specs:
             return ""
 
+        taxonomy = self._build_taxonomy(specs)
+        valid_values = self._build_valid_values(specs)
+        examples = self._build_examples(specs)
+
+        if template:
+            return template.format(
+                taxonomy=taxonomy,
+                examples=examples,
+                valid_values=valid_values,
+            )
+
+        return _DEFAULT_TAG_PROMPT.format(
+            taxonomy=taxonomy,
+            examples=examples,
+            valid_values=valid_values,
+        )
+
+    @staticmethod
+    def _build_taxonomy(specs: list[dict]) -> str:
         sections = []
         for spec in specs:
             lines = [f"## Tag: `{spec['key']}`"]
-            # Prefer prompt section over raw description
             desc = spec.get("prompt") or spec.get("description", "")
             if desc:
                 lines.append(desc)
@@ -651,18 +701,19 @@ class TagClassifier:
                 else:
                     lines.append(f"- `{v['value']}`")
             sections.append("\n".join(lines))
+        return "\n\n".join(sections)
 
-        taxonomy = "\n\n".join(sections)
-
-        # Build valid values summary for enforcement
+    @staticmethod
+    def _build_valid_values(specs: list[dict]) -> str:
         valid_per_key = {}
         for spec in specs:
             valid_per_key[spec["key"]] = [v["value"] for v in spec["values"]]
-        valid_summary = "; ".join(
+        return "; ".join(
             f"{k}: {', '.join(vs)}" for k, vs in valid_per_key.items()
         )
 
-        # Build examples from the first few tag keys
+    @staticmethod
+    def _build_examples(specs: list[dict]) -> str:
         keys = [s["key"] for s in specs]
         examples = []
         if "act" in keys:
@@ -675,43 +726,27 @@ class TagClassifier:
                 "6: act=assessment(0.8)",
             ])
         else:
-            # Generic examples for other taxonomies
             k0 = keys[0] if keys else "tag"
             v0 = specs[0]["values"][0]["value"] if specs and specs[0]["values"] else "value"
             examples.extend([
                 f"1: {k0}={v0}(0.9)",
                 "2: NONE",
             ])
-
-        return f"""Classify each numbered text fragment.
-
-{taxonomy}
-
-Output one line per fragment. Format — one or more tag=value(confidence) pairs:
-NUMBER: tag1=value1(CONFIDENCE) tag2=value2(CONFIDENCE)
-
-CONFIDENCE is 0.0 to 1.0. If no tags apply, write:
-NUMBER: NONE
-
-Examples:
-{chr(10).join(examples)}
-
-Rules:
-- ONLY use these values — {valid_summary}
-- Do NOT invent new values
-- If a fragment is just a preamble, heading, or meta-commentary with no substantive content, output NONE
-- 0.9+ = unambiguous, 0.7-0.9 = likely"""
+        return "\n".join(examples)
 
     def classify(
         self,
         parts: list[dict],
         specs: list[dict] | None = None,
+        *,
+        prompt_template: str | None = None,
     ) -> list[dict]:
         """Classify parts and add tags above the confidence threshold.
 
         Args:
             parts: List of part dicts (must have "summary" key).
             specs: Tag specs (uses loaded specs if not provided).
+            prompt_template: Optional prompt template from ``.prompt/tag/*``.
 
         Returns:
             The same parts list, with "tags" dicts added/updated in place.
@@ -727,7 +762,7 @@ Rules:
         if hasattr(provider, '_provider') and provider._provider is not None:
             provider = provider._provider
 
-        system_prompt = self.build_prompt(specs)
+        system_prompt = self.build_prompt(specs, template=prompt_template)
         if not system_prompt:
             return parts
 

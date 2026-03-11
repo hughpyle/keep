@@ -352,7 +352,7 @@ class TestStateDocValidation:
         assert any("match must be" in d.message for d in r.errors)
 
     def test_empty_rules_warns(self):
-        content = "rules: []"
+        content = "match: sequence\nrules: []"
         r = validate_system_doc(".state/test", content)
         assert r.ok  # warning, not error
         assert any("empty" in d.message for d in r.warnings)

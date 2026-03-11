@@ -709,10 +709,16 @@ def _extract_edges(
 
 def _try_compile_state_doc(result: ValidationResult, doc_id: str, content: str) -> None:
     """Attempt full parse+compile to catch CEL compilation errors."""
+    import yaml
     try:
-        from .state_doc import parse_state_doc
+        from .state_doc import parse_state_doc, parse_fragment
         name = doc_id.split("/", 1)[1] if "/" in doc_id else doc_id
-        parse_state_doc(name, content)
+        # If no match: field, try as fragment instead of base state doc
+        parsed = yaml.safe_load(content)
+        if isinstance(parsed, dict) and "match" not in parsed:
+            parse_fragment(name, content)
+        else:
+            parse_state_doc(name, content)
     except ValueError as exc:
         msg = str(exc)
         if not any(msg in d.message for d in result.diagnostics):

@@ -216,7 +216,12 @@ def parse_state_doc(name: str, body: str) -> StateDoc:
     if not isinstance(parsed, dict):
         raise ValueError(f"state doc {name!r} must be a YAML mapping")
 
-    match = str(parsed.get("match") or "sequence").strip().lower()
+    if "match" not in parsed:
+        raise ValueError(
+            f"state doc {name!r}: missing 'match' field "
+            f"(fragments use parse_fragment instead)"
+        )
+    match = str(parsed["match"]).strip().lower()
     if match not in ("sequence", "all"):
         raise ValueError(f"state doc {name!r}: match must be 'sequence' or 'all', got {match!r}")
 
@@ -416,12 +421,14 @@ def load_state_doc(
     if base is None:
         return None
 
-    # Discover and merge child fragments
+    # Discover and merge child fragments (store + builtin fallbacks)
+    fragments: list[StateDocFragment] = []
+    store_frag_names: set[str] = set()
+
     try:
         prefix = f".state/{name}/"
         children = list_children(prefix)
         if children:
-            fragments = []
             for child in sorted(children, key=lambda c: getattr(c, "id", "")):
                 tags = getattr(child, "tags", {}) or {}
                 if tags.get("active") == "false":
@@ -433,15 +440,30 @@ def load_state_doc(
                 frag_name = getattr(child, "id", "").removeprefix(prefix)
                 try:
                     fragments.append(parse_fragment(frag_name, body))
+                    store_frag_names.add(frag_name)
                 except (ValueError, RuntimeError) as exc:
                     logger.warning("Failed to parse fragment %s: %s",
                                    getattr(child, "id", ""), exc)
                     continue
-            if fragments:
-                base = merge_fragments(base, fragments)
-                logger.debug("Merged %d fragment(s) into %s", len(fragments), name)
     except Exception as exc:
         logger.debug("Fragment discovery for %s skipped: %s", name, exc)
+
+    # Builtin fragment fallbacks (for test envs / pre-migration)
+    from .builtin_state_docs import BUILTIN_STATE_FRAGMENTS
+    builtin_frags = BUILTIN_STATE_FRAGMENTS.get(name, {})
+    for frag_name in sorted(builtin_frags):
+        if frag_name not in store_frag_names:
+            try:
+                fragments.append(parse_fragment(frag_name, builtin_frags[frag_name]))
+            except (ValueError, RuntimeError) as exc:
+                logger.warning("Failed to parse builtin fragment %s/%s: %s",
+                               name, frag_name, exc)
+
+    if fragments:
+        # Sort by name for stable ordering before merging
+        fragments.sort(key=lambda f: f.name)
+        base = merge_fragments(base, fragments)
+        logger.debug("Merged %d fragment(s) into %s", len(fragments), name)
 
     return base
 

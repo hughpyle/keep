@@ -42,7 +42,7 @@ def _make_runner(outputs: dict[str, dict] | None = None):
 class TestBasicFlow:
     def test_immediate_done(self):
         loader = _make_loader({
-            "simple": "rules:\n  - return: done",
+            "simple": "match: sequence\nrules:\n  - return: done",
         })
         result = run_flow("simple", {}, load_state_doc=loader, run_action=_make_runner())
         assert result.status == "done"
@@ -51,7 +51,7 @@ class TestBasicFlow:
 
     def test_immediate_error(self):
         loader = _make_loader({
-            "fail": "rules:\n  - return: error",
+            "fail": "match: sequence\nrules:\n  - return: error",
         })
         result = run_flow("fail", {}, load_state_doc=loader, run_action=_make_runner())
         assert result.status == "error"
@@ -59,6 +59,7 @@ class TestBasicFlow:
     def test_immediate_stopped(self):
         loader = _make_loader({
             "stop": """\
+match: sequence
 rules:
   - return:
       status: stopped
@@ -88,6 +89,7 @@ class TestActionExecution:
     def test_action_runs(self):
         loader = _make_loader({
             "with-action": """\
+match: sequence
 rules:
   - id: result
     do: find
@@ -108,6 +110,7 @@ rules:
     def test_action_output_bound(self):
         loader = _make_loader({
             "bound": """\
+match: sequence
 rules:
   - id: search
     do: find
@@ -143,6 +146,7 @@ class TestFindEnrichment:
     def test_find_output_gets_stats(self):
         loader = _make_loader({
             "enriched": """\
+match: sequence
 rules:
   - id: search
     do: find
@@ -172,6 +176,7 @@ rules:
     def test_non_find_action_not_enriched(self):
         loader = _make_loader({
             "other": """\
+match: sequence
 rules:
   - id: item
     do: get
@@ -195,8 +200,8 @@ rules:
 class TestTransitions:
     def test_simple_transition(self):
         loader = _make_loader({
-            "first": "rules:\n  - then: second",
-            "second": "rules:\n  - return: done",
+            "first": "match: sequence\nrules:\n  - then: second",
+            "second": "match: sequence\nrules:\n  - return: done",
         })
         result = run_flow(
             "first", {},
@@ -209,13 +214,14 @@ class TestTransitions:
     def test_transition_with_params(self):
         loader = _make_loader({
             "first": """\
+match: sequence
 rules:
   - then:
       state: second
       with:
         extra: "value"
 """,
-            "second": "rules:\n  - return: done",
+            "second": "match: sequence\nrules:\n  - return: done",
         })
         result = run_flow(
             "first", {"original": "kept"},
@@ -226,7 +232,7 @@ rules:
 
     def test_self_transition_with_budget(self):
         loader = _make_loader({
-            "loop": "rules:\n  - then: loop",
+            "loop": "match: sequence\nrules:\n  - then: loop",
         })
         result = run_flow(
             "loop", {}, budget=3,
@@ -239,7 +245,7 @@ rules:
 
     def test_transition_to_missing_doc(self):
         loader = _make_loader({
-            "start": "rules:\n  - then: nonexistent",
+            "start": "match: sequence\nrules:\n  - then: nonexistent",
         })
         result = run_flow(
             "start", {},
@@ -256,7 +262,7 @@ rules:
 class TestBudget:
     def test_budget_1(self):
         loader = _make_loader({
-            "step": "rules:\n  - then: step",
+            "step": "match: sequence\nrules:\n  - then: step",
         })
         result = run_flow(
             "step", {}, budget=1,
@@ -274,7 +280,7 @@ class TestBudget:
         # We can't easily test CEL predicates without the CEL library,
         # so we test the context structure indirectly through the flow.
         loader = _make_loader({
-            "check": "rules:\n  - return: done",
+            "check": "match: sequence\nrules:\n  - return: done",
         })
         result = run_flow(
             "check", {}, budget=5,
@@ -332,6 +338,7 @@ class TestParamsFlow:
         def _loader(name):
             docs = {
                 "first": """\
+match: sequence
 rules:
   - then:
       state: second
@@ -339,6 +346,7 @@ rules:
         added: "new"
 """,
                 "second": """\
+match: sequence
 rules:
   - id: search
     do: find
@@ -374,8 +382,9 @@ class TestMakeStateDocLoader:
 
         class FakeNote:
             id = ".state/test"
-            summary = "rules:\n  - return: done"
+            summary = "match: sequence\nrules:\n  - return: done"
             tags = {}
+
 
         class FakeEnv:
             def get(self, id):
@@ -418,7 +427,7 @@ class TestMakeStateDocLoader:
 
         class FakeNote:
             id = ".state/find-deep"
-            summary = "rules:\n  - return: error"
+            summary = "match: sequence\nrules:\n  - return: error"
             tags = {}
 
         class FakeEnv:
@@ -470,7 +479,7 @@ class TestMakeStateDocLoader:
 
         class FakeNote:
             id = ".state/prefixed"
-            summary = "rules:\n  - return: done"
+            summary = "match: sequence\nrules:\n  - return: done"
             tags = {}
 
         class FakeEnv:
