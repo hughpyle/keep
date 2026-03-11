@@ -128,83 +128,6 @@ class BackgroundProcessingMixin:
             supersede_key=supersede_key,
         )
 
-    def _enqueue_summarize_background(
-        self,
-        *,
-        id: str,
-        doc_coll: str,
-        content: str,
-        tags: Optional[dict[str, Any]] = None,
-    ) -> None:
-        self._enqueue_task_background(
-            task_type="summarize",
-            id=id,
-            doc_coll=doc_coll,
-            content=content,
-            tags=tags,
-        )
-
-    def _enqueue_ocr_background(
-        self,
-        *,
-        id: str,
-        doc_coll: str,
-        uri: str,
-        ocr_pages: list[int],
-        content_type: Optional[str],
-    ) -> None:
-        self._enqueue_task_background(
-            task_type="ocr",
-            id=id,
-            doc_coll=doc_coll,
-            content="",
-            metadata={
-                "uri": uri,
-                "ocr_pages": list(ocr_pages),
-                "content_type": content_type,
-            },
-        )
-
-    def _enqueue_describe_background(
-        self,
-        *,
-        id: str,
-        doc_coll: str,
-        uri: str,
-        content_type: str,
-    ) -> None:
-        self._enqueue_task_background(
-            task_type="describe",
-            id=id,
-            doc_coll=doc_coll,
-            content="",
-            metadata={
-                "uri": uri,
-                "content_type": content_type,
-            },
-        )
-
-    def _enqueue_analyze_background(
-        self,
-        *,
-        id: str,
-        doc_coll: str,
-        tags: Optional[list[str]] = None,
-        force: bool = False,
-    ) -> None:
-        metadata: dict[str, Any] = {}
-        if tags:
-            metadata["tags"] = list(tags)
-        if force:
-            metadata["force"] = True
-        self._enqueue_task_background(
-            task_type="analyze",
-            id=id,
-            doc_coll=doc_coll,
-            content="",
-            metadata=metadata,
-        )
-
     def _dispatch_after_write_flow(
         self,
         *,
@@ -284,23 +207,37 @@ class BackgroundProcessingMixin:
             # tasks that would immediately skip due to missing providers.
             if action == "ocr":
                 if ocr_pages and self._config.content_extractor:
-                    self._enqueue_ocr_background(
+                    self._enqueue_task_background(
+                        task_type="ocr",
                         id=item_id, doc_coll=doc_coll,
-                        uri=uri, ocr_pages=ocr_pages,
-                        content_type=content_type,
+                        content="",
+                        metadata={
+                            "uri": uri,
+                            "ocr_pages": list(ocr_pages),
+                            "content_type": content_type,
+                        },
                     )
                     logger.info("Enqueued OCR for %s (%d pages)", uri, len(ocr_pages))
                     dispatched = True
             elif action == "describe":
                 if self._config.media:
-                    self._enqueue_describe_background(
+                    self._enqueue_task_background(
+                        task_type="describe",
                         id=item_id, doc_coll=doc_coll,
-                        uri=uri, content_type=content_type,
+                        content="",
+                        metadata={
+                            "uri": uri,
+                            "content_type": content_type,
+                        },
                     )
                     logger.info("Enqueued media description for %s", uri)
                     dispatched = True
             elif action == "analyze":
-                self._enqueue_analyze_background(id=item_id, doc_coll=doc_coll)
+                self._enqueue_task_background(
+                    task_type="analyze",
+                    id=item_id, doc_coll=doc_coll,
+                    content="",
+                )
                 dispatched = True
             elif action == "tag":
                 self._enqueue_task_background(

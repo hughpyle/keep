@@ -1519,7 +1519,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             logger.debug("Tags changed, queueing re-summarization for %s", id)
             final_summary = existing_doc.summary
             if queue_summarize and len(content) > max_len:
-                self._enqueue_summarize_background(
+                self._enqueue_task_background(
+                    task_type="summarize",
                     id=id,
                     doc_coll=doc_coll,
                     content=content,
@@ -1530,7 +1531,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         else:
             final_summary = content[:max_len] + "..."
             if queue_summarize:
-                self._enqueue_summarize_background(
+                self._enqueue_task_background(
+                    task_type="summarize",
                     id=id,
                     doc_coll=doc_coll,
                     content=content,
@@ -3712,11 +3714,17 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 logger.info("Skipping enqueue for %s: parts already current", id)
                 return False
 
-        self._enqueue_analyze_background(
+        metadata: dict[str, Any] = {}
+        if tags:
+            metadata["tags"] = list(tags)
+        if force:
+            metadata["force"] = True
+        self._enqueue_task_background(
+            task_type="analyze",
             id=id,
             doc_coll=doc_coll,
-            tags=tags,
-            force=force,
+            content="",
+            metadata=metadata,
         )
         self._spawn_processor()
         return True
