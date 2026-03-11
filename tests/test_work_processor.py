@@ -21,6 +21,8 @@ from keep.task_workflows import (
     TaskRequest,
     TaskRunResult,
     run_local_task,
+    _apply_mutations,
+    _resolve_ref,
 )
 
 
@@ -270,3 +272,79 @@ class TestTagSkipConditions:
         ctx.resolve_provider.return_value = MagicMock()
         result = Tag().run({"item_id": "d1"}, ctx)
         assert "mutations" not in result or not result.get("mutations")
+
+
+# ---------------------------------------------------------------------------
+# _apply_mutations
+# ---------------------------------------------------------------------------
+
+class TestApplyMutations:
+    def test_set_summary_without_embed(self):
+        kp = MagicMock()
+        output = {"mutations": [{"op": "set_summary", "target": "d1", "summary": "hello"}]}
+        _apply_mutations(kp, "coll", output)
+        kp._document_store.update_summary.assert_called_once_with("coll", "d1", "hello")
+        kp._store.update_summary.assert_called_once_with("coll", "d1", "hello")
+        kp._resolve_chroma_collection.assert_not_called()
+
+    def test_set_summary_with_embed(self):
+        kp = MagicMock()
+        kp._document_store.get.return_value = MagicMock(tags={"topic": "test"})
+        output = {"mutations": [{"op": "set_summary", "target": "d1", "summary": "hello", "embed": True}]}
+        _apply_mutations(kp, "coll", output)
+        kp._document_store.update_summary.assert_called_once()
+        kp._get_embedding_provider.return_value.embed.assert_called_once_with("hello")
+        kp._store.upsert.assert_called_once()
+
+    def test_put_item_calls_put_direct(self):
+        kp = MagicMock()
+        output = {"mutations": [
+            {"op": "put_item", "id": "d1@p1", "content": "c", "summary": "s",
+             "tags": {"_base_id": "d1"}, "queue_background_tasks": False},
+        ]}
+        _apply_mutations(kp, "coll", output)
+        kp._put_direct.assert_called_once_with(
+            content="c", id="d1@p1", summary="s",
+            tags={"_base_id": "d1"}, queue_background_tasks=False,
+        )
+        kp.put.assert_not_called()
+
+    def test_set_tags(self):
+        kp = MagicMock()
+        output = {"mutations": [{"op": "set_tags", "target": "d1", "tags": {"topic": "AI"}}]}
+        _apply_mutations(kp, "coll", output)
+        kp.tag.assert_called_once_with("d1", tags={"topic": "AI"})
+
+    def test_delete_prefix(self):
+        kp = MagicMock()
+        output = {"mutations": [{"op": "delete_prefix", "prefix": "d1@p"}]}
+        _apply_mutations(kp, "coll", output)
+        kp._store.delete_parts.assert_called_once()
+        kp._document_store.delete_parts.assert_called_once()
+
+    def test_resolve_ref(self):
+        output = {"summary": "resolved value"}
+        assert _resolve_ref("$output.summary", output) == "resolved value"
+        assert _resolve_ref("literal", output) == "literal"
+        assert _resolve_ref("$output.missing", output) == "$output.missing"
+
+    def test_no_mutations_is_noop(self):
+        kp = MagicMock()
+        _apply_mutations(kp, "coll", {})
+        _apply_mutations(kp, "coll", {"mutations": None})
+        assert kp.method_calls == []
+
+    def test_set_content(self):
+        kp = MagicMock()
+        kp._document_store.get.return_value = MagicMock(tags={})
+        output = {"mutations": [{
+            "op": "set_content", "target": "d1",
+            "content": "full text", "summary": "short",
+            "content_hash": "abc123", "content_hash_full": "abc123full",
+        }]}
+        _apply_mutations(kp, "coll", output)
+        kp._document_store.update_summary.assert_called_once_with("coll", "d1", "short")
+        kp._document_store.update_content_hash.assert_called_once_with(
+            "coll", "d1", content_hash="abc123", content_hash_full="abc123full",
+        )
+        kp._store.upsert.assert_called_once()
