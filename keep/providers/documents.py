@@ -611,6 +611,12 @@ class FileDocumentProvider:
             if text_parts:
                 text_parts.sort(key=lambda t: t[0])
                 content = "\n\n".join(text for _, text in text_parts)
+                # Check if extracted text is low-quality (schematics, scanned
+                # docs with minimal embedded text, garbled extraction).
+                # If so, flag all pages for OCR as well — text is kept as
+                # fallback but OCR results will replace it.
+                if self._is_low_quality_text(content, len(reader.pages)):
+                    ocr_needed = list(range(len(reader.pages)))
             elif ocr_needed:
                 # All pages blank — return empty with OCR page list.
                 # Caller decides whether to enqueue OCR or raise.
@@ -623,6 +629,31 @@ class FileDocumentProvider:
             raise
         except Exception as e:
             raise IOError(f"Failed to extract text from PDF {path}: {e}")
+
+    @staticmethod
+    def _is_low_quality_text(text: str, num_pages: int) -> bool:
+        """Check if extracted PDF text looks like garbled/schematic output.
+
+        Returns True if the text has very few real words relative to its
+        length, suggesting it's labels from a schematic, garbled encoding,
+        or minimal embedded text that would benefit from OCR.
+        """
+        if not text:
+            return True
+        # Whitespace-separated tokens — normal prose averages 4-6 chars/word.
+        # Schematics, garbled PDFs, and label dumps produce long concatenated
+        # tokens (e.g. "BCDDate:2025-04-10KiCadE.D.A.8.0.8").
+        tokens = text.split()
+        if not tokens:
+            return True
+        avg_token_len = sum(len(t) for t in tokens) / len(tokens)
+        if avg_token_len > 15:
+            return True
+        # Very few tokens per page (normal text has 200+ words/page)
+        tokens_per_page = len(tokens) / max(num_pages, 1)
+        if tokens_per_page < 30:
+            return True
+        return False
 
     def _ocr_pdf_pages(
         self, path: Path, page_indices: list[int], extractor=None,

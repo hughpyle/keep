@@ -211,6 +211,65 @@ def _detect_ollama() -> dict | None:
     return None
 
 
+def _ollama_has_model(model: str, base_url: str | None = None) -> bool:
+    """Check if a specific model is available in Ollama."""
+    ollama = _detect_ollama()
+    if not ollama:
+        return False
+    if base_url and ollama["base_url"] != base_url:
+        return False
+    base = model.split(":")[0]
+    return any(m.split(":")[0] == base for m in ollama["models"])
+
+
+def ollama_pull(model: str, base_url: str | None = None,
+                on_progress: "Callable[[str], None] | None" = None) -> bool:
+    """Pull an Ollama model, streaming progress.
+
+    Returns True if model pulled successfully, False on error.
+    on_progress receives status strings like "pulling abc123... 45%".
+    """
+    import json
+    import urllib.request
+
+    url = (base_url or os.environ.get("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
+    if not url.startswith("http"):
+        url = f"http://{url}"
+
+    try:
+        data = json.dumps({"name": model, "stream": True}).encode()
+        req = urllib.request.Request(
+            f"{url}/api/pull", data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            buf = b""
+            while True:
+                chunk = resp.read(512)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    if not line.strip():
+                        continue
+                    msg = json.loads(line)
+                    if on_progress:
+                        status = msg.get("status", "")
+                        total = msg.get("total", 0)
+                        completed = msg.get("completed", 0)
+                        if total and completed:
+                            pct = int(completed / total * 100)
+                            on_progress(f"{status} {pct}%")
+                        elif status:
+                            on_progress(status)
+                    if msg.get("error"):
+                        return False
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _ollama_pick_models(models: list[str]) -> tuple[str, str | None]:
     """Choose the best Ollama models for embeddings and summarization.
 
@@ -234,6 +293,36 @@ def _ollama_pick_models(models: list[str]) -> tuple[str, str | None]:
     chat_model = generative_models[0] if generative_models else None
 
     return embed_model, chat_model
+
+
+# Ollama model names (base, before ':') known to support vision.
+OLLAMA_VISION_KEYWORDS = ("llava", "moondream", "bakllava", "llama3.2-vision")
+# gemma3 has vision at 4b+, not 1b
+_GEMMA3_MIN_VISION_SIZE = 4
+# Default vision model to pull when none available.
+OLLAMA_DEFAULT_VISION_MODEL = "gemma3:4b"
+# Default OCR model to pull when none available.
+OLLAMA_DEFAULT_OCR_MODEL = "glm-ocr"
+
+
+def _ollama_vision_models(models: list[str]) -> list[str]:
+    """Filter Ollama models to those known to support vision."""
+    result = []
+    for m in models:
+        base = m.split(":")[0]
+        tag = m.split(":")[-1] if ":" in m else ""
+        # Check keyword matches
+        if any(v in base for v in OLLAMA_VISION_KEYWORDS):
+            result.append(m)
+        # gemma3 has vision at 4b+
+        elif base == "gemma3":
+            try:
+                size = int("".join(c for c in tag if c.isdigit()) or "0")
+                if size >= _GEMMA3_MIN_VISION_SIZE:
+                    result.append(m)
+            except ValueError:
+                pass
+    return result
 
 
 def _detect_content_extractor() -> "ProviderConfig | None":
@@ -422,11 +511,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     if media_provider is None:
         ollama = get_ollama()
         if ollama:
-            vision_keywords = ("llava", "moondream", "bakllava", "llama3.2-vision")
-            vision_models = [
-                m for m in ollama["models"]
-                if any(v in m.split(":")[0] for v in vision_keywords)
-            ]
+            vision_models = _ollama_vision_models(ollama["models"])
             if vision_models:
                 params: dict[str, Any] = {"model": vision_models[0]}
                 if ollama["base_url"] != "http://localhost:11434":
@@ -573,11 +658,8 @@ def load_config(config_dir: Path) -> StoreConfig:
     # Parse optional analyzer section
     analyzer_config = parse_provider(data["analyzer"]) if "analyzer" in data else None
 
-    # Parse optional content_extractor section (auto-detect if not in config)
-    if "content_extractor" in data:
-        content_extractor_config = parse_provider(data["content_extractor"])
-    else:
-        content_extractor_config = _detect_content_extractor()
+    # Parse optional content_extractor section
+    content_extractor_config = parse_provider(data["content_extractor"]) if "content_extractor" in data else None
 
     # Parse remote backend config (env vars override TOML)
     remote = None
@@ -598,11 +680,14 @@ def load_config(config_dir: Path) -> StoreConfig:
     summarization_config = parse_provider(data.get("summarization", {"name": "truncate"}))
 
     # Auto-heal: re-detect if key providers are missing or fallback.
-    # This recovers from first-run in constrained environments.
+    # This recovers from first-run in constrained environments and
+    # auto-configures media/content_extractor when available.
     _need_redetect = (
         "embedding" not in data or
         "summarization" not in data or
-        summarization_config.name in _FALLBACK_PROVIDERS
+        summarization_config.name in _FALLBACK_PROVIDERS or
+        media_config is None or
+        content_extractor_config is None
     )
     if _need_redetect:
         try:
@@ -613,6 +698,10 @@ def load_config(config_dir: Path) -> StoreConfig:
                 det_summ = detected["summarization"]
                 if det_summ and det_summ.name not in _FALLBACK_PROVIDERS:
                     summarization_config = det_summ
+            if media_config is None:
+                media_config = detected.get("media")
+            if content_extractor_config is None:
+                content_extractor_config = detected.get("content_extractor")
         except Exception:
             pass  # re-detection is best-effort; don't block config loading
 

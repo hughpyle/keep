@@ -3819,24 +3819,103 @@ def doctor(
             ok(f"Media: {cfg.media.name} ({model})")
         except Exception as e:
             fail(f"Media: {e}")
-    else:
-        ok("Media: none configured (metadata-only indexing)")
+    elif cfg:
+        from .config import (
+            _detect_ollama, _ollama_vision_models, ollama_pull,
+            OLLAMA_DEFAULT_VISION_MODEL, OLLAMA_DEFAULT_OCR_MODEL,
+            save_config, ProviderConfig,
+        )
+        ollama = _detect_ollama()
+        if ollama:
+            vision = _ollama_vision_models(ollama["models"])
+            if vision:
+                # Vision model available but not configured — auto-configure
+                model_name = vision[0]
+                params: dict[str, Any] = {"model": model_name}
+                if ollama["base_url"] != "http://localhost:11434":
+                    params["base_url"] = ollama["base_url"]
+                cfg.media = ProviderConfig("ollama", params)
+                save_config(cfg)
+                ok(f"Media: auto-configured ollama ({model_name})")
+            else:
+                # Ollama running but no vision model — pull one
+                target = OLLAMA_DEFAULT_VISION_MODEL
+                typer.echo(f"         Pulling {target}...", nl=False)
+                last_status = [""]
+                def _progress(s: str) -> None:
+                    if s != last_status[0]:
+                        last_status[0] = s
+                        typer.echo(f"\r         Pulling {target}... {s}    ", nl=False)
+                if ollama_pull(target, ollama["base_url"], on_progress=_progress):
+                    typer.echo(f"\r         Pulling {target}... done.           ")
+                    params = {"model": target}
+                    if ollama["base_url"] != "http://localhost:11434":
+                        params["base_url"] = ollama["base_url"]
+                    cfg.media = ProviderConfig("ollama", params)
+                    save_config(cfg)
+                    ok(f"Media: pulled and configured ollama ({target})")
+                else:
+                    typer.echo()
+                    warn(f"Media: failed to pull {target}")
+        else:
+            ok("Media: none available (metadata-only indexing)")
 
     # 7b. Content extractor (OCR for PDFs/images)
     if cfg and cfg.content_extractor:
-        ok(f"Content extractor: {cfg.content_extractor.name}")
+        # Verify the model is actually available if it's Ollama
+        if cfg.content_extractor.name == "ollama":
+            from .config import _detect_ollama, _ollama_has_model, ollama_pull, OLLAMA_DEFAULT_OCR_MODEL, save_config
+            ce_model = cfg.content_extractor.params.get("model", OLLAMA_DEFAULT_OCR_MODEL)
+            if _ollama_has_model(ce_model):
+                ok(f"Content extractor: {cfg.content_extractor.name} ({ce_model})")
+            else:
+                typer.echo(f"         Pulling {ce_model}...", nl=False)
+                base_url = cfg.content_extractor.params.get("base_url")
+                last_status = [""]
+                def _ce_progress(s: str) -> None:
+                    if s != last_status[0]:
+                        last_status[0] = s
+                        typer.echo(f"\r         Pulling {ce_model}... {s}    ", nl=False)
+                if ollama_pull(ce_model, base_url, on_progress=_ce_progress):
+                    typer.echo(f"\r         Pulling {ce_model}... done.           ")
+                    ok(f"Content extractor: pulled {ce_model}")
+                else:
+                    typer.echo()
+                    warn(f"Content extractor: {ce_model} not available, pull it: ollama pull {ce_model}")
+        else:
+            ok(f"Content extractor: {cfg.content_extractor.name}")
     elif cfg:
-        # Check if one could be auto-detected
-        from .config import _detect_content_extractor
-        available = _detect_content_extractor()
-        if available:
-            warn(
-                f"Content extractor: not configured, but {available.name} is available.\n"
-                "         PDFs and images won't be OCR'd without this.\n"
-                "         Run `keep config --setup` to enable, or add to keep.toml:\n"
-                f"         [content_extractor]\n"
-                f"         name = \"{available.name}\""
-            )
+        from .config import _detect_ollama, ollama_pull, OLLAMA_DEFAULT_OCR_MODEL, save_config, ProviderConfig
+        ollama = _detect_ollama()
+        if ollama:
+            # Ollama running — pull OCR model and configure
+            target = OLLAMA_DEFAULT_OCR_MODEL
+            if any(m.split(":")[0] == target.split(":")[0] for m in ollama["models"]):
+                # Model already present, just configure
+                params: dict[str, Any] = {"model": target}
+                if ollama["base_url"] != "http://localhost:11434":
+                    params["base_url"] = ollama["base_url"]
+                cfg.content_extractor = ProviderConfig("ollama", params)
+                save_config(cfg)
+                ok(f"Content extractor: auto-configured ollama ({target})")
+            else:
+                typer.echo(f"         Pulling {target}...", nl=False)
+                last_status = [""]
+                def _ocr_progress(s: str) -> None:
+                    if s != last_status[0]:
+                        last_status[0] = s
+                        typer.echo(f"\r         Pulling {target}... {s}    ", nl=False)
+                if ollama_pull(target, ollama["base_url"], on_progress=_ocr_progress):
+                    typer.echo(f"\r         Pulling {target}... done.           ")
+                    params = {"model": target}
+                    if ollama["base_url"] != "http://localhost:11434":
+                        params["base_url"] = ollama["base_url"]
+                    cfg.content_extractor = ProviderConfig("ollama", params)
+                    save_config(cfg)
+                    ok(f"Content extractor: pulled and configured ollama ({target})")
+                else:
+                    typer.echo()
+                    warn(f"Content extractor: failed to pull {target}")
         else:
             ok("Content extractor: none (PDFs use text extraction only)")
 

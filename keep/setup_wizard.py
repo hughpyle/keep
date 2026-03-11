@@ -614,6 +614,20 @@ def _print_summary(config: StoreConfig, installed_tools: list[str]) -> None:
             summ_desc += f" ({model})"
         print(f"  Summarization: {summ_desc}", file=sys.stderr)
 
+    if config.media:
+        media_desc = config.media.name
+        model = config.media.params.get("model", "")
+        if model:
+            media_desc += f" ({model})"
+        print(f"  Media: {media_desc}", file=sys.stderr)
+
+    if config.content_extractor:
+        ce_desc = config.content_extractor.name
+        model = config.content_extractor.params.get("model", "")
+        if model:
+            ce_desc += f" ({model})"
+        print(f"  Content extractor: {ce_desc}", file=sys.stderr)
+
     print(file=sys.stderr)
     print("  Run `keep now` to get started.", file=sys.stderr)
     print(file=sys.stderr)

@@ -113,11 +113,13 @@ class TestMediaConfig:
 
     def test_config_roundtrip_without_media(self, tmp_path):
         """Config without media section loads as None (backward compatible)."""
+        from unittest.mock import patch
         from keep.config import StoreConfig, save_config, load_config
 
         config = StoreConfig(path=tmp_path, config_dir=tmp_path, media=None)
         save_config(config)
-        loaded = load_config(tmp_path)
+        with patch("keep.config._detect_ollama", return_value=None):
+            loaded = load_config(tmp_path)
 
         assert loaded.media is None
 
@@ -211,6 +213,7 @@ class TestMediaIntegration:
 
     def test_put_without_media_provider(self, mock_providers, tmp_path):
         """Without media provider, image gets metadata-only content."""
+        from unittest.mock import patch
         from keep.api import Keeper
 
         mock_doc = _make_mock_doc(
@@ -218,7 +221,8 @@ class TestMediaIntegration:
         )
         mock_providers["document"].fetch = lambda uri: mock_doc
 
-        kp = Keeper(store_path=tmp_path)
+        with patch("keep.config._detect_ollama", return_value=None):
+            kp = Keeper(store_path=tmp_path)
         _keeper_skip_migration(kp)
         assert kp._get_media_describer() is None
 

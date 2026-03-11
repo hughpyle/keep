@@ -1,7 +1,13 @@
 
 * run `get`-type paths without persistence (late-bound, only when async is needed)
 
+* acq
+
+* reddit q: benchmarks
+
 * move remaining stuff from the pending-queue?
+
+* budget by tokens, not just by ticks
 
 * chatgpt import
 
