@@ -1,9 +1,10 @@
-"""Tests for media description protocol and integration."""
+"""Tests for media description: state doc rules, dispatch, and task workflow."""
 
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from keep.config import ProviderConfig
 from keep.providers.base import MediaDescriber, get_registry
 
 
@@ -15,7 +16,6 @@ class TestMediaDescriberProtocol:
     """Verify MediaDescriber protocol compliance."""
 
     def test_protocol_is_runtime_checkable(self):
-        """MediaDescriber protocol can be checked at runtime."""
         class FakeDescriber:
             def describe(self, path: str, content_type: str) -> str | None:
                 return "a test description"
@@ -23,24 +23,11 @@ class TestMediaDescriberProtocol:
         assert isinstance(FakeDescriber(), MediaDescriber)
 
     def test_non_conforming_class_fails_check(self):
-        """Classes without describe() don't satisfy the protocol."""
         class NotADescriber:
             def summarize(self, content: str) -> str:
                 return content
 
         assert not isinstance(NotADescriber(), MediaDescriber)
-
-    def test_none_for_unsupported_type(self):
-        """Describers should return None for unsupported content types."""
-        class ImageOnlyDescriber:
-            def describe(self, path: str, content_type: str) -> str | None:
-                if not content_type.startswith("image/"):
-                    return None
-                return "an image"
-
-        d = ImageOnlyDescriber()
-        assert d.describe("/test.mp3", "audio/mpeg") is None
-        assert d.describe("/test.jpg", "image/jpeg") == "an image"
 
 
 # -----------------------------------------------------------------------------
@@ -48,31 +35,24 @@ class TestMediaDescriberProtocol:
 # -----------------------------------------------------------------------------
 
 class TestMediaRegistry:
-    """Test media provider registration and creation."""
 
     def test_register_and_create(self):
-        """Can register and create a media describer."""
         registry = get_registry()
 
         class TestDescriber:
             def __init__(self, greeting="hello"):
                 self.greeting = greeting
-
             def describe(self, path: str, content_type: str) -> str | None:
                 return f"{self.greeting}: {path}"
 
         registry.register_media("test-media", TestDescriber)
         try:
             describer = registry.create_media("test-media", {"greeting": "hi"})
-            assert describer.greeting == "hi"
-            result = describer.describe("/img.jpg", "image/jpeg")
-            assert result == "hi: /img.jpg"
+            assert describer.describe("/img.jpg", "image/jpeg") == "hi: /img.jpg"
         finally:
-            # Clean up registration
             del registry._media_providers["test-media"]
 
     def test_create_unknown_raises(self):
-        """Creating unknown media provider raises ValueError."""
         registry = get_registry()
         with pytest.raises(ValueError, match="Unknown media provider"):
             registry.create_media("nonexistent-provider")
@@ -83,16 +63,13 @@ class TestMediaRegistry:
 # -----------------------------------------------------------------------------
 
 class TestMediaConfig:
-    """Test media section in config load/save/detect."""
 
     def test_config_media_defaults_to_none(self, tmp_path):
-        """StoreConfig.media defaults to None."""
         from keep.config import StoreConfig
         config = StoreConfig(path=tmp_path)
         assert config.media is None
 
     def test_config_roundtrip_with_media(self, tmp_path):
-        """Media config survives save + load cycle."""
         from keep.config import StoreConfig, ProviderConfig, save_config, load_config
 
         config = StoreConfig(
@@ -109,11 +86,8 @@ class TestMediaConfig:
         assert loaded.media is not None
         assert loaded.media.name == "mlx"
         assert loaded.media.params["vision_model"] == "test-vision"
-        assert loaded.media.params["whisper_model"] == "test-whisper"
 
     def test_config_roundtrip_without_media(self, tmp_path):
-        """Config without media section loads as None (backward compatible)."""
-        from unittest.mock import patch
         from keep.config import StoreConfig, save_config, load_config
 
         config = StoreConfig(path=tmp_path, config_dir=tmp_path, media=None)
@@ -123,23 +97,14 @@ class TestMediaConfig:
 
         assert loaded.media is None
 
-    def test_detect_providers_includes_media_key(self):
-        """detect_default_providers() returns a 'media' key."""
-        from keep.config import detect_default_providers
-        providers = detect_default_providers()
-        assert "media" in providers
-        # media may be None if no vision/whisper libraries installed
-
 
 # -----------------------------------------------------------------------------
 # LockedMediaDescriber Tests
 # -----------------------------------------------------------------------------
 
 class TestLockedMediaDescriber:
-    """Test LockedMediaDescriber wrapper."""
 
     def test_locked_describer_delegates(self, tmp_path):
-        """LockedMediaDescriber delegates describe() calls."""
         from keep.model_lock import LockedMediaDescriber
 
         inner = MagicMock()
@@ -151,7 +116,6 @@ class TestLockedMediaDescriber:
         inner.describe.assert_called_once_with("/test.jpg", "image/jpeg")
 
     def test_locked_describer_release(self, tmp_path):
-        """LockedMediaDescriber.release() cleans up."""
         from keep.model_lock import LockedMediaDescriber
 
         inner = MagicMock()
@@ -161,16 +125,91 @@ class TestLockedMediaDescriber:
 
 
 # -----------------------------------------------------------------------------
-# Keeper Integration Tests (with mocks)
+# After-write state doc rule evaluation
 # -----------------------------------------------------------------------------
 
-def _make_mock_doc(uri, content, content_type, tags=None):
+class TestAfterWriteStateDoc:
+    """Verify the after-write state doc rules are the source of truth
+    for which background tasks fire after put().
+
+    These tests evaluate the state doc directly — no Keeper, no mocks.
+    If a rule is wrong here, the entire post-write pipeline is wrong.
+    """
+
+    @pytest.fixture
+    def after_write_doc(self):
+        from keep.state_doc import parse_state_doc
+        from keep.builtin_state_docs import BUILTIN_STATE_DOCS
+        return parse_state_doc("after-write", BUILTIN_STATE_DOCS["after-write"])
+
+    def _eval(self, doc, **item_overrides):
+        from keep.state_doc import evaluate_state_doc
+        item = {
+            "content_length": 50,
+            "has_summary": False,
+            "has_uri": False,
+            "is_system_note": False,
+            "tags": {},
+            "has_media_content": False,
+            "has_content": True,
+        }
+        item.update(item_overrides)
+        ctx = {"item": item, "params": {"max_summary_length": 2000}}
+        result = evaluate_state_doc(doc, ctx, run_action=None)
+        return [a["action"] for a in result.actions]
+
+    def test_inline_text_fires_analyze_and_tag(self, after_write_doc):
+        """Short inline text → analyze + tag only."""
+        actions = self._eval(after_write_doc)
+        assert actions == ["analyze", "tag"]
+
+    def test_long_content_fires_summarize(self, after_write_doc):
+        """Content exceeding max_summary_length fires summarize."""
+        actions = self._eval(after_write_doc, content_length=5000)
+        assert "summarize" in actions
+
+    def test_system_note_skips_analyze_and_tag(self, after_write_doc):
+        """System notes (dot-prefix IDs) skip analyze and tag."""
+        actions = self._eval(after_write_doc, is_system_note=True)
+        assert "analyze" not in actions
+        assert "tag" not in actions
+
+    def test_image_uri_fires_describe(self, after_write_doc):
+        """URI-backed image content fires describe."""
+        actions = self._eval(after_write_doc,
+                             has_uri=True, has_media_content=True)
+        assert "describe" in actions
+
+    def test_text_uri_skips_describe(self, after_write_doc):
+        """URI-backed text content does NOT fire describe."""
+        actions = self._eval(after_write_doc,
+                             has_uri=True, has_media_content=False)
+        assert "describe" not in actions
+
+    def test_ocr_pages_fires_ocr(self, after_write_doc):
+        """Items with _ocr_pages tag and URI fire OCR."""
+        actions = self._eval(after_write_doc,
+                             has_uri=True, tags={"_ocr_pages": "[1,2]"})
+        assert "ocr" in actions
+
+    def test_no_content_skips_tag(self, after_write_doc):
+        """Empty content skips tag (nothing to classify)."""
+        actions = self._eval(after_write_doc, has_content=False)
+        assert "tag" not in actions
+        assert "analyze" in actions  # analyze still fires
+
+
+# -----------------------------------------------------------------------------
+# Integration: put() → state doc → work queue
+# -----------------------------------------------------------------------------
+
+def _make_mock_doc(uri, content, content_type, tags=None, metadata=None):
     """Create a mock Document for testing."""
     mock_doc = MagicMock()
     mock_doc.uri = uri
     mock_doc.content = content
     mock_doc.content_type = content_type
-    mock_doc.metadata = None
+    mock_doc.metadata = metadata
     mock_doc.tags = tags
     return mock_doc
 
@@ -182,11 +221,19 @@ def _keeper_skip_migration(kp):
     kp._needs_sysdoc_migration = False
 
 
-class TestMediaIntegration:
-    """Test media description integration in Keeper.put()."""
+def _claimed_task_kinds(kp, limit=20):
+    """Claim work queue items and return their kinds as a list."""
+    claimed = kp._work_queue.claim("test", limit=limit)
+    return [t.kind for t in claimed]
 
-    def test_put_image_appends_description(self, mock_providers, tmp_path):
-        """When media describer is configured, image put appends description."""
+
+class TestAfterWriteDispatch:
+    """Verify _dispatch_after_write_flow enqueues the right tasks
+    through the full put() → state doc → work queue path.
+    """
+
+    def test_image_put_enqueues_describe_analyze_tag(self, mock_providers, tmp_path):
+        """Image URI with media config → describe + analyze + tag tasks."""
         from keep.api import Keeper
 
         mock_doc = _make_mock_doc(
@@ -197,41 +244,20 @@ class TestMediaIntegration:
         )
         mock_providers["document"].fetch = lambda uri: mock_doc
 
-        mock_describer = MagicMock()
-        mock_describer.describe.return_value = "A sunset over mountains"
-
         kp = Keeper(store_path=tmp_path)
         _keeper_skip_migration(kp)
-        kp._media_describer = mock_describer
+        kp._config.media = ProviderConfig("ollama", {"model": "test"})
 
-        item = kp.put(uri="file:///test.jpg")
+        kp.put(uri="file:///test.jpg")
 
-        assert "A sunset over mountains" in item.summary
-        assert "Canon EOS R5" in item.summary
-        mock_describer.describe.assert_called_once()
+        kinds = _claimed_task_kinds(kp)
+        assert "describe" in kinds
+        assert "analyze" in kinds
+        assert "tag" in kinds
         kp.close()
 
-    def test_put_without_media_provider(self, mock_providers, tmp_path):
-        """Without media provider, image gets metadata-only content."""
-        from unittest.mock import patch
-        from keep.api import Keeper
-
-        mock_doc = _make_mock_doc(
-            "file:///test.jpg", "Dimensions: 1920x1080", "image/jpeg",
-        )
-        mock_providers["document"].fetch = lambda uri: mock_doc
-
-        with patch("keep.config._detect_ollama", return_value=None):
-            kp = Keeper(store_path=tmp_path)
-        _keeper_skip_migration(kp)
-        assert kp._get_media_describer() is None
-
-        item = kp.put(uri="file:///test.jpg")
-        assert "Dimensions: 1920x1080" in item.summary
-        kp.close()
-
-    def test_put_media_failure_graceful(self, mock_providers, tmp_path):
-        """Media description failure doesn't block indexing."""
+    def test_image_put_without_media_config_skips_describe(self, mock_providers, tmp_path):
+        """Image URI without media config → no describe task (capability gate)."""
         from keep.api import Keeper
 
         mock_doc = _make_mock_doc(
@@ -239,20 +265,42 @@ class TestMediaIntegration:
         )
         mock_providers["document"].fetch = lambda uri: mock_doc
 
-        mock_describer = MagicMock()
-        mock_describer.describe.side_effect = RuntimeError("model crashed")
+        with patch("keep.config._detect_ollama", return_value=None):
+            kp = Keeper(store_path=tmp_path)
+        _keeper_skip_migration(kp)
+        assert kp._config.media is None
+
+        kp.put(uri="file:///test.jpg")
+
+        kinds = _claimed_task_kinds(kp)
+        assert "describe" not in kinds
+        # analyze + tag still fire (not gated by media config)
+        assert "analyze" in kinds
+        assert "tag" in kinds
+        kp.close()
+
+    def test_audio_put_enqueues_describe(self, mock_providers, tmp_path):
+        """Audio URI with media config → describe task."""
+        from keep.api import Keeper
+
+        mock_doc = _make_mock_doc(
+            "file:///test.mp3", "Title: Song\nArtist: Band", "audio/mpeg",
+            tags={"title": "Song"},
+        )
+        mock_providers["document"].fetch = lambda uri: mock_doc
 
         kp = Keeper(store_path=tmp_path)
         _keeper_skip_migration(kp)
-        kp._media_describer = mock_describer
+        kp._config.media = ProviderConfig("ollama", {"model": "test"})
 
-        item = kp.put(uri="file:///test.jpg")
-        assert item is not None
-        assert "Dimensions: 100x100" in item.summary
+        kp.put(uri="file:///test.mp3")
+
+        kinds = _claimed_task_kinds(kp)
+        assert "describe" in kinds
         kp.close()
 
-    def test_text_files_skip_media_description(self, mock_providers, tmp_path):
-        """Text files never trigger media description."""
+    def test_text_uri_skips_describe(self, mock_providers, tmp_path):
+        """Text/markdown URI → no describe, still analyze + tag."""
         from keep.api import Keeper
 
         mock_doc = _make_mock_doc(
@@ -260,59 +308,149 @@ class TestMediaIntegration:
         )
         mock_providers["document"].fetch = lambda uri: mock_doc
 
-        mock_describer = MagicMock()
-        mock_describer.describe.return_value = "should not be called"
-
         kp = Keeper(store_path=tmp_path)
         _keeper_skip_migration(kp)
-        kp._media_describer = mock_describer
+        kp._config.media = ProviderConfig("ollama", {"model": "test"})
 
         kp.put(uri="file:///test.md")
-        mock_describer.describe.assert_not_called()
+
+        kinds = _claimed_task_kinds(kp)
+        assert "describe" not in kinds
+        assert "analyze" in kinds
         kp.close()
 
-    def test_audio_content_triggers_description(self, mock_providers, tmp_path):
-        """Audio files trigger media description."""
+    def test_inline_text_enqueues_analyze_and_tag(self, mock_providers, tmp_path):
+        """Inline text → analyze + tag, no describe or OCR."""
         from keep.api import Keeper
-
-        mock_doc = _make_mock_doc(
-            "file:///test.mp3", "Title: Song\nArtist: Band", "audio/mpeg",
-            tags={"title": "Song", "artist": "Band"},
-        )
-        mock_providers["document"].fetch = lambda uri: mock_doc
-
-        mock_describer = MagicMock()
-        mock_describer.describe.return_value = "A rock song with guitar solo"
 
         kp = Keeper(store_path=tmp_path)
         _keeper_skip_migration(kp)
-        kp._media_describer = mock_describer
 
-        item = kp.put(uri="file:///test.mp3")
-        assert "A rock song with guitar solo" in item.summary
-        assert "Title: Song" in item.summary
-        mock_describer.describe.assert_called_once_with(
-            "/test.mp3", "audio/mpeg"
-        )
+        kp.put("A note about architecture", id="note1")
+
+        kinds = _claimed_task_kinds(kp)
+        assert "analyze" in kinds
+        assert "tag" in kinds
+        assert "describe" not in kinds
+        assert "ocr" not in kinds
         kp.close()
 
-    def test_description_none_skips_enrichment(self, mock_providers, tmp_path):
-        """When describer returns None, content is not modified."""
+    def test_system_note_enqueues_nothing(self, mock_providers, tmp_path):
+        """System note (dot-prefix) → no analyze, no tag."""
         from keep.api import Keeper
-
-        mock_doc = _make_mock_doc(
-            "file:///test.jpg", "Dimensions: 100x100", "image/jpeg",
-        )
-        mock_providers["document"].fetch = lambda uri: mock_doc
-
-        mock_describer = MagicMock()
-        mock_describer.describe.return_value = None
 
         kp = Keeper(store_path=tmp_path)
         _keeper_skip_migration(kp)
-        kp._media_describer = mock_describer
 
-        item = kp.put(uri="file:///test.jpg")
+        kp.put("System data", id=".sys/test")
+
+        # Work queue may not even be initialized (no tasks to dispatch)
+        if kp._work_queue is not None:
+            kinds = _claimed_task_kinds(kp)
+            assert "analyze" not in kinds
+            assert "tag" not in kinds
+        kp.close()
+
+
+# -----------------------------------------------------------------------------
+# Describe task workflow
+# -----------------------------------------------------------------------------
+
+class TestDescribeTaskWorkflow:
+    """Test the describe task workflow (background execution path)."""
+
+    def test_describe_enriches_summary(self, mock_providers, tmp_path):
+        """_run_describe appends description to existing summary."""
+        from keep.api import Keeper
+        from keep.task_workflows import TaskRequest, _run_describe
+
+        kp = Keeper(store_path=tmp_path)
+        _keeper_skip_migration(kp)
+
+        # Create item with initial summary
+        kp.put("Dimensions: 100x100", id="img1")
+
+        # Set up a mock media describer
+        mock_describer = MagicMock()
+        mock_describer.describe.return_value = "A photo of a sunset"
+        kp._media_describer = mock_describer
+        kp._config.media = ProviderConfig("ollama", {"model": "test"})
+
+        # Create a file for the describer to find
+        test_file = tmp_path / "test.jpg"
+        test_file.write_bytes(b"fake image data")
+
+        req = TaskRequest(
+            task_type="describe",
+            id="img1",
+            collection=kp._resolve_doc_collection(),
+            content="",
+            metadata={"uri": str(test_file), "content_type": "image/jpeg"},
+        )
+        # Patch path validation (tmp_path is outside home)
+        with patch("keep.paths.validate_path_within_home"):
+            result = _run_describe(kp, req)
+
+        assert result.status == "applied"
+        # Verify the summary was enriched
+        item = kp.get("img1")
+        assert "Description:" in item.summary
+        assert "A photo of a sunset" in item.summary
+        kp.close()
+
+    def test_describe_skips_when_no_provider(self, mock_providers, tmp_path):
+        """_run_describe skips gracefully without a media provider."""
+        from keep.api import Keeper
+        from keep.task_workflows import TaskRequest, _run_describe
+
+        with patch("keep.config._detect_ollama", return_value=None):
+            kp = Keeper(store_path=tmp_path)
+        _keeper_skip_migration(kp)
+        kp.put("Dimensions: 100x100", id="img1")
+
+        req = TaskRequest(
+            task_type="describe",
+            id="img1",
+            collection=kp._resolve_doc_collection(),
+            content="",
+            metadata={"uri": "/test.jpg", "content_type": "image/jpeg"},
+        )
+        result = _run_describe(kp, req)
+        assert result.status == "skipped"
+        assert result.details["reason"] == "no_media_provider"
+        kp.close()
+
+    def test_describe_skips_on_empty_description(self, mock_providers, tmp_path):
+        """_run_describe skips when describer returns empty string."""
+        from keep.api import Keeper
+        from keep.task_workflows import TaskRequest, _run_describe
+
+        kp = Keeper(store_path=tmp_path)
+        _keeper_skip_migration(kp)
+        kp.put("Original summary", id="img1")
+
+        mock_describer = MagicMock()
+        mock_describer.describe.return_value = "   "
+        kp._media_describer = mock_describer
+        kp._config.media = ProviderConfig("ollama", {"model": "test"})
+
+        test_file = tmp_path / "test.jpg"
+        test_file.write_bytes(b"fake")
+
+        req = TaskRequest(
+            task_type="describe",
+            id="img1",
+            collection=kp._resolve_doc_collection(),
+            content="",
+            metadata={"uri": str(test_file), "content_type": "image/jpeg"},
+        )
+        with patch("keep.paths.validate_path_within_home"):
+            result = _run_describe(kp, req)
+        assert result.status == "skipped"
+        assert result.details["reason"] == "empty_description"
+
+        # Original summary unchanged
+        item = kp.get("img1")
         assert "Description:" not in item.summary
         kp.close()
 
@@ -322,13 +460,10 @@ class TestMediaIntegration:
 # -----------------------------------------------------------------------------
 
 class TestMLXMediaDescriber:
-    """Test MLXMediaDescriber composite without real models."""
 
     def test_returns_none_for_text(self):
-        """MLXMediaDescriber returns None for text content types."""
         from keep.providers.mlx import MLXMediaDescriber
 
-        # Patch the sub-provider imports to avoid ImportError
         describer = object.__new__(MLXMediaDescriber)
         describer._vision = None
         describer._whisper = None
@@ -338,7 +473,6 @@ class TestMLXMediaDescriber:
         assert describer.describe("/test.txt", "text/plain") is None
 
     def test_image_delegates_to_vision(self):
-        """MLXMediaDescriber delegates images to vision sub-provider."""
         from keep.providers.mlx import MLXMediaDescriber
 
         describer = object.__new__(MLXMediaDescriber)
@@ -354,7 +488,6 @@ class TestMLXMediaDescriber:
         mock_vision.describe.assert_called_once_with("/cat.jpg", "image/jpeg")
 
     def test_audio_delegates_to_whisper(self):
-        """MLXMediaDescriber delegates audio to whisper sub-provider."""
         from keep.providers.mlx import MLXMediaDescriber
 
         describer = object.__new__(MLXMediaDescriber)

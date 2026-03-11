@@ -13,7 +13,7 @@ and exercised by tests. They implement the core behaviors.
 
 | State doc | Entry for | Wired in |
 |-----------|-----------|----------|
-| `.state/after-write` | `put` | `api.py:_enqueue_after_write_tasks()` |
+| `.state/after-write` | `put` | `api.py:_dispatch_after_write_flow()` |
 | `.state/get-context` | `get` (display) | `api.py:_run_read_flow()` via `get_context()` |
 | `.state/find-deep` | `find(deep)` | `api.py:_run_read_flow()` via `_deep_follow_via_flow()` |
 

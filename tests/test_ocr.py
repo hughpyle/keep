@@ -357,9 +357,10 @@ class TestImageOcr:
         assert result is None
         kp.close()
 
-    def test_process_pending_ocr_dispatches_image(self, tmp_path, mock_providers):
-        """_process_pending_ocr routes to _ocr_image for image content types."""
+    def test_ocr_workflow_dispatches_image(self, tmp_path, mock_providers):
+        """_run_ocr routes to _ocr_image for image content types."""
         from keep.api import Keeper
+        from keep.task_workflows import TaskRequest, _run_ocr
 
         kp = Keeper(str(tmp_path / "store"))
 
@@ -369,56 +370,62 @@ class TestImageOcr:
         img_path = tmp_path / "receipt.png"
         img.save(img_path)
 
-        # Mock _ocr_image to verify dispatch without needing full store updates
+        # Store a document so the workflow can find it
+        kp.put("placeholder", id=f"file://{img_path}")
+
         kp._content_extractor = MagicMock()
         kp._ocr_image = MagicMock(return_value=None)
 
-        item = MagicMock()
-        item.id = f"file://{img_path}"
-        item.collection = kp._resolve_doc_collection()
-        item.metadata = {
-            "uri": f"file://{img_path}",
-            "ocr_pages": [0],
-            "content_type": "image/png",
-        }
+        req = TaskRequest(
+            task_type="ocr",
+            id=f"file://{img_path}",
+            collection=kp._resolve_doc_collection(),
+            content="",
+            metadata={
+                "uri": f"file://{img_path}",
+                "ocr_pages": [0],
+                "content_type": "image/png",
+            },
+        )
 
-        # tmp_path is outside $HOME; patch Path.home so the boundary check passes
-        with patch("keep.api.Path.home", return_value=tmp_path):
-            kp._process_pending_ocr(item)
+        with patch("keep.paths.validate_path_within_home"):
+            result = _run_ocr(kp, req)
 
-        # Verify _ocr_image was called (not _ocr_pdf)
         kp._ocr_image.assert_called_once()
         call_args = kp._ocr_image.call_args[0]
         assert call_args[1] == "image/png"
         kp.close()
 
-    def test_process_pending_ocr_dispatches_pdf(self, tmp_path, mock_providers):
-        """_process_pending_ocr routes to _ocr_pdf for PDFs."""
+    def test_ocr_workflow_dispatches_pdf(self, tmp_path, mock_providers):
+        """_run_ocr routes to _ocr_pdf for PDFs."""
         from keep.api import Keeper
+        from keep.task_workflows import TaskRequest, _run_ocr
 
         kp = Keeper(str(tmp_path / "store"))
 
-        # Create a dummy PDF path (won't be read since we mock _ocr_pdf)
         pdf_path = tmp_path / "doc.pdf"
         pdf_path.write_bytes(b"%PDF-1.4")
+
+        kp.put("placeholder", id=f"file://{pdf_path}")
 
         kp._content_extractor = MagicMock()
         kp._ocr_pdf = MagicMock(return_value=None)
 
-        item = MagicMock()
-        item.id = f"file://{pdf_path}"
-        item.collection = kp._resolve_doc_collection()
-        item.metadata = {
-            "uri": f"file://{pdf_path}",
-            "ocr_pages": [0, 1],
-            "content_type": "application/pdf",
-        }
+        req = TaskRequest(
+            task_type="ocr",
+            id=f"file://{pdf_path}",
+            collection=kp._resolve_doc_collection(),
+            content="",
+            metadata={
+                "uri": f"file://{pdf_path}",
+                "ocr_pages": [0, 1],
+                "content_type": "application/pdf",
+            },
+        )
 
-        # tmp_path is outside $HOME; patch Path.home so the boundary check passes
-        with patch("keep.api.Path.home", return_value=tmp_path):
-            kp._process_pending_ocr(item)
+        with patch("keep.paths.validate_path_within_home"):
+            result = _run_ocr(kp, req)
 
-        # Verify _ocr_pdf was called (not _ocr_image)
         kp._ocr_pdf.assert_called_once()
         kp.close()
 

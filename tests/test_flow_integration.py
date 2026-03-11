@@ -32,27 +32,33 @@ def kp(mock_providers, tmp_path):
 # ---------------------------------------------------------------------------
 
 class TestWritePathFlow:
-    def test_put_enqueues_background_tasks(self, kp):
-        """put() enqueues background tasks (analyze, tag) for non-system items."""
+    """Verify put() dispatches background tasks via the after-write state doc.
+
+    Task decisions are driven by evaluating the after-write state doc rules,
+    NOT hardcoded in _put_direct.  See _dispatch_after_write_flow().
+    """
+
+    def test_put_enqueues_analyze_and_tag(self, kp):
+        """put() evaluates after-write state doc → enqueues analyze + tag."""
+        # Drain any migration-enqueued tasks first
+        queue = kp._get_work_queue()
+        queue.claim("drain", limit=200)
         kp.put("Short note", id="s1")
-        # Short content skips summarize but still fires analyze+tag
-        count = kp.pending_work_count()
-        assert count >= 2, f"Expected >=2 pending tasks (analyze+tag), got {count}"
+        claimed = queue.claim("test", limit=20)
+        kinds = {t.kind for t in claimed}
+        assert "analyze" in kinds, "State doc should fire analyze for non-system items"
+        assert "tag" in kinds, "State doc should fire tag for non-system items"
 
-    def test_put_long_content_enqueues_more_tasks(self, kp):
-        """Long content enqueues summarize (direct) + analyze + tag (state doc)."""
-        baseline = kp.pending_work_count()
-        kp.put("x" * 500, id="long1")
-        count = kp.pending_work_count() - baseline
-        # analyze + tag from state doc, plus summarize from direct path
-        assert count >= 2, f"Expected >=2 new tasks, got {count}"
-
-    def test_put_system_note_skips_state_doc(self, kp):
-        """System notes (dot-prefix) skip state-doc evaluation entirely."""
+    def test_put_system_note_skips_analyze_and_tag(self, kp):
+        """System notes: state doc rules filter out analyze and tag."""
+        # Drain any migration-enqueued tasks first
+        queue = kp._get_work_queue()
+        queue.claim("drain", limit=200)
         kp.put("System data", id=".sys/test")
-        # System notes should not enqueue analyze or tag
-        count = kp.pending_work_count()
-        assert count == 0, f"System note should not create tasks, got {count}"
+        claimed = queue.claim("test", limit=20)
+        kinds = {t.kind for t in claimed}
+        assert "analyze" not in kinds
+        assert "tag" not in kinds
 
 
 # ---------------------------------------------------------------------------

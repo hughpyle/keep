@@ -70,6 +70,8 @@ def _run_analyze(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
     tags = req.metadata.get("tags")
     force = req.metadata.get("force", False)
     parts = keeper.analyze(req.id, tags=tags, force=force)
+    if not parts:
+        return TaskRunResult(status="skipped", details={"reason": "content_too_short"})
     return TaskRunResult(status="applied", details={"parts_count": len(parts)})
 
 
@@ -157,6 +159,53 @@ def _run_ocr(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
     )
 
 
+def _run_describe(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
+    uri = req.metadata.get("uri") or req.id
+    content_type = req.metadata.get("content_type", "")
+
+    describer = keeper._get_media_describer()
+    if not describer:
+        return TaskRunResult(status="skipped", details={"reason": "no_media_provider"})
+
+    file_path = uri.removeprefix("file://") if uri.startswith("file://") else uri
+    path = Path(file_path).resolve()
+    if not path.exists():
+        logger.warning("File no longer exists for describe: %s", path)
+        return TaskRunResult(status="skipped", details={"reason": "missing_file"})
+
+    from .paths import validate_path_within_home
+    try:
+        validate_path_within_home(path)
+    except ValueError:
+        logger.warning("Describe path outside home directory, skipping: %s", path)
+        return TaskRunResult(status="skipped", details={"reason": "path_outside_home"})
+
+    try:
+        description = describer.describe(str(path), content_type)
+    except Exception as e:
+        logger.warning("Media description failed for %s: %s", uri, e)
+        return TaskRunResult(status="skipped", details={"reason": f"describe_error: {e}"})
+
+    if not description or not description.strip():
+        return TaskRunResult(status="skipped", details={"reason": "empty_description"})
+
+    existing = keeper._document_store.get(req.collection, req.id)
+    if not existing:
+        return TaskRunResult(status="skipped", details={"reason": "deleted"})
+
+    # Append description to existing summary
+    enriched = existing.summary
+    if enriched:
+        enriched = enriched.rstrip() + "\n\nDescription:\n" + description
+    else:
+        enriched = description
+
+    from .processors import ProcessorResult
+    result = ProcessorResult(task_type="describe", summary=enriched)
+    keeper.apply_result(req.id, req.collection, result, existing_tags=existing.tags)
+    return TaskRunResult(status="applied", details={"chars": len(description)})
+
+
 def _run_tag(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
     content = str(req.content or "").strip()
     if not content:
@@ -196,6 +245,8 @@ def run_local_task(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
         return _run_analyze(keeper, req)
     if task_type == "ocr":
         return _run_ocr(keeper, req)
+    if task_type == "describe":
+        return _run_describe(keeper, req)
     if task_type == "tag":
         return _run_tag(keeper, req)
     raise ValueError(f"unsupported local task workflow: {task_type}")

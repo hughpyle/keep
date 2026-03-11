@@ -73,7 +73,7 @@ _DESTRUCTIVE = ToolAnnotations(destructiveHint=True, idempotentHint=False)
     description=(
         "Store a fact, preference, decision, URL, or document in long-term memory. "
         "For URLs, fetches and indexes the content. "
-        "Set analyze=true to decompose into searchable parts."
+        "Background tasks (analyze, tag, OCR) are dispatched automatically."
     ),
     annotations=_IDEMPOTENT,
 )
@@ -90,9 +90,6 @@ async def keep_put(
     tags: Annotated[Optional[dict[str, str | list[str]]], Field(
         description='Tags to categorize. Example: {"topic": "preferences", "project": "myapp"}',
     )] = None,
-    analyze: Annotated[bool, Field(
-        description="If true, decompose the stored content into searchable parts after storing.",
-    )] = False,
 ) -> str:
     """Store content in memory."""
     async with _lock:
@@ -110,13 +107,6 @@ async def keep_put(
 
         status = "Unchanged" if item.changed is False else "Stored"
         result = f"{status}: {item.id}"
-
-        if analyze:
-            try:
-                parts = keeper.analyze(item.id)
-                result += f" ({len(parts)} parts)"
-            except ValueError as e:
-                result += f" (analyze failed: {e})"
 
     return result
 

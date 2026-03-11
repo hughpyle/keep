@@ -2088,23 +2088,6 @@ class Keeper:
         digest = hashlib.sha256(f"{metadata_material}|{tag_material}".encode("utf-8")).hexdigest()[:12]
         return f"bg:{task_type}:{id}:{_content_hash(content)}:{digest}"
 
-    def _fallback_enqueue_pending_task(self, pending: dict[str, Any]) -> None:
-        task = str(pending.get("task_type") or "summarize")
-        item_id = str(pending.get("id") or "")
-        doc_coll = str(pending.get("doc_coll") or self._resolve_doc_collection())
-        content = str(pending.get("content") or "")
-        metadata = pending.get("metadata")
-        if task == "summarize":
-            self._pending_queue.enqueue(item_id, doc_coll, content)
-        else:
-            self._pending_queue.enqueue(
-                item_id,
-                doc_coll,
-                content,
-                task_type=task,
-                metadata=dict(metadata or {}),
-            )
-
     def _enqueue_task_background(
         self,
         *,
@@ -2115,37 +2098,31 @@ class Keeper:
         metadata: Optional[dict[str, Any]] = None,
         tags: Optional[dict[str, Any]] = None,
     ) -> None:
-        meta = dict(metadata or {})
-        fallback = {
-            "task_type": task_type, "id": id,
-            "doc_coll": doc_coll, "content": content,
-            "metadata": meta,
-        }
+        """Enqueue a background task to the work queue.
+
+        There is exactly one processing path for background tasks:
+        work queue → process_work_batch → task_workflows.  Do NOT
+        fall back to the pending queue — that creates a duplicate
+        execution path.
+        """
         if not self._is_local:
-            self._fallback_enqueue_pending_task(fallback)
-            return
+            return  # Remote mode: tasks are processed server-side
+        meta = dict(metadata or {})
         supersede_key = self._task_idempotency_key(
             task_type=task_type, id=id, content=content,
             metadata=metadata, tags=tags,
         )
-        try:
-            self._get_work_queue().enqueue(
-                task_type,
-                {
-                    "task_type": task_type,
-                    "item_id": id,
-                    "collection": doc_coll,
-                    "content": content,
-                    "metadata": meta,
-                },
-                supersede_key=supersede_key,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Work queue enqueue failed for %s/%s; falling back to pending queue: %s",
-                task_type, id, exc,
-            )
-            self._fallback_enqueue_pending_task(fallback)
+        self._get_work_queue().enqueue(
+            task_type,
+            {
+                "task_type": task_type,
+                "item_id": id,
+                "collection": doc_coll,
+                "content": content,
+                "metadata": meta,
+            },
+            supersede_key=supersede_key,
+        )
 
     def _enqueue_summarize_background(
         self,
@@ -2184,6 +2161,25 @@ class Keeper:
             },
         )
 
+    def _enqueue_describe_background(
+        self,
+        *,
+        id: str,
+        doc_coll: str,
+        uri: str,
+        content_type: str,
+    ) -> None:
+        self._enqueue_task_background(
+            task_type="describe",
+            id=id,
+            doc_coll=doc_coll,
+            content="",
+            metadata={
+                "uri": uri,
+                "content_type": content_type,
+            },
+        )
+
     def _enqueue_analyze_background(
         self,
         *,
@@ -2205,23 +2201,143 @@ class Keeper:
             metadata=metadata,
         )
 
-    def _enqueue_after_write_tasks(self, item_id: str, content: str) -> None:
-        """Enqueue analyze + tag tasks for non-system items after a write.
+    def _dispatch_after_write_flow(
+        self,
+        *,
+        item_id: str,
+        content: str,
+        uri: str = "",
+        content_type: str = "",
+        tags: Optional[dict[str, str]] = None,
+        summary: Optional[str] = None,
+        ocr_pages: Optional[list[int]] = None,
+    ) -> None:
+        """Evaluate the after-write state doc and enqueue matched tasks.
 
-        Matches the behavior previously handled by the after-write state doc
-        in FlowEngine.
+        ALL post-write task decisions are driven by the after-write state doc
+        (see builtin_state_docs.py and data/system/state-after-write.md).
+
+        Do NOT add hardcoded task enqueues outside this method.  If a new
+        post-write task is needed, add a rule to the after-write state doc
+        and a dispatch case here.  The state doc is the sole source of truth
+        for what background work runs after a write.
+
+        Summarize is handled separately by _upsert() because it is tightly
+        coupled with content-change detection and truncation logic.  The
+        state doc still defines the summarize rule so users can override the
+        condition, but dispatch is skipped here to avoid double-enqueue.
         """
-        if item_id.startswith("."):
+        from .state_doc import evaluate_state_doc
+        from .state_doc_runtime import _get_compiled_builtin
+
+        # --- Load the after-write state doc (store override → builtin) ---
+        doc = self._load_after_write_state_doc()
+        if doc is None:
+            logger.warning("after-write state doc not found; no tasks dispatched")
             return
+
+        # --- Build item context for CEL evaluation ---
+        # These properties mirror what the state doc rules reference.
+        all_tags: dict[str, Any] = dict(tags or {})
+        if ocr_pages:
+            all_tags["_ocr_pages"] = str(ocr_pages)
+
+        item_ctx: dict[str, Any] = {
+            "content_length": len(content),
+            "has_summary": bool(summary),
+            "has_uri": bool(uri),
+            "is_system_note": item_id.startswith("."),
+            "tags": all_tags,
+            "has_media_content": bool(
+                content_type and not content_type.startswith("text/")
+            ),
+            "has_content": bool(content),
+        }
+
+        eval_context: dict[str, Any] = {
+            "item": item_ctx,
+            "params": {
+                "max_summary_length": self._config.max_summary_length,
+            },
+        }
+
+        # --- Evaluate rules (no execution) ---
+        result = evaluate_state_doc(doc, eval_context, run_action=None)
+
+        # --- Dispatch matched actions to the work queue ---
         doc_coll = self._resolve_doc_collection()
-        self._enqueue_analyze_background(id=item_id, doc_coll=doc_coll)
-        if content:
-            self._enqueue_task_background(
-                task_type="tag",
-                id=item_id,
-                doc_coll=doc_coll,
-                content=content,
-            )
+        dispatched = False
+
+        for action_entry in result.actions:
+            action = action_entry.get("action", "")
+
+            # Summarize is handled by _upsert(); skip to avoid double-enqueue.
+            if action == "summarize":
+                continue
+
+            # Capability gates: the state doc decides WHAT should happen
+            # based on item properties; these checks prevent enqueuing
+            # tasks that would immediately skip due to missing providers.
+            if action == "ocr":
+                if ocr_pages and self._config.content_extractor:
+                    self._enqueue_ocr_background(
+                        id=item_id, doc_coll=doc_coll,
+                        uri=uri, ocr_pages=ocr_pages,
+                        content_type=content_type,
+                    )
+                    logger.info("Enqueued OCR for %s (%d pages)", uri, len(ocr_pages))
+                    dispatched = True
+            elif action == "describe":
+                if self._config.media:
+                    self._enqueue_describe_background(
+                        id=item_id, doc_coll=doc_coll,
+                        uri=uri, content_type=content_type,
+                    )
+                    logger.info("Enqueued media description for %s", uri)
+                    dispatched = True
+            elif action == "analyze":
+                self._enqueue_analyze_background(id=item_id, doc_coll=doc_coll)
+                dispatched = True
+            elif action == "tag":
+                self._enqueue_task_background(
+                    task_type="tag", id=item_id,
+                    doc_coll=doc_coll, content=content,
+                )
+                dispatched = True
+            else:
+                logger.debug(
+                    "Unknown after-write action %r (rule %r), skipping",
+                    action, action_entry.get("rule_id"),
+                )
+
+        if dispatched:
+            self._spawn_processor()
+
+    def _load_after_write_state_doc(self) -> Optional["StateDoc"]:
+        """Load the after-write state doc (store override → builtin fallback)."""
+        from .state_doc import StateDoc, parse_state_doc
+        from .builtin_state_docs import BUILTIN_STATE_DOCS
+        from .state_doc_runtime import _get_compiled_builtin
+
+        # Try store first (allows user overrides)
+        try:
+            doc_coll = self._resolve_doc_collection()
+            note = self._document_store.get(doc_coll, ".state/after-write")
+            if note is not None:
+                body = str(getattr(note, "summary", "") or "").strip()
+                if body:
+                    try:
+                        return parse_state_doc("after-write", body)
+                    except (ValueError, RuntimeError) as exc:
+                        logger.warning("Failed to compile stored after-write state doc: %s", exc)
+        except Exception:
+            pass  # Store not ready; fall through to builtin
+
+        # Fallback: compiled builtin
+        builtin_body = BUILTIN_STATE_DOCS.get("after-write")
+        if builtin_body:
+            return _get_compiled_builtin("after-write", builtin_body)
+        return None
 
     def _store_write_context(self, item_id: str, context: dict[str, Any]) -> None:
         note_id = normalize_id(item_id)
@@ -2607,26 +2723,6 @@ class Keeper:
                 if tags:
                     merged_tags.update(tags)
 
-            # Media description: enrich non-text content
-            if doc.content_type and not doc.content_type.startswith("text/"):
-                describer = self._get_media_describer()
-                if describer:
-                    try:
-                        file_path = uri.removeprefix("file://") if uri.startswith("file://") else uri
-                        description = describer.describe(file_path, doc.content_type)
-                        if description:
-                            doc = Document(
-                                uri=doc.uri,
-                                content=doc.content + "\n\nDescription:\n" + description,
-                                content_type=doc.content_type,
-                                metadata=doc.metadata,
-                                tags=doc.tags,
-                            )
-                            logger.info("Added media description for %s (%d chars)",
-                                        uri, len(description))
-                    except Exception as e:
-                        logger.warning("Media description failed for %s: %s", uri, e)
-
             system_tags = {"_source": "uri"}
             if doc.content_type:
                 system_tags["_content_type"] = doc.content_type
@@ -2662,22 +2758,7 @@ class Keeper:
                 queue_summarize=queue_background_tasks,
             )
 
-            # Enqueue background OCR for scanned PDFs and images
             ocr_pages = (doc.metadata or {}).get("_ocr_pages")
-            if queue_background_tasks and ocr_pages and self._config.content_extractor:
-                doc_coll = self._resolve_doc_collection()
-                self._enqueue_ocr_background(
-                    id=doc_id,
-                    doc_coll=doc_coll,
-                    uri=uri,
-                    ocr_pages=ocr_pages,
-                    content_type=doc.content_type,
-                )
-                self._spawn_processor()
-                logger.info(
-                    "Enqueued OCR for %s (%d pages)",
-                    uri, len(ocr_pages),
-                )
 
             if capture_write_context:
                 self._store_write_context(
@@ -2689,9 +2770,20 @@ class Keeper:
                         "content_type": doc.content_type or "",
                     },
                 )
+
+            # Post-write background tasks are driven by the after-write
+            # state doc — do NOT hardcode task enqueues here.  See
+            # _dispatch_after_write_flow() and builtin_state_docs.py.
             if queue_background_tasks:
-                self._enqueue_after_write_tasks(result.id, doc.content)
-                self._spawn_processor()
+                self._dispatch_after_write_flow(
+                    item_id=result.id,
+                    content=doc.content,
+                    uri=uri,
+                    content_type=doc.content_type or "",
+                    tags=merged_tags,
+                    summary=summary,
+                    ocr_pages=ocr_pages,
+                )
             return result
         else:
             # Inline mode: store content directly
@@ -2719,9 +2811,16 @@ class Keeper:
                         "content_type": "",
                     },
                 )
+            # Post-write background tasks are driven by the after-write
+            # state doc — do NOT hardcode task enqueues here.  See
+            # _dispatch_after_write_flow() and builtin_state_docs.py.
             if queue_background_tasks:
-                self._enqueue_after_write_tasks(result.id, str(content or ""))
-                self._spawn_processor()
+                self._dispatch_after_write_flow(
+                    item_id=result.id,
+                    content=str(content or ""),
+                    tags=tags,
+                    summary=summary,
+                )
             return result
 
     def put(
@@ -5408,7 +5507,8 @@ class Keeper:
 
         total_content = "".join(c["content"] for c in chunk_dicts)
         if len(total_content.strip()) < 50:
-            raise ValueError(f"Document content too short to analyze: {id}")
+            logger.info("Skipping analysis for %s: content too short", id)
+            return []
 
         guide_context = self._gather_guide_context(tags) if tags else ""
 
@@ -5835,13 +5935,19 @@ class Keeper:
         )
 
     def process_pending(self, limit: int = 10) -> dict:
-        """Process pending work items (embedding, summaries, OCR, and analysis).
+        """Process pending work items (embedding, summaries, reindex, infrastructure).
 
         Handles task types serially:
         - "embed": computes and stores embeddings (cloud mode deferred writes)
-        - "ocr": OCR scanned PDF pages, update document content
         - "summarize": generates real summaries for lazy-indexed items
-        - "analyze": decomposes documents into parts via LLM
+        - "reindex": re-embeds after model/dimension change
+        - "backfill-edges": populates inverse edge tags
+        - "planner-rebuild": rebuilds planner statistics
+
+        Analyze, OCR, describe, and tag tasks are handled by the work
+        queue (process_pending_work) via _dispatch_after_write_flow().
+        If any appear here (legacy data or fallback), they are re-routed
+        to the work queue.
 
         Items that fail MAX_SUMMARY_ATTEMPTS times are removed from
         the queue.
@@ -5897,30 +6003,31 @@ class Keeper:
 
             try:
                 _task_verbs = {
-                    "analyze": "Analyzing",
                     "backfill-edges": "Backfilling edges",
                     "embed": "Embedding",
-                    "ocr": "OCR",
                     "planner-rebuild": "Rebuilding planner stats",
                     "reindex": "Re-embedding",
                     "summarize": "Summarizing",
                 }
                 verb = _task_verbs.get(item.task_type, item.task_type)
                 logger.info("%s %s (attempt %d)", verb, item.id, item.attempts)
-                if item.task_type == "analyze":
-                    self._process_pending_analyze(item)
-                    # analyze releases summarization internally;
-                    # release embedding after parts are embedded
-                    self._release_embedding_provider()
+                if item.task_type in ("analyze", "ocr", "describe", "tag"):
+                    # These tasks belong on the work queue, not here.
+                    # Skip — they'll be re-enqueued on next put() via
+                    # _dispatch_after_write_flow().
+                    logger.warning(
+                        "Skipping %s/%s on pending queue (belongs on work queue)",
+                        item.task_type, item.id,
+                    )
+                    self._pending_queue.complete(
+                        item.id, item.collection, item.task_type
+                    )
+                    result["processed"] += 1
+                    continue
                 elif item.task_type == "backfill-edges":
                     self._process_pending_backfill_edges(item)
                 elif item.task_type == "embed":
                     self._process_pending_embed(item)
-                    self._release_embedding_provider()
-                elif item.task_type == "ocr":
-                    self._process_pending_ocr(item)
-                    self._release_content_extractor()
-                    self._release_summarization_provider()
                     self._release_embedding_provider()
                 elif item.task_type == "planner-rebuild":
                     if self._planner_stats:
@@ -6263,6 +6370,20 @@ class Keeper:
                 tags=casefold_tags_for_index(existing_tags or {}),
             )
 
+        elif result.task_type == "describe":
+            # Media description: append description to existing summary,
+            # re-embed with enriched content.
+            self._document_store.update_summary(collection, item_id, result.summary)
+            chroma_coll = self._resolve_chroma_collection()
+            embedding = self._get_embedding_provider().embed(result.summary)
+            self._store.upsert(
+                collection=chroma_coll,
+                id=item_id,
+                embedding=embedding,
+                summary=result.summary,
+                tags=casefold_tags_for_index(existing_tags or {}),
+            )
+
         elif result.task_type == "analyze":
             from .document_store import PartInfo
             from .types import utc_now
@@ -6406,22 +6527,6 @@ class Keeper:
             summary=doc.summary,
             tags=casefold_tags_for_index(doc.tags),
         )
-
-    def _process_pending_analyze(self, item) -> None:
-        """Process a pending analysis work item."""
-        outcome = self._run_local_task_workflow(
-            task_type="analyze",
-            item_id=item.id,
-            collection=item.collection,
-            content=item.content,
-            metadata=item.metadata,
-        )
-        if outcome.get("status") == "applied":
-            parts_count = int(outcome.get("details", {}).get("parts_count") or 0)
-            logger.info("Analyzed %s into %d parts", item.id, parts_count)
-        else:
-            reason = outcome.get("details", {}).get("reason") or "skipped"
-            logger.info("Skipping analyze for %s: %s", item.id, reason)
 
     def _process_pending_reindex(self, item) -> None:
         """Process a reindex task: embed summary and write to vector store.
@@ -6603,35 +6708,6 @@ class Keeper:
         """OCR scanned PDF pages and merge with text-layer pages."""
         from .processors import ocr_pdf
         return ocr_pdf(path, ocr_pages, extractor)
-
-    def _process_pending_ocr(self, item) -> None:
-        """Process a pending OCR work item: OCR scanned PDFs or images.
-
-        For PDFs: renders blank pages to images, runs OCR, merges with
-        text-layer pages.
-        For images: runs OCR directly on the image file.
-
-        Then updates the document summary and embedding with the content.
-        """
-        outcome = self._run_local_task_workflow(
-            task_type="ocr",
-            item_id=item.id,
-            collection=item.collection,
-            content=item.content,
-            metadata=item.metadata,
-        )
-        if outcome.get("status") == "applied":
-            details = outcome.get("details", {})
-            uri = (item.metadata or {}).get("uri") or item.id
-            logger.info(
-                "OCR complete for %s: %d chars, type=%s",
-                uri,
-                int(details.get("chars") or 0),
-                details.get("content_type") or "pdf",
-            )
-        else:
-            reason = outcome.get("details", {}).get("reason") or "skipped"
-            logger.info("Skipping OCR for %s: %s", item.id, reason)
 
     def pending_count(self) -> int:
         """Get count of pending summaries awaiting processing."""

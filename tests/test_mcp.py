@@ -132,37 +132,12 @@ class TestKeepPut:
         )
 
     @pytest.mark.asyncio
-    async def test_put_with_analyze(self, mock_keeper):
-        from keep.mcp import keep_put
-        mock_keeper.put.return_value = _make_item(id="%abc", changed=True)
-        mock_keeper.analyze.return_value = [MagicMock()] * 5
-        result = await keep_put("long content", analyze=True)
-        assert result == "Stored: %abc (5 parts)"
-        mock_keeper.analyze.assert_called_once_with("%abc")
-
-    @pytest.mark.asyncio
-    async def test_put_analyze_not_called_when_false(self, mock_keeper):
-        from keep.mcp import keep_put
-        mock_keeper.put.return_value = _make_item(changed=True)
-        await keep_put("content", analyze=False)
-        mock_keeper.analyze.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_put_error_returns_string(self, mock_keeper):
         from keep.mcp import keep_put
         mock_keeper.put.side_effect = ValueError("content and uri are mutually exclusive")
         result = await keep_put("bad input")
         assert result.startswith("Error: ")
         assert "mutually exclusive" in result
-
-    @pytest.mark.asyncio
-    async def test_put_analyze_error_partial_success(self, mock_keeper):
-        from keep.mcp import keep_put
-        mock_keeper.put.return_value = _make_item(id="%abc", changed=True)
-        mock_keeper.analyze.side_effect = ValueError("content too short")
-        result = await keep_put("short", analyze=True)
-        assert "Stored: %abc" in result
-        assert "analyze failed" in result
 
 
 # ---------------------------------------------------------------------------

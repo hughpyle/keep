@@ -48,8 +48,12 @@ def process_work_batch(
             continue
 
         try:
-            _execute_work_item(keeper, item.kind, item.input)
-            queue.complete(item.work_id, {"status": "applied"})
+            outcome = _execute_work_item(keeper, item.kind, item.input)
+            status = outcome.get("status", "applied")
+            details = outcome.get("details")
+            queue.complete(item.work_id, outcome)
+            if status == "skipped":
+                logger.info("Work item %s (%s) skipped: %s", item.work_id, item.kind, details or {})
             stats["processed"] += 1
         except Exception as exc:
             msg = f"{type(exc).__name__}: {exc}"
@@ -66,8 +70,11 @@ def _execute_work_item(
     keeper: "Keeper",
     kind: str,
     input_data: dict[str, Any],
-) -> None:
-    """Execute a single work item via keeper._run_local_task_workflow."""
+) -> dict[str, Any]:
+    """Execute a single work item via keeper._run_local_task_workflow.
+
+    Returns the outcome dict (keys: status, details).
+    """
     task_type = input_data.get("task_type") or kind
     item_id = str(input_data.get("item_id") or input_data.get("id") or "").strip()
     if not item_id:
@@ -90,10 +97,4 @@ def _execute_work_item(
         content=content,
         metadata=metadata,
     )
-    status = str((outcome or {}).get("status") or "applied")
-    details = (outcome or {}).get("details")
-    logger.info(
-        "Work item %s/%s: %s %s",
-        kind, item_id, status,
-        details if details else "",
-    )
+    return outcome or {"status": "applied"}
