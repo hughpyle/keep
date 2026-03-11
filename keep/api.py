@@ -2691,6 +2691,7 @@ class Keeper:
                 )
             if queue_background_tasks:
                 self._enqueue_after_write_tasks(result.id, doc.content)
+                self._spawn_processor()
             return result
         else:
             # Inline mode: store content directly
@@ -2720,6 +2721,7 @@ class Keeper:
                 )
             if queue_background_tasks:
                 self._enqueue_after_write_tasks(result.id, str(content or ""))
+                self._spawn_processor()
             return result
 
     def put(
@@ -6970,9 +6972,15 @@ class Keeper:
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
-        # Find mismatches between stores
+        # Find mismatches between stores (exclude empty-summary items
+        # that can't produce embeddings, e.g. bare .tag/* stubs)
         doc_ids = ds.list_ids(doc_coll)
-        missing_from_chroma = self._store.find_missing_ids(chroma_coll, doc_ids)
+        missing_from_chroma_raw = self._store.find_missing_ids(chroma_coll, doc_ids)
+        missing_records: dict[str, Any] = {}
+        for doc_id in missing_from_chroma_raw:
+            rec = ds.get(doc_coll, doc_id)
+            if rec and rec.summary:
+                missing_records[doc_id] = rec
 
         # Skip versioned (@v{N}) and part (@p{N}) IDs — tracked in separate tables
         chroma_ids = self._store.list_ids(chroma_coll)
@@ -6986,11 +6994,10 @@ class Keeper:
         removed = 0
         if fix:
             # Re-index items missing from ChromaDB using stored summary
-            for doc_id in missing_from_chroma:
+            for doc_id, doc_record in missing_records.items():
                 if self._closing.is_set():
                     break
                 try:
-                    doc_record = ds.get(doc_coll, doc_id)
                     if doc_record:
                         embedding = self._get_embedding_provider().embed(doc_record.summary)
                         self._store.upsert(
@@ -7017,11 +7024,11 @@ class Keeper:
                     logger.warning("Failed to remove orphan %s: %s", orphan_id, e)
 
         return {
-            "missing_from_index": len(missing_from_chroma),
+            "missing_from_index": len(missing_records),
             "orphaned_in_index": len(orphaned_in_chroma),
             "fixed": fixed,
             "removed": removed,
-            "missing_ids": list(missing_from_chroma) if missing_from_chroma else [],
+            "missing_ids": list(missing_records) if missing_records else [],
             "orphaned_ids": list(orphaned_in_chroma) if orphaned_in_chroma else [],
         }
 

@@ -3719,6 +3719,9 @@ def doctor(
     def fail(msg):
         typer.echo(f"  [FAIL] {msg}")
 
+    def warn(msg):
+        typer.echo(f"  [WARN] {msg}")
+
     # 1. Environment
     from importlib.metadata import version as pkg_version
     try:
@@ -3819,6 +3822,24 @@ def doctor(
     else:
         ok("Media: none configured (metadata-only indexing)")
 
+    # 7b. Content extractor (OCR for PDFs/images)
+    if cfg and cfg.content_extractor:
+        ok(f"Content extractor: {cfg.content_extractor.name}")
+    elif cfg:
+        # Check if one could be auto-detected
+        from .config import _detect_content_extractor
+        available = _detect_content_extractor()
+        if available:
+            warn(
+                f"Content extractor: not configured, but {available.name} is available.\n"
+                "         PDFs and images won't be OCR'd without this.\n"
+                "         Run `keep config --setup` to enable, or add to keep.toml:\n"
+                f"         [content_extractor]\n"
+                f"         name = \"{available.name}\""
+            )
+        else:
+            ok("Content extractor: none (PDFs use text extraction only)")
+
     # 8. Analyzer
     if cfg and cfg.analyzer:
         try:
@@ -3871,9 +3892,10 @@ def doctor(
     try:
         tmp_dir = tempfile.mkdtemp(prefix="keep_doctor_")
         tmp_path = Path(tmp_dir)
-        # Minimal config: passthrough summarization (no LLM)
+        # Minimal config: use store's embedding provider, passthrough summarization
         test_config = StoreConfig(
             path=tmp_path,
+            embedding=cfg.embedding if cfg else None,
             summarization=ProviderConfig("passthrough", {"max_chars": 10000}),
             max_summary_length=10000,
         )
