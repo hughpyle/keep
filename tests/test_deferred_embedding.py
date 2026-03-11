@@ -477,7 +477,7 @@ class TestEmbeddingDedup:
 
         # Second put with same short hash but different actual content
         # (simulate a collision — same _content_hash but different _content_hash_full)
-        from keep.api import _content_hash
+        from keep.processors import _content_hash
         # Create content that happens to have the same short hash... hard to do.
         # Instead, directly manipulate: set file-b's content_hash = file-a's content_hash
         # by using the same content (same short hash), but the donor's full hash is wrong.

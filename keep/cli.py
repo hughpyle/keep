@@ -37,7 +37,8 @@ PART_SUFFIX_PATTERN = re.compile(r'@P\{(\d+)\}$')
 # Used to distinguish URIs from plain text in the update command
 _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 
-from .api import Keeper, _text_content_id
+from .api import Keeper
+from .utils import _text_content_id
 from .config import get_tool_directory
 from .types import (
     SYSTEM_TAG_PREFIX,
@@ -1297,7 +1298,7 @@ def _parse_frontmatter(text: str) -> tuple[str, dict[str, str]]:
     a ``tags`` dict.  Keys starting with ``_`` are skipped (system reserved).
     Non-scalar values (lists, nested dicts) are dropped except ``tags`` dict.
     """
-    from .api import _extract_markdown_frontmatter
+    from .utils import _extract_markdown_frontmatter
     return _extract_markdown_frontmatter(text)
 
 
@@ -2013,7 +2014,7 @@ def now(
     if setting:
         if reset:
             # Reset to default from system (delete first to clear old tags)
-            from .api import _load_frontmatter, SYSTEM_DOC_DIR
+            from .system_docs import _load_frontmatter, SYSTEM_DOC_DIR
             kp.delete(doc_id)
             try:
                 new_content, default_tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
@@ -2514,7 +2515,7 @@ def _get_meta_list(kp: Keeper, actual_id: str, limit: int) -> str:
 
 def _get_resolve_list(kp: Keeper, actual_id: str, resolve: list[str], limit: int) -> str:
     """Resolve inline meta-doc syntax strings."""
-    from .api import _parse_meta_doc
+    from .utils import _parse_meta_doc
     all_queries: list[dict[str, str]] = []
     all_context: list[str] = []
     all_prereqs: list[str] = []

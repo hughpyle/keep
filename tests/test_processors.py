@@ -284,8 +284,8 @@ class TestContentHash:
 
     def test_backwards_compat_import(self):
         """Hash functions are still importable from api.py."""
-        from keep.api import _content_hash as api_hash
-        from keep.api import _content_hash_full as api_hash_full
+        from keep.processors import _content_hash as api_hash
+        from keep.processors import _content_hash_full as api_hash_full
         assert api_hash("test") == _content_hash("test")
         assert api_hash_full("test") == _content_hash_full("test")
 

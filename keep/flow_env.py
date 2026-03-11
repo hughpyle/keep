@@ -199,7 +199,7 @@ class LocalFlowEnvironment:
         *,
         limit_per_source: int = 5,
     ) -> dict[str, list[Any]]:
-        from .api import _record_to_item
+        from .utils import _record_to_item
 
         limit = max(int(limit_per_source), 1)
         doc_coll = self._keeper._resolve_doc_collection()

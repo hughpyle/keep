@@ -20,7 +20,7 @@ from typing import Any, Literal
 import yaml
 
 from .analyzers import _PROMPT_SECTION_RE
-from .api import _META_CONTEXT_KEY, _META_PREREQ_KEY, _META_QUERY_PAIR
+from .utils import _META_CONTEXT_KEY, _META_PREREQ_KEY, _META_QUERY_PAIR
 
 Severity = Literal["error", "warning", "info"]
 DocType = Literal["tag", "meta", "prompt", "state", "unknown"]

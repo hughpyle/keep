@@ -24,7 +24,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from .api import Keeper, _text_content_id
+from .api import Keeper
+from .utils import _text_content_id
 from .cli import render_context, render_find_context, expand_prompt
 
 # ---------------------------------------------------------------------------

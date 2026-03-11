@@ -1,4 +1,5 @@
-from keep.api import Keeper, _text_content_id
+from keep.api import Keeper
+from keep.utils import _text_content_id
 
 
 def test_put_inline_without_id_uses_content_addressed_id(mock_providers, tmp_path):

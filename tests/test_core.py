@@ -255,7 +255,7 @@ class TestNowdoc:
 
     def test_system_now_md_exists(self):
         """System now.md file exists in keep/data/system/ with frontmatter."""
-        from keep.api import _load_frontmatter, SYSTEM_DOC_DIR
+        from keep.system_docs import _load_frontmatter, SYSTEM_DOC_DIR
 
         content, tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
         assert len(content) > 0
@@ -266,7 +266,7 @@ class TestNowdoc:
 
     def test_load_frontmatter_missing_file(self):
         """_load_frontmatter raises FileNotFoundError for missing files."""
-        from keep.api import _load_frontmatter, SYSTEM_DOC_DIR
+        from keep.system_docs import _load_frontmatter, SYSTEM_DOC_DIR
         import pytest
 
         with pytest.raises(FileNotFoundError):
@@ -411,7 +411,7 @@ class TestMetaDocParser:
 
     def test_query_lines(self):
         """Query lines with key=value pairs are parsed."""
-        from keep.api import _parse_meta_doc
+        from keep.utils import _parse_meta_doc
         queries, ctx, prereqs = _parse_meta_doc("act=commitment status=open\ntype=learning")
         assert queries == [
             {"act": "commitment", "status": "open"},
@@ -422,7 +422,7 @@ class TestMetaDocParser:
 
     def test_context_match_keys(self):
         """Context-match lines (key=) are parsed."""
-        from keep.api import _parse_meta_doc
+        from keep.utils import _parse_meta_doc
         queries, ctx, prereqs = _parse_meta_doc("project=\ntopic=")
         assert queries == []
         assert ctx == ["project", "topic"]
@@ -430,7 +430,7 @@ class TestMetaDocParser:
 
     def test_prose_ignored(self):
         """Prose lines are ignored by the parser."""
-        from keep.api import _parse_meta_doc
+        from keep.utils import _parse_meta_doc
         content = """# .meta/todo — Open Loops
 
 Open loops: unresolved commitments.
@@ -446,7 +446,7 @@ project=
 
     def test_mixed_content(self):
         """Full meta-doc with prose, queries, and context."""
-        from keep.api import _parse_meta_doc
+        from keep.utils import _parse_meta_doc
         content = """# .meta/learnings — Experiential Priming
 
 Past learnings and breakdowns.
@@ -468,7 +468,7 @@ topic=
 
     def test_empty_content(self):
         """Empty content returns empty lists."""
-        from keep.api import _parse_meta_doc
+        from keep.utils import _parse_meta_doc
         queries, ctx, prereqs = _parse_meta_doc("")
         assert queries == []
         assert ctx == []
@@ -476,7 +476,7 @@ topic=
 
     def test_markdown_headings_are_prose(self):
         """Markdown headings and formatting are treated as prose."""
-        from keep.api import _parse_meta_doc
+        from keep.utils import _parse_meta_doc
         queries, ctx, prereqs = _parse_meta_doc("# Heading\n**bold text**\n- list item")
         assert queries == []
         assert ctx == []
@@ -484,7 +484,7 @@ topic=
 
     def test_partial_key_value_is_prose(self):
         """Lines with mixed tokens (some not key=value) are prose."""
-        from keep.api import _parse_meta_doc
+        from keep.utils import _parse_meta_doc
         queries, ctx, prereqs = _parse_meta_doc("act=commitment and also open")
         assert queries == []
         assert ctx == []
@@ -492,7 +492,7 @@ topic=
 
     def test_prerequisite_wildcard(self):
         """Prerequisite lines (key=*) gate metadoc on tag existence."""
-        from keep.api import _parse_meta_doc
+        from keep.utils import _parse_meta_doc
         queries, ctx, prereqs = _parse_meta_doc("genre=*\ngenre=")
         assert queries == []
         assert ctx == ["genre"]
@@ -500,7 +500,7 @@ topic=
 
     def test_mixed_prereq_query_context(self):
         """Full metadoc with prerequisites, queries, and context."""
-        from keep.api import _parse_meta_doc
+        from keep.utils import _parse_meta_doc
         content = """# .meta/genre — Similar genres
 
 Items in the same genre, for media with genre tags.
@@ -525,21 +525,22 @@ class TestSystemDocs:
 
     def test_all_system_doc_files_exist(self):
         """Every file referenced in SYSTEM_DOC_IDS exists on disk."""
-        from keep.api import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR
+        from keep.system_docs import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR
         for filename in SYSTEM_DOC_IDS:
             path = SYSTEM_DOC_DIR / filename
             assert path.exists(), f"Missing system doc file: {filename}"
 
     def test_system_doc_ids_are_valid(self):
         """System doc IDs follow naming conventions."""
-        from keep.api import SYSTEM_DOC_IDS
+        from keep.system_docs import SYSTEM_DOC_IDS
         for filename, doc_id in SYSTEM_DOC_IDS.items():
             assert not doc_id.startswith("_"), f"{doc_id} uses old underscore prefix"
             assert doc_id == doc_id.strip(), f"{doc_id} has whitespace"
 
     def test_meta_docs_have_query_lines(self):
         """Meta-docs must contain at least one parseable query or context line."""
-        from keep.api import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR, _load_frontmatter, _parse_meta_doc
+        from keep.system_docs import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR, _load_frontmatter
+        from keep.utils import _parse_meta_doc
         for filename, doc_id in SYSTEM_DOC_IDS.items():
             if not doc_id.startswith(".meta/"):
                 continue
@@ -550,7 +551,7 @@ class TestSystemDocs:
 
     def test_tag_docs_have_structure(self):
         """.tag/* docs should have documented structure (values, characteristics, or lifecycle)."""
-        from keep.api import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR, _load_frontmatter
+        from keep.system_docs import SYSTEM_DOC_IDS, SYSTEM_DOC_DIR, _load_frontmatter
         markers = ("## Values", "## Characteristics", "## Speech-act lifecycle")
         for filename, doc_id in SYSTEM_DOC_IDS.items():
             if not doc_id.startswith(".tag/"):
@@ -564,7 +565,7 @@ class TestSystemDocs:
 
     def test_bundled_hash_is_deterministic(self):
         """_content_hash produces consistent results for same input."""
-        from keep.api import _content_hash
+        from keep.processors import _content_hash
         h1 = _content_hash("test content")
         h2 = _content_hash("test content")
         assert h1 == h2
