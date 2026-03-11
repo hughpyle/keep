@@ -23,7 +23,7 @@ rules:
   - when: "'_ocr_pages' in item.tags && item.has_uri"
     id: extracted
     do: ocr
-  - when: "item.has_uri && item.has_media_content"
+  - when: "item.has_uri && item.has_media_content && system.has_media_provider"
     id: described
     do: describe
   - when: "!item.is_system_note"

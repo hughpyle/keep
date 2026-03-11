@@ -142,7 +142,7 @@ class TestAfterWriteStateDoc:
         from keep.builtin_state_docs import BUILTIN_STATE_DOCS
         return parse_state_doc("after-write", BUILTIN_STATE_DOCS["after-write"])
 
-    def _eval(self, doc, **item_overrides):
+    def _eval(self, doc, system=None, **item_overrides):
         from keep.state_doc import evaluate_state_doc
         item = {
             "content_length": 50,
@@ -154,7 +154,10 @@ class TestAfterWriteStateDoc:
             "has_content": True,
         }
         item.update(item_overrides)
-        ctx = {"item": item, "params": {"max_summary_length": 2000}}
+        sys = {"has_media_provider": True}
+        if system is not None:
+            sys.update(system)
+        ctx = {"item": item, "params": {"max_summary_length": 2000}, "system": sys}
         result = evaluate_state_doc(doc, ctx, run_action=None)
         return [a["action"] for a in result.actions]
 

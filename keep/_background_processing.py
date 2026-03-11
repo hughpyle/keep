@@ -141,13 +141,9 @@ class BackgroundProcessingMixin:
     ) -> None:
         """Evaluate the after-write state doc and enqueue matched tasks.
 
-        ALL post-write task decisions are driven by the after-write state doc
-        (see builtin_state_docs.py and data/system/state-after-write.md).
-
-        Do NOT add hardcoded task enqueues outside this method.  If a new
-        post-write task is needed, add a rule to the after-write state doc
-        and a dispatch case here.  The state doc is the sole source of truth
-        for what background work runs after a write.
+        The state doc is the sole source of truth for what background work
+        runs after a write.  This method evaluates it and enqueues every
+        matched action generically — no per-action dispatch logic.
 
         Summarize is handled separately by _upsert() because it is tightly
         coupled with content-change detection and truncation logic.  The
@@ -155,16 +151,14 @@ class BackgroundProcessingMixin:
         condition, but dispatch is skipped here to avoid double-enqueue.
         """
         from .state_doc import evaluate_state_doc
-        from .state_doc_runtime import _get_compiled_builtin
 
-        # --- Load the after-write state doc (store override -> builtin) ---
+        # --- Load the after-write state doc (store override → builtin) ---
         doc = self._load_after_write_state_doc()
         if doc is None:
             logger.warning("after-write state doc not found; no tasks dispatched")
             return
 
         # --- Build item context for CEL evaluation ---
-        # These properties mirror what the state doc rules reference.
         all_tags: dict[str, Any] = dict(tags or {})
         if ocr_pages:
             all_tags["_ocr_pages"] = str(ocr_pages)
@@ -186,70 +180,47 @@ class BackgroundProcessingMixin:
             "params": {
                 "max_summary_length": self._config.max_summary_length,
             },
+            "system": {
+                "has_media_provider": self._config.media is not None,
+            },
         }
 
         # --- Evaluate rules (no execution) ---
         result = evaluate_state_doc(doc, eval_context, run_action=None)
 
-        # --- Dispatch matched actions to the work queue ---
+        # --- Build uniform metadata for all enqueued tasks ---
+        # Every task gets the same item context; each task workflow
+        # extracts what it needs (uri, ocr_pages, content_type, etc.).
+        item_metadata: dict[str, Any] = {}
+        if uri:
+            item_metadata["uri"] = uri
+        if content_type:
+            item_metadata["content_type"] = content_type
+        if ocr_pages:
+            item_metadata["ocr_pages"] = list(ocr_pages)
+
+        # --- Enqueue every matched action ---
         doc_coll = self._resolve_doc_collection()
         dispatched = False
 
         for action_entry in result.actions:
-            action = action_entry.get("action", "")
-
-            # Summarize is handled by _upsert(); skip to avoid double-enqueue.
-            if action == "summarize":
+            action_id = action_entry.get("action", "")
+            if not action_id:
                 continue
 
-            # Capability gates: the state doc decides WHAT should happen
-            # based on item properties; these checks prevent enqueuing
-            # tasks that would immediately skip due to missing providers.
-            if action == "ocr":
-                if ocr_pages and self._config.content_extractor:
-                    self._enqueue_task_background(
-                        task_type="ocr",
-                        id=item_id, doc_coll=doc_coll,
-                        content="",
-                        metadata={
-                            "uri": uri,
-                            "ocr_pages": list(ocr_pages),
-                            "content_type": content_type,
-                        },
-                    )
-                    logger.info("Enqueued OCR for %s (%d pages)", uri, len(ocr_pages))
-                    dispatched = True
-            elif action == "describe":
-                if self._config.media:
-                    self._enqueue_task_background(
-                        task_type="describe",
-                        id=item_id, doc_coll=doc_coll,
-                        content="",
-                        metadata={
-                            "uri": uri,
-                            "content_type": content_type,
-                        },
-                    )
-                    logger.info("Enqueued media description for %s", uri)
-                    dispatched = True
-            elif action == "analyze":
-                self._enqueue_task_background(
-                    task_type="analyze",
-                    id=item_id, doc_coll=doc_coll,
-                    content="",
-                )
-                dispatched = True
-            elif action == "tag":
-                self._enqueue_task_background(
-                    task_type="tag", id=item_id,
-                    doc_coll=doc_coll, content=content,
-                )
-                dispatched = True
-            else:
-                logger.debug(
-                    "Unknown after-write action %r (rule %r), skipping",
-                    action, action_entry.get("rule_id"),
-                )
+            # Summarize is enqueued by _upsert(); skip to avoid double-enqueue.
+            if action_id == "summarize":
+                continue
+
+            self._enqueue_task_background(
+                task_type=action_id,
+                id=item_id,
+                doc_coll=doc_coll,
+                content=content,
+                metadata=item_metadata,
+            )
+            logger.info("Enqueued %s for %s", action_id, item_id)
+            dispatched = True
 
         if dispatched:
             self._spawn_processor()

@@ -19,7 +19,7 @@ rules:
     do: ocr
   - id: described
     # Non-text URI content (images, audio, video) → media description
-    when: "item.has_uri && item.has_media_content"
+    when: "item.has_uri && item.has_media_content && system.has_media_provider"
     do: describe
   - id: analyzed
     # Decompose non-system items into parts
