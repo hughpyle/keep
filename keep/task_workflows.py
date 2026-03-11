@@ -196,7 +196,7 @@ def _apply_mutations(
             )
 
         elif op == "put_item":
-            keeper.put(
+            keeper._put_direct(
                 content=str(mut.get("content", "")),
                 id=mut.get("id"),
                 summary=str(mut.get("summary", "")),
