@@ -5,5 +5,5 @@ tags:
 ---
 rules:
   - id: resolve_stubs
-    when: "item.has_uri && !item.is_system_note && item.tags._source != 'link'"
+    when: "item.has_uri && !item.is_system_note && !(has(item.tags._source) && item.tags._source == 'link')"
     do: resolve_stubs

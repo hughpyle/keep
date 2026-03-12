@@ -116,6 +116,10 @@ def run_flow(
         optional return data. When status is "stopped", the cursor
         field contains a resumable token.
     """
+    from .perf_stats import perf as _perf
+    import time as _time
+    _flow_t0 = _time.monotonic()
+
     # Resume from cursor or start fresh
     if cursor is not None:
         current_state = cursor.state
@@ -132,9 +136,13 @@ def run_flow(
     ticks = 0
     history: list[str] = []
 
-    # Wrap run_action to enrich find output with statistics
+    def _record_flow() -> None:
+        _perf.record("flow", initial_state, _time.monotonic() - _flow_t0)
+
+    # Wrap run_action to enrich find output with statistics and track timing
     def _action_callback(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
-        output = run_action(action_name, action_params)
+        with _perf.timer("action", action_name):
+            output = run_action(action_name, action_params)
         if action_name == "find" and isinstance(output, dict):
             output = enrich_find_output(output)
         return output
@@ -143,6 +151,7 @@ def run_flow(
         doc = load_state_doc(current_state)
         if doc is None:
             logger.info("flow: %s -> error (state doc not found)", current_state)
+            _record_flow()
             return FlowResult(
                 status="error",
                 data={"reason": f"state doc not found: {current_state}"},
@@ -161,6 +170,7 @@ def run_flow(
             result = evaluate_state_doc(doc, eval_ctx, run_action=_action_callback)
         except Exception as exc:
             logger.warning("State doc %r evaluation failed: %s", current_state, exc)
+            _record_flow()
             return FlowResult(
                 status="error",
                 data={"reason": f"evaluation failed: {exc}"},
@@ -174,6 +184,7 @@ def run_flow(
         # Terminal
         if result.terminal is not None:
             logger.info("flow: %s -> %s (%d ticks)", current_state, result.terminal, ticks)
+            _record_flow()
             return FlowResult(
                 status=result.terminal,
                 bindings=accumulated_bindings,
@@ -187,6 +198,7 @@ def run_flow(
             next_state, transition_params = _parse_transition(result.transition)
             if next_state is None:
                 logger.info("flow: %s -> error (invalid transition)", current_state)
+                _record_flow()
                 return FlowResult(
                     status="error",
                     data={"reason": f"invalid transition: {result.transition}"},
@@ -202,6 +214,7 @@ def run_flow(
 
         # No terminal, no transition — shouldn't happen (evaluator defaults to done)
         logger.info("flow: %s -> done (implicit, %d ticks)", current_state, ticks)
+        _record_flow()
         return FlowResult(
             status="done",
             bindings=accumulated_bindings,
@@ -213,6 +226,7 @@ def run_flow(
     total_ticks = prior_ticks + ticks
     cursor_token = encode_cursor(current_state, total_ticks, accumulated_bindings)
     logger.info("flow: %s -> stopped (budget, %d ticks)", current_state, total_ticks)
+    _record_flow()
     return FlowResult(
         status="stopped",
         bindings=accumulated_bindings,

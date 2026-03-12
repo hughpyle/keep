@@ -285,6 +285,7 @@ def _apply_mutations(
 def run_local_task(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
     """Run a background task by calling the action's ``run()`` method."""
     from .actions import get_action
+    from .perf_stats import perf
 
     task_type = str(req.task_type or "").strip()
     action = get_action(task_type)
@@ -299,7 +300,9 @@ def run_local_task(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
     params: dict[str, Any] = {"item_id": req.id}
     params.update(req.metadata)
 
-    output = action.run(params, ctx)
+    with perf.timer("action", task_type):
+        output = action.run(params, ctx)
+
     if not isinstance(output, dict):
         return TaskRunResult(status="skipped", details={"reason": "no_output"})
 

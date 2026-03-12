@@ -64,6 +64,12 @@ def process_work_batch(
             errors.append({"work_id": item.work_id, "error": msg})
 
     stats["errors"] = errors  # type: ignore[assignment]
+
+    # Log perf summary after each batch with actual work
+    if stats["processed"] or stats["failed"]:
+        from .perf_stats import perf
+        perf.log_summary()
+
     return stats
 
 
