@@ -2759,6 +2759,14 @@ class DocumentStore:
         """, (id, collection))
         return cursor.fetchone()[0]
 
+    def max_part_num(self, collection: str, id: str) -> int:
+        """Return the highest part_num for a document, or 0 if none."""
+        cursor = self._execute("""
+            SELECT COALESCE(MAX(part_num), 0) FROM document_parts
+            WHERE id = ? AND collection = ?
+        """, (id, collection))
+        return cursor.fetchone()[0]
+
     def delete_parts(self, collection: str, id: str) -> int:
         """Delete all parts for a document.
 

@@ -276,11 +276,11 @@ class OllamaEmbedding:
         error (instant 500), trims ~10% and retries. Only the final
         successful call does real compute; rejections are near-free.
         """
-        import requests
+        from .ollama_utils import ollama_session
 
         attempt = text
         for _ in range(30):  # 0.9^30 ≈ 4% — covers even extreme cases
-            response = requests.post(
+            response = ollama_session().post(
                 f"{self.base_url}/api/embeddings",
                 json={"model": self.model_name, "prompt": attempt},
                 timeout=(10, 120),  # (connect, read) — model loading can be slow
@@ -376,14 +376,14 @@ class VoyageEmbedding:
     def _request_with_retry(self, payload: dict, timeout: int) -> dict:
         """Make API request with exponential backoff retry for rate limits."""
         import time
-        import requests
+        from keep.providers.http import http_session
 
         backoff = self.INITIAL_BACKOFF
         last_exception = None
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                response = requests.post(
+                response = http_session().post(
                     self.API_URL,
                     headers={
                         "Authorization": f"Bearer {self._api_key}",

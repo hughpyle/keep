@@ -1452,6 +1452,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if existing:
                 existing_tags = filter_non_system_tags(existing.tags)
 
+        # Preserve analysis watermark across puts (incremental analysis needs
+        # the version baseline even when content changes).
+        _prev_analyzed_version = None
+        if existing_doc:
+            _prev_analyzed_version = existing_doc.tags.get("_analyzed_version")
+
         # Compute content hash for change detection
         new_hash = _content_hash(content)
 
@@ -1483,6 +1489,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     _merge_tags_additive(merged_tags, {key: values})
 
         _merge_tags_additive(merged_tags, system_tags, replace_system=True)
+
+        # Restore analysis version watermark (dropped by filter_non_system_tags)
+        if _prev_analyzed_version and "_analyzed_version" not in merged_tags:
+            merged_tags["_analyzed_version"] = _prev_analyzed_version
 
         # Change detection (before embedding to allow early return)
         content_unchanged = (
@@ -3204,11 +3214,23 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
     # Parts (structural decomposition)
     # -------------------------------------------------------------------------
 
-    def _gather_analyze_chunks(self, id: str, doc_record) -> list[dict]:
+    # Number of prior (already-analyzed) versions to include as context
+    # in incremental analysis, so the LLM can judge whether new entries
+    # represent genuinely new themes or continuations.
+    INCREMENTAL_CONTEXT = 10
+
+    def _gather_analyze_chunks(
+        self, id: str, doc_record, *, since_version: int | None = None,
+    ) -> list[dict] | dict[str, list[dict]]:
         """Gather content chunks for analysis as serializable dicts.
 
         For URI sources: re-fetch the document content.
         For inline notes: assemble version history chronologically.
+
+        When *since_version* is set and the item is not URI-sourced, returns
+        ``{"context": [...], "targets": [...]}`` with overlap context chunks
+        and new-version target chunks.  Returns ``{"context": [], "targets": []}``
+        if there are no new versions.
         """
         doc_coll = self._resolve_doc_collection()
         source = doc_record.tags.get("_source")
@@ -3224,24 +3246,67 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 chunks = [{"content": doc.content, "tags": parent_user_tags, "index": 0}]
             except Exception as e:
                 logger.warning("Could not re-fetch %s: %s, using summary", id, e)
+            if chunks:
+                return chunks  # URI sources don't support incremental
 
-        if not chunks:
-            versions = self._document_store.list_versions(doc_coll, id, limit=100)
-            if versions:
-                for i, v in enumerate(reversed(versions)):
-                    date_str = v.created_at[:10] if v.created_at else ""
-                    chunks.append({
-                        "content": f"[{date_str}]\n{v.summary}",
-                        "tags": parent_user_tags,
-                        "index": i,
-                    })
-                chunks.append({
-                    "content": f"[current]\n{doc_record.summary}",
+        versions = self._document_store.list_versions(doc_coll, id, limit=100)
+
+        if since_version is not None and versions:
+            # Incremental: split versions into context (already analyzed) and targets (new)
+            chronological = list(reversed(versions))
+            context_versions = [v for v in chronological if v.version <= since_version]
+            new_versions = [v for v in chronological if v.version > since_version]
+
+            if not new_versions:
+                return {"context": [], "targets": []}
+
+            # Take last N context versions as overlap
+            overlap = context_versions[-self.INCREMENTAL_CONTEXT:]
+
+            context_chunks: list[dict] = []
+            for i, v in enumerate(overlap):
+                date_str = v.created_at[:10] if v.created_at else ""
+                context_chunks.append({
+                    "content": f"[{date_str}]\n{v.summary}",
                     "tags": parent_user_tags,
-                    "index": len(chunks),
+                    "index": i,
                 })
-            else:
-                chunks = [{"content": doc_record.summary, "tags": parent_user_tags, "index": 0}]
+
+            target_chunks: list[dict] = []
+            idx = len(context_chunks)
+            for v in new_versions:
+                date_str = v.created_at[:10] if v.created_at else ""
+                target_chunks.append({
+                    "content": f"[{date_str}]\n{v.summary}",
+                    "tags": parent_user_tags,
+                    "index": idx,
+                })
+                idx += 1
+            # Current doc as final target
+            target_chunks.append({
+                "content": f"[current]\n{doc_record.summary}",
+                "tags": parent_user_tags,
+                "index": idx,
+            })
+
+            return {"context": context_chunks, "targets": target_chunks}
+
+        # Full analysis (no since_version or no versions)
+        if versions:
+            for i, v in enumerate(reversed(versions)):
+                date_str = v.created_at[:10] if v.created_at else ""
+                chunks.append({
+                    "content": f"[{date_str}]\n{v.summary}",
+                    "tags": parent_user_tags,
+                    "index": i,
+                })
+            chunks.append({
+                "content": f"[current]\n{doc_record.summary}",
+                "tags": parent_user_tags,
+                "index": len(chunks),
+            })
+        else:
+            chunks = [{"content": doc_record.summary, "tags": parent_user_tags, "index": 0}]
 
         return chunks
 
@@ -3304,8 +3369,41 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 logger.info("Skipping analysis for %s: parts already current", id)
                 return self.list_parts(id)
 
+        # Detect incremental vstring analysis
+        analyzed_version_str = doc_record.tags.get("_analyzed_version")
+        is_vstring = doc_record.tags.get("_source") != "uri"
+        incremental = (
+            not force
+            and bool(analyzed_version_str)
+            and is_vstring
+            and analyzer is None  # custom analyzers always get full
+        )
+        since_version: int | None = None
+        if incremental:
+            try:
+                since_version = int(analyzed_version_str)
+            except (ValueError, TypeError):
+                incremental = False
+
         # Phase 1: Gather — assemble chunks, guide context, tag specs (local)
-        chunk_dicts = self._gather_analyze_chunks(id, doc_record)
+        gather_result = self._gather_analyze_chunks(
+            id, doc_record, since_version=since_version if incremental else None,
+        )
+
+        # Handle incremental gather result
+        if isinstance(gather_result, dict):
+            context_chunks = gather_result["context"]
+            target_chunks = gather_result["targets"]
+            if not target_chunks:
+                logger.info("Skipping incremental analysis for %s: no new versions", id)
+                self._record_analyzed_tags(doc_coll, id, doc_record)
+                return self.list_parts(id)
+            chunk_dicts = context_chunks + target_chunks
+        else:
+            context_chunks = None
+            target_chunks = None
+            chunk_dicts = gather_result
+            incremental = False  # gather returned flat list (URI or full)
 
         total_content = "".join(c["content"] for c in chunk_dicts)
         if len(total_content.strip()) < 50:
@@ -3342,6 +3440,89 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         else:
             analyzer_provider = None  # custom analyzer passed directly
 
+        if incremental and context_chunks is not None and target_chunks is not None:
+            # Incremental path: single-window LLM call with context + targets
+            from .analyzers import (
+                INCREMENTAL_ANALYSIS_PROMPT,
+                _estimate_tokens,
+                _parse_parts,
+                extract_prompt_section,
+            )
+
+            # Resolve incremental prompt from .prompt/analyze/incremental system doc
+            incremental_prompt = None
+            try:
+                doc_coll_prompt = self._resolve_doc_collection()
+                inc_doc = self._document_store.get(doc_coll_prompt, ".prompt/analyze/incremental")
+                if inc_doc and inc_doc.summary:
+                    extracted = extract_prompt_section(inc_doc.summary)
+                    if extracted:
+                        incremental_prompt = extracted
+            except Exception as e:
+                logger.debug("Incremental prompt doc resolution failed: %s", e)
+
+            total_tokens = sum(
+                _estimate_tokens(c["content"])
+                for c in context_chunks + target_chunks
+            )
+            # If too large for single window, fall back to full analysis
+            if total_tokens > 12000:
+                logger.info(
+                    "Incremental content too large (%d tokens), falling back to full analysis: %s",
+                    total_tokens, id,
+                )
+                incremental = False
+                # Re-gather as full
+                chunk_dicts = self._gather_analyze_chunks(id, doc_record)
+                # Fall through to full path below
+            else:
+                # Build single-window prompt with <analyze> marking
+                prompt_parts = ["<content>"]
+                for c in context_chunks:
+                    prompt_parts.append(c["content"])
+                prompt_parts.append("<analyze>")
+                for c in target_chunks:
+                    prompt_parts.append(c["content"])
+                prompt_parts.append("</analyze>")
+                prompt_parts.append("</content>")
+                user_prompt = "\n\n".join(prompt_parts)
+
+                if guide_context:
+                    user_prompt = f"{guide_context}\n\n---\n\n{user_prompt}"
+
+                provider = analyzer_provider or self._get_summarization_provider()
+                # Unwrap caching wrapper if present
+                raw_provider = provider
+                if hasattr(raw_provider, '_provider') and raw_provider._provider is not None:
+                    raw_provider = raw_provider._provider
+
+                prompt_text = incremental_prompt or INCREMENTAL_ANALYSIS_PROMPT
+                try:
+                    result_text = raw_provider.generate(
+                        prompt_text, user_prompt, max_tokens=4096,
+                    )
+                    new_parts = _parse_parts(result_text) if result_text else []
+                except Exception as e:
+                    logger.warning("Incremental analysis LLM call failed: %s", e)
+                    new_parts = []
+
+                # Classify new parts with tag specs
+                if tag_specs and new_parts:
+                    try:
+                        classifier.classify(new_parts, tag_specs)
+                    except Exception as e:
+                        logger.warning("Tag classification skipped: %s", e)
+
+                # Append new parts (don't delete old ones)
+                if new_parts:
+                    self._append_incremental_parts(
+                        id, doc_coll, new_parts, doc_record, analyzer_provider,
+                    )
+
+                self._record_analyzed_tags(doc_coll, id, doc_record)
+                return self.list_parts(id)
+
+        # Full analysis path
         if analyzer is not None:
             # Custom analyzer: call directly (not through process_analyze)
             from .providers.base import AnalysisChunk
@@ -3373,17 +3554,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # Content not decomposable — single section is redundant with the note
         if not proc_result.parts or len(proc_result.parts) <= 1:
             logger.info("Content not decomposable into multiple parts: %s", id)
-            # Record _analyzed_hash so we don't re-run the LLM next time
-            if doc_record.content_hash:
-                chroma_coll = self._resolve_chroma_collection()
-                updated_tags = dict(doc_record.tags)
-                updated_tags["_analyzed_hash"] = doc_record.content_hash
-                self._document_store.update_tags(doc_coll, id, updated_tags)
-                self._store.update_tags(chroma_coll, id,
-                                        casefold_tags_for_index(updated_tags))
+            self._record_analyzed_tags(doc_coll, id, doc_record)
             return []
 
         # Phase 3: Apply — write parts + embeddings to stores (local)
+        # apply_result records _analyzed_hash and _analyzed_version via mutations
         self.apply_result(
             id, doc_coll, proc_result,
             existing_tags=doc_record.tags,
@@ -3396,34 +3571,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 chunk_dicts, overview_provider,
             )
             if overview:
-                from .document_store import PartInfo
-                from .types import utc_now
-
-                parent_user_tags = {
-                    k: v for k, v in doc_record.tags.items()
-                    if not k.startswith(SYSTEM_TAG_PREFIX)
-                }
-                now = utc_now()
-                overview_part = PartInfo(
-                    part_num=0,
-                    summary=overview,
-                    tags=dict(parent_user_tags, _part_type="overview"),
-                    content="",
-                    created_at=now,
-                )
-                # SQLite: INSERT OR REPLACE (doesn't touch parts 1..N)
-                self._document_store.upsert_single_part(
-                    doc_coll, id, overview_part,
-                )
-                # ChromaDB: upsert with embedding
-                chroma_coll = self._resolve_chroma_collection()
-                embed = self._get_embedding_provider()
-                embedding = embed.embed(overview)
-                self._store.upsert_part(
-                    chroma_coll, id, 0,
-                    embedding, overview,
-                    casefold_tags_for_index(overview_part.tags),
-                )
+                self._upsert_overview_part(id, doc_coll, overview, doc_record)
 
         return self.list_parts(id)
 
@@ -3446,6 +3594,100 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             except TypeError:
                 result = provider.summarize(full_text)
         return result
+
+    def _record_analyzed_tags(self, doc_coll: str, id: str, doc_record) -> None:
+        """Update _analyzed_hash and _analyzed_version tags after analysis."""
+        chroma_coll = self._resolve_chroma_collection()
+        updated_tags = dict(doc_record.tags)
+        if doc_record.content_hash:
+            updated_tags["_analyzed_hash"] = doc_record.content_hash
+        versions = self._document_store.list_versions(doc_coll, id, limit=1)
+        if versions:
+            updated_tags["_analyzed_version"] = str(versions[0].version)
+        self._document_store.update_tags(doc_coll, id, updated_tags)
+        self._store.update_tags(chroma_coll, id, casefold_tags_for_index(updated_tags))
+
+    def _append_incremental_parts(
+        self, id: str, doc_coll: str, new_parts: list[dict],
+        doc_record, provider,
+    ) -> None:
+        """Append new analysis parts without deleting existing ones."""
+        from .document_store import PartInfo
+
+        chroma_coll = self._resolve_chroma_collection()
+        max_part = self._document_store.max_part_num(doc_coll, id)
+        parent_user_tags = {
+            k: v for k, v in doc_record.tags.items()
+            if not k.startswith(SYSTEM_TAG_PREFIX)
+        }
+        embed = self._get_embedding_provider()
+        now = utc_now()
+
+        for i, raw in enumerate(new_parts, start=max_part + 1):
+            part_tags = dict(parent_user_tags)
+            if raw.get("tags"):
+                part_tags.update(raw["tags"])
+            part_tags["_base_id"] = id
+            part_tags["_part_num"] = str(i)
+            summary = str(raw.get("summary") or "")
+
+            part = PartInfo(
+                part_num=i,
+                summary=summary,
+                tags=part_tags,
+                content=str(raw.get("content") or ""),
+                created_at=now,
+            )
+            self._document_store.upsert_single_part(doc_coll, id, part)
+
+            if summary:
+                embedding = embed.embed(summary)
+                self._store.upsert_part(
+                    chroma_coll, id, i,
+                    embedding, summary,
+                    casefold_tags_for_index(part_tags),
+                )
+
+        # Regenerate overview from all part summaries
+        all_parts = self._document_store.list_parts(doc_coll, id)
+        overview_chunks = [
+            {"content": p.summary, "tags": {}, "index": i}
+            for i, p in enumerate(all_parts)
+            if p.part_num > 0 and p.summary
+        ]
+        if len(overview_chunks) >= 2:
+            overview_provider = provider or self._get_summarization_provider()
+            overview = self._generate_vstring_overview(overview_chunks, overview_provider)
+            if overview:
+                self._upsert_overview_part(id, doc_coll, overview, doc_record)
+
+    def _upsert_overview_part(
+        self, id: str, doc_coll: str, overview: str, doc_record,
+    ) -> None:
+        """Write or replace the @P{0} overview part."""
+        from .document_store import PartInfo
+
+        parent_user_tags = {
+            k: v for k, v in doc_record.tags.items()
+            if not k.startswith(SYSTEM_TAG_PREFIX)
+        }
+        now = utc_now()
+        overview_part = PartInfo(
+            part_num=0,
+            summary=overview,
+            tags=dict(parent_user_tags, _part_type="overview"),
+            content="",
+            created_at=now,
+        )
+        self._document_store.upsert_single_part(doc_coll, id, overview_part)
+        chroma_coll = self._resolve_chroma_collection()
+        embed = self._get_embedding_provider()
+        embedding = embed.embed(overview)
+        self._store.upsert_part(
+            chroma_coll, id, 0,
+            embedding, overview,
+            casefold_tags_for_index(overview_part.tags),
+        )
 
     def get_part(self, id: str, part_num: int) -> Optional[Item]:
         """Get a specific part of a document.

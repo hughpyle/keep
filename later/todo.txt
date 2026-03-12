@@ -1,11 +1,15 @@
 
+* keep ui
+    - search, navigate edges & tags
+    - use the flows, luke
+
 * expose flows as MCP tasks (SEP-1686)? (no good clients yet tho)
     https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1686
     https://github.com/modelcontextprotocol/modelcontextprotocol/pull/1732
 
 * acp
 
-* budget by tokens, not just by ticks
+* budget by tokens, not just by ticks?
 
 * chatgpt import
 
@@ -284,3 +288,4 @@ x check for CLI compatibility with windows (WLS should work but no plan to valid
 . run `get`-type paths without persistence (late-bound, only when async is needed)
 . recurse option for CLI put
 . state-doc fragments and assembly
+. obsidian, markdown-links and wikilinks

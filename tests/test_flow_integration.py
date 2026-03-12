@@ -454,7 +454,10 @@ class TestFlowCLI:
         from typer.testing import CliRunner
         runner = CliRunner()
         def invoke(*args):
-            env = {"KEEP_STORE": str(tmp_path)}
+            env = {
+                "KEEP_STORE_PATH": str(tmp_path),
+                "KEEP_CONFIG": str(tmp_path),
+            }
             return runner.invoke(app, list(args), env=env, catch_exceptions=False)
         return invoke
 

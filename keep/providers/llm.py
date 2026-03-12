@@ -223,9 +223,9 @@ class OllamaSummarization:
         max_tokens: int = 4096,
     ) -> str | None:
         """Send a raw prompt to Ollama and return generated text."""
-        import requests
+        from .ollama_utils import ollama_session
 
-        response = requests.post(
+        response = ollama_session().post(
             f"{self.base_url}/api/chat",
             json={
                 "model": self.model,
@@ -454,10 +454,10 @@ class OllamaTagging:
 
     def tag(self, content: str) -> dict[str, str]:
         """Generate tags using Ollama."""
-        import requests
+        from .ollama_utils import ollama_session
 
         truncated = content[:20000] if len(content) > 20000 else content
-        response = requests.post(
+        response = ollama_session().post(
             f"{self.base_url}/api/chat",
             json={
                 "model": self.model,
@@ -558,12 +558,12 @@ class OllamaMediaDescriber:
             return None
 
         import base64
-        import requests
+        from .ollama_utils import ollama_session
 
         with open(path, "rb") as f:
             image_data = base64.b64encode(f.read()).decode("utf-8")
 
-        response = requests.post(
+        response = ollama_session().post(
             f"{self.base_url}/api/chat",
             json={
                 "model": self.model,
@@ -616,12 +616,12 @@ class OllamaContentExtractor:
             return None
 
         import base64
-        import requests
+        from .ollama_utils import ollama_session
 
         with open(path, "rb") as f:
             image_data = base64.b64encode(f.read()).decode("utf-8")
 
-        response = requests.post(
+        response = ollama_session().post(
             f"{self.base_url}/api/generate",
             json={
                 "model": self.model,

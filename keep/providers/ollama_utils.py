@@ -6,6 +6,8 @@ import sys
 
 import requests
 
+from keep.providers.http import http_session as ollama_session  # back-compat alias
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,8 +35,7 @@ def ollama_ensure_model(base_url: str, model: str) -> None:
 
     # Check installed models
     try:
-        from keep.types import user_agent
-        resp = requests.get(f"{base_url}/api/tags", timeout=5, headers={"User-Agent": user_agent()})
+        resp = ollama_session().get(f"{base_url}/api/tags", timeout=5)
         resp.raise_for_status()
     except requests.RequestException as e:
         raise RuntimeError(
@@ -54,7 +55,7 @@ def ollama_ensure_model(base_url: str, model: str) -> None:
     print(f"Pulling Ollama model '{model}' (first use)...", file=sys.stderr)
 
     try:
-        resp = requests.post(
+        resp = ollama_session().post(
             f"{base_url}/api/pull",
             json={"name": model, "stream": True},
             stream=True,

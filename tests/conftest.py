@@ -649,6 +649,11 @@ class MockDocumentStore:
         key = f"_parts:{collection}:{id}"
         return len(self._parts.get(key, []))
 
+    def max_part_num(self, collection: str, id: str) -> int:
+        key = f"_parts:{collection}:{id}"
+        parts = self._parts.get(key, [])
+        return max((p.part_num for p in parts), default=0)
+
     def delete_parts(self, collection: str, id: str) -> int:
         key = f"_parts:{collection}:{id}"
         parts = self._parts.pop(key, [])

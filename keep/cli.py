@@ -3317,11 +3317,35 @@ def pending_cmd(
             kp.close()
             return
 
-        _daemon_logger.info("Daemon started (pid=%d)", os.getpid())
+        # Startup banner: version, paths, queue depth
+        try:
+            from importlib.metadata import version as _pkg_version
+            _ver = _pkg_version("keep-skill")
+        except Exception:
+            _ver = "unknown"
+        _daemon_logger.info(
+            "Daemon started (pid=%d) keep-skill=%s python=%s store=%s",
+            os.getpid(), _ver, sys.executable, kp._store_path,
+        )
+        _daemon_logger.info(
+            "Queue: %d pending, %d flow, %d failed",
+            kp._pending_queue.count(),
+            kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0,
+            0,  # failed count not cheaply available
+        )
+        _daemon_logger.info(
+            "Embedding: %s/%s",
+            kp._config.embedding.name if kp._config.embedding else "none",
+            kp._config.embedding.params.get("model", "") if kp._config.embedding else "",
+        )
 
         def handle_signal(signum, frame):
             nonlocal shutdown_requested
             shutdown_requested = True
+            _daemon_logger.info("Received signal %d, shutting down after current item", signum)
+
+        def _is_shutdown():
+            return shutdown_requested
 
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
@@ -3333,8 +3357,11 @@ def pending_cmd(
                     limit=50,
                     worker_id=flow_worker_id,
                     lease_seconds=180,
+                    shutdown_check=_is_shutdown,
                 )
-                result = kp.process_pending(limit=50)
+                if shutdown_requested:
+                    break
+                result = kp.process_pending(limit=50, shutdown_check=_is_shutdown)
                 delegated = result.get("delegated", 0)
                 _daemon_logger.info(
                     "Daemon batch: processed=%d failed=%d delegated=%d flow_processed=%d flow_failed=%d",
@@ -3365,12 +3392,15 @@ def pending_cmd(
                     # (e.g. OCR enqueued while we were processing a summarize).
                     # Wait briefly and check once more before exiting.
                     time.sleep(1)
+                    if shutdown_requested:
+                        break
                     flow_result = kp.process_pending_work(
                         limit=50,
                         worker_id=flow_worker_id,
                         lease_seconds=180,
+                        shutdown_check=_is_shutdown,
                     )
-                    result = kp.process_pending(limit=50)
+                    result = kp.process_pending(limit=50, shutdown_check=_is_shutdown)
                     flow_activity = (
                         int(flow_result.get("claimed", 0)) > 0
                         or int(flow_result.get("processed", 0)) > 0

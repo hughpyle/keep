@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
 from .work_queue import WorkQueue
@@ -25,6 +26,7 @@ def process_work_batch(
     limit: int = 10,
     worker_id: Optional[str] = None,
     lease_seconds: int = 120,
+    shutdown_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Claim and execute a batch of work items.
 
@@ -37,6 +39,10 @@ def process_work_batch(
     errors: list[dict[str, str]] = []
 
     for item in items:
+        if shutdown_check and shutdown_check():
+            logger.info("Shutdown requested, stopping work batch")
+            break
+
         # Skip if superseded by a newer item
         if (
             item.supersede_key
@@ -47,18 +53,21 @@ def process_work_batch(
             stats["processed"] += 1
             continue
 
+        target = item.input.get("item_id") or item.input.get("id") or "?"
         try:
+            logger.info("Processing %s %s", item.kind, target)
             outcome = _execute_work_item(keeper, item.kind, item.input)
             status = outcome.get("status", "applied")
             details = outcome.get("details")
             queue.complete(item.work_id, outcome)
             if status == "skipped":
-                target = item.input.get("item_id") or item.input.get("id") or "?"
-                logger.info("Work item %s (%s) skipped [%s]: %s", item.work_id, item.kind, target, details or {})
+                logger.info("Skipped %s %s: %s", item.kind, target, details or "")
+            else:
+                logger.info("Done %s %s", item.kind, target)
             stats["processed"] += 1
         except Exception as exc:
             msg = f"{type(exc).__name__}: {exc}"
-            logger.warning("Work item %s (%s) failed: %s", item.work_id, item.kind, msg)
+            logger.warning("Failed %s %s: %s", item.kind, target, msg)
             queue.fail(item.work_id, worker, msg)
             stats["failed"] += 1
             errors.append({"work_id": item.work_id, "error": msg})

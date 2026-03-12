@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -304,7 +305,7 @@ class BackgroundProcessingMixin:
             item.id, item.task_type, failure_class, error,
         )
 
-    def process_pending(self, limit: int = 10) -> dict:
+    def process_pending(self, limit: int = 10, shutdown_check=None) -> dict:
         """Process pending work items (embedding, reindex, infrastructure).
 
         Handles task types serially:
@@ -332,6 +333,10 @@ class BackgroundProcessingMixin:
         result = {"processed": 0, "failed": 0, "abandoned": 0, "delegated": 0, "errors": []}
 
         for item in items:
+            if shutdown_check and shutdown_check():
+                logger.info("Shutdown requested, stopping pending batch")
+                break
+
             # Skip items that have failed too many times
             # (attempts was already incremented by dequeue, so check >= MAX)
             if item.attempts >= MAX_SUMMARY_ATTEMPTS:
@@ -712,6 +717,9 @@ class BackgroundProcessingMixin:
             if doc.content_hash:
                 updated_tags = dict(doc.tags)
                 updated_tags["_analyzed_hash"] = doc.content_hash
+                versions = self._document_store.list_versions(collection, item_id, limit=1)
+                if versions:
+                    updated_tags["_analyzed_version"] = str(versions[0].version)
                 mutations.append({
                     "op": "set_tags", "target": item_id,
                     "tags": updated_tags,
@@ -997,6 +1005,7 @@ class BackgroundProcessingMixin:
         limit: int = 10,
         worker_id: Optional[str] = None,
         lease_seconds: int = 120,
+        shutdown_check=None,
     ) -> dict:
         """Process a batch of requested work items."""
         if not self._is_local:
@@ -1007,6 +1016,7 @@ class BackgroundProcessingMixin:
             self._get_work_queue(),
             limit=limit,
             worker_id=worker_id,
+            shutdown_check=shutdown_check,
             lease_seconds=lease_seconds,
         )
 
@@ -1129,7 +1139,13 @@ class BackgroundProcessingMixin:
                 # Windows: use CREATE_NEW_PROCESS_GROUP
                 kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-            subprocess.Popen(cmd, **kwargs)
+            # Inherit KEEP_VERBOSE so daemon logs at debug level when
+            # the parent was started with -v / KEEP_VERBOSE=1.
+            env = os.environ.copy()
+            if os.environ.get("KEEP_VERBOSE"):
+                env["KEEP_VERBOSE"] = "1"
+
+            subprocess.Popen(cmd, env=env, **kwargs)
             self._last_spawn_time = time.monotonic()
             logger.info("Spawned background processor")
             return True

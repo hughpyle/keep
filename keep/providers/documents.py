@@ -3,6 +3,8 @@
 import tempfile
 from pathlib import Path
 
+import requests
+
 from .base import Document, DocumentProvider, get_registry
 
 
@@ -913,20 +915,14 @@ class HttpDocumentProvider:
         if self._is_private_url(uri):
             raise IOError(f"Blocked request to private/internal address: {uri}")
 
-        try:
-            import requests
-        except ImportError:
-            raise RuntimeError("HTTP document fetching requires 'requests' library")
-
-        from keep.types import user_agent
+        from keep.providers.http import http_session
 
         # Follow redirects manually so each hop is validated against SSRF
         target = uri
         for _ in range(self._MAX_REDIRECTS):
-            resp = requests.get(
+            resp = http_session().get(
                 target,
                 timeout=self.timeout,
-                headers={"User-Agent": user_agent()},
                 stream=True,
                 allow_redirects=False,
             )

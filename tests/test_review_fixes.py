@@ -194,14 +194,15 @@ class TestIsPrivateUrl:
 
     def test_fetch_blocks_redirect_to_private(self, provider) -> None:
         """fetch() blocks redirects to private addresses."""
-        import requests
-
         mock_resp = MagicMock()
         mock_resp.is_redirect = True
         mock_resp.headers = {"Location": "http://127.0.0.1/internal"}
         mock_resp.close = MagicMock()
 
-        with patch("requests.get", return_value=mock_resp):
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
+
+        with patch("keep.providers.http.http_session", return_value=mock_session):
             with pytest.raises(IOError, match="private"):
                 provider.fetch("https://example.com/redirect")
 
