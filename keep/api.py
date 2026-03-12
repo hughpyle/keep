@@ -1385,11 +1385,13 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 summary=existing.summary, tags=tags,
             )
         else:
-            # Create minimal inverse tagdoc
+            # Create minimal inverse tagdoc with a useful summary
+            # so it can be embedded and found via search.
             now = utc_now()
+            summary = f"Inverse edge tag for `{predicate}` (auto-generated)"
             self._document_store.upsert(
                 doc_coll, inverse_tagdoc_id,
-                summary="",
+                summary=summary,
                 tags={
                     "_inverse": predicate,
                     "_created": now,
@@ -3961,12 +3963,13 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     break
                 try:
                     if doc_record:
-                        embedding = self._get_embedding_provider().embed(doc_record.summary)
+                        embed_text = doc_record.summary or doc_id
+                        embedding = self._get_embedding_provider().embed(embed_text)
                         self._store.upsert(
                             collection=chroma_coll,
                             id=doc_id,
                             embedding=embedding,
-                            summary=doc_record.summary,
+                            summary=doc_record.summary or doc_id,
                             tags=casefold_tags_for_index(doc_record.tags),
                         )
                         fixed += 1

@@ -53,7 +53,8 @@ def process_work_batch(
             details = outcome.get("details")
             queue.complete(item.work_id, outcome)
             if status == "skipped":
-                logger.info("Work item %s (%s) skipped: %s", item.work_id, item.kind, details or {})
+                target = item.input.get("item_id") or item.input.get("id") or "?"
+                logger.info("Work item %s (%s) skipped [%s]: %s", item.work_id, item.kind, target, details or {})
             stats["processed"] += 1
         except Exception as exc:
             msg = f"{type(exc).__name__}: {exc}"
