@@ -99,14 +99,16 @@ def _git_visible_files(directory: Path, recurse: bool) -> list[Path] | None:
     for relpath in raw.split("\0"):
         if not relpath:
             continue
+        # Skip paths with any hidden component (.github/, .vscode/, etc.)
+        parts = relpath.split("/")
+        if any(p.startswith(".") for p in parts):
+            continue
         entry = (directory / relpath).resolve()
         # Scope to directory
         if not str(entry).startswith(str(directory.resolve())):
             continue
         # Apply recurse constraint: without -r, only top-level files
-        if not recurse and entry.parent.resolve() != directory.resolve():
-            continue
-        if entry.name.startswith("."):
+        if not recurse and len(parts) > 1:
             continue
         if entry.is_symlink() or not entry.is_file():
             continue
