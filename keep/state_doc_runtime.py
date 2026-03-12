@@ -401,6 +401,13 @@ class _EnvActionContext:
     def get_document(self, id: str) -> Any:
         return self._env.get_document(id)
 
+    def find_by_name(self, stem: str, *, vault: str | None = None) -> Any:
+        # Delegate to env if available; extract_links runs via _KeeperActionContext
+        fn = getattr(self._env, "find_by_name", None)
+        if fn is not None:
+            return fn(stem, vault=vault)
+        return None
+
     def resolve_meta(self, id: str, limit_per_doc: int = 3) -> dict[str, list[Any]]:
         return self._env.resolve_meta(id, limit_per_doc=limit_per_doc)
 

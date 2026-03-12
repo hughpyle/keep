@@ -8,7 +8,7 @@ from . import action
 from ._item_scope import resolve_item_content
 
 
-@action(id="summarize")
+@action(id="summarize", priority=3)
 class Summarize:
     """Generate and return a summary for the target item."""
 

@@ -10,8 +10,10 @@ import pytest
 from keep.actions.extract_links import (
     _parse_links,
     _resolve_internal_link,
+    _detect_vault_root,
     ExtractLinks,
 )
+from keep.types import parse_ref
 
 
 # ---------------------------------------------------------------------------
@@ -42,9 +44,11 @@ class TestParseLinks:
         assert len(links) == 1
         assert links[0]["target"] == "https://example.com"
 
-    def test_image_not_captured(self):
+    def test_image_captured(self):
         links = _parse_links("![alt](image.png)")
-        assert len(links) == 0
+        assert len(links) == 1
+        assert links[0]["target"] == "image.png"
+        assert links[0]["style"] == "markdown"
 
     def test_mixed_styles(self):
         content = "Link to [[wiki-note]] and [md](./other.md) and [url](https://x.com)"
@@ -81,6 +85,7 @@ class TestResolveInternalLink:
         def _get(id):
             return MagicMock() if id in known_ids else None
         ctx.get = _get
+        ctx.find_by_name = MagicMock(return_value=None)
         return ctx
 
     def test_direct_match(self):
@@ -141,6 +146,8 @@ def _make_context(items: dict[str, Any], item_id: str = "source.md"):
     def _get(id):
         return items.get(id)
     ctx.get = _get
+    ctx.find_by_name = MagicMock(return_value=None)
+    ctx.list_items = MagicMock(return_value=[])
 
     return ctx
 
@@ -159,11 +166,11 @@ class TestExtractLinksAction:
         result = ExtractLinks().run({"item_id": "file:///vault/a.md"}, ctx)
 
         assert not result.get("skipped")
-        assert "file:///vault/b.md" in result["resolved"]
+        assert "file:///vault/b.md[[b]]" in result["resolved"]
         # Should have set_tags mutation
         tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
         assert len(tag_mut) == 1
-        assert "file:///vault/b.md" in tag_mut[0]["tags"]["references"]
+        assert "file:///vault/b.md[[b]]" in tag_mut[0]["tags"]["references"]
 
     def test_external_url(self):
         source = _make_item("file:///vault/a.md", "See [docs](https://example.com).")
@@ -227,9 +234,11 @@ class TestExtractLinksAction:
         result = ExtractLinks().run({"item_id": "file:///vault/a.md"}, ctx)
 
         assert not result.get("skipped")
-        put_muts = [m for m in result["mutations"] if m["op"] == "put_item"]
+        put_muts = [m for m in result["mutations"] if m["op"] == "put_item"
+                     and m["id"] != ".vault/None"]  # exclude vault registration
         assert len(put_muts) == 1
         assert put_muts[0]["id"] == "file:///vault/missing-note.md"
+        assert put_muts[0]["tags"]["_link_stem"] == "missing-note"
 
     def test_merges_with_existing_references(self):
         source = _make_item(
@@ -247,4 +256,90 @@ class TestExtractLinksAction:
         tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
         refs = tag_mut[0]["tags"]["references"]
         assert "existing-ref" in refs
-        assert "new-link" in refs
+        assert "new-link[[new-link]]" in refs
+
+
+# ---------------------------------------------------------------------------
+# parse_ref
+# ---------------------------------------------------------------------------
+
+class TestParseRef:
+
+    def test_plain_id(self):
+        assert parse_ref("file:///vault/Foo.md") == ("file:///vault/Foo.md", None)
+
+    def test_with_alias(self):
+        assert parse_ref("file:///vault/Foo.md[[Foo]]") == ("file:///vault/Foo.md", "Foo")
+
+    def test_url_no_alias(self):
+        assert parse_ref("https://example.com") == ("https://example.com", None)
+
+    def test_empty_alias(self):
+        assert parse_ref("id[[]]") == ("id", "")
+
+    def test_no_closing_brackets(self):
+        assert parse_ref("id[[Foo") == ("id[[Foo", None)
+
+    def test_nested_brackets(self):
+        # [[...]] should find the last [[
+        assert parse_ref("a[[b]]c[[d]]") == ("a[[b]]c", "d")
+
+
+# ---------------------------------------------------------------------------
+# Vault-wide wiki resolution
+# ---------------------------------------------------------------------------
+
+class TestVaultWideResolution:
+
+    def _make_context(self, known_ids: set[str], find_by_name_result=None):
+        ctx = MagicMock()
+        def _get(id):
+            return MagicMock() if id in known_ids else None
+        ctx.get = _get
+        ctx.find_by_name = MagicMock(return_value=find_by_name_result)
+        return ctx
+
+    def test_wiki_vault_wide_fallback(self):
+        """Wiki link that fails folder-relative falls back to find_by_name."""
+        found = MagicMock()
+        found.id = "file:///vault/deep/nested/Bar.md"
+        ctx = self._make_context(set(), find_by_name_result=found)
+
+        result = _resolve_internal_link(
+            "Bar", "file:///vault/notes/source.md", ctx,
+            style="wiki", vault_root="file:///vault",
+        )
+        assert result == "file:///vault/deep/nested/Bar.md"
+        ctx.find_by_name.assert_called_once_with("Bar", vault="file:///vault")
+
+    def test_markdown_no_vault_fallback(self):
+        """Markdown links do NOT use vault-wide fallback."""
+        ctx = self._make_context(set())
+
+        result = _resolve_internal_link(
+            "Bar", "file:///vault/notes/source.md", ctx,
+            style="markdown",
+        )
+        assert result is None
+        ctx.find_by_name.assert_not_called()
+
+    def test_wiki_folder_relative_preferred(self):
+        """Folder-relative match is preferred over vault-wide."""
+        ctx = self._make_context({"file:///vault/notes/Bar.md"})
+
+        result = _resolve_internal_link(
+            "Bar", "file:///vault/notes/source.md", ctx,
+            style="wiki", vault_root="file:///vault",
+        )
+        assert result == "file:///vault/notes/Bar.md"
+        ctx.find_by_name.assert_not_called()
+
+    def test_wiki_not_found_anywhere(self):
+        """Wiki link not found folder-relative or vault-wide returns None."""
+        ctx = self._make_context(set(), find_by_name_result=None)
+
+        result = _resolve_internal_link(
+            "Missing", "file:///vault/notes/source.md", ctx,
+            style="wiki", vault_root="file:///vault",
+        )
+        assert result is None

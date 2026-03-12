@@ -14,10 +14,14 @@ __all__ = [
     "ActionContext",
     "action",
     "get_action",
+    "get_action_priority",
     "list_actions",
     "item_to_result",
     "coerce_item_id",
 ]
+
+# Default action priority (0 = highest, 9 = lowest).
+DEFAULT_ACTION_PRIORITY = 5
 
 
 @runtime_checkable
@@ -54,6 +58,7 @@ class ActionContext(Protocol):
     ) -> list[Any]: ...
 
     def get_document(self, id: str) -> Any | None: ...
+    def find_by_name(self, stem: str, *, vault: str | None = None) -> Any | None: ...
     def resolve_meta(self, id: str, limit_per_doc: int = 3) -> dict[str, list[Any]]: ...
     def resolve_provider(self, kind: str, name: str | None = None) -> Any: ...
 
@@ -67,12 +72,20 @@ def _snake_case(name: str) -> str:
     return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
 
-def action(cls: type | None = None, *, id: str | None = None, name: str | None = None):
+def action(
+    cls: type | None = None,
+    *,
+    id: str | None = None,
+    name: str | None = None,
+    priority: int = DEFAULT_ACTION_PRIORITY,
+):
     """Register a class as a named action.
 
     Use ``@action(id="summarize")`` to declare the action's canonical ID.
     The ``name`` kwarg is accepted as a legacy alias for ``id``.
     If neither is provided, the ID is derived from the class name via snake_case.
+
+    ``priority`` controls work-queue ordering (0 = highest, 9 = lowest).
     """
     effective_id = id or name
 
@@ -82,6 +95,7 @@ def action(cls: type | None = None, *, id: str | None = None, name: str | None =
             raise ValueError("action id cannot be empty")
         _ACTION_REGISTRY[action_id] = target
         target.ACTION_ID = action_id
+        target.ACTION_PRIORITY = max(0, min(9, int(priority)))
         return target
 
     if cls is None:
@@ -112,6 +126,15 @@ def get_action(name: str) -> Action:
     if not isinstance(inst, Action):
         raise TypeError(f"action {key!r} does not implement Action protocol")
     return inst
+
+
+def get_action_priority(name: str) -> int:
+    """Return the declared priority for an action (0-9, default 5)."""
+    _discover_actions()
+    cls = _ACTION_REGISTRY.get(str(name or "").strip())
+    if cls is None:
+        return DEFAULT_ACTION_PRIORITY
+    return getattr(cls, "ACTION_PRIORITY", DEFAULT_ACTION_PRIORITY)
 
 
 def list_actions() -> list[str]:

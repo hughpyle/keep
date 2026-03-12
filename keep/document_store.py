@@ -2546,6 +2546,67 @@ class DocumentStore:
 
         return results
 
+    def find_by_name(
+        self,
+        collection: str,
+        stem: str,
+        *,
+        id_prefix: str | None = None,
+        limit: int = 5,
+    ) -> list[DocumentRecord]:
+        """Find documents whose ID ends with ``/{stem}`` or ``/{stem}.md``.
+
+        Used for vault-wide wikilink resolution: given a note name like
+        ``Foo``, find any item whose path ends with ``/Foo.md`` or ``/Foo``.
+
+        Args:
+            collection: Collection name
+            stem: Bare note name (no extension)
+            id_prefix: Optional URI prefix to scope results (e.g. vault root)
+            limit: Max results
+        """
+        escaped = stem.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+        # Match /{stem}.md or /{stem} at end of ID
+        conditions = [
+            "collection = ?",
+            "(id LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\')",
+        ]
+        params: list[Any] = [
+            collection,
+            f"%/{escaped}.md",
+            f"%/{escaped}",
+        ]
+
+        if id_prefix:
+            esc_prefix = id_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append("id LIKE ? ESCAPE '\\'")
+            params.append(f"{esc_prefix}%")
+
+        sql = f"""
+            SELECT id, collection, summary, tags_json, created_at, updated_at, content_hash, accessed_at
+            FROM documents
+            WHERE {' AND '.join(conditions)}
+            ORDER BY length(id), id
+            LIMIT ?
+        """
+        params.append(limit)
+        cursor = self._execute(sql, tuple(params))
+
+        results = []
+        for row in cursor:
+            results.append(DocumentRecord(
+                id=row["id"],
+                collection=row["collection"],
+                summary=row["summary"],
+                tags=json.loads(row["tags_json"]) if row["tags_json"] else {},
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                content_hash=row["content_hash"],
+                accessed_at=row["accessed_at"],
+            ))
+        return results
+
     # -------------------------------------------------------------------------
     # Part Operations (structural decomposition)
     # -------------------------------------------------------------------------
@@ -2869,6 +2930,57 @@ class DocumentStore:
                 accessed_at=row["accessed_at"],
             ))
 
+        return results
+
+    def query_by_tag_value(
+        self,
+        collection: str,
+        key: str,
+        value: str,
+        *,
+        limit: int = 100,
+    ) -> list[DocumentRecord]:
+        """Find documents where tag *key* contains *value*.
+
+        Handles both scalar (``"val"``) and array (``["a","b"]``) storage
+        using SQLite JSON functions.
+        """
+        cursor = self._execute(
+            """
+            SELECT id, collection, summary, tags_json, created_at, updated_at,
+                   content_hash, content_hash_full, accessed_at
+            FROM documents
+            WHERE collection = ?
+              AND (
+                  json_extract(tags_json, ?) = ?
+                  OR EXISTS (
+                      SELECT 1 FROM json_each(
+                          CASE
+                              WHEN json_type(json_extract(tags_json, ?)) = 'array'
+                              THEN json_extract(tags_json, ?)
+                              ELSE '[]'
+                          END
+                      ) WHERE value = ?
+                  )
+              )
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (collection, f"$.{key}", value, f"$.{key}", f"$.{key}", value, limit),
+        )
+        results = []
+        for row in cursor:
+            results.append(DocumentRecord(
+                id=row["id"],
+                collection=row["collection"],
+                summary=row["summary"],
+                tags=json.loads(row["tags_json"]) if row["tags_json"] else {},
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                content_hash=row["content_hash"],
+                content_hash_full=row.get("content_hash_full"),
+                accessed_at=row["accessed_at"],
+            ))
         return results
 
     # -------------------------------------------------------------------------

@@ -116,6 +116,8 @@ class BackgroundProcessingMixin:
             task_type=task_type, id=id, content=content,
             metadata=metadata, tags=tags,
         )
+        from .actions import get_action_priority
+        priority = get_action_priority(task_type)
         self._get_work_queue().enqueue(
             task_type,
             {
@@ -126,6 +128,7 @@ class BackgroundProcessingMixin:
                 "metadata": meta,
             },
             supersede_key=supersede_key,
+            priority=priority,
         )
 
     def _dispatch_after_write_flow(

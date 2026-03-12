@@ -13,7 +13,7 @@ from ._item_scope import resolve_item
 logger = logging.getLogger(__name__)
 
 
-@action(id="describe")
+@action(id="describe", priority=5)
 class Describe:
     """Generate a text description of media content (images, audio, video)."""
 

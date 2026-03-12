@@ -96,6 +96,31 @@ class _KeeperActionContext:
     def get_document(self, id: str) -> Any:
         return self._keeper._document_store.get(self._collection, id)
 
+    def find_by_name(self, stem: str, *, vault: str | None = None) -> Any:
+        results = self._keeper._document_store.find_by_name(
+            self._collection, stem, id_prefix=vault, limit=1,
+        )
+        if results:
+            from .types import Item
+            rec = results[0]
+            return Item(id=rec.id, summary=rec.summary, tags=rec.tags)
+        return None
+
+    def find_referencing(self, target_id: str, tag_key: str = "references", limit: int = 50) -> list[Any]:
+        """Find items that reference *target_id* via edge-tag *tag_key*."""
+        doc_coll = self._keeper._resolve_doc_collection()
+        edges = self._keeper._document_store.get_inverse_edges(doc_coll, target_id)
+        # edges: list of (inverse, source_id, created) — we want the sources
+        source_ids = list(dict.fromkeys(src for _, src, _ in edges))[:limit]
+        if not source_ids:
+            return []
+        docs = self._keeper._document_store.get_many(doc_coll, source_ids)
+        from .types import Item
+        return [
+            Item(id=rec.id, summary=rec.summary, tags=rec.tags)
+            for rec in docs.values()
+        ]
+
     def resolve_meta(self, id: str, limit_per_doc: int = 3) -> dict[str, list[Any]]:
         return self._keeper.resolve_meta(item_id=id, limit_per_doc=limit_per_doc)
 
@@ -230,11 +255,18 @@ def _apply_mutations(
             target = str(mut["target"])
             tags = _resolve_ref(mut["tags"], output)
             if isinstance(tags, dict):
+                # Fetch existing tags for edge diff
+                existing_doc = keeper._document_store.get(collection, target)
+                existing_tags = existing_doc.tags if existing_doc else {}
+
                 keeper._document_store.update_tags(collection, target, tags)
                 chroma_coll = keeper._resolve_chroma_collection()
                 keeper._store.update_tags(
                     chroma_coll, target, casefold_tags_for_index(tags),
                 )
+
+                # Sync edge table for any edge-tag changes
+                keeper._process_edge_tags(target, tags, existing_tags, collection)
 
         elif op == "delete_prefix":
             prefix = str(mut["prefix"])

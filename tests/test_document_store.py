@@ -866,3 +866,53 @@ class TestStopwordOverrides:
         store.upsert("default", ".stop", "bar", {})
         second = store._build_fts_query("foo bar")
         assert second == '"foo"'
+
+
+class TestFindByName:
+    """Vault-wide name-based lookup."""
+
+    @pytest.fixture
+    def store(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "documents.db"
+            with DocumentStore(db_path) as store:
+                yield store
+
+    def test_find_by_stem_with_md(self, store: DocumentStore) -> None:
+        store.upsert("default", "file:///vault/notes/Foo.md", "Foo note", {})
+        store.upsert("default", "file:///vault/other/Bar.md", "Bar note", {})
+        results = store.find_by_name("default", "Foo")
+        assert len(results) == 1
+        assert results[0].id == "file:///vault/notes/Foo.md"
+
+    def test_find_by_stem_without_md(self, store: DocumentStore) -> None:
+        store.upsert("default", "file:///vault/notes/Foo", "Foo note", {})
+        results = store.find_by_name("default", "Foo")
+        assert len(results) == 1
+        assert results[0].id == "file:///vault/notes/Foo"
+
+    def test_scoped_by_prefix(self, store: DocumentStore) -> None:
+        store.upsert("default", "file:///vault1/Foo.md", "Foo v1", {})
+        store.upsert("default", "file:///vault2/Foo.md", "Foo v2", {})
+        results = store.find_by_name(
+            "default", "Foo", id_prefix="file:///vault1",
+        )
+        assert len(results) == 1
+        assert results[0].id == "file:///vault1/Foo.md"
+
+    def test_shortest_path_first(self, store: DocumentStore) -> None:
+        store.upsert("default", "file:///vault/deep/nested/Foo.md", "deep", {})
+        store.upsert("default", "file:///vault/Foo.md", "shallow", {})
+        results = store.find_by_name("default", "Foo")
+        assert results[0].id == "file:///vault/Foo.md"
+
+    def test_no_match(self, store: DocumentStore) -> None:
+        store.upsert("default", "file:///vault/Bar.md", "Bar", {})
+        results = store.find_by_name("default", "Foo")
+        assert results == []
+
+    def test_no_partial_match(self, store: DocumentStore) -> None:
+        """'Foo' should not match 'MyFoo.md'."""
+        store.upsert("default", "file:///vault/MyFoo.md", "MyFoo", {})
+        results = store.find_by_name("default", "Foo")
+        assert results == []

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 """Extract wiki-style and markdown-style links from markdown content."""
 
+import logging
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import action
 from ._item_scope import resolve_item_content
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Link parsing
@@ -16,8 +19,14 @@ from ._item_scope import resolve_item_content
 # [[target]] or [[target|display text]]
 _WIKI_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 
-# [display](target) — but not images: ![alt](src)
-_MD_LINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)]+)\)")
+# [display](target) or [display](target "title") — but not images
+_MD_LINK_RE = re.compile(r'(?<!!)\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)')
+
+# ![alt](src) or ![alt](src "title")
+_MD_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)')
+
+# Directories that mark a vault root
+_VAULT_MARKERS = (".obsidian", ".logseq", ".git")
 
 
 def _parse_links(content: str) -> list[dict[str, str]]:
@@ -34,6 +43,12 @@ def _parse_links(content: str) -> list[dict[str, str]]:
             seen.add(target)
             links.append({"target": target, "style": "wiki"})
 
+    for m in _MD_IMAGE_RE.finditer(content):
+        target = m.group(2).strip()
+        if target and target not in seen:
+            seen.add(target)
+            links.append({"target": target, "style": "markdown"})
+
     for m in _MD_LINK_RE.finditer(content):
         target = m.group(2).strip()
         # Skip anchors, mailto, and empty
@@ -44,6 +59,53 @@ def _parse_links(content: str) -> list[dict[str, str]]:
             links.append({"target": target, "style": "markdown"})
 
     return links
+
+
+# ---------------------------------------------------------------------------
+# Vault detection
+# ---------------------------------------------------------------------------
+
+def _detect_vault_root(file_path: str) -> str | None:
+    """Walk parent dirs of a file:// path looking for vault markers.
+
+    Returns the vault root as a ``file://`` URI, or None.
+    """
+    p = Path(file_path)
+    for parent in p.parents:
+        for marker in _VAULT_MARKERS:
+            if (parent / marker).is_dir():
+                return f"file://{parent}"
+    return None
+
+
+def _get_vault_root(source_id: str, context: Any) -> str | None:
+    """Resolve the vault root for a file:// source item.
+
+    Checks cached ``.vault/*`` items first, falls back to filesystem detection.
+    Returns the vault root URI or None.
+    """
+    if not source_id.startswith("file://"):
+        return None
+
+    file_path = source_id.removeprefix("file://")
+
+    # Fast path: check known vault roots from store
+    try:
+        vault_items = context.list_items(
+            prefix=".vault/", include_hidden=True, limit=100,
+        )
+    except Exception:
+        vault_items = []
+
+    if isinstance(vault_items, list):
+        for vi in vault_items:
+            vault_uri = str(getattr(vi, "id", "")).removeprefix(".vault/")
+            if vault_uri and source_id.startswith(vault_uri):
+                return vault_uri
+
+    # Slow path: walk filesystem (once per vault)
+    vault_root = _detect_vault_root(file_path)
+    return vault_root
 
 
 # ---------------------------------------------------------------------------
@@ -58,11 +120,15 @@ def _resolve_internal_link(
     target: str,
     source_id: str,
     context: Any,
+    *,
+    style: str = "wiki",
+    vault_root: str | None = None,
 ) -> str | None:
     """Resolve an internal link target to a keep item ID.
 
-    Uses path-segment matching against file:// URIs. Tries with and
-    without .md extension.
+    For markdown-style links, uses folder-relative path matching only.
+    For wiki-style links, tries folder-relative first then vault-wide
+    name search as a fallback.
     """
     # Normalize: strip .md suffix for matching
     bare = target.removesuffix(".md")
@@ -104,6 +170,14 @@ def _resolve_internal_link(
     if item is not None:
         return bare
 
+    # Wiki-style fallback: vault-wide name search
+    if style == "wiki" and hasattr(context, "find_by_name"):
+        found = context.find_by_name(bare, vault=vault_root)
+        if found is not None:
+            found_id = str(getattr(found, "id", ""))
+            if found_id:
+                return found_id
+
     return None
 
 
@@ -111,7 +185,7 @@ def _resolve_internal_link(
 # Action
 # ---------------------------------------------------------------------------
 
-@action(id="extract_links")
+@action(id="extract_links", priority=1)
 class ExtractLinks:
     """Extract links from markdown content and create reference edges."""
 
@@ -125,11 +199,29 @@ class ExtractLinks:
         if not links:
             return {"skipped": True}
 
+        # Detect vault root for wiki-style resolution
+        vault_root = _get_vault_root(item_id, context)
+
         mutations: list[dict[str, Any]] = []
         resolved_targets: list[str] = []
 
+        # If we discovered a new vault root, register it
+        if vault_root:
+            vault_item_id = f".vault/{vault_root}"
+            existing_vault = context.get(vault_item_id)
+            if existing_vault is None:
+                mutations.append({
+                    "op": "put_item",
+                    "id": vault_item_id,
+                    "content": f"Vault root: {vault_root}",
+                    "summary": f"Vault root: {vault_root}",
+                    "tags": {"_source": "vault_detect", "category": "system"},
+                    "queue_background_tasks": False,
+                })
+
         for link in links:
             target = link["target"]
+            style = link["style"]
 
             if _is_url(target):
                 # External URL — use as-is
@@ -148,20 +240,32 @@ class ExtractLinks:
                         })
             else:
                 # Internal link — resolve via path matching
-                resolved = _resolve_internal_link(target, item_id, context)
+                resolved = _resolve_internal_link(
+                    target, item_id, context,
+                    style=style, vault_root=vault_root,
+                )
                 if resolved:
-                    resolved_targets.append(resolved)
+                    # For wiki links, encode the alias for re-resolution
+                    ref_value = resolved
+                    if style == "wiki":
+                        bare = target.removesuffix(".md")
+                        ref_value = f"{resolved}[[{bare}]]"
+                    resolved_targets.append(ref_value)
                 elif create_targets:
                     # Auto-vivify: create from relative path if source is file://
                     vivified = _vivify_id(target, item_id)
                     if vivified:
-                        resolved_targets.append(vivified)
+                        bare = target.removesuffix(".md")
+                        ref_value = vivified
+                        if style == "wiki":
+                            ref_value = f"{vivified}[[{bare}]]"
+                        resolved_targets.append(ref_value)
                         mutations.append({
                             "op": "put_item",
                             "id": vivified,
                             "content": f"[{target}]",
                             "summary": f"[{target}]",
-                            "tags": {"_source": "link"},
+                            "tags": {"_source": "link", "_link_stem": bare},
                             "queue_background_tasks": False,
                         })
 
@@ -172,20 +276,24 @@ class ExtractLinks:
         existing_tags = dict(getattr(item, "tags", {}) or {})
         existing_refs = existing_tags.get(tag_key)
         if isinstance(existing_refs, list):
-            # Merge, preserving order, dedup
-            seen = set(existing_refs)
+            # Merge, preserving order, dedup by ID
+            from ..types import parse_ref
+            seen_ids = {parse_ref(r)[0] for r in existing_refs}
             merged = list(existing_refs)
             for t in resolved_targets:
-                if t not in seen:
-                    seen.add(t)
+                tid = parse_ref(t)[0]
+                if tid not in seen_ids:
+                    seen_ids.add(tid)
                     merged.append(t)
             existing_tags[tag_key] = merged
         elif isinstance(existing_refs, str) and existing_refs:
-            seen = {existing_refs}
+            from ..types import parse_ref
+            seen_ids = {parse_ref(existing_refs)[0]}
             merged = [existing_refs]
             for t in resolved_targets:
-                if t not in seen:
-                    seen.add(t)
+                tid = parse_ref(t)[0]
+                if tid not in seen_ids:
+                    seen_ids.add(tid)
                     merged.append(t)
             existing_tags[tag_key] = merged
         else:

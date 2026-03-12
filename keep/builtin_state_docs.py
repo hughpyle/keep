@@ -186,5 +186,11 @@ rules:
       tag: references
       create_targets: "true"
 """,
+        "resolve-stubs": """\
+rules:
+  - when: "item.has_uri && !item.is_system_note && item.tags._source != 'link'"
+    id: resolve_stubs
+    do: resolve_stubs
+""",
     },
 }

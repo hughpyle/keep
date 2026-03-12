@@ -55,7 +55,7 @@ from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, EdgeRef, TagMap,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
-    iter_tag_pairs, set_tag_values, tag_values,
+    iter_tag_pairs, set_tag_values, tag_values, parse_ref,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     MAX_TAG_VALUE_LENGTH,
@@ -1224,9 +1224,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
             # Tag values removed → queue edge deletions.
             for removed in removed_values:
-                target_id = removed
+                target_id = parse_ref(removed)[0]
                 try:
-                    target_id = normalize_id(removed)
+                    target_id = normalize_id(target_id)
                 except ValueError:
                     pass
                 edges_to_delete.append((id, key, target_id))
@@ -1236,11 +1236,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 if not current_value:
                     continue
                 try:
-                    target_id = normalize_id(current_value)
-                except ValueError as e:
-                    raise ValueError(
-                        f"Invalid edge target for tag '{key}': {current_value!r}. {e}"
-                    ) from e
+                    target_id = normalize_id(parse_ref(current_value)[0])
+                except ValueError:
+                    logger.debug("Skipping invalid edge target for tag %r: %r", key, current_value)
+                    continue
                 if target_id.startswith("."):
                     continue
                 # Auto-vivify: create target as empty doc if it doesn't exist.
@@ -2409,7 +2408,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 resolved_targets: list[str] = []
                 for raw_target in tag_values(item.tags, key):
                     try:
-                        target_id = normalize_id(raw_target)
+                        target_id = normalize_id(parse_ref(raw_target)[0])
                     except ValueError:
                         continue
                     if target_id.startswith(".") or target_id in seen_targets:

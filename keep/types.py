@@ -205,6 +205,21 @@ def _normalize_http_uri(uri: str) -> str:
     return urlunparse((scheme, netloc, path, parsed.params, query, fragment))
 
 
+def parse_ref(value: str) -> tuple[str, str | None]:
+    """Parse a reference value into (id, wikilink_alias).
+
+    Wikilink-resolved references carry an alias suffix:
+    ``file:///vault/Notes/Foo.md[[Foo]]``
+
+    Returns ``(id, alias)`` where alias is ``None`` if no suffix.
+    """
+    if value.endswith("]]"):
+        idx = value.rfind("[[")
+        if idx >= 0:
+            return value[:idx], value[idx + 2:-2]
+    return value, None
+
+
 def normalize_id(id: str) -> str:
     """Validate and normalize a document ID.
 
