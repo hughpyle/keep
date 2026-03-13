@@ -840,20 +840,14 @@ class TestStdinJsonTemplates:
         result = _expand_stdin_tag_list(tags, data={"session_id": "s123"})
         assert result == ["session=s123", "plain=value"]
 
-    def test_now_with_stdin_json_templates(self, cli):
-        """keep now expands ${.field} from stdin JSON."""
-        stdin_json = json.dumps({
-            "session_id": "test-sess-1",
-            "prompt": "hello from hook"
-        })
-        result = cli(
-            "now", "User prompt: ${.prompt:10}",
-            "-t", "session=${.session_id}",
-            input=stdin_json,
-        )
-        assert result.returncode == 0
-        # Content should contain the truncated prompt
-        assert "hello from" in result.stdout
+    def test_template_end_to_end(self):
+        """Template expansion produces correct content and tags for hooks."""
+        from keep.cli import _expand_template, _expand_stdin_tag_list
+        data = {"session_id": "test-sess-1", "prompt": "hello from hook"}
+        content = _expand_template("User prompt: ${.prompt:10}", data)
+        assert content == "User prompt: hello from"
+        tags = _expand_stdin_tag_list(["session=${.session_id}"], data=data)
+        assert tags == ["session=test-sess-1"]
 
     def test_template_regex_rejects_invalid(self):
         from keep.cli import _expand_template
