@@ -160,7 +160,7 @@ def _bundled_docs_hash() -> str:
     return h.hexdigest()[-10:]
 
 
-def migrate_system_documents(keeper: "Keeper") -> dict:
+def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
     """Migrate system documents to stable IDs and current version.
 
     Handles:
@@ -172,6 +172,10 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
     Called during init. Only loads docs that don't already exist,
     so user modifications are preserved. Updates config version
     after successful migration.
+
+    Args:
+        keeper: Keeper instance
+        progress: Optional callback(current, total, label) for progress reporting
 
     Returns:
         Dict with migration stats: created, migrated, skipped, cleaned
@@ -264,7 +268,11 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
     # Fourth pass: create or update system docs from bundled content
     # Iterates over SYSTEM_DOC_IDS to include both top-level docs and
     # subdirectory fragment files.
-    for rel_path, new_id in sorted(filename_to_id.items()):
+    sorted_items = sorted(filename_to_id.items())
+    total_items = len(sorted_items)
+    for idx, (rel_path, new_id) in enumerate(sorted_items, 1):
+        if progress:
+            progress(idx, total_items, new_id)
         path = SYSTEM_DOC_DIR / rel_path
         if not path.exists():
             continue
@@ -317,17 +325,8 @@ def migrate_system_documents(keeper: "Keeper") -> dict:
                 tags=tags, content_hash=bundled_hash,
                 archive=False,
             )
-            # Enqueue embedding as background work instead of blocking
-            # the first write. System docs are reference material —
-            # they don't need to be searchable immediately.
-            try:
-                keeper._pending_queue.enqueue(
-                    new_id, doc_coll, content,
-                    task_type="reindex",
-                    metadata={"tags": dict(tags)},
-                )
-            except Exception as e:
-                logger.debug("Could not enqueue system doc %s for embedding: %s", new_id, e)
+            # All bundled system docs have dot-prefix IDs — no embedding
+            # or background processing needed (looked up by ID, not search).
 
             # Activate edge backfill for tagdocs with _inverse
             if new_id.startswith(".tag/") and "/" not in new_id[5:]:

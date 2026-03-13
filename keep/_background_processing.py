@@ -167,7 +167,16 @@ class BackgroundProcessingMixin:
         coupled with content-change detection and truncation logic.  The
         state doc still defines the summarize rule so users can override the
         condition, but dispatch is skipped here to avoid double-enqueue.
+
+        System docs (dot-prefix IDs) are skipped entirely — they are
+        authored reference material that needs no summarization, analysis,
+        OCR, tagging, or link extraction.
         """
+        # System docs need no background processing — skip the entire
+        # dispatch rather than relying on each fragment's `when` guard.
+        if item_id.startswith("."):
+            return
+
         from .state_doc import evaluate_state_doc
 
         # --- Load the after-write state doc (store override → builtin) ---

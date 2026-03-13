@@ -524,10 +524,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         finally:
             recon_ds.close()
 
-    def _migrate_system_documents(self) -> dict:
+    def _migrate_system_documents(self, progress=None) -> dict:
         """Migrate system documents to stable IDs and current version."""
         from .system_docs import migrate_system_documents
-        result = migrate_system_documents(self)
+        result = migrate_system_documents(self, progress=progress)
         self._tagdoc_cache.clear()  # tagdocs may have changed
         self._scan_tagdoc_backfills()
         return result

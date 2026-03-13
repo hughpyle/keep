@@ -1254,6 +1254,28 @@ def _get_keeper(store: Optional[Path]) -> Keeper:
         # Ensure close() runs before interpreter shutdown to release model locks
         atexit.register(kp.close)
 
+        # After first-time setup: populate store with system docs immediately
+        # so prompts, tags, state docs, etc. are available right away.
+        if wizard_config and kp._needs_sysdoc_migration:
+            is_tty = sys.stderr.isatty()
+            try:
+                def _setup_progress(current, total, label):
+                    if is_tty:
+                        _progress_bar(current, total, label, err=True)
+                result = kp._migrate_system_documents(progress=_setup_progress)
+                kp._needs_sysdoc_migration = False
+                n_loaded = result.get("created", 0) + result.get("migrated", 0)
+                if is_tty:
+                    # Replace progress bar with final summary on same line
+                    cols = shutil.get_terminal_size((80, 24)).columns
+                    msg = f"  Loaded {n_loaded} system docs." if n_loaded else ""
+                    sys.stderr.write("\r" + msg.ljust(cols - 1) + "\n")
+                    sys.stderr.flush()
+                elif n_loaded:
+                    typer.echo(f"  Loaded {n_loaded} system docs.", err=True)
+            except Exception as e:
+                logger.warning("System doc setup deferred: %s", e)
+
         # Check for remote config in TOML (loaded during Keeper init)
         if kp.config and kp.config.remote:
             from .remote import RemoteKeeper
