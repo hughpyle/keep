@@ -1,20 +1,12 @@
 
-* "duplicate-of"
+* claude-code plugin
 
-* claude-code marketplace/plugin
-
-* mcpb for keep (local)
-
+* claude-desktop mcpb (no local components at all, only remote MCP)
+    - just ship this as a pre-built thing
 
 * keep ui
     - search, navigate edges & tags
     - use the flows, luke
-
-* expose flows as MCP tasks (SEP-1686)? (no good clients yet tho)
-    https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1686
-    https://github.com/modelcontextprotocol/modelcontextprotocol/pull/1732
-
-* acp
 
 * budget by tokens, not just by ticks?
 
@@ -286,3 +278,8 @@ x check for CLI compatibility with windows (WLS should work but no plan to valid
 . state-doc fragments and assembly
 . obsidian, markdown-links and wikilinks
 . keep help
+. claude-desktop mcpb (local keep)
+x expose flows as MCP tasks (SEP-1686)? (no good clients yet tho)
+x acp
+. `keep del` return the thing that was deleted, not the thing that survived it
+. "duplicates" edge-tag

@@ -51,12 +51,39 @@ def _get_keeper() -> Keeper:
     Must be called inside ``async with _lock`` — Keeper init is not
     thread-safe and we rely on the caller holding the lock to avoid
     racing on the global.
+
+    On first init: runs system-doc migration (so prompts, tags, etc.
+    are available immediately) and validates the embedding provider.
     """
     global _keeper
     if _keeper is None:
         import os
         store_path = os.environ.get("KEEP_STORE_PATH")
-        _keeper = Keeper(store_path=Path(store_path) if store_path else None)
+        keeper = Keeper(store_path=Path(store_path) if store_path else None)
+
+        # Load system docs into a fresh store so the agent has prompts,
+        # tag definitions, etc. from the first request.
+        if keeper._needs_sysdoc_migration:
+            try:
+                keeper._migrate_system_documents()
+                keeper._needs_sysdoc_migration = False
+            except Exception as e:
+                print(f"keep: system doc setup deferred: {e}", file=sys.stderr)
+
+        # Validate embedding provider — quit early with a clear message
+        # rather than serving from a broken store.
+        if keeper._config.embedding is None:
+            print(
+                "keep: no embedding provider configured.\n"
+                "\n"
+                "Run the setup wizard:  keep config --setup\n"
+                "Or set an API key:     export OPENAI_API_KEY=...\n"
+                "Or install Ollama:     https://ollama.com/",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        _keeper = keeper
     return _keeper
 
 
@@ -462,123 +489,8 @@ async def keep_help(
 
 
 # ---------------------------------------------------------------------------
-# Startup hints
-# ---------------------------------------------------------------------------
-
-def _check_mcp_setup():
-    """Print setup hints for detected tools missing keep MCP config."""
-    home = Path.home()
-    hints: list[str] = []
-
-    # Claude Code: MCP servers live in ~/.claude.json (NOT ~/.claude/settings.json)
-    claude_dir = home / ".claude"
-    if claude_dir.is_dir():
-        configured = False
-        claude_json = home / ".claude.json"
-        if claude_json.exists():
-            try:
-                data = json.loads(claude_json.read_text(encoding="utf-8"))
-                configured = "keep" in data.get("mcpServers", {})
-            except (json.JSONDecodeError, OSError):
-                pass
-        if not configured:
-            hints.append(
-                'Claude Code:\n'
-                '    claude mcp add --scope user keep -- keep mcp'
-            )
-
-    # Kiro: ~/.kiro/settings/mcp.json → mcpServers.keep
-    kiro_dir = home / ".kiro"
-    if kiro_dir.is_dir():
-        configured = False
-        mcp_json = kiro_dir / "settings" / "mcp.json"
-        if mcp_json.exists():
-            try:
-                data = json.loads(mcp_json.read_text(encoding="utf-8"))
-                configured = "keep" in data.get("mcpServers", {})
-            except (json.JSONDecodeError, OSError):
-                pass
-        if not configured:
-            hints.append(
-                'Kiro:\n'
-                '    kiro-cli mcp add --name keep --scope global -- keep mcp'
-            )
-
-    # Codex: ~/.codex/config.toml → [mcp_servers.keep]
-    codex_dir = home / ".codex"
-    if codex_dir.is_dir():
-        configured = False
-        config_toml = codex_dir / "config.toml"
-        if config_toml.exists():
-            try:
-                content = config_toml.read_text(encoding="utf-8")
-                configured = "mcp_servers.keep" in content
-            except OSError:
-                pass
-        if not configured:
-            hints.append(
-                'Codex:\n'
-                '    codex mcp add keep -- keep mcp'
-            )
-
-    # GitHub Copilot CLI: ~/.config/github-copilot/mcp.json → mcpServers.keep
-    copilot_mcp = home / ".config" / "github-copilot" / "mcp.json"
-    if copilot_mcp.parent.is_dir():
-        configured = False
-        if copilot_mcp.exists():
-            try:
-                data = json.loads(copilot_mcp.read_text(encoding="utf-8"))
-                configured = "keep" in data.get("mcpServers", {})
-            except (json.JSONDecodeError, OSError):
-                pass
-        if not configured:
-            hints.append(
-                'GitHub Copilot CLI:\n'
-                '    Add to ~/.config/github-copilot/mcp.json:\n'
-                '    {"mcpServers":{"keep":{"type":"local","command":"keep","args":["mcp"],"tools":["*"]}}}'
-            )
-
-    # VS Code: user-level mcp.json → servers.keep
-    if platform.system() == "Darwin":
-        vscode_dir = home / "Library" / "Application Support" / "Code"
-    else:
-        vscode_dir = home / ".config" / "Code"
-    if vscode_dir.is_dir():
-        configured = False
-        vscode_mcp = vscode_dir / "User" / "mcp.json"
-        if vscode_mcp.exists():
-            try:
-                data = json.loads(vscode_mcp.read_text(encoding="utf-8"))
-                configured = "keep" in data.get("servers", {})
-            except (json.JSONDecodeError, OSError):
-                pass
-        if not configured:
-            hints.append(
-                "VS Code:\n"
-                """    code --add-mcp '{"name":"keep","command":"keep","args":["mcp"]}'"""
-            )
-
-    if hints:
-        print("keep: MCP server not configured for:", file=sys.stderr)
-        for hint in hints:
-            print(f"  {hint}", file=sys.stderr)
-        print(file=sys.stderr)
-
-
-# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-
-def _check_integrations():
-    """Run hook/integration upgrades (same as other CLI commands)."""
-    try:
-        keeper = _get_keeper()
-        if keeper.config:
-            from .integrations import check_and_install
-            check_and_install(keeper.config)
-    except Exception:
-        pass  # Never block MCP startup
-
 
 def main():
     """Run the MCP stdio server."""
@@ -589,8 +501,10 @@ def main():
     # can deadlock on the stdin buffer lock held by the reader thread.
     signal.signal(signal.SIGINT, lambda *_: os._exit(130))
 
-    _check_integrations()
-    _check_mcp_setup()
+    # Eagerly init the store so system docs are loaded and provider
+    # issues surface immediately (not on the first tool call).
+    _get_keeper()
+
     mcp.run(transport="stdio")
 
 

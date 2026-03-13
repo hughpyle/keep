@@ -1,8 +1,8 @@
 # keep mcp
 
-MCP (Model Context Protocol) stdio server for AI agent integration.
+MCP (Model Context Protocol) server for AI agent integration.
 
-Exposes keep's reflective memory as MCP tools, so any MCP-compatible agent gets full memory capability without HTTP infrastructure.
+Provides MCP access to keep's reflective memory, using a local interface (stdio).
 
 ## Quick Start
 
@@ -11,7 +11,13 @@ keep mcp                    # Start stdio server
 keep mcp --store ~/mystore  # Custom store path
 ```
 
-On first startup, `keep mcp` detects installed tools and prints setup hints if not yet configured.
+### Claude Desktop
+
+```bash
+keep config mcpb              # Generate and open .mcpb bundle
+```
+
+Generates a `.mcpb` bundle and opens it with Claude Desktop. You will be prompted to install the `keep` connector, which gives Claude Desktop full access to the memory system and help pages.
 
 ### Claude Code
 
@@ -41,7 +47,7 @@ The server respects the `KEEP_STORE_PATH` environment variable for store locatio
 
 ## Tools
 
-9 tools, all prefixed `keep_` to avoid collision with other MCP servers:
+11 tools, all prefixed `keep_` to avoid collision with other MCP servers:
 
 | Tool | Description | Annotations |
 |------|-------------|-------------|
@@ -54,6 +60,8 @@ The server respects the `KEEP_STORE_PATH` environment variable for store locatio
 | `keep_list` | List recent items with optional filters | read-only |
 | `keep_move` | Move versions between items | — |
 | `keep_prompt` | Render an agent prompt with context injected | read-only |
+| `keep_flow` | Run a state-doc flow synchronously | — |
+| `keep_help` | Browse keep documentation | read-only |
 
 All tools return human-readable strings. Errors are returned as strings (never raised to the protocol layer).
 

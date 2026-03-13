@@ -2,6 +2,14 @@
 
 Show configuration and resolve paths.
 
+## Setup wizard
+
+```bash
+keep config --setup                   # Interactive setup wizard
+```
+
+The setup wizard walks you through choosing a store location, detecting providers, and configuring integrations. It runs automatically on first use, or you can re-run it at any time.
+
 ## Usage
 
 ```bash
@@ -10,6 +18,7 @@ keep config file                      # Config file location
 keep config tool                      # Package directory (SKILL.md location)
 keep config docs                      # Documentation directory
 keep config store                     # Store path
+keep config mcpb                      # Generate .mcpb for Claude Desktop
 keep config openclaw-plugin           # OpenClaw plugin directory
 keep config providers                 # All provider config
 keep config providers.embedding       # Embedding provider name
@@ -19,6 +28,7 @@ keep config providers.embedding       # Embedding provider name
 
 | Option | Description |
 |--------|-------------|
+| `--setup` | Run the interactive setup wizard |
 | `--reset-system-docs` | Force reload system documents from bundled content |
 | `-s`, `--store PATH` | Override store directory |
 
@@ -149,17 +159,15 @@ keep put "test"             # No API key needed
 
 ### Claude Desktop Setup
 
-For use in Claude Desktop, API-based providers can be used. For OpenAI (handles both embeddings and summarization):
+Install the keep connector in Claude Desktop:
 
-1. **Get an OpenAI API key** at [platform.openai.com](https://platform.openai.com/)
-2. **Add to network allowlist**: `api.openai.com`
-3. **Set `OPENAI_API_KEY`** and use normally
+```bash
+keep config mcpb
+```
 
-Alternatively, for best quality embeddings with Anthropic summarization:
+This generates a `.mcpb` bundle and opens it with Claude Desktop. You will be prompted to install the `keep` connector, which gives Claude Desktop full access to the memory system and help pages.
 
-1. **Get API keys** at [dash.voyageai.com](https://dash.voyageai.com/) and [console.anthropic.com](https://console.anthropic.com/)
-2. **Add to network allowlist**: `api.voyageai.com`, `api.anthropic.com`
-3. **Set both `VOYAGE_API_KEY` and `ANTHROPIC_API_KEY`**
+Any provider that works with keep (Ollama, MLX, API-based) works with Claude Desktop — MCP tools run locally via stdio.
 
 ### Available Models
 
@@ -236,6 +244,12 @@ This is the recommended approach because it transparently covers both SQLite and
 
 ## Troubleshooting
 
+Run `keep doctor` to check your installation:
+
+```bash
+keep doctor                           # Check providers, store, integrations
+```
+
 **No embedding provider configured:** Set an API key (e.g., `VOYAGE_API_KEY`), install Ollama with models, or install `keep-skill[local]`.
 
 **Model download hangs:** First use of local models downloads weights (~minutes). Cached in `~/.cache/`.
@@ -254,6 +268,7 @@ This is the recommended approach because it transparently covers both SQLite and
 | `tool` | Package directory (where SKILL.md lives) |
 | `docs` | Documentation directory |
 | `store` | Store data path |
+| `mcpb` | Generate `.mcpb` bundle for Claude Desktop |
 | `openclaw-plugin` | OpenClaw plugin directory |
 | `providers` | All provider configuration |
 | `providers.embedding` | Embedding provider name |

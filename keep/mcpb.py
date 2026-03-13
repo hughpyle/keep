@@ -94,12 +94,18 @@ def generate_manifest(keep_path: Optional[str] = None) -> dict:
     }
 
 
-def generate_mcpb(output_path: Optional[Path] = None) -> Path:
+def generate_mcpb(
+    output_path: Optional[Path] = None,
+    store_path: Optional[Path] = None,
+) -> Path:
     """Generate a .mcpb bundle file.
 
     Args:
         output_path: Where to write the .mcpb file.
                      Defaults to a temp directory.
+        store_path: Resolved store path to bake into the wrapper script.
+                    Claude Desktop runs outside the user's shell, so the
+                    wrapper must explicitly pass ``--store``.
 
     Returns:
         Path to the generated .mcpb file.
@@ -117,12 +123,15 @@ def generate_mcpb(output_path: Optional[Path] = None) -> Path:
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )
 
-        # Create wrapper script that delegates to the installed keep
+        # Create wrapper script that delegates to the installed keep.
+        # Always bake in --store so Claude Desktop (which runs outside the
+        # user's shell) connects to the correct store.
         server_dir = Path(tmpdir) / "server"
         server_dir.mkdir()
         wrapper = server_dir / "keep-mcp"
+        store_arg = f' --store "{store_path}"' if store_path else ""
         wrapper.write_text(
-            f"#!/bin/sh\nexec {keep_path} mcp \"$@\"\n",
+            f"#!/bin/sh\nexec {keep_path} mcp{store_arg} \"$@\"\n",
             encoding="utf-8",
         )
         wrapper.chmod(0o755)

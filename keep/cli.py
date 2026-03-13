@@ -2922,7 +2922,7 @@ def _get_config_value(cfg, store_path: Path, path: str):
         return str(Path(str(importlib.resources.files("keep"))) / "data" / "openclaw-plugin")
     if path == "mcpb":
         from .mcpb import generate_mcpb
-        out = generate_mcpb()
+        out = generate_mcpb(store_path=store_path)
         if platform.system() == "Darwin":
             subprocess.Popen(["open", str(out)])
         elif platform.system() == "Windows":
