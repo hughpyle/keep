@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -48,7 +50,12 @@ keep_get(id=".tag/act")                                                # Speech-
 """
 
 # Bump this when hook definitions change — triggers re-install for existing users
-HOOKS_VERSION = 12
+HOOKS_VERSION = 13
+
+# Claude Code plugin marketplace URL
+CLAUDE_CODE_MARKETPLACE_URL = "https://github.com/keepnotes-ai/keep.git"
+CLAUDE_CODE_MARKETPLACE_NAME = "keepnotes-ai"
+CLAUDE_CODE_PLUGIN_NAME = "keep"
 
 # Hook definitions for Claude Code
 CLAUDE_CODE_HOOKS = {
@@ -81,6 +88,16 @@ CLAUDE_CODE_HOOKS = {
                     "type": "command",
                     "command": "keep prompt subagent-start </dev/null 2>/dev/null || true",
                     "statusMessage": "Loading context...",
+                }
+            ],
+        }
+    ],
+    "SessionEnd": [
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "jq -r '.session_id // empty' 2>/dev/null | xargs -I{} keep move session-{} -t session={} 2>/dev/null || true",
                 }
             ],
         }
@@ -229,20 +246,100 @@ def _install_claude_code_hooks(settings_file: Path) -> bool:
     return True
 
 
+def _cleanup_claude_code_legacy(config_dir: Path) -> list[str]:
+    """Remove legacy keep integration from Claude Code config files.
+
+    Strips protocol block from CLAUDE.md and keep hooks from settings.json.
+    Returns list of cleanup actions taken.
+    """
+    cleaned = []
+
+    # Strip protocol block from CLAUDE.md
+    claude_md = config_dir / "CLAUDE.md"
+    if claude_md.exists():
+        content = claude_md.read_text(encoding="utf-8")
+        if PROTOCOL_BLOCK_MARKER in content:
+            content = _strip_protocol_block(content)
+            claude_md.write_text(content, encoding="utf-8")
+            cleaned.append("removed legacy protocol block")
+
+    # Strip keep hooks from settings.json
+    settings_json = config_dir / "settings.json"
+    if settings_json.exists():
+        try:
+            settings = json.loads(settings_json.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return cleaned
+        existing_hooks = settings.get("hooks", {})
+        stripped = _strip_keep_hooks(existing_hooks)
+        if stripped != existing_hooks:
+            if stripped:
+                settings["hooks"] = stripped
+            else:
+                settings.pop("hooks", None)
+            settings_json.write_text(
+                json.dumps(settings, indent=2) + "\n", encoding="utf-8"
+            )
+            cleaned.append("removed legacy hooks")
+
+    return cleaned
+
+
+def _try_install_claude_code_plugin() -> bool:
+    """Try to install the keep plugin via claude CLI.
+
+    Runs `claude plugin marketplace add` and `claude plugin install`.
+    Uses a short timeout to avoid blocking. Returns True on success.
+    """
+    claude = shutil.which("claude")
+    if not claude:
+        return False
+
+    try:
+        # Add marketplace (idempotent)
+        subprocess.run(
+            [claude, "plugin", "marketplace", "add", CLAUDE_CODE_MARKETPLACE_URL],
+            timeout=30,
+            capture_output=True,
+        )
+        # Install plugin (idempotent)
+        result = subprocess.run(
+            [claude, "plugin", "install",
+             f"{CLAUDE_CODE_PLUGIN_NAME}@{CLAUDE_CODE_MARKETPLACE_NAME}"],
+            timeout=30,
+            capture_output=True,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.debug("claude plugin install failed: %s", e)
+        return False
+
+
 def install_claude_code(config_dir: Path) -> list[str]:
-    """Install protocol block and hooks for Claude Code.
+    """Install keep integration for Claude Code.
+
+    Tries plugin-based install first (via claude CLI).
+    Falls back to legacy protocol block + hooks if CLI unavailable.
+    Cleans up legacy integration when migrating to plugin.
 
     Returns list of actions taken.
     """
     actions = []
 
-    claude_md = config_dir / "CLAUDE.md"
-    if _install_protocol_block(claude_md):
-        actions.append("protocol block")
-
-    settings_json = config_dir / "settings.json"
-    if _install_claude_code_hooks(settings_json):
-        actions.append("hooks")
+    # Try plugin install via claude CLI
+    if _try_install_claude_code_plugin():
+        actions.append("plugin")
+        # Clean up legacy integration if present
+        cleanup = _cleanup_claude_code_legacy(config_dir)
+        actions.extend(cleanup)
+    else:
+        # Fall back to legacy: protocol block + hooks
+        claude_md = config_dir / "CLAUDE.md"
+        if _install_protocol_block(claude_md):
+            actions.append("protocol block")
+        settings_json = config_dir / "settings.json"
+        if _install_claude_code_hooks(settings_json):
+            actions.append("hooks")
 
     return actions
 

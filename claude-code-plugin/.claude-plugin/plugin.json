@@ -1,0 +1,12 @@
+{
+  "name": "keep",
+  "version": "0.95.1",
+  "description": "Reflective memory with semantic search for AI agents",
+  "author": {
+    "name": "keepnotes-ai",
+    "url": "https://github.com/keepnotes-ai"
+  },
+  "repository": "https://github.com/keepnotes-ai/keep",
+  "license": "MIT",
+  "keywords": ["memory", "reflective", "semantic-search", "context", "reflection"]
+}

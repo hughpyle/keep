@@ -1,0 +1,47 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "keep prompt session-start </dev/null 2>/dev/null || true",
+            "statusMessage": "Reflecting..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '\"User prompt: \" + .prompt[:500]' 2>/dev/null | keep now 2>/dev/null || true",
+            "statusMessage": "Reflecting..."
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "keep prompt subagent-start </dev/null 2>/dev/null || true",
+            "statusMessage": "Loading context..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.session_id // empty' 2>/dev/null | xargs -I{} keep move session-{} -t session={} 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

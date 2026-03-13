@@ -1,0 +1,19 @@
+{
+  "name": "keepnotes-ai",
+  "owner": {
+    "name": "keepnotes-ai",
+    "url": "https://github.com/keepnotes-ai"
+  },
+  "metadata": {
+    "description": "Keep — Reflective memory for AI agents"
+  },
+  "plugins": [
+    {
+      "name": "keep",
+      "source": "./claude-code-plugin",
+      "description": "Reflective memory with semantic search. Store facts, preferences, decisions, and documents. Search by meaning. Persist context across sessions.",
+      "keywords": ["memory", "reflective", "semantic-search", "context", "reflection"],
+      "license": "MIT"
+    }
+  ]
+}
