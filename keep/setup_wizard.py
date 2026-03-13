@@ -630,6 +630,7 @@ def _print_summary(config: StoreConfig, installed_tools: list[str]) -> None:
 
     print(file=sys.stderr)
     print("  Run `keep now` to get started.", file=sys.stderr)
+    print("  Run `keep config mcpb` to install in Claude Desktop.", file=sys.stderr)
     print(file=sys.stderr)
 
 
