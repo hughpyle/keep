@@ -55,15 +55,6 @@
         ]
       }
     ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "keep move 'session-${.session_id}' -t 'session=${.session_id}' 2>/dev/null || true"
-          }
-        ]
-      }
-    ]
+    "SessionEnd": []
   }
 }
