@@ -83,9 +83,10 @@ class Stats:
                     if k in edge_tag_keys:
                         edge_fan_outs.setdefault(k, []).append(1)
 
-        # Build per-key output
+        # Build per-key output (detailed for top_k keys, names-only for the rest)
+        all_tag_keys = [k for k, _ in tag_key_counts.most_common()]
         tags_out: dict[str, Any] = {}
-        for k, cnt in tag_key_counts.most_common():
+        for k, cnt in tag_key_counts.most_common(top_k):
             vc = tag_value_counts[k]
             distinct = len(vc)
             unique = sum(1 for c in vc.values() if c == 1)
@@ -221,6 +222,7 @@ class Stats:
         return {
             "total": total,
             "tags": tags_out,
+            "all_tags": all_tag_keys,
             "dates": dates_out,
             "structure": structure_out,
         }
