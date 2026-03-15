@@ -74,7 +74,10 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.limit}"
-      exclude: "{params.exclude}"
+      bias: "{params.bias}"
+      since: "{params.since}"
+      until: "{params.until}"
+      offset: "{params.offset}"
   - when: "search.margin > params.margin_high"
     return:
       status: done
@@ -88,7 +91,10 @@ rules:
       query: "{params.query}"
       tags: "{search.dominant_lineage_tags}"
       limit: 5
-      exclude: "{params.exclude}"
+      bias: "{params.bias}"
+      since: "{params.since}"
+      until: "{params.until}"
+      offset: "{params.offset}"
     then: query-resolve
   - when: "search.margin < params.margin_low || search.entropy > params.entropy_high"
     then:
@@ -100,7 +106,10 @@ rules:
     with:
       query: "{params.query}"
       limit: 5
-      exclude: "{params.exclude}"
+      bias: "{params.bias}"
+      since: "{params.since}"
+      until: "{params.until}"
+      offset: "{params.offset}"
     then: query-resolve
   - then: query-explore
 """,
@@ -113,13 +122,19 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.pivot_limit}"
-      exclude: "{params.exclude}"
+      bias: "{params.bias}"
+      since: "{params.since}"
+      until: "{params.until}"
+      offset: "{params.offset}"
   - id: bridge
     do: find
     with:
       query: "{params.query}"
       limit: "{params.bridge_limit}"
-      exclude: "{params.exclude}"
+      bias: "{params.bias}"
+      since: "{params.since}"
+      until: "{params.until}"
+      offset: "{params.offset}"
 post:
   - when: "pivot1.margin > params.margin_high || bridge.margin > params.margin_high"
     return:
@@ -149,7 +164,10 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.explore_limit}"
-      exclude: "{params.exclude}"
+      bias: "{params.bias}"
+      since: "{params.since}"
+      until: "{params.until}"
+      offset: "{params.offset}"
   - when: "search.margin > params.margin_high"
     return:
       status: done
@@ -162,7 +180,10 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.explore_limit_wide}"
-      exclude: "{params.exclude}"
+      bias: "{params.bias}"
+      since: "{params.since}"
+      until: "{params.until}"
+      offset: "{params.offset}"
     then: query-resolve
   - return:
       status: stopped
@@ -184,7 +205,10 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.limit}"
-      exclude: "{params.exclude}"
+      bias: "{params.bias}"
+      since: "{params.since}"
+      until: "{params.until}"
+      offset: "{params.offset}"
   - when: "search.count == 0"
     return:
       status: done

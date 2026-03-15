@@ -14,14 +14,21 @@ class Find:
         prefix = params.get("prefix")
         since = params.get("since")
         until = params.get("until")
+        offset = int(params.get("offset") or 0)
         include_hidden = bool(params.get("include_hidden", False))
         order_by = str(params.get("order_by") or "updated")
         limit = int(params.get("limit", 10))
         limit = max(limit, 1)
-        exclude = params.get("exclude")
-        if isinstance(exclude, str):
-            exclude = [exclude]
-        exclude_set = set(exclude) if isinstance(exclude, list) else set()
+
+        # Bias: {id: weight} — negative suppresses/excludes, positive boosts
+        bias = params.get("bias")
+        if isinstance(bias, dict):
+            bias = {str(k): float(v) for k, v in bias.items()
+                    if isinstance(v, (int, float))}
+        else:
+            bias = None
+        # Count how many items might be excluded (bias <= -1.0)
+        n_excluded = sum(1 for v in (bias or {}).values() if v <= -1.0)
 
         has_selector = any([
             bool(query),
@@ -35,7 +42,7 @@ class Find:
         if query and similar_to:
             raise ValueError("find.query and find.similar_to are mutually exclusive")
 
-        fetch_limit = limit + len(exclude_set) if exclude_set else limit
+        fetch_limit = limit + n_excluded + offset
 
         if query or similar_to:
             rows = context.find(
@@ -58,10 +65,28 @@ class Find:
                 limit=fetch_limit,
             )
 
-        if exclude_set:
-            rows = [r for r in rows if getattr(r, "id", None) not in exclude_set][:limit]
+        # Apply bias exclusions before converting to result dicts
+        if bias:
+            rows = [r for r in rows
+                    if not (getattr(r, "id", None) in bias
+                            and bias[getattr(r, "id", None)] <= -1.0)]
 
+        # Apply offset
+        if offset > 0:
+            rows = rows[offset:]
+
+        rows = rows[:limit]
         results = [item_to_result(row) for row in rows]
+
+        # Apply bias score adjustments on result dicts (Items are frozen)
+        if bias:
+            for r in results:
+                rid = r.get("id")
+                if rid and rid in bias:
+                    w = bias[rid]
+                    if w > -1.0 and isinstance(r.get("score"), (int, float)):
+                        r["score"] = r["score"] + w * 0.2
+            results.sort(key=lambda r: -(r.get("score") or 0))
         return {
             "results": results,
             "count": len(results),
