@@ -74,6 +74,7 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.limit}"
+      tags: "{params.tags}"
       bias: "{params.bias}"
       since: "{params.since}"
       until: "{params.until}"
@@ -91,6 +92,7 @@ rules:
       query: "{params.query}"
       tags: "{search.dominant_lineage_tags}"
       limit: 5
+      tags: "{params.tags}"
       bias: "{params.bias}"
       since: "{params.since}"
       until: "{params.until}"
@@ -106,6 +108,7 @@ rules:
     with:
       query: "{params.query}"
       limit: 5
+      tags: "{params.tags}"
       bias: "{params.bias}"
       since: "{params.since}"
       until: "{params.until}"
@@ -122,6 +125,7 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.pivot_limit}"
+      tags: "{params.tags}"
       bias: "{params.bias}"
       since: "{params.since}"
       until: "{params.until}"
@@ -131,6 +135,7 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.bridge_limit}"
+      tags: "{params.tags}"
       bias: "{params.bias}"
       since: "{params.since}"
       until: "{params.until}"
@@ -164,6 +169,7 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.explore_limit}"
+      tags: "{params.tags}"
       bias: "{params.bias}"
       since: "{params.since}"
       until: "{params.until}"
@@ -180,6 +186,7 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.explore_limit_wide}"
+      tags: "{params.tags}"
       bias: "{params.bias}"
       since: "{params.since}"
       until: "{params.until}"
@@ -205,6 +212,7 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.limit}"
+      tags: "{params.tags}"
       bias: "{params.bias}"
       since: "{params.since}"
       until: "{params.until}"
