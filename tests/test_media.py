@@ -170,10 +170,10 @@ class TestAfterWriteStateDoc:
         return [a["action"] for a in result.actions]
 
     def test_inline_text_fires_analyze_and_tag(self, after_write_doc):
-        """Short inline text → analyze + tag + resolve_duplicates."""
+        """Short inline text → analyze + auto_tag + resolve_duplicates."""
         actions = self._eval(after_write_doc)
         assert "analyze" in actions
-        assert "tag" in actions
+        assert "auto_tag" in actions
         assert "resolve_duplicates" in actions
 
     def test_long_content_fires_summarize(self, after_write_doc):
@@ -182,10 +182,10 @@ class TestAfterWriteStateDoc:
         assert "summarize" in actions
 
     def test_system_note_skips_analyze_and_tag(self, after_write_doc):
-        """System notes (dot-prefix IDs) skip analyze, tag, and resolve_duplicates."""
+        """System notes (dot-prefix IDs) skip analyze, auto_tag, and resolve_duplicates."""
         actions = self._eval(after_write_doc, is_system_note=True)
         assert "analyze" not in actions
-        assert "tag" not in actions
+        assert "auto_tag" not in actions
         assert "resolve_duplicates" not in actions
 
     def test_image_uri_fires_describe(self, after_write_doc):
@@ -207,9 +207,9 @@ class TestAfterWriteStateDoc:
         assert "ocr" in actions
 
     def test_no_content_skips_tag(self, after_write_doc):
-        """Empty content skips tag (nothing to classify)."""
+        """Empty content skips auto_tag (nothing to classify)."""
         actions = self._eval(after_write_doc, has_content=False)
-        assert "tag" not in actions
+        assert "auto_tag" not in actions
         assert "analyze" in actions  # analyze still fires
 
     def test_markdown_fires_extract_links(self, after_write_doc):
@@ -277,7 +277,7 @@ class TestAfterWriteDispatch:
         kinds = _claimed_task_kinds(kp)
         assert "describe" in kinds
         assert "analyze" in kinds
-        assert "tag" in kinds
+        assert "auto_tag" in kinds
         kp.close()
 
     def test_image_put_without_media_config_skips_describe(self, mock_providers, tmp_path):
@@ -300,7 +300,7 @@ class TestAfterWriteDispatch:
         assert "describe" not in kinds
         # analyze + tag still fire (not gated by media config)
         assert "analyze" in kinds
-        assert "tag" in kinds
+        assert "auto_tag" in kinds
         kp.close()
 
     def test_audio_put_enqueues_describe(self, mock_providers, tmp_path):
@@ -354,7 +354,7 @@ class TestAfterWriteDispatch:
 
         kinds = _claimed_task_kinds(kp)
         assert "analyze" in kinds
-        assert "tag" in kinds
+        assert "auto_tag" in kinds
         assert "describe" not in kinds
         assert "ocr" not in kinds
         kp.close()
@@ -372,7 +372,7 @@ class TestAfterWriteDispatch:
         if kp._work_queue is not None:
             kinds = _claimed_task_kinds(kp)
             assert "analyze" not in kinds
-            assert "tag" not in kinds
+            assert "auto_tag" not in kinds
         kp.close()
 
 

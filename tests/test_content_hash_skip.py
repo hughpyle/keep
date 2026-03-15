@@ -8,7 +8,7 @@ import pytest
 
 from keep.actions._item_scope import check_content_hash
 from keep.actions.analyze import Analyze
-from keep.actions.tag import Tag
+from keep.actions.auto_tag import AutoTag as Tag
 from keep.actions.summarize import Summarize
 from keep._background_processing import _size_priority_bump
 

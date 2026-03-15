@@ -270,7 +270,7 @@ rules:
 rules:
   - when: "!item.is_system_note && item.has_content"
     id: tagged
-    do: tag
+    do: auto_tag
 """,
         "links": """\
 rules:

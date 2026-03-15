@@ -47,7 +47,7 @@ class TestWritePathFlow:
         claimed = queue.claim("test", limit=20)
         kinds = {t.kind for t in claimed}
         assert "analyze" in kinds, "State doc should fire analyze for non-system items"
-        assert "tag" in kinds, "State doc should fire tag for non-system items"
+        assert "auto_tag" in kinds, "State doc should fire tag for non-system items"
 
     def test_put_system_note_skips_analyze_and_tag(self, kp):
         """System notes: state doc rules filter out analyze and tag."""
@@ -58,7 +58,7 @@ class TestWritePathFlow:
         claimed = queue.claim("test", limit=20)
         kinds = {t.kind for t in claimed}
         assert "analyze" not in kinds
-        assert "tag" not in kinds
+        assert "auto_tag" not in kinds
 
 
 # ---------------------------------------------------------------------------

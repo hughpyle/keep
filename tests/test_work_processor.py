@@ -214,7 +214,7 @@ class TestRunLocalTask:
         assert result.status == "applied"
 
     def test_dispatches_to_tag(self):
-        """Tag action runs through run_local_task."""
+        """Auto-tag action runs through run_local_task."""
         kp = MagicMock()
         mock_item = MagicMock(content="some content", summary="some content", tags={})
         kp.get.return_value = mock_item
@@ -222,7 +222,7 @@ class TestRunLocalTask:
         kp._get_summarization_provider.return_value = MagicMock()
 
         req = TaskRequest(
-            task_type="tag", id="d1", collection="c", content="some content",
+            task_type="auto_tag", id="d1", collection="c", content="some content",
         )
         result = run_local_task(kp, req)
         # No tag specs → no mutations → skipped
@@ -254,23 +254,23 @@ class TestAnalyzeSkipConditions:
         assert "mutations" not in result
 
 
-class TestTagSkipConditions:
+class TestAutoTagSkipConditions:
     def test_empty_content_raises(self):
-        """Tag raises when item has no content."""
-        from keep.actions.tag import Tag
+        """AutoTag raises when item has no content."""
+        from keep.actions.auto_tag import AutoTag
         ctx = MagicMock()
         ctx.get.return_value = MagicMock(content="", summary="")
         with pytest.raises(ValueError, match="content unavailable"):
-            Tag().run({"item_id": "d1"}, ctx)
+            AutoTag().run({"item_id": "d1"}, ctx)
 
     def test_no_tag_specs_returns_no_mutations(self):
-        """Tag with no .tag/* specs returns no mutations."""
-        from keep.actions.tag import Tag
+        """AutoTag with no .tag/* specs returns no mutations."""
+        from keep.actions.auto_tag import AutoTag
         ctx = MagicMock()
         ctx.get.return_value = MagicMock(content="hello world", summary="hello")
         ctx.list_items.return_value = []  # no tag specs
         ctx.resolve_provider.return_value = MagicMock()
-        result = Tag().run({"item_id": "d1"}, ctx)
+        result = AutoTag().run({"item_id": "d1"}, ctx)
         assert "mutations" not in result or not result.get("mutations")
 
 

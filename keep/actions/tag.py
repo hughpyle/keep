@@ -1,66 +1,45 @@
 from __future__ import annotations
 
-"""Item-scoped constrained-tag classification action."""
+"""Apply explicit tags to one or more items."""
 
 from typing import Any
 
 from . import action
-from ._item_scope import check_content_hash, resolve_item_content
-from ._tagging import classify_parts_with_specs
 
 
-def _normalize_tag_value(value: Any) -> str | list[str] | None:
-    """Normalize classifier tag values to scalar-or-list strings."""
-    if value is None:
-        return None
-    if isinstance(value, (list, tuple, set)):
-        out = [str(v).strip() for v in value if str(v).strip()]
-        if not out:
-            return None
-        return out[0] if len(out) == 1 else out
-    text = str(value).strip()
-    return text or None
-
-
-@action(id="tag", priority=5)
+@action(id="tag")
 class Tag:
-    """Classify an item against `.tag/*` specs and emit tag mutations."""
+    """Set explicit tags on one or more items."""
 
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
-        """Run constrained classification and return normalized tags."""
-        item_id, _item, content = resolve_item_content(params, context)
+        tags = params.get("tags")
+        if not isinstance(tags, dict) or not tags:
+            raise ValueError("apply_tags requires tags dict")
 
-        if check_content_hash(params, context, item_id, "_tagged_hash"):
-            return {"skipped": True, "reason": "content unchanged"}
+        # Accept a single item ID or a list of result dicts
+        items = params.get("items")
+        item_id = params.get("id") or params.get("item_id")
 
-        parts = [{"summary": str(content), "tags": {}}]
-        classified = classify_parts_with_specs(parts, context)
-        row = classified[0] if classified else {}
-        raw_tags = row.get("tags") if isinstance(row, dict) else {}
-        if not isinstance(raw_tags, dict):
-            raw_tags = {}
-        tags: dict[str, Any] = {}
-        for key, value in raw_tags.items():
-            key_str = str(key).strip()
-            if not key_str:
-                continue
-            normalized = _normalize_tag_value(value)
-            if normalized is None:
-                continue
-            tags[key_str] = normalized
-        out: dict[str, Any] = {"tags": tags}
-        if tags:
-            # Record _tagged_hash so we skip unchanged content next time
-            doc = context.get_document(item_id) if hasattr(context, "get_document") else None
-            content_hash = getattr(doc, "content_hash", None) if doc else None
-            merged_tags = dict(tags)
-            if content_hash:
-                merged_tags["_tagged_hash"] = content_hash
-            out["mutations"] = [
-                {
-                    "op": "set_tags",
-                    "target": item_id,
-                    "tags": merged_tags,
-                }
-            ]
-        return out
+        target_ids: list[str] = []
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and "id" in item:
+                    target_ids.append(str(item["id"]))
+                elif isinstance(item, str):
+                    target_ids.append(item)
+        elif item_id:
+            target_ids.append(str(item_id))
+
+        if not target_ids:
+            raise ValueError("apply_tags requires items (list) or id")
+
+        mutations = [
+            {"op": "set_tags", "target": tid, "tags": dict(tags)}
+            for tid in target_ids
+        ]
+
+        return {
+            "count": len(target_ids),
+            "ids": target_ids,
+            "mutations": mutations,
+        }

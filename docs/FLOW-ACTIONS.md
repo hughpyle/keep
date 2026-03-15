@@ -195,10 +195,39 @@ Generate a summary for a target item using the configured LLM provider.
 
 ### tag
 
-Classify a target item against tag specs (`.tag/*` docs) in the store.
+Set explicit tags on one or more items. Accepts a single item ID or a list of search results.
 
 ```yaml
+# Single item
 - do: tag
+  with:
+    id: "my-item"
+    tags: { project: "security-audit" }
+
+# Bulk: tag all search results
+- do: tag
+  with:
+    items: "{search.results}"
+    tags: { reviewed: "true" }
+```
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | str | — | Single item ID to tag |
+| `items` | list | — | List of items (result dicts or IDs) to tag |
+| `tags` | dict | required | Tags to apply |
+
+One of `id` or `items` is required.
+
+**Output:** `{"count": N, "ids": ["..."], "mutations": [...]}`
+**Mutations:** `[{"op": "set_tags", "target": "id", "tags": {...}}, ...]`
+
+### auto_tag
+
+Classify a target item against tag specs (`.tag/*` docs) in the store using an LLM. Used by the `after-write` flow for automatic classification.
+
+```yaml
+- do: auto_tag
   with:
     item_id: "{params.item_id}"
 ```
