@@ -168,17 +168,23 @@ class Stats:
         for _, cnt in version_rows:
             version_hist[min(cnt, 100)] += 1
 
-        parts_count = conn.execute(
-            "SELECT COUNT(DISTINCT substr(id, 1, instr(id, '@p') - 1)) FROM documents "
-            "WHERE collection = ? AND id LIKE '%@p%'",
+        # Parts: count parents and histogram of parts-per-parent
+        parts_rows = conn.execute(
+            "SELECT substr(id, 1, instr(id, '@p') - 1) as parent, COUNT(*) as cnt "
+            "FROM documents WHERE collection = ? AND id LIKE '%@p%' GROUP BY parent",
             (collection,),
-        ).fetchone()[0]
+        ).fetchall()
+        parts_count = len(parts_rows)
+        parts_hist: Counter = Counter()
+        for _, cnt in parts_rows:
+            parts_hist[min(cnt, 50)] += 1
 
         structure_out = {
             "sources": dict(source_counts.most_common()),
             "with_versions": len(version_rows),
-            "version_histogram": {str(k): version_hist[k] for k in sorted(version_hist)},
+            "versions_len": {str(k): version_hist[k] for k in sorted(version_hist)},
             "with_parts": parts_count,
+            "parts_len": {str(k): parts_hist[k] for k in sorted(parts_hist)},
         }
 
         return {
