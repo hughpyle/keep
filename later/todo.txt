@@ -1,4 +1,6 @@
 
+* stats action
+
 * claude-desktop mcpb (no local components at all, only remote MCP)
     - just ship this as a pre-built thing
 

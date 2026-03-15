@@ -490,6 +490,12 @@ class _EnvActionContext:
     def traverse(self, source_ids: list[str], *, limit: int = 5) -> dict[str, list[Any]]:
         return self._env.traverse_related(source_ids, limit_per_source=limit)
 
+    def get_db_connection(self) -> Any:
+        return self._env.get_db_connection()
+
+    def get_collection(self) -> str:
+        return self._env.get_collection()
+
     def move(self, name: str, *, source_id: str = "now",
              tags: dict | None = None, only_current: bool = False) -> Any:
         if not self._writable:

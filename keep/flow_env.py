@@ -217,6 +217,12 @@ class LocalFlowEnvironment:
                 result[key] = entries
         return {"edges": result, "count": total}
 
+    def get_db_connection(self):
+        return self._keeper._document_store._conn
+
+    def get_collection(self) -> str:
+        return self._keeper._resolve_doc_collection()
+
     def move(self, name: str, *, source_id: str = "now",
              tags: dict | None = None, only_current: bool = False) -> Any:
         return self._keeper.move(name, source_id=source_id, tags=tags, only_current=only_current)
