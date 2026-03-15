@@ -35,6 +35,8 @@ find("auth patterns")    →  .state/query-resolve            (immediate)
 
 Each state doc defines **rules** that the runtime evaluates. Rules can run actions (search, summarize, tag), check conditions, and transition to other states. The runtime tracks what's been tried and stops when it finds a clear answer or exhausts its budget.
 
+Results are token-budgeted and cursors are lightweight, so the agent gets just enough context to steer without blowing up its context window.
+
 This matters for two reasons:
 
 - **Processing is customizable.** State docs are editable documents in the store, not hardcoded logic. You can change how documents get processed after writes, build entirely new processing paths, and trigger them from updates, explicit API calls, or scheduled jobs.
