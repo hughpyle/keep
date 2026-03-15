@@ -225,7 +225,6 @@ MCP equivalent of `--file` — pass inline YAML instead of a state name.
 
 ## See also
 
-- [FLOWS.md](FLOWS.md) — How flows work, state transitions, background processing
-- [FLOW_STATE_DOCS.md](FLOW_STATE_DOCS.md) — Built-in state doc reference
-- [design/STATE-DOC-SCHEMA.md](design/STATE-DOC-SCHEMA.md) — State doc YAML schema
-- [design/STATE-ACTIONS.md](design/STATE-ACTIONS.md) — Available actions
+- [FLOWS.md](use keep_help with topic="flows") — How flows work, state transitions, background processing
+- [FLOW-ACTIONS.md](use keep_help with topic="flow-actions") — Available actions reference
+- [FLOW_STATE_DOCS.md](use keep_help with topic="flow_state_docs") — Built-in state doc reference

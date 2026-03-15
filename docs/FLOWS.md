@@ -168,9 +168,9 @@ The existing `keep get`, `keep find`, and `keep put` commands work exactly as be
 
 ## See also
 
-- [KEEP-FLOW.md](KEEP-FLOW.md) — Running, resuming, and steering flows from CLI/MCP
-- [FLOW_STATE_DOCS.md](FLOW_STATE_DOCS.md) — Built-in state doc reference
-- [API-SCHEMA.md](API-SCHEMA.md) — General keep API reference
-- [AGENT-GUIDE.md](AGENT-GUIDE.md) — Working session patterns
-- [KEEP-MCP.md](KEEP-MCP.md) — MCP server setup
-- [docs/design/](design/) — State doc schema, actions, and design docs
+- [KEEP-FLOW.md](use keep_help with topic="keep-flow") — Running, resuming, and steering flows from CLI/MCP
+- [FLOW-ACTIONS.md](use keep_help with topic="flow-actions") — Available actions reference
+- [FLOW_STATE_DOCS.md](use keep_help with topic="flow_state_docs") — Built-in state doc reference
+- [API-SCHEMA.md](use keep_help with topic="api-schema") — General keep API reference
+- [AGENT-GUIDE.md](use keep_help with topic="agent-guide") — Working session patterns
+- [KEEP-MCP.md](use keep_help with topic="keep-mcp") — MCP server setup
