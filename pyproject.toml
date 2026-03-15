@@ -35,6 +35,7 @@ dependencies = [
     "google-genai>=1.0.0",
     "mistralai>=1.0",
     # Document extraction
+    "pyjwt>=2.12.0",
     "pypdf>=6.8.0",
     "pypdfium2>=4.0",
     "beautifulsoup4>=4.9",
