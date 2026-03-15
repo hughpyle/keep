@@ -9,8 +9,8 @@ from typing import Any
 from . import action
 
 
-def _top_k(counter: Counter, k: int = 10) -> list[list]:
-    return [[v, c] for v, c in counter.most_common(k)]
+def _top_k(counter: Counter, k: int = 10) -> dict[str, int]:
+    return {v: c for v, c in counter.most_common(k)}
 
 
 @action(id="stats")
