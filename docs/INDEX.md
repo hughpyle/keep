@@ -32,6 +32,7 @@ note, and run a semantic search.
 - **[Edge Tags](EDGE-TAGS.md)** — Turn tags into navigable relationships. Tag a turn with `speaker: Deborah` and `get Deborah` shows everything she said — auto-vivification, backfill, and inverse listings.
 - **[Prompts](PROMPTS.md)** — How prompts work: template rendering, context injection, built-in vs custom prompts.
 - **[Flows](FLOWS.md)** — Multi-step workflows: chaining operations, conditionals, LLM-driven decisions, and automation patterns.
+- **[Flow Actions](FLOW-ACTIONS.md)** — Action reference for building custom flows: find, get, list_parts, list_versions, resolve_meta, resolve_edges, summarize, tag, analyze, and more.
 - **[Built-in State Docs](FLOW_STATE_DOCS.md)** — Reference for built-in flow state documents and their schemas.
 - **[Versioning](VERSIONING.md)** — Every update creates a version. Full history is queryable. Compare versions to see how context evolved over time.
 - **[Analysis](ANALYSIS.md)** — How document analysis improves search by decomposing content into individually searchable parts — themes, facts, and relationships.
@@ -70,6 +71,7 @@ Complete listing with summaries:
 | [Edge Tags](EDGE-TAGS.md) | Turn tags into navigable relationship edges. When a tagdoc declares `_inverse`, tagged documents become links — and targets get automatic inverse listings. Tag a conversation with `speaker: Deborah` and `get Deborah` shows everything she said. Targets auto-vivify on first reference. |
 | [Prompts](PROMPTS.md) | How prompts work: template rendering, context injection, built-in vs custom prompts. |
 | [Flows](FLOWS.md) | Multi-step workflows: chaining operations, conditionals, LLM-driven decisions, and automation patterns. |
+| [Flow Actions](FLOW-ACTIONS.md) | Action reference for building custom flows. Covers search (find, traverse), context (get, list_parts, list_versions, resolve_meta, resolve_edges), processing (summarize, tag, analyze), and the generate escape hatch. |
 | [Built-in State Docs](FLOW_STATE_DOCS.md) | Reference for built-in flow state documents and their schemas. |
 | [Versioning](VERSIONING.md) | Every `keep put` to an existing ID creates a new version. List versions, retrieve any version by number, compare across versions. Content-hash deduplication skips unchanged updates. |
 | [Analysis](ANALYSIS.md) | How document analysis decomposes long content into individually searchable structural parts. Each part gets its own embedding and tags, improving retrieval for large documents. |

@@ -12,13 +12,13 @@
     - search, navigate edges & tags
     - use the flows, luke
 
-* budget by tokens, not just by ticks?
+* extract links from pdf, word, etc.
 
-* chatgpt import
-    unzip -> jq -> keep data import
+* chatgpt import (unzip -> jq -> data)
+    ("use the flows, luke")
 
-* mbox import
-    (including attachments)
+* mbox import, including attachments
+    ("use the flows, luke")
 
 * code mode
 
@@ -291,3 +291,6 @@ x acp
 . `keep del` return the thing that was deleted, not the thing that survived it
 . "duplicates" edge-tag, content-based duplicate linking
 . claude-code plugin rebuild
+. render-budget by tokens
+. read paths -> thin wrap over flows
+. write paths -> thin wrap over flows
