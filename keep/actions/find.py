@@ -20,15 +20,14 @@ class Find:
         limit = int(params.get("limit", 10))
         limit = max(limit, 1)
 
-        # Bias: {id: weight} — negative suppresses/excludes, positive boosts
+        # Bias: {id: weight} — score multiplier. 0=exclude, <1=demote, 1=neutral, >1=boost
         bias = params.get("bias")
         if isinstance(bias, dict):
             bias = {str(k): float(v) for k, v in bias.items()
                     if isinstance(v, (int, float))}
         else:
             bias = None
-        # Count how many items might be excluded (bias <= -1.0)
-        n_excluded = sum(1 for v in (bias or {}).values() if v <= -1.0)
+        n_excluded = sum(1 for v in (bias or {}).values() if v == 0)
 
         has_selector = any([
             bool(query),
@@ -65,11 +64,10 @@ class Find:
                 limit=fetch_limit,
             )
 
-        # Apply bias exclusions before converting to result dicts
+        # Apply bias exclusions (weight=0) before converting to result dicts
         if bias:
             rows = [r for r in rows
-                    if not (getattr(r, "id", None) in bias
-                            and bias[getattr(r, "id", None)] <= -1.0)]
+                    if bias.get(getattr(r, "id", None), 1) != 0]
 
         # Apply offset
         if offset > 0:
@@ -78,15 +76,15 @@ class Find:
         rows = rows[:limit]
         results = [item_to_result(row) for row in rows]
 
-        # Apply bias score adjustments on result dicts (Items are frozen)
+        # Apply bias score multipliers on result dicts (Items are frozen)
         if bias:
             for r in results:
                 rid = r.get("id")
-                if rid and rid in bias:
-                    w = bias[rid]
-                    if w > -1.0 and isinstance(r.get("score"), (int, float)):
-                        r["score"] = r["score"] + w * 0.2
+                w = bias.get(rid) if rid else None
+                if w is not None and w != 0 and isinstance(r.get("score"), (int, float)):
+                    r["score"] = r["score"] * w
             results.sort(key=lambda r: -(r.get("score") or 0))
+
         return {
             "results": results,
             "count": len(results),
