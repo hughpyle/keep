@@ -179,12 +179,43 @@ class Stats:
         for _, cnt in parts_rows:
             parts_hist[min(cnt, 50)] += 1
 
+        # Edges: count by predicate (forward + inverse from edges table)
+        edges_out: dict[str, Any] = {}
+        try:
+            fwd_edges = conn.execute(
+                "SELECT predicate, COUNT(*) FROM edges WHERE collection = ? "
+                "GROUP BY predicate ORDER BY COUNT(*) DESC",
+                (collection,),
+            ).fetchall()
+            inv_edges = conn.execute(
+                "SELECT inverse, COUNT(*) FROM edges WHERE collection = ? "
+                "AND inverse IS NOT NULL GROUP BY inverse ORDER BY COUNT(*) DESC",
+                (collection,),
+            ).fetchall()
+            edge_sources = conn.execute(
+                "SELECT COUNT(DISTINCT source_id) FROM edges WHERE collection = ?",
+                (collection,),
+            ).fetchone()[0]
+            edge_targets = conn.execute(
+                "SELECT COUNT(DISTINCT target_id) FROM edges WHERE collection = ?",
+                (collection,),
+            ).fetchone()[0]
+            edges_out = {
+                "forward": {r[0]: r[1] for r in fwd_edges},
+                "inverse": {r[0]: r[1] for r in inv_edges},
+                "distinct_sources": edge_sources,
+                "distinct_targets": edge_targets,
+            }
+        except Exception:
+            pass  # edges table may not exist in older stores
+
         structure_out = {
             "sources": dict(source_counts.most_common()),
             "with_versions": len(version_rows),
             "versions_len": {str(k): version_hist[k] for k in sorted(version_hist)},
             "with_parts": parts_count,
             "parts_len": {str(k): parts_hist[k] for k in sorted(parts_hist)},
+            "edges": edges_out,
         }
 
         return {
