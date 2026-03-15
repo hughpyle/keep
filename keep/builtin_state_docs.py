@@ -290,8 +290,8 @@ rules:
         "duplicates": """\
 rules:
   - when: "!item.is_system_note && item.has_content"
-    id: find-duplicates
-    do: find_duplicates
+    id: resolve-duplicates
+    do: resolve_duplicates
     with:
       tag: duplicates
 """,

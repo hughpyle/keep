@@ -17,6 +17,9 @@
 * chatgpt import
     unzip -> jq -> keep data import
 
+* mbox import
+    (including attachments)
+
 * code mode
 
 * poc: "an append-only journal narrated in first person (experiences, not task logs)"

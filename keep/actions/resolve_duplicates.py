@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Find documents with identical content and link them via an edge tag."""
+"""Resolve documents with identical content and link them via an edge tag."""
 
 from typing import Any
 
@@ -8,14 +8,14 @@ from . import action
 from ._item_scope import resolve_item_id
 
 
-@action(id="find_duplicates", priority=2)
-class FindDuplicates:
+@action(id="resolve_duplicates", priority=2)
+class ResolveDuplicates:
     """Detect exact-content duplicates and emit edge-tag mutations."""
 
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         item_id = resolve_item_id(params, context)
         if not item_id:
-            raise ValueError("find_duplicates requires item_id")
+            raise ValueError("resolve_duplicates requires item_id")
 
         tag_key = str(params.get("tag", "duplicates"))
 
