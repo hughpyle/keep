@@ -4004,12 +4004,10 @@ def flow_cmd(
     }
     if result.data:
         output["data"] = result.data
-    if result.bindings:
-        output["bindings"] = result.bindings
-    if result.history:
-        output["history"] = result.history
     if result.cursor:
         output["cursor"] = result.cursor
+    if result.tried_queries:
+        output["tried_queries"] = result.tried_queries
 
     if _get_json_output():
         typer.echo(json.dumps(output, ensure_ascii=False))
