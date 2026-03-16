@@ -1707,6 +1707,12 @@ def list_recent(
         "--with-parts",
         help="Only show notes that have been analyzed into parts"
     )] = False,
+    ids_only: Annotated[bool, typer.Option(
+        "--ids", "-I",
+        help="Output only IDs (for piping to xargs)",
+        callback=_ids_callback,
+        is_eager=True,
+    )] = False,
     show_all: Annotated[bool, typer.Option(
         "--all", "-a",
         help="Include hidden system notes (IDs starting with '.')"
