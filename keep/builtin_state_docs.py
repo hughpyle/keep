@@ -25,10 +25,7 @@ rules:
       id: "{params.id}"
       tags: "{params.tags}"
       summary: "{params.summary}"
-  - return:
-      status: done
-      with:
-        id: "{stored.id}"
+  - return: done
 """,
 
     "tag": """\
@@ -40,11 +37,7 @@ rules:
       id: "{params.id}"
       items: "{params.items}"
       tags: "{params.tags}"
-  - return:
-      status: done
-      with:
-        count: "{tagged.count}"
-        ids: "{tagged.ids}"
+  - return: done
 """,
 
     "delete": """\
@@ -54,10 +47,7 @@ rules:
     do: delete
     with:
       id: "{params.id}"
-  - return:
-      status: done
-      with:
-        deleted: "{result.deleted}"
+  - return: done
 """,
 
     "move": """\
@@ -70,11 +60,7 @@ rules:
       source: "{params.source}"
       tags: "{params.tags}"
       only_current: "{params.only_current}"
-  - return:
-      status: done
-      with:
-        id: "{moved.id}"
-        summary: "{moved.summary}"
+  - return: done
 """,
 
     "stats": """\
@@ -84,14 +70,7 @@ rules:
     do: stats
     with:
       top_k: "{params.top_k}"
-  - return:
-      status: done
-      with:
-        total: "{profile.total}"
-        tags: "{profile.tags}"
-        all_tags: "{profile.all_tags}"
-        dates: "{profile.dates}"
-        structure: "{profile.structure}"
+  - return: done
 """,
 
     # -----------------------------------------------------------------

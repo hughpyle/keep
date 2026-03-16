@@ -296,7 +296,9 @@ rules:
 
         result = evaluate_state_doc(doc, {}, run_action=failing_action)
         assert result.terminal == "error"
-        assert "broken" not in result.bindings
+        # Failed actions produce error bindings (not empty)
+        assert "broken" in result.bindings
+        assert "error" in result.bindings["broken"]
 
 
 # ---------------------------------------------------------------------------

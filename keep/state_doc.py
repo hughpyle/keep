@@ -547,6 +547,10 @@ def _eval_sequence(
                         eval_ctx[rule.id] = output
                 except Exception as exc:
                     logger.warning("Action %s failed: %s", rule.do, exc)
+                    error_output = {"error": str(exc)}
+                    if rule.id:
+                        bindings[rule.id] = error_output
+                        eval_ctx[rule.id] = error_output
 
         # Transition
         if rule.then is not None:
@@ -601,6 +605,10 @@ def _eval_all(
                         eval_ctx[rule.id] = output
                 except Exception as exc:
                     logger.warning("Action %s failed: %s", rule.do, exc)
+                    error_output = {"error": str(exc)}
+                    if rule.id:
+                        bindings[rule.id] = error_output
+                        eval_ctx[rule.id] = error_output
 
     # Post block
     if doc.post:

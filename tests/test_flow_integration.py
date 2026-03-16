@@ -566,3 +566,36 @@ rules:
                                   cursor_token=r1.cursor, state_doc_yaml=yaml_loop)
         assert r2.status == "stopped"
         assert r2.ticks == 3  # 1 prior + 2 new
+
+
+# ---------------------------------------------------------------------------
+# Validation: missing params surface actionable errors
+# ---------------------------------------------------------------------------
+
+class TestFlowValidation:
+    """Verify that missing required params produce error bindings, not silent nulls."""
+
+    def test_put_missing_content(self, kp):
+        r = kp.run_flow_command("put", params={}, budget=1)
+        assert r.data.get("stored", {}).get("error")
+        assert "content" in r.data["stored"]["error"]
+
+    def test_tag_missing_tags(self, kp):
+        r = kp.run_flow_command("tag", params={"id": "x"}, budget=1)
+        assert r.data.get("tagged", {}).get("error")
+        assert "tags" in r.data["tagged"]["error"]
+
+    def test_delete_missing_id(self, kp):
+        r = kp.run_flow_command("delete", params={}, budget=1)
+        assert r.data.get("result", {}).get("error")
+        assert "id" in r.data["result"]["error"]
+
+    def test_move_missing_name(self, kp):
+        r = kp.run_flow_command("move", params={}, budget=1)
+        assert r.data.get("moved", {}).get("error")
+        assert "name" in r.data["moved"]["error"]
+
+    def test_nonexistent_state_doc(self, kp):
+        r = kp.run_flow_command("nonexistent", params={}, budget=1)
+        assert r.status == "error"
+        assert "not found" in r.data["reason"]

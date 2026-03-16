@@ -9,7 +9,4 @@ rules:
     do: delete
     with:
       id: "{params.id}"
-  - return:
-      status: done
-      with:
-        deleted: "{result.deleted}"
+  - return: done

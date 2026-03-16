@@ -12,8 +12,4 @@ rules:
       source: "{params.source}"
       tags: "{params.tags}"
       only_current: "{params.only_current}"
-  - return:
-      status: done
-      with:
-        id: "{moved.id}"
-        summary: "{moved.summary}"
+  - return: done

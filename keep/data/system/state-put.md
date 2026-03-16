@@ -13,7 +13,4 @@ rules:
       id: "{params.id}"
       tags: "{params.tags}"
       summary: "{params.summary}"
-  - return:
-      status: done
-      with:
-        id: "{stored.id}"
+  - return: done

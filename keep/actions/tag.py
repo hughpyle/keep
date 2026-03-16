@@ -14,7 +14,7 @@ class Tag:
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         tags = params.get("tags")
         if not isinstance(tags, dict) or not tags:
-            raise ValueError("apply_tags requires tags dict")
+            raise ValueError("tag requires tags dict")
 
         # Accept a single item ID or a list of result dicts
         items = params.get("items")
@@ -31,7 +31,7 @@ class Tag:
             target_ids.append(str(item_id))
 
         if not target_ids:
-            raise ValueError("apply_tags requires items (list) or id")
+            raise ValueError("tag requires items (list) or id")
 
         mutations = [
             {"op": "set_tags", "target": tid, "tags": dict(tags)}

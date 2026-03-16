@@ -11,8 +11,4 @@ rules:
       id: "{params.id}"
       items: "{params.items}"
       tags: "{params.tags}"
-  - return:
-      status: done
-      with:
-        count: "{tagged.count}"
-        ids: "{tagged.ids}"
+  - return: done
