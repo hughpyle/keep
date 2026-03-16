@@ -496,6 +496,18 @@ class _EnvActionContext:
     def get_collection(self) -> str:
         return self._env.get_collection()
 
+    def put(self, *, content: str | None = None, uri: str | None = None,
+            id: str | None = None, tags: dict | None = None,
+            summary: str | None = None) -> Any:
+        if not self._writable:
+            raise NotImplementedError("put not available in read-only flow context")
+        return self._env.put(content=content, uri=uri, id=id, tags=tags, summary=summary)
+
+    def tag(self, id: str, tags: dict) -> Any:
+        if not self._writable:
+            raise NotImplementedError("tag not available in read-only flow context")
+        return self._env.tag(id, tags)
+
     def move(self, name: str, *, source_id: str = "now",
              tags: dict | None = None, only_current: bool = False) -> Any:
         if not self._writable:

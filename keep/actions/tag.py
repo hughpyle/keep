@@ -33,13 +33,10 @@ class Tag:
         if not target_ids:
             raise ValueError("tag requires items (list) or id")
 
-        mutations = [
-            {"op": "set_tags", "target": tid, "tags": dict(tags)}
-            for tid in target_ids
-        ]
+        for tid in target_ids:
+            context.tag(tid, tags)
 
         return {
             "count": len(target_ids),
             "ids": target_ids,
-            "mutations": mutations,
         }

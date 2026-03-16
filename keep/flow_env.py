@@ -223,6 +223,18 @@ class LocalFlowEnvironment:
     def get_collection(self) -> str:
         return self._keeper._resolve_doc_collection()
 
+    def put(self, *, content: str | None = None, uri: str | None = None,
+            id: str | None = None, tags: dict | None = None,
+            summary: str | None = None) -> Any:
+        if uri is not None:
+            return self._keeper.put(uri=uri, id=id, tags=tags, summary=summary)
+        from .utils import _text_content_id
+        doc_id = id or _text_content_id(content) if content else id
+        return self._keeper.put(content, id=doc_id, tags=tags, summary=summary)
+
+    def tag(self, id: str, tags: dict) -> Any:
+        return self._keeper.tag(id, tags)
+
     def move(self, name: str, *, source_id: str = "now",
              tags: dict | None = None, only_current: bool = False) -> Any:
         return self._keeper.move(name, source_id=source_id, tags=tags, only_current=only_current)
