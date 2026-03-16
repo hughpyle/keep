@@ -1,7 +1,7 @@
-"""MCP stdio server for keep — reflective memory tools for AI agents.
+"""MCP stdio server for keep — reflective memory for AI agents.
 
-Exposes Keeper operations as MCP tools so local AI agents (Claude Code, etc.)
-get full reflective memory capability without HTTP infrastructure.
+Three tools: keep_flow (all operations), keep_help (documentation),
+keep_prompt (practice prompts).
 
 Usage:
     keep mcp                        # stdio server (via CLI)
@@ -25,8 +25,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from .api import Keeper
-from .utils import _text_content_id
-from .cli import render_context, render_find_context, expand_prompt
+from .cli import expand_prompt
 
 # ---------------------------------------------------------------------------
 # Server setup
@@ -93,7 +92,6 @@ def _get_keeper() -> Keeper:
 
 _READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
 _IDEMPOTENT = ToolAnnotations(idempotentHint=True, destructiveHint=False)
-_DESTRUCTIVE = ToolAnnotations(destructiveHint=True, idempotentHint=False)
 
 
 # ---------------------------------------------------------------------------
@@ -103,259 +101,65 @@ _DESTRUCTIVE = ToolAnnotations(destructiveHint=True, idempotentHint=False)
 
 @mcp.tool(
     description=(
-        "Store a fact, preference, decision, URL, or document in long-term memory. "
-        "For URLs, fetches and indexes the content. "
-        "Background tasks (analyze, tag, OCR) are dispatched automatically."
+        "Run a state-doc flow synchronously. Flows evaluate state doc rules, "
+        "execute actions (find, get, tag, summarize, etc.), and follow transitions. "
+        "Returns when done, on error, or when budget is exhausted (with a resumable cursor). "
+        "See: keep_help(topic='keep-flow') for usage."
     ),
     annotations=_IDEMPOTENT,
 )
-async def keep_put(
-    content: Annotated[str, Field(
-        description="Text to store, or a URI (http://, https://, file://) to fetch and index.",
+async def keep_flow(
+    state: Annotated[str, Field(
+        description="State doc name (e.g. 'query-resolve', 'get-context', 'put', 'tag', 'delete', 'move', 'stats').",
     )],
-    id: Annotated[Optional[str], Field(
-        description="Custom ID. Auto-generated if omitted for inline text; URI used as ID for URIs.",
+    params: Annotated[Optional[dict[str, Any]], Field(
+        description="Flow parameters. Use 'id' key to target a specific note.",
     )] = None,
-    summary: Annotated[Optional[str], Field(
-        description="User-provided summary (skips auto-summarization).",
+    budget: Annotated[Optional[int], Field(
+        description="Max ticks for this invocation (default: from config).",
     )] = None,
-    tags: Annotated[Optional[dict[str, str | list[str]]], Field(
-        description='Tags to categorize. Example: {"topic": "preferences", "project": "myapp"}',
+    cursor: Annotated[Optional[str], Field(
+        description="Cursor from a previous stopped flow to resume.",
+    )] = None,
+    state_doc_yaml: Annotated[Optional[str], Field(
+        description="Inline YAML state doc (instead of loading from store).",
+    )] = None,
+    token_budget: Annotated[Optional[int], Field(
+        description="Token budget for rendering results (default: raw JSON).",
     )] = None,
 ) -> str:
-    """Store content in memory."""
+    """Run a state-doc flow."""
     async with _lock:
         keeper = _get_keeper()
-        is_uri = content.startswith(("http://", "https://", "file://"))
         try:
-            if is_uri:
-                item = keeper.put(uri=content, id=id, summary=summary, tags=tags)
-            else:
-                # Match CLI behavior: inline text defaults to content-addressed IDs.
-                doc_id = id or _text_content_id(content)
-                item = keeper.put(content, id=doc_id, summary=summary, tags=tags)
+            result = keeper.run_flow_command(
+                state,
+                params=params,
+                budget=budget,
+                cursor_token=cursor,
+                state_doc_yaml=state_doc_yaml,
+            )
         except (ValueError, OSError) as e:
             return f"Error: {e}"
-
-        status = "Unchanged" if item.changed is False else "Stored"
-        result = f"{status}: {item.id}"
-
-    return result
-
-
-@mcp.tool(
-    description=(
-        "Search long-term memory by natural language query. "
-        "Returns matching items ranked by relevance with similarity scores."
-    ),
-    annotations=_READ_ONLY,
-)
-async def keep_find(
-    query: Annotated[str, Field(
-        description="Natural language search query.",
-    )],
-    tags: Annotated[Optional[dict[str, str | list[str]]], Field(
-        description="Filter results by tags (all must match).",
-    )] = None,
-    since: Annotated[Optional[str], Field(
-        description="Only items updated since this value (ISO duration like P3D, or date like 2026-01-15).",
-    )] = None,
-    until: Annotated[Optional[str], Field(
-        description="Only items updated before this value (ISO duration or date).",
-    )] = None,
-    deep: Annotated[bool, Field(
-        description="Follow tags from results to discover related items.",
-    )] = False,
-    show_tags: Annotated[bool, Field(
-        description="Show non-system tags for each result.",
-    )] = False,
-    token_budget: Annotated[int, Field(
-        description="Token budget for results context (default: 4000).",
-    )] = 4000,
-) -> str:
-    """Search memory."""
-    async with _lock:
-        keeper = _get_keeper()
-        # Derive retrieval limit from token budget
-        tokens_per_item = 200 if deep else 50
-        limit = min(200, max(10, token_budget // tokens_per_item))
-        items = keeper.find(query, tags=tags, limit=limit, since=since, until=until, deep=deep)
-
-        if not items:
-            return "No results found."
-
-        return render_find_context(items, keeper=keeper, token_budget=token_budget, show_tags=show_tags)
+    if token_budget and token_budget > 0:
+        from .cli import render_flow_response
+        return render_flow_response(result, token_budget=token_budget, keeper=_get_keeper())
+    output: dict[str, Any] = {
+        "status": result.status,
+        "ticks": result.ticks,
+    }
+    if result.data:
+        output["data"] = result.data
+    if result.cursor:
+        output["cursor"] = result.cursor
+    if result.tried_queries:
+        output["tried_queries"] = result.tried_queries
+    return json.dumps(output, indent=2)
 
 
-@mcp.tool(
-    description=(
-        "Retrieve a specific item by ID with full context: "
-        "similar items, meta-doc sections, parts, and version history. "
-        'Use id="now" to read current working context.'
-    ),
-    annotations=_READ_ONLY,
-)
-async def keep_get(
-    id: Annotated[str, Field(description="Item ID to retrieve.")],
-) -> str:
-    """Retrieve item with full context."""
-    async with _lock:
-        keeper = _get_keeper()
-        ctx = keeper.get_context(id)
-
-    if ctx is None:
-        return f"Not found: {id}"
-    return render_context(ctx)
-
-
-@mcp.tool(
-    description=(
-        "Update the current working context with new state, goals, or decisions. "
-        "This persists across sessions. "
-        'To read context, use keep_get with id="now".'
-    ),
-    annotations=_IDEMPOTENT,
-)
-async def keep_now(
-    content: Annotated[str, Field(
-        description="New working context — describe current state, active goals, recent decisions.",
-    )],
-    tags: Annotated[Optional[dict[str, str | list[str]]], Field(
-        description="Optional tags.",
-    )] = None,
-) -> str:
-    """Update current working context."""
-    async with _lock:
-        keeper = _get_keeper()
-        item = keeper.set_now(content, tags=tags)
-    return f"Context updated: {item.id}"
-
-
-@mcp.tool(
-    description=(
-        "Add, update, or remove tags on an existing item without re-processing it. "
-        "Use empty string value to delete a tag."
-    ),
-    annotations=_IDEMPOTENT,
-)
-async def keep_tag(
-    id: Annotated[str, Field(description="Item ID.")],
-    tags: Annotated[dict[str, str | list[str]], Field(
-        description='Tags to add/update. Use empty string value "" to delete a tag.',
-    )],
-) -> str:
-    """Update tags on an existing item."""
-    async with _lock:
-        keeper = _get_keeper()
-        item = keeper.tag(id, tags)
-
-    if item is None:
-        return f"Not found: {id}"
-
-    def _fmt(k: str, v: str | list[str]) -> str:
-        if isinstance(v, list):
-            return ", ".join(f"{k}={x}" for x in v)
-        return f"{k}={v}"
-    display = ", ".join(_fmt(k, v) for k, v in tags.items() if v)
-    removed = [k for k, v in tags.items() if not v]
-    parts = []
-    if display:
-        parts.append(f"set {display}")
-    if removed:
-        parts.append(f"removed {', '.join(removed)}")
-    return f"Tagged {id}: {'; '.join(parts)}"
-
-
-@mcp.tool(
-    description="Permanently delete an item and its version history from memory.",
-    annotations=_DESTRUCTIVE,
-)
-async def keep_delete(
-    id: Annotated[str, Field(description="Item ID to delete.")],
-) -> str:
-    """Delete an item."""
-    async with _lock:
-        keeper = _get_keeper()
-        deleted = keeper.delete(id)
-    return f"Deleted: {id}" if deleted else f"Not found: {id}"
-
-
-@mcp.tool(
-    description=(
-        "List recent items, optionally filtered by ID prefix/glob, tags, or date range."
-    ),
-    annotations=_READ_ONLY,
-)
-async def keep_list(
-    prefix: Annotated[Optional[str], Field(
-        description='Filter by ID prefix or glob pattern (e.g. ".tag/*").',
-    )] = None,
-    tags: Annotated[Optional[dict[str, str | list[str]]], Field(
-        description="Filter by tag key=value pairs.",
-    )] = None,
-    since: Annotated[Optional[str], Field(
-        description="Only items updated since this value (ISO duration or date).",
-    )] = None,
-    until: Annotated[Optional[str], Field(
-        description="Only items updated before this value (ISO duration or date).",
-    )] = None,
-    sort: Annotated[Optional[str], Field(
-        description="Sort order: 'updated' (default), 'accessed', 'created', or 'id'.",
-    )] = None,
-    limit: Annotated[int, Field(
-        description="Max results to return.",
-    )] = 10,
-) -> str:
-    """List recent items."""
-    async with _lock:
-        keeper = _get_keeper()
-        kwargs: dict = dict(
-            prefix=prefix, tags=tags, since=since, until=until, limit=limit,
-        )
-        if sort:
-            kwargs["order_by"] = sort
-        items = keeper.list_items(**kwargs)
-
-    if not items:
-        return "No items found."
-
-    lines = []
-    for item in items:
-        date = item.tags.get("_updated_date", "")
-        lines.append(f"- {item.id}  {date}  {item.summary}")
-    return "\n".join(lines)
-
-
-@mcp.tool(
-    description=(
-        "Move versions from a source item (default: now) into a named target item. "
-        "Useful for extracting topics from working context into named notes."
-    ),
-    annotations=ToolAnnotations(destructiveHint=False, idempotentHint=False),
-)
-async def keep_move(
-    name: Annotated[str, Field(
-        description="Target item ID (created if new, extended if exists).",
-    )],
-    source_id: Annotated[str, Field(
-        description='Source item to extract from (default: "now").',
-    )] = "now",
-    tags: Annotated[Optional[dict[str, str | list[str]]], Field(
-        description="If provided, only extract versions whose tags match all specified key=value pairs.",
-    )] = None,
-    only_current: Annotated[bool, Field(
-        description="If true, only move the current (tip) version, not history.",
-    )] = False,
-) -> str:
-    """Move versions from one item to another."""
-    async with _lock:
-        keeper = _get_keeper()
-        try:
-            item = keeper.move(name, source_id=source_id, tags=tags, only_current=only_current)
-        except ValueError as e:
-            return f"Error: {e}"
-    return f"Moved to: {item.id}"
-
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
 
 @mcp.tool(
     description=(
@@ -411,64 +215,6 @@ async def keep_prompt(
             return f"Prompt not found: {name}"
 
         return expand_prompt(result, kp=keeper)
-
-
-@mcp.tool(
-    description=(
-        "Run a state-doc flow synchronously. Flows evaluate state doc rules, "
-        "execute actions (find, get, tag, summarize, etc.), and follow transitions. "
-        "Returns when done, on error, or when budget is exhausted (with a resumable cursor). "
-        "See: keep_help(topic='keep-flow') for usage."
-    ),
-    annotations=_IDEMPOTENT,
-)
-async def keep_flow(
-    state: Annotated[str, Field(
-        description="State doc name (e.g. 'after-write', 'query-resolve').",
-    )],
-    params: Annotated[Optional[dict[str, Any]], Field(
-        description="Flow parameters. Use 'id' key to target a specific note.",
-    )] = None,
-    budget: Annotated[Optional[int], Field(
-        description="Max ticks for this invocation (default: from config).",
-    )] = None,
-    cursor: Annotated[Optional[str], Field(
-        description="Cursor from a previous stopped flow to resume.",
-    )] = None,
-    state_doc_yaml: Annotated[Optional[str], Field(
-        description="Inline YAML state doc (instead of loading from store).",
-    )] = None,
-    token_budget: Annotated[Optional[int], Field(
-        description="Token budget for rendering results (default: raw JSON).",
-    )] = None,
-) -> str:
-    """Run a state-doc flow."""
-    async with _lock:
-        keeper = _get_keeper()
-        try:
-            result = keeper.run_flow_command(
-                state,
-                params=params,
-                budget=budget,
-                cursor_token=cursor,
-                state_doc_yaml=state_doc_yaml,
-            )
-        except (ValueError, OSError) as e:
-            return f"Error: {e}"
-    if token_budget and token_budget > 0:
-        from .cli import render_flow_response
-        return render_flow_response(result, token_budget=token_budget, keeper=_get_keeper())
-    output: dict[str, Any] = {
-        "status": result.status,
-        "ticks": result.ticks,
-    }
-    if result.data:
-        output["data"] = result.data
-    if result.cursor:
-        output["cursor"] = result.cursor
-    if result.tried_queries:
-        output["tried_queries"] = result.tried_queries
-    return json.dumps(output, indent=2)
 
 
 # ---------------------------------------------------------------------------
