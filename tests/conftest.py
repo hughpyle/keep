@@ -417,6 +417,12 @@ class MockDocumentStore:
             return True
         return False
 
+    def patch_head_tags(self, collection: str, id: str, patch: dict) -> bool:
+        if collection in self._data and id in self._data[collection]:
+            self._data[collection][id]["tags"].update(patch)
+            return True
+        return False
+
     def update_summary(self, collection: str, id: str, summary: str) -> bool:
         if collection in self._data and id in self._data[collection]:
             self._data[collection][id]["summary"] = summary
