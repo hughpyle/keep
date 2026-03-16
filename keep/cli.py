@@ -3792,13 +3792,32 @@ def pending_cmd(
     if list_items:
         items = kp._pending_queue.list_pending()
         failed = kp._pending_queue.list_failed()
-        if not items and not failed:
+        # Also query the work queue (flow items)
+        try:
+            wq = kp._get_work_queue()
+            flow_items = wq.list_pending(limit=100)
+        except Exception:
+            flow_items = []
+        if not items and not failed and not flow_items:
             typer.echo("Nothing pending.")
         else:
             if items:
                 for item in items:
                     retry = f" (retry after {item['retry_after']})" if item.get("retry_after") else ""
                     typer.echo(f"  {item['task_type']:15s} {item['supersede_key'] or item['work_id']}{retry}")
+            if flow_items:
+                if items:
+                    typer.echo()
+                # Group by kind for readability
+                by_kind: dict[str, int] = {}
+                for item in flow_items:
+                    kind = item.get("kind", "?")
+                    by_kind[kind] = by_kind.get(kind, 0) + 1
+                for kind, count in sorted(by_kind.items(), key=lambda x: -x[1]):
+                    typer.echo(f"  {kind:20s} {count}")
+                total_flow = kp.pending_work_count() if hasattr(kp, "pending_work_count") else len(flow_items)
+                if total_flow > len(flow_items):
+                    typer.echo(f"  ... and {total_flow - len(flow_items)} more")
             if failed:
                 typer.echo(f"\nFailed ({len(failed)}):")
                 for item in failed[:10]:
@@ -3862,6 +3881,17 @@ def _queue_status_line(kp, queue_stats: dict) -> str:
     by_type = kp.pending_stats_by_type()
     type_parts = ", ".join(f"{c} {t}" for t, c in sorted(by_type.items()))
 
+    # Flow work queue breakdown by kind
+    flow_by_kind = ""
+    if flow_pending:
+        try:
+            wq = kp._get_work_queue()
+            by_kind = wq.count_by_kind()
+            if by_kind:
+                flow_by_kind = ", ".join(f"{c} {k}" for k, c in sorted(by_kind.items(), key=lambda x: -x[1]))
+        except Exception:
+            pass
+
     parts = [f"{pending} queued"]
     if processing:
         parts.append(f"{processing} processing")
@@ -3873,6 +3903,8 @@ def _queue_status_line(kp, queue_stats: dict) -> str:
     line = ", ".join(parts)
     if type_parts:
         line += f" ({type_parts})"
+    elif flow_by_kind:
+        line += f" ({flow_by_kind})"
     if failed:
         line += f" + {failed} failed"
     return line

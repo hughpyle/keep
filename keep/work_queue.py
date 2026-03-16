@@ -366,11 +366,23 @@ class WorkQueue:
             ).fetchone()
         return int(row["c"]) if row is not None else 0
 
+    def count_by_kind(self) -> dict[str, int]:
+        """Count requested work items grouped by kind (task type)."""
+        rows = self._conn.execute(
+            """
+            SELECT kind, COUNT(1) AS c FROM continue_work
+            WHERE status = 'requested'
+            GROUP BY kind
+            ORDER BY c DESC
+            """
+        ).fetchall()
+        return {row["kind"]: int(row["c"]) for row in rows}
+
     def list_pending(self, limit: int = 50) -> list[dict]:
         """List pending work items with their type and target."""
         rows = self._conn.execute(
             """
-            SELECT work_id, task_type, supersede_key, created_at, retry_after
+            SELECT work_id, kind, supersede_key, created_at, retry_after
             FROM continue_work
             WHERE status = 'requested'
             ORDER BY created_at ASC
