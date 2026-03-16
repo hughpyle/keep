@@ -390,10 +390,11 @@ def reset_system_documents(keeper: "Keeper") -> dict:
     stats = {"reset": 0, "versions_deleted": 0}
     doc_coll = keeper._resolve_doc_collection()
 
-    for path in SYSTEM_DOC_DIR.glob("*.md"):
-        if path.name == "__init__.py":
+    # Iterate all system docs including subdirectory fragments
+    for rel_path, new_id in sorted(SYSTEM_DOC_IDS.items()):
+        path = SYSTEM_DOC_DIR / rel_path
+        if not path.exists():
             continue
-        new_id = _filename_to_id(path.name)
 
         try:
             content, tags = _load_frontmatter(path)
