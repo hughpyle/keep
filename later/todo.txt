@@ -1,7 +1,7 @@
 
-* stats action
-
-* summarizer: separate instructions for code, other types
+* async cleanup (TTL) for
+    - temp eml fragments
+    - what else?
 
 * claude-desktop mcpb (no local components at all, only remote MCP)
     - just ship this as a pre-built thing
@@ -24,21 +24,12 @@
 * mbox import, including attachments
     ("use the flows, luke")
 
-* code mode
-
 * poc: "an append-only journal narrated in first person (experiences, not task logs)"
     (also: "with periodic consolidation that compresses episodes into thematic structures" - our `analyze`)
 
 * `keep put --no-version` for volatile items
 
-* how to optimize the "get... relevant things"
-
-* how to optimize the "do... skillful things"
-
 * edge migration over versioning and move
-
-* blog: the unreasonable "as if";
-    experience building software with agents as mirrors;
 
 * prompt: select by model (match `_model=`, inject that in)?
 
@@ -298,3 +289,6 @@ x acp
 . render-budget by tokens
 . read paths -> thin wrap over flows
 . write paths -> thin wrap over flows
+. eml import (headers -> tags; multipart messages)
+. stats action
+. code summarizer
