@@ -273,14 +273,19 @@ def _apply_mutations(
                 existing_doc = keeper._document_store.get(collection, target)
                 existing_tags = existing_doc.tags if existing_doc else {}
 
-                keeper._document_store.update_tags(collection, target, tags)
+                # Merge into existing tags (don't replace — actions only
+                # return the tags they want to set, not the full tag map)
+                merged = dict(existing_tags)
+                merged.update(tags)
+
+                keeper._document_store.update_tags(collection, target, merged)
                 chroma_coll = keeper._resolve_chroma_collection()
                 keeper._store.update_tags(
-                    chroma_coll, target, casefold_tags_for_index(tags),
+                    chroma_coll, target, casefold_tags_for_index(merged),
                 )
 
                 # Sync edge table for any edge-tag changes
-                keeper._process_edge_tags(target, tags, existing_tags, collection)
+                keeper._process_edge_tags(target, merged, existing_tags, collection)
 
         elif op == "delete_prefix":
             prefix = str(mut["prefix"])
