@@ -1883,6 +1883,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             )
 
             ocr_pages = (doc.metadata or {}).get("_ocr_pages")
+            doc_links = (doc.metadata or {}).get("_links")
 
             if capture_write_context:
                 self._store_write_context(
@@ -1907,6 +1908,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     tags=merged_tags,
                     summary=summary,
                     ocr_pages=ocr_pages,
+                    doc_links=doc_links,
                 )
 
             # Process email attachments as child items with edges

@@ -156,6 +156,7 @@ class BackgroundProcessingMixin:
         tags: Optional[dict[str, str]] = None,
         summary: Optional[str] = None,
         ocr_pages: Optional[list[int]] = None,
+        doc_links: Optional[list[str]] = None,
     ) -> None:
         """Evaluate the after-write state doc and enqueue matched tasks.
 
@@ -227,6 +228,8 @@ class BackgroundProcessingMixin:
             item_metadata["content_type"] = content_type
         if ocr_pages:
             item_metadata["ocr_pages"] = list(ocr_pages)
+        if doc_links:
+            item_metadata["doc_links"] = list(doc_links)
 
         # --- Enqueue every matched action ---
         doc_coll = self._resolve_doc_collection()

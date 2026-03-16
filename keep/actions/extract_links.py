@@ -220,6 +220,17 @@ class ExtractLinks:
         ct = item_tags.get("_content_type", "text/markdown")
 
         links = _parse_links(content, content_type=ct)
+
+        # Merge pre-extracted structured links from document provider
+        # (PDF annotations, DOCX/PPTX hyperlinks, HTML <a> tags)
+        doc_links = params.get("doc_links") or []
+        if doc_links:
+            seen = {l["target"] for l in links}
+            for url in doc_links:
+                if url and url not in seen:
+                    seen.add(url)
+                    links.append({"target": url, "style": "structured"})
+
         if not links:
             return {"skipped": True}
 
