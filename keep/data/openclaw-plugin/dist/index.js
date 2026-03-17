@@ -21761,6 +21761,19 @@ function estimateTokens(text) {
   return Math.ceil(text.length / 4);
 }
 var INGEST_ROLES = /* @__PURE__ */ new Set(["user", "assistant"]);
+var PRACTICE_INSTRUCTIONS = `## keep: Reflective Memory
+
+Context from keep is injected automatically. You also have voluntary access:
+
+\`\`\`
+keep prompt reflect                              # Full reflection practice
+keep flow get-context -p item_id=now             # Current intentions + context
+keep flow query-resolve -p query="topic"         # Semantic search
+keep flow put -p content="insight" -p 'tags={"type":"learning"}'  # Capture
+keep flow put -p content="next steps" -p id=now  # Update intentions
+\`\`\`
+
+Reflect before significant actions, capture learnings after.`;
 function register(api) {
   if (!keepAvailable()) {
     api.logger?.warn("[keep] keep CLI not found, plugin inactive");
@@ -22085,7 +22098,11 @@ ${contextText}` : void 0
   api.on(
     "before_prompt_build",
     async (event, ctx) => {
-      if (isContextEngine) return;
+      if (isContextEngine) {
+        return {
+          appendSystemContext: PRACTICE_INSTRUCTIONS
+        };
+      }
       const sid = ctx?.sessionId || ctx?.sessionKey;
       let convInfo = "";
       let userText = event.prompt || "";

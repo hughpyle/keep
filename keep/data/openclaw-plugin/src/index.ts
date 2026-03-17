@@ -88,6 +88,23 @@ function estimateTokens(text: string): number {
 // Roles worth ingesting into keep's now trace.
 const INGEST_ROLES = new Set(["user", "assistant"]);
 
+// Static practice instructions injected via appendSystemContext.
+// This goes into the cacheable system prompt (prompt caching friendly).
+const PRACTICE_INSTRUCTIONS = `## keep: Reflective Memory
+
+Context from keep is injected automatically. You also have voluntary access:
+
+\`\`\`
+keep prompt reflect                              # Full reflection practice
+keep flow get-context -p item_id=now             # Current intentions + context
+keep flow query-resolve -p query="topic"         # Semantic search
+keep flow put -p content="insight" -p 'tags={"type":"learning"}'  # Capture
+keep flow put -p content="next steps" -p id=now  # Update intentions
+\`\`\`
+
+Reflect before significant actions, capture learnings after.`;
+
+
 // ---------------------------------------------------------------------------
 // Plugin registration
 // ---------------------------------------------------------------------------
@@ -593,7 +610,14 @@ export default function register(api: any) {
   api.on(
     "before_prompt_build",
     async (event: any, ctx: any) => {
-      if (isContextEngine) return; // context engine handles this via assemble()
+      // In context-engine mode, assemble() handles dynamic context.
+      // But we still use this hook for static practice instructions
+      // via appendSystemContext (cacheable by providers).
+      if (isContextEngine) {
+        return {
+          appendSystemContext: PRACTICE_INSTRUCTIONS,
+        };
+      }
 
       const sid = ctx?.sessionId || ctx?.sessionKey;
 
