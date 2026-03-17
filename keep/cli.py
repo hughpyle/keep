@@ -1934,7 +1934,6 @@ def _put_store(
     parsed_tags: dict,
     id: Optional[str],
     summary: Optional[str],
-    do_analyze: bool,
     force: bool = False,
     recurse: bool = False,
 ) -> Optional["Item"]:
@@ -2007,18 +2006,6 @@ def _put_store(
                 typer.echo(f"  error: {e}", err=True)
         if results:
             typer.echo(_format_items(results, as_json=_get_json_output()))
-        if do_analyze and results:
-            queued = 0
-            for r in results:
-                try:
-                    if kp.enqueue_analyze(r.id):
-                        queued += 1
-                except ValueError:
-                    pass
-            if queued:
-                typer.echo(f"Queued {queued} items for analysis.", err=True)
-            else:
-                typer.echo("All items already analyzed, nothing to do.", err=True)
         return None
     elif resolved_path is not None and resolved_path.is_file():
         # File mode: bare file path → normalize to file:// URI
@@ -2063,13 +2050,12 @@ def put(
         "--suggest-tags",
         help="Show tag suggestions from similar notes"
     )] = False,
-    do_analyze: Annotated[bool, typer.Option(
-        "--analyze",
-        help="Queue background analysis (decompose into parts)"
-    )] = False,
     recurse: Annotated[bool, typer.Option(
         "--recurse", "-r",
         help="Recurse into subdirectories (directory mode)"
+    )] = False,
+    _analyze: Annotated[bool, typer.Option(
+        "--analyze", hidden=True, help="(deprecated, no-op)"
     )] = False,
     force: Annotated[bool, typer.Option(
         "--force",
@@ -2105,7 +2091,7 @@ def put(
     resolved_path = _is_filesystem_path(source) if source and source != "-" else None
 
     try:
-        item = _put_store(kp, source, resolved_path, parsed_tags, id, summary, do_analyze, force, recurse=recurse)
+        item = _put_store(kp, source, resolved_path, parsed_tags, id, summary, force, recurse=recurse)
     except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -2137,15 +2123,6 @@ def put(
             for tag, count in sorted_tags:
                 typer.echo(f"  -t {tag}  ({count})")
             typer.echo(f"\napply with: keep tag {_shell_quote_id(item.id)} -t TAG")
-
-    if do_analyze:
-        try:
-            if kp.enqueue_analyze(item.id):
-                typer.echo(f"Queued {item.id} for background analysis.", err=True)
-            else:
-                typer.echo(f"Already analyzed, skipping {item.id}.", err=True)
-        except ValueError:
-            pass
 
 
 @app.command("update", hidden=True)
@@ -2552,9 +2529,8 @@ def move(
         "--only",
         help="Move only the current (tip) version"
     )] = False,
-    do_analyze: Annotated[bool, typer.Option(
-        "--analyze",
-        help="Queue background analysis after move"
+    _analyze: Annotated[bool, typer.Option(
+        "--analyze", hidden=True, help="(deprecated, no-op)"
     )] = False,
     store: StoreOption = None,
 ):
@@ -2593,13 +2569,6 @@ def move(
     versions = kp.list_versions(name, limit=100)
     items = _versions_to_items(name, saved, versions)
     typer.echo(_format_items(items, as_json=as_json))
-
-    if do_analyze:
-        try:
-            kp.enqueue_analyze(name)
-            typer.echo(f"Queued {name} for background analysis.", err=True)
-        except ValueError:
-            pass
 
 
 @app.command()
