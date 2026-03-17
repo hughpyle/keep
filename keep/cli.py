@@ -3689,14 +3689,14 @@ def pending_cmd(
             pid_path.write_text(str(os.getpid()))
             while not shutdown_requested:
                 flow_result = kp.process_pending_work(
-                    limit=50,
+                    limit=1,
                     worker_id=flow_worker_id,
                     lease_seconds=180,
                     shutdown_check=_is_shutdown,
                 )
                 if shutdown_requested:
                     break
-                result = kp.process_pending(limit=50, shutdown_check=_is_shutdown)
+                result = kp.process_pending(limit=1, shutdown_check=_is_shutdown)
                 delegated = result.get("delegated", 0)
 
                 # Poll watched sources for changes
@@ -3757,12 +3757,12 @@ def pending_cmd(
                     if shutdown_requested:
                         break
                     flow_result = kp.process_pending_work(
-                        limit=50,
+                        limit=1,
                         worker_id=flow_worker_id,
                         lease_seconds=180,
                         shutdown_check=_is_shutdown,
                     )
-                    result = kp.process_pending(limit=50, shutdown_check=_is_shutdown)
+                    result = kp.process_pending(limit=1, shutdown_check=_is_shutdown)
                     flow_activity = (
                         int(flow_result.get("claimed", 0)) > 0
                         or int(flow_result.get("processed", 0)) > 0

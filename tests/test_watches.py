@@ -110,10 +110,19 @@ class TestWatchCRUD:
         assert watches[0].source == "file:///tmp/test.txt"
         assert watches[0].kind == "file"
 
-    def test_add_duplicate(self, kp):
+    def test_add_duplicate_returns_existing(self, kp):
         add_watch(kp, "file:///tmp/test.txt", "file")
-        with pytest.raises(ValueError, match="Already watching"):
-            add_watch(kp, "file:///tmp/test.txt", "file")
+        entry = add_watch(kp, "file:///tmp/test.txt", "file")
+        assert entry.source == "file:///tmp/test.txt"
+        assert len(list_watches(kp)) == 1  # no duplicate created
+
+    def test_update_interval(self, kp):
+        add_watch(kp, "file:///tmp/test.txt", "file")
+        entry = add_watch(kp, "file:///tmp/test.txt", "file", interval="PT1M")
+        assert entry.interval == "PT1M"
+        watches = list_watches(kp)
+        assert len(watches) == 1
+        assert watches[0].interval == "PT1M"
 
     def test_add_max_limit(self, kp):
         for i in range(3):

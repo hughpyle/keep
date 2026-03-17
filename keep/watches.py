@@ -250,13 +250,28 @@ def add_watch(
     interval: str = _DEFAULT_INTERVAL,
     max_watches: int = 100,
 ) -> WatchEntry:
-    """Add a watch entry. Raises ValueError on limit or duplicate."""
+    """Add or update a watch entry. Updates interval/exclude if already watching."""
     entries = load_watches(keeper)
 
-    # Check for duplicate
+    # Update existing watch if source already tracked
     for e in entries:
         if e.source == source:
-            raise ValueError(f"Already watching: {source}")
+            updated = False
+            if interval != _DEFAULT_INTERVAL and e.interval != interval:
+                e.interval = interval
+                updated = True
+            if exclude and e.exclude != (exclude or []):
+                e.exclude = exclude or []
+                updated = True
+            if recurse != e.recurse:
+                e.recurse = recurse
+                updated = True
+            if tags and e.tags != (tags or {}):
+                e.tags = tags or {}
+                updated = True
+            if updated:
+                save_watches(keeper, entries)
+            return e
 
     if len(entries) >= max_watches:
         raise ValueError(
