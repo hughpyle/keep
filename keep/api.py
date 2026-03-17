@@ -1869,6 +1869,19 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                         birthtime, tz=timezone.utc
                     ).isoformat()
 
+            # Email threading: if the email has a thread ID, use it as the
+            # item ID.  Each message becomes a version of the thread item.
+            # Use the email Date header as created_at for version ordering.
+            thread_id = (doc.tags or {}).get("_thread_id")
+            if thread_id and doc.content_type == "message/rfc822" and id is None:
+                # Strip angle brackets from Message-ID for valid keep ID
+                clean_thread_id = thread_id.strip("<>")
+                doc_id = normalize_id(f"thread:{clean_thread_id}")
+                # Use email Date as created_at for chronological version ordering
+                email_date = (merged_tags or {}).get("date") or (doc.tags or {}).get("date")
+                if email_date and created_at is None:
+                    created_at = email_date
+
             # Store source URI as system tag when using custom ID
             if doc_id != uri:
                 system_tags["_source_uri"] = uri
@@ -1996,7 +2009,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if not att_path:
                 continue
 
-            child_id = f"{parent_id}#att-{i}"
+            # Use MIME Content-ID as fragment if available, else att-{N}
+            content_id = att.get("content_id")
+            fragment = content_id if content_id else f"att-{i}"
+            child_id = f"{parent_id}#{fragment}"
             filename = att.get("filename", f"attachment-{i}")
 
             # Inherit key context tags from the parent email

@@ -394,3 +394,82 @@ class TestMultipartEmail:
         # Clean up temp files
         import shutil
         shutil.rmtree(Path(doc.metadata['_attachments'][0]['path']).parent)
+
+
+class TestEmailThreading:
+    """Tests for email thread ID extraction."""
+
+    def test_thread_id_from_references(self, tmp_path):
+        provider = FileDocumentProvider()
+        email_file = tmp_path / "reply.eml"
+        email_file.write_text(textwrap.dedent("""\
+            From: bob@example.com
+            To: alice@example.com
+            Subject: Re: Meeting
+            Message-ID: <reply1@example.com>
+            In-Reply-To: <original@example.com>
+            References: <original@example.com>
+
+            Sounds good, Thursday works.
+        """))
+
+        content, tags, _ = provider._extract_email(email_file)
+
+        assert tags['message-id'] == '<reply1@example.com>'
+        assert tags['in-reply-to'] == '<original@example.com>'
+        assert tags['_thread_id'] == '<original@example.com>'
+
+    def test_thread_id_from_deep_references(self, tmp_path):
+        provider = FileDocumentProvider()
+        email_file = tmp_path / "deep_reply.eml"
+        email_file.write_text(textwrap.dedent("""\
+            From: carol@example.com
+            To: alice@example.com, bob@example.com
+            Subject: Re: Re: Meeting
+            Message-ID: <reply2@example.com>
+            In-Reply-To: <reply1@example.com>
+            References: <original@example.com> <reply1@example.com>
+
+            Adding budget discussion.
+        """))
+
+        content, tags, _ = provider._extract_email(email_file)
+
+        # Thread ID is the first in References (the root)
+        assert tags['_thread_id'] == '<original@example.com>'
+        assert tags['in-reply-to'] == '<reply1@example.com>'
+
+    def test_thread_id_from_in_reply_to_only(self, tmp_path):
+        provider = FileDocumentProvider()
+        email_file = tmp_path / "reply_no_refs.eml"
+        email_file.write_text(textwrap.dedent("""\
+            From: bob@example.com
+            To: alice@example.com
+            Subject: Re: Hello
+            Message-ID: <reply@example.com>
+            In-Reply-To: <original@example.com>
+
+            Got your message.
+        """))
+
+        content, tags, _ = provider._extract_email(email_file)
+
+        assert tags['_thread_id'] == '<original@example.com>'
+
+    def test_new_thread_uses_own_message_id(self, tmp_path):
+        provider = FileDocumentProvider()
+        email_file = tmp_path / "new_thread.eml"
+        email_file.write_text(textwrap.dedent("""\
+            From: alice@example.com
+            To: bob@example.com
+            Subject: Meeting request
+            Message-ID: <new@example.com>
+
+            Can we meet Thursday?
+        """))
+
+        content, tags, _ = provider._extract_email(email_file)
+
+        # No References or In-Reply-To — own message-id is thread root
+        assert tags['_thread_id'] == '<new@example.com>'
+        assert 'in-reply-to' not in tags

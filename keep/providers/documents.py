@@ -1047,11 +1047,13 @@ class FileDocumentProvider:
                 safe_name = Path(filename).name  # strip directory components
                 att_path = att_dir / safe_name
                 att_path.write_bytes(payload_bytes)
+                content_id = part.get("Content-ID", "").strip().strip("<>") or None
                 attachments.append({
                     "path": str(att_path),
                     "filename": filename,
                     "content_type": ct,
                     "size": len(payload_bytes),
+                    "content_id": content_id,
                 })
 
         # Extract headers as tags
@@ -1115,6 +1117,33 @@ class FileDocumentProvider:
         msg_id = msg.get('Message-ID', '')
         if msg_id:
             tags['message-id'] = msg_id.strip()
+
+        # Threading: In-Reply-To and References
+        in_reply_to = msg.get('In-Reply-To', '').strip()
+        if in_reply_to:
+            tags['in-reply-to'] = in_reply_to
+
+        references_header = msg.get('References', '')
+        if references_header:
+            # References is a space-separated list of Message-IDs
+            refs = references_header.split()
+            refs = [r.strip() for r in refs if r.strip()]
+            if refs:
+                tags['_references'] = refs if len(refs) > 1 else refs[0]
+
+        # Compute thread ID: first Message-ID in References chain,
+        # or In-Reply-To, or own Message-ID (new thread)
+        thread_id = None
+        if references_header:
+            refs = references_header.split()
+            if refs:
+                thread_id = refs[0].strip()
+        if not thread_id and in_reply_to:
+            thread_id = in_reply_to
+        if not thread_id and msg_id:
+            thread_id = msg_id.strip()
+        if thread_id:
+            tags['_thread_id'] = thread_id
 
         return content, tags or None, attachments or None
 
