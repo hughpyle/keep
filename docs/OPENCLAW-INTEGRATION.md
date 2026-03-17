@@ -55,7 +55,7 @@ openclaw gateway restart
 ### 4. Verify
 
 ```bash
-openclaw plugins list                         # Should show: keep (loaded, 0.99.0)
+openclaw plugins list                         # Should show: keep (loaded)
 openclaw keep doctor                          # Check keep store health
 ```
 
@@ -78,7 +78,7 @@ stage of the agent lifecycle:
 | **ingest** | Capture each user and assistant message as a `now` version |
 | **assemble** | Run `.state/openclaw-assemble` flow — 5 parallel queries for intentions, similar items, meta-tags, edges, and recent session context |
 | **afterTurn** | Detect inflection points (topic shifts, commitments, substantial work), trigger background reflection |
-| **compact** | Index the session transcript into keep's store (advisory — OpenClaw still manages its own compaction in v0.99) |
+| **compact** | Index the session transcript into keep's store (advisory — OpenClaw still manages its own compaction) |
 | **session_end** | Archive session message versions, clean up working context |
 
 The agent doesn't need to do anything — context flows in automatically.
@@ -194,14 +194,14 @@ openclaw cron add \
   --session isolated \
   --agent-turn "Daily memory sync and reflection.
 
-1. Index memory files with analysis: run \`keep put /path/to/workspace/memory/ --analyze\`
+1. Index memory files: run \`keep put /path/to/workspace/memory/\`
 2. Reflect: run \`keep prompt reflect\` and follow the practice.
 
 This is the deeper review — not just what happened, but what it means."
 ```
 
-This runs nightly in an isolated session. The `--analyze` flag finds themes
-within each document; unchanged files cost nothing via hash-skip.
+This runs nightly in an isolated session. Analysis runs automatically via the
+after-write state doc; unchanged files cost nothing via hash-skip.
 
 ---
 
