@@ -1,10 +1,8 @@
 
-* async cleanup (TTL) for
-    - temp eml fragments
-    - what else?
-
 * claude-desktop mcpb (no local components at all, only remote MCP)
     - just ship this as a pre-built thing
+
+* recall lineno/chunk position - design?
 
 * mcpb submission to Claude Desktop directory
     - privacy policy (URL + manifest `privacy_policies` field + README section)
@@ -15,8 +13,6 @@
 * keep ui
     - search, navigate edges & tags
     - use the flows, luke
-
-* extract links from pdf, word, etc.
 
 * chatgpt import (unzip -> jq -> data)
     ("use the flows, luke")
@@ -292,3 +288,6 @@ x acp
 . eml import (headers -> tags; multipart messages)
 . stats action
 . code summarizer
+. extract links from pdf, word, etc.
+. watch paths
+. async cleanup (TTL)
