@@ -1,2 +1,2 @@
 node_modules/
-# dist/ is committed — it's the built plugin that ships in the pip package
+dist/
