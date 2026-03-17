@@ -476,12 +476,23 @@ export default function register(api: any) {
 
           const keepTokens = estimateTokens(contextText);
 
+          // Build systemPromptAddition
+          const parts: string[] = [];
+          if (contextText) parts.push(`\`keep context\`:\n${contextText}`);
+
+          // On first turn, hint that keep tools are available via MCP
+          if (isFirstAssemble) {
+            parts.push(
+              `\`keep tools\`: keep_flow, keep_help, and keep_prompt are available as tools. ` +
+              `If unfamiliar with keep, start with keep_help(topic="flow-actions") ` +
+              `and keep_help(topic="index") to learn the full capability set.`
+            );
+          }
+
           return {
             messages: params.messages,
             estimatedTokens: conversationTokens + keepTokens,
-            systemPromptAddition: contextText
-              ? `\`keep context\`:\n${contextText}`
-              : undefined,
+            systemPromptAddition: parts.length > 0 ? parts.join("\n\n") : undefined,
           };
         } catch (err: any) {
           api.logger?.warn(`[keep] assemble error: ${err.message}`);
