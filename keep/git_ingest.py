@@ -228,9 +228,8 @@ def ingest_git_history(
                 refs.append(f"file://{fpath}")
 
         tags: dict[str, Any] = {
-            "_source": "git",
-            "_git_sha": commit["sha"],
-            "_git_author": commit["author_name"],
+            "git_sha": commit["sha"],
+            "git_author": commit["author_name"],
             "author": commit["author_email"],
         }
         if refs:
@@ -274,8 +273,7 @@ def ingest_git_history(
                 gt["subject"],
                 id=gt["id"],
                 tags={
-                    "_source": "git",
-                    "_git_tag": gt["name"],
+                    "git_tag": gt["name"],
                 },
                 created_at=gt["date"] or None,
             )
@@ -288,7 +286,7 @@ def ingest_git_history(
         newest_sha = commits[0]["sha"]
         try:
             if not keeper.exists(dir_uri):
-                keeper.put(f"Git repository: {repo}", id=dir_uri, tags={"_source": "git"})
+                keeper.put(f"Git repository: {repo}", id=dir_uri)
             keeper.tag(dir_uri, tags={"git_watermark": newest_sha})
         except Exception:
             pass

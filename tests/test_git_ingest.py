@@ -213,3 +213,59 @@ class TestIngest:
             refs = [refs]
         auth_refs = [r for r in refs if "auth.py" in r]
         assert len(auth_refs) > 0
+
+    def test_commit_has_author_email(self, kp, git_repo):
+        ingest_git_history(kp, git_repo)
+
+        commits = get_commits_since(git_repo)
+        item = kp.get(commits[0]["id"])
+        assert item is not None
+        assert item.tags.get("author") == "t@t.com"
+        assert item.tags.get("git_author") == "Test"
+
+    def test_commit_has_created_at(self, kp, git_repo):
+        ingest_git_history(kp, git_repo)
+
+        commits = get_commits_since(git_repo)
+        item = kp.get(commits[0]["id"])
+        assert item is not None
+        # created should reflect commit date, not ingest time
+        assert item.created is not None
+
+
+class TestRepoNameParsing:
+    """Test remote URL parsing edge cases."""
+
+    def test_ssh_url(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(repo), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "git@github.com:acme/project.git"],
+            cwd=str(repo), capture_output=True, check=True,
+        )
+        assert _repo_name(repo) == "github.com/acme/project"
+
+    def test_https_url(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(repo), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://gitlab.com/team/sub/repo.git"],
+            cwd=str(repo), capture_output=True, check=True,
+        )
+        assert _repo_name(repo) == "gitlab.com/team/sub/repo"
+
+    def test_no_remote(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(repo), capture_output=True, check=True)
+        assert _repo_name(repo) == str(repo.resolve())
+
+    def test_empty_repo(self, tmp_path):
+        """Repo with no commits should return 0 commits."""
+        repo = tmp_path / "empty"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(repo), capture_output=True, check=True)
+        commits = get_commits_since(repo)
+        assert commits == []
