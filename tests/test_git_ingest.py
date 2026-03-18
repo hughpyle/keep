@@ -69,8 +69,18 @@ class TestGitDetection:
         root = get_repo_root(git_repo / "src")
         assert root == git_repo
 
-    def test_repo_name(self, git_repo):
-        assert _repo_name(git_repo) == "myproject"
+    def test_repo_name_no_remote(self, git_repo):
+        # No remote → falls back to absolute path
+        name = _repo_name(git_repo)
+        assert name == str(git_repo.resolve())
+
+    def test_repo_name_with_remote(self, git_repo):
+        # Add a remote and verify URL extraction
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://github.com/acme/myproject.git"],
+            cwd=str(git_repo), check=True, capture_output=True,
+        )
+        assert _repo_name(git_repo) == "github.com/acme/myproject"
 
 
 class TestGetCommits:
@@ -90,7 +100,8 @@ class TestGetCommits:
         assert c["author"] == "Test"
         assert c["date"]  # ISO date
         assert c["message"]
-        assert c["id"].startswith("git://myproject#")
+        assert c["id"].startswith("git://")
+        assert f"#{c['sha_short']}" in c["id"]
         assert isinstance(c["files"], list)
 
     def test_commit_has_files(self, git_repo):
@@ -119,7 +130,8 @@ class TestGetTags:
         assert len(tags) >= 1
         v1 = [t for t in tags if t["name"] == "v1.0"]
         assert len(v1) == 1
-        assert v1[0]["id"] == "git://myproject@v1.0"
+        assert v1[0]["id"].endswith("@v1.0")
+        assert v1[0]["id"].startswith("git://")
         assert "release" in v1[0]["subject"].lower() or "first" in v1[0]["subject"].lower()
 
 
@@ -160,7 +172,9 @@ class TestIngest:
     def test_ingest_creates_tag_items(self, kp, git_repo):
         ingest_git_history(kp, git_repo)
 
-        tag_item = kp.get("git://myproject@v1.0")
+        tags = get_tags(git_repo)
+        v1 = [t for t in tags if t["name"] == "v1.0"][0]
+        tag_item = kp.get(v1["id"])
         assert tag_item is not None
 
     def test_incremental_ingest(self, kp, git_repo):

@@ -20,8 +20,31 @@ _LOG_SEP = "\x1e"  # record separator
 
 
 def _repo_name(repo_dir: Path) -> str:
-    """Derive a short repo name from the directory."""
-    return repo_dir.resolve().name
+    """Derive a stable repo identifier from git remote or absolute path.
+
+    Uses the origin remote URL (stripped of .git suffix and protocol prefix)
+    when available, otherwise falls back to the absolute directory path.
+
+    Examples:
+        github.com/keepnotes-ai/keep   (from https://github.com/keepnotes-ai/keep.git)
+        /Users/hugh/play/local-project  (no remote)
+    """
+    # Try origin remote URL first
+    url = _run_git(repo_dir, ["remote", "get-url", "origin"])
+    if url:
+        url = url.strip()
+        # Strip protocol prefix and .git suffix
+        for prefix in ("https://", "http://", "ssh://", "git@", "git://"):
+            if url.startswith(prefix):
+                url = url[len(prefix):]
+                break
+        # git@github.com:user/repo.git → github.com/user/repo
+        url = url.replace(":", "/", 1) if ":" in url and "/" not in url.split(":")[0][1:] else url
+        url = url.removesuffix(".git").removesuffix("/")
+        return url
+
+    # Fallback to absolute path
+    return str(repo_dir.resolve())
 
 
 def _run_git(repo_dir: Path, args: list[str], timeout: int = 60) -> str | None:
