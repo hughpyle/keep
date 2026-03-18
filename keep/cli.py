@@ -2997,6 +2997,59 @@ def _get_one(
     return render_context(ctx, as_json=_get_json_output())
 
 
+@app.command("edit")
+def edit_cmd(
+    id: Annotated[str, typer.Argument(help="ID of note to edit")],
+    store: StoreOption = None,
+):
+    """Edit a note's content in $EDITOR.
+
+    Opens the current content in your editor. On save, updates the note
+    if the content changed. Useful for editing prompts, .ignore, and
+    other system docs.
+
+    \b
+    Examples:
+        keep edit .ignore                    # Edit global ignore patterns
+        keep edit .prompt/agent/reflect      # Edit a prompt template
+        keep edit now                        # Edit current intentions
+        EDITOR=code keep edit .ignore        # Use VS Code
+    """
+    kp = _get_keeper(store)
+    item = kp.get(id)
+    if item is None:
+        typer.echo(f"Not found: {id}", err=True)
+        raise typer.Exit(1)
+
+    import tempfile
+    import subprocess
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+
+    suffix = ".md" if not id.endswith((".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml")) else ""
+    with tempfile.NamedTemporaryFile(suffix=suffix or Path(id).suffix, mode="w", delete=False, prefix="keep-edit-") as f:
+        f.write(item.summary)
+        tmp = f.name
+
+    try:
+        subprocess.run([editor, tmp], check=True)
+        new_content = Path(tmp).read_text()
+    except (subprocess.CalledProcessError, KeyboardInterrupt):
+        typer.echo("Editor exited abnormally, no changes saved", err=True)
+        Path(tmp).unlink(missing_ok=True)
+        raise typer.Exit(1)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+    if new_content == item.summary:
+        typer.echo("No changes", err=True)
+        return
+
+    result = kp.put(new_content, id=id)
+    typer.echo(f"Updated {id}", err=True)
+    if _get_json_output():
+        typer.echo(_format_items([result], as_json=True))
+
+
 @app.command("del")
 def del_cmd(
     id: Annotated[list[str], typer.Argument(help="ID(s) of note(s) to delete")],
