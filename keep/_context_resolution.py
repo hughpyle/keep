@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .types import (
     Item,
@@ -328,7 +328,17 @@ class ContextResolutionMixin:
             # Fall back to full content if no ## Prompt section
             prompt_body = doc.summary
 
-        # Context: get_context for the target item (default "now")
+        # Check for state-doc flow reference in prompt tags.
+        # When present, the flow's bindings replace the default get/find.
+        state_doc = (doc.tags or {}).get("state")
+        if state_doc:
+            return self._render_prompt_via_flow(
+                prompt_body, state_doc, text=text, id=id,
+                since=since, until=until, tags=tags, scope=scope,
+                token_budget=token_budget,
+            )
+
+        # Default path: hardcoded get + find
         context_id = id or "now"
         if context_id == "now":
             self.get_now()  # ensure now exists (auto-creates from bundled doc)
@@ -366,6 +376,48 @@ class ContextResolutionMixin:
             since=since,
             until=until,
             token_budget=token_budget,
+        )
+
+    def _render_prompt_via_flow(
+        self,
+        prompt_body: str,
+        state_doc: str,
+        *,
+        text: Optional[str] = None,
+        id: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        tags: Optional[TagMap] = None,
+        scope: Optional[str] = None,
+        token_budget: Optional[int] = None,
+    ) -> PromptResult:
+        """Run a state-doc flow and return a PromptResult with bindings."""
+        params: dict[str, Any] = {}
+        if text:
+            params["query"] = text
+            params["prompt"] = text
+        if id:
+            params["item_id"] = id
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        if tags:
+            params["tags"] = tags
+        if scope:
+            params["scope"] = scope
+
+        flow_result = self._run_read_flow(state_doc, params, budget=10)
+
+        return PromptResult(
+            context=None,
+            search_results=None,
+            prompt=prompt_body,
+            text=text,
+            since=since,
+            until=until,
+            token_budget=token_budget,
+            flow_bindings=flow_result.bindings if flow_result.status == "done" else None,
         )
 
     def list_prompts(self) -> list[PromptInfo]:

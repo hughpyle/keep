@@ -539,9 +539,10 @@ class PromptResult:
     """Rendered agent prompt with context injection.
 
     The ``prompt`` field is a template that may contain ``{get}``,
-    ``{find}``, ``{text}``, ``{since}``, and ``{until}`` placeholders.
-    The CLI/MCP renderer expands these with the rendered context,
-    search results, and filter values.
+    ``{find}``, ``{text}``, ``{since}``, ``{until}``, and
+    ``{binding_name}`` placeholders.  When the prompt doc has a
+    ``state`` tag, a state-doc flow runs and its bindings become
+    available as ``{binding_name}`` placeholders.
     """
     context: ItemContext | None           # from get_context(id) — default "now"
     search_results: list[Item] | None     # from find(query=text, ...) when text given
@@ -550,6 +551,7 @@ class PromptResult:
     since: str | None = None              # since filter value
     until: str | None = None              # until filter value
     token_budget: int | None = None      # explicit token budget (None = use template default)
+    flow_bindings: dict[str, dict] | None = None  # bindings from state-doc flow
 
 
 @dataclass(frozen=True)

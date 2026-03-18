@@ -2358,14 +2358,65 @@ def _find_now_version_by_tags(kp, tags: list[str], *, scope: Optional[str] = Non
     return None
 
 
-def expand_prompt(result: "PromptResult", kp=None) -> str:
-    """Expand {get}, {find}, {find:deep}, {text}, {since}, {until} placeholders in a prompt template.
+def _render_binding(name: str, binding: dict, kp=None, token_budget: int = 4000) -> str:
+    """Render a single flow binding to text by dispatching on shape."""
+    from .types import Item
 
-    The {find} placeholder supports optional modifiers:
-      {find}                — use default token budget
-      {find:deep}           — deep search (handled upstream)
-      {find:8000}           — override token budget to 8000
-      {find:deep:8000}      — both deep and budget override
+    # Find-action results: {"results": [...], "count": N}
+    results = binding.get("results")
+    if isinstance(results, list) and results:
+        items = _dicts_to_items(results, summary_limit=500)
+        if items:
+            return render_find_context(items, keeper=kp, token_budget=token_budget)
+
+    # Get-action result: {"id": ..., "summary": ..., "tags": ...}
+    if "id" in binding and "summary" in binding:
+        item = Item(
+            id=str(binding["id"]),
+            summary=str(binding.get("summary", "")),
+            tags=dict(binding.get("tags") or {}),
+        )
+        from ._context_resolution import ItemContext
+        ctx = ItemContext(item=item, viewing_offset=0, similar=[], meta={}, edges={}, parts=[], prev=[], next=[])
+        return render_context(ctx)
+
+    # Meta sections: {"sections": {"learnings": [...], "todo": [...]}}
+    sections = binding.get("sections")
+    if isinstance(sections, dict):
+        lines = []
+        for section_name, section_items in sections.items():
+            if isinstance(section_items, list) and section_items:
+                items = _dicts_to_items(section_items, summary_limit=300)
+                if items:
+                    lines.append(f"meta/{section_name}:")
+                    for item in items:
+                        sid = item.id[:20]
+                        summary = item.summary.replace("\n", " ")[:120]
+                        lines.append(f"  - {sid} {summary}")
+        return "\n".join(lines)
+
+    # Edges: {"edges": {...}}
+    edges = binding.get("edges")
+    if isinstance(edges, dict) and edges:
+        lines = []
+        for tag_key, edge_list in edges.items():
+            if isinstance(edge_list, list):
+                for e in edge_list:
+                    if isinstance(e, dict):
+                        lines.append(f"  {tag_key}: {e.get('id', '')} {str(e.get('summary', ''))[:100]}")
+        return "\n".join(lines)
+
+    return ""
+
+
+def expand_prompt(result: "PromptResult", kp=None) -> str:
+    """Expand placeholders in a prompt template.
+
+    Supports:
+      {get}                 — rendered item context
+      {find[:deep][:budget]} — search results
+      {text}, {since}, {until} — raw filter values
+      {binding_name}        — flow binding (when state doc is used)
     """
     output = result.prompt
 
@@ -2399,6 +2450,18 @@ def expand_prompt(result: "PromptResult", kp=None) -> str:
             deep_primary_cap=cap,
         )
     output = _find_re.sub(_expand_find, output)
+
+    # Expand flow bindings: {binding_name} -> rendered binding
+    if result.flow_bindings:
+        budget = result.token_budget or 4000
+        # Distribute budget across bindings
+        n_bindings = sum(1 for b in result.flow_bindings.values() if b)
+        per_binding = budget // max(n_bindings, 1)
+        for name, binding in result.flow_bindings.items():
+            placeholder = "{" + name + "}"
+            if placeholder in output:
+                rendered = _render_binding(name, binding, kp=kp, token_budget=per_binding)
+                output = output.replace(placeholder, rendered)
 
     # Expand {text}, {since}, {until} with raw filter values
     output = output.replace("{text}", result.text or "")
