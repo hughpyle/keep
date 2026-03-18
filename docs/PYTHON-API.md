@@ -91,17 +91,24 @@ kp.find("auth", limit=10) → list[Item]
 # With tag pre-filtering
 kp.find("auth", tags={"user": "alice"}, limit=10) → list[Item]
 
-# Full-text search
-kp.find("auth", fulltext=True) → list[Item]
+# Scoped to specific IDs (glob pattern)
+kp.find("auth", scope="file:///path/to/notes/*") → list[Item]
+
+# Deep search — follow edges to discover related items
+kp.find("auth", deep=True) → list[Item]
 
 # Find similar to an existing note
 kp.find(similar_to="note-id", limit=10) → list[Item]
 
-# Time filtering (all search methods support since)
-kp.find("auth", since="P7D")      # Last 7 days
-kp.find("auth", since="P1W")      # Last week
-kp.find("auth", since="PT1H")     # Last hour
-kp.find("auth", since="2026-01-15")  # Since date
+# Time filtering
+kp.find("auth", since="P7D")             # Last 7 days
+kp.find("auth", since="P7D", until="P1D")  # Between 7 and 1 days ago
+kp.find("auth", since="2026-01-15")      # Since date
+
+# Full signature:
+# kp.find(query=None, *, tags=None, similar_to=None, limit=10,
+#         since=None, until=None, include_self=False,
+#         include_hidden=False, deep=False, scope=None) → list[Item]
 ```
 
 #### Listing and Filtering
@@ -174,6 +181,34 @@ kp.set_now(content, tags={}) → Item
 
 # Per-user scoped update (auto-tags user=alice)
 kp.set_now(content, scope="alice") → Item
+```
+
+#### Analysis and Parts
+
+```python
+# Analyze a document into structural parts
+kp.analyze(id) → dict  # Returns {"parts": [...], "status": "applied"}
+
+# List parts of an analyzed document
+kp.list_parts(id) → list[PartInfo]
+
+# Get a specific part
+kp.get_part(id, part_num) → PartInfo | None
+```
+
+#### Flows and Prompts
+
+```python
+# Run a state-doc flow (same as keep_flow MCP tool)
+result = kp.run_flow_command("query-resolve", params={"query": "auth"})
+# result.status, result.data, result.bindings, result.cursor
+
+# Render an agent prompt with context injection
+result = kp.render_prompt("reflect", "auth flow")
+# result.prompt, result.context, result.search_results, result.flow_bindings
+
+# Render with scoped search
+result = kp.render_prompt("query", "auth", scope="file:///notes/*")
 ```
 
 #### Deletion
