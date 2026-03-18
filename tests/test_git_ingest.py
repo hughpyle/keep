@@ -190,11 +190,12 @@ class TestIngest:
     def test_watermark_stored(self, kp, git_repo):
         ingest_git_history(kp, git_repo)
 
+        # Ingest creates the directory item and sets git_watermark
         dir_item = kp.get(f"file://{git_repo}")
-        # Watermark might be on the directory or the repo root
-        # It's set via keeper.tag on the dir_uri
-        # The dir item might not exist if we didn't put it
-        # In this test we put individual files, not the directory
+        assert dir_item is not None
+        watermark = dir_item.tags.get("git_watermark")
+        assert watermark is not None
+        assert len(watermark) == 40  # full SHA
 
     def test_not_git_repo(self, kp, tmp_path):
         result = ingest_git_history(kp, tmp_path)

@@ -266,7 +266,8 @@ def ingest_git_history(
 
     # Tag files with their last commit
     files_tagged = 0
-    # Build file -> last commit mapping (commits are newest-first)
+    # Build file -> last commit mapping.  Commits are newest-first from
+    # git log, so the first occurrence of each file is its latest commit.
     file_last_commit: dict[str, str] = {}
     for commit in commits:
         for fname in commit["files"]:
