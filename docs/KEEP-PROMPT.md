@@ -22,6 +22,7 @@ keep prompt reflect --tag project=myapp   # Scoped to project
 | `--tag`, `-t` KEY=VALUE | Filter search context by tag (repeatable) |
 | `--since DURATION` | Only items updated since (ISO duration or date) |
 | `--until DURATION` | Only items updated before (ISO duration or date) |
+| `--scope`, `-S` GLOB | Constrain search results to IDs matching glob |
 | `-n`, `--limit N` | Max search results (default: 5) |
 
 ## Template placeholders
@@ -32,11 +33,45 @@ Prompt docs may contain placeholders that are expanded at render time:
 |-------------|------------|
 | `{get}` | Full context for `--id` target (default: `now`) — YAML frontmatter with similar items, meta sections, version history |
 | `{find}` | Search results for the text argument — summary lines matching the query with optional tag/time filters |
+| `{find:deep}` | Deep search — follows edges from results to discover related items |
+| `{find:deep:N}` | Deep search with explicit token budget N |
 | `{text}` | Raw query text passed as the text argument |
 | `{since}` | The `--since` filter value (ISO duration or date), empty if not given |
 | `{until}` | The `--until` filter value (ISO duration or date), empty if not given |
+| `{binding_name}` | Flow binding — see *State-doc backed prompts* below |
 
 When no text argument is given, `{find}` and `{text}` expand to empty. When no `--id` is given, `{get}` shows the `now` document context.
+
+## State-doc backed prompts
+
+A prompt doc can reference a state doc via a `state` tag. When present, the state doc flow runs and its **bindings** become `{binding_name}` placeholders in the template. This allows custom retrieval pipelines to be composed into prompts.
+
+### Example
+
+Given a state doc `.state/openclaw-assemble` that produces bindings `intentions`, `similar`, `meta`, `edges`, `recent`:
+
+```bash
+keep put "$(cat <<'EOF'
+## Prompt
+{intentions}
+{similar}
+{recent}
+
+Question: {text}
+Answer precisely using the context above.
+EOF
+)" --id .prompt/agent/my-query -t state=openclaw-assemble -t context=prompt
+```
+
+Now `keep prompt my-query "auth flow"` runs the `openclaw-assemble` state doc and renders its bindings into the template.
+
+Each binding is rendered by type:
+- **find results** (`{results: [...]}`) — token-budgeted search results with summaries
+- **get results** (`{id, summary}`) — YAML frontmatter context
+- **meta sections** (`{sections: {...}}`) — grouped meta items
+- **edges** (`{edges: {...}}`) — resolved edge references
+
+The token budget is distributed across bindings. Bindings not referenced in the template are ignored.
 
 ## Prompt docs
 

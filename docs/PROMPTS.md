@@ -74,7 +74,19 @@ keep prompt reflect "auth flow"          # With search context injected
 keep prompt --list                       # List available agent prompts
 ```
 
-See [KEEP-PROMPT.md](KEEP-PROMPT.md) for full usage and template placeholders.
+### State-doc backed prompts
+
+Agent prompts can reference a state doc via a `state` tag. The state doc flow runs and its bindings become `{binding_name}` placeholders in the template. This separates retrieval logic (state doc) from presentation (prompt template):
+
+```bash
+keep put "## Prompt
+{intentions}
+{similar}
+Question: {text}
+" --id .prompt/agent/my-query -t state=my-retrieval-flow -t context=prompt
+```
+
+See [KEEP-PROMPT.md](KEEP-PROMPT.md) for full usage, template placeholders, and state-doc binding details.
 
 ## Viewing prompt docs
 

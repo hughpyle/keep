@@ -98,9 +98,10 @@ text:   "auth flow"                # optional search context
 id:     "now"                      # item for context injection
 tags:   {"project": "myapp"}       # filter search results
 since:  "P7D"
+scope:  "file:///path/to/dir*"     # constrain results to ID glob
 ```
 
-Returns the rendered prompt with `{get}` and `{find}` placeholders expanded with live context. See [KEEP-PROMPT.md](use keep_help with topic="keep-prompt") for prompt details.
+Returns the rendered prompt with placeholders expanded. Supports `{get}`, `{find}`, `{text}`, and `{binding_name}` placeholders (when the prompt doc has a `state` tag referencing a state doc flow). See [KEEP-PROMPT.md](use keep_help with topic="keep-prompt") for prompt details.
 
 ### keep_help
 
