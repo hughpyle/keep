@@ -155,6 +155,16 @@ class TestNormalizeHttpUri:
     def test_empty_path(self):
         assert _normalize_http_uri("https://example.com") == "https://example.com/"
 
+    # Credential stripping
+    def test_username_stripped(self):
+        assert _normalize_http_uri("https://user@example.com/path") == "https://example.com/path"
+
+    def test_username_password_stripped(self):
+        assert _normalize_http_uri("https://user:pass@example.com/path") == "https://example.com/path"
+
+    def test_token_stripped(self):
+        assert _normalize_http_uri("https://x-access-token:ghp_SECRET@github.com/org/repo") == "https://github.com/org/repo"
+
     # Path case preserved
     def test_path_case_preserved(self):
         assert _normalize_http_uri("https://example.com/ReadMe.MD") == "https://example.com/ReadMe.MD"

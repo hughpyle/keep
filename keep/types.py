@@ -199,11 +199,7 @@ def _normalize_http_uri(uri: str) -> str:
     if port and port == _DEFAULT_PORTS.get(scheme):
         port = None
     netloc = f'{host}:{port}' if port else host
-    if parsed.username:
-        userinfo = parsed.username
-        if parsed.password:
-            userinfo += f':{parsed.password}'
-        netloc = f'{userinfo}@{netloc}'
+    # Strip credentials — never store userinfo in item IDs
 
     path = _resolve_dot_segments(_decode_unreserved(parsed.path))
     if not path:
