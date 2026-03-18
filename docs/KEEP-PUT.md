@@ -55,6 +55,23 @@ keep put https://example.com/doc --watch   # Watch a URL for changes
 
 Watches persist across sessions — the daemon polls for changes in the background. Use `keep pending` to see active watches. Excludes are captured at watch-creation time.
 
+## Global ignore patterns
+
+The `.ignore` system doc contains glob patterns that are automatically excluded from all directory walks and watches — in addition to `.gitignore` and per-watch `--exclude` patterns.
+
+```bash
+keep get .ignore                           # View current patterns
+keep put .ignore "$(cat <<'EOF'
+*.min.js
+dist/*
+package-lock.json
+__pycache__/*
+EOF
+)"                                         # Edit patterns
+```
+
+Updating `.ignore` retroactively purges matching `file://` items from the store and cancels their pending work. Ships with sensible defaults for build artifacts, lock files, bytecode, and binaries.
+
 ## Text mode and content-addressed IDs
 
 Text mode uses content-addressed IDs for automatic versioning:

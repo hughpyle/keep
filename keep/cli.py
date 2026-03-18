@@ -2520,6 +2520,10 @@ def prompt(
         "--deep", "-D",
         help="Follow tags from results to discover related items"
     )] = False,
+    scope: Annotated[Optional[str], typer.Option(
+        "--scope", "-S",
+        help="ID glob to constrain search results (e.g. 'file:///path/to/dir*')"
+    )] = None,
     token_budget: Annotated[Optional[int], typer.Option(
         "--tokens",
         help="Token budget for {find} context (template default if not set)"
@@ -2559,7 +2563,7 @@ def prompt(
     tags_dict = _parse_tags(tag) if tag else None
     result = kp.render_prompt(
         name, text, id=id, since=since, until=until, tags=tags_dict,
-        deep=deep, token_budget=token_budget,
+        deep=deep, scope=scope, token_budget=token_budget,
     )
     if result is None:
         typer.echo(f"Prompt not found: {name}", err=True)

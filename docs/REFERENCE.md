@@ -114,8 +114,12 @@ keep move "name" --only --analyze     # Move + decompose into parts
 keep put "inline text" -t topic=auth  # Text mode
 keep put file:///path/to/doc.pdf      # URI mode
 keep put /path/to/folder/             # Directory mode
+keep put /path/to/repo/ -r            # Recursive + git changelog
+keep put /path/ -r --watch            # Watch for changes
 keep put "note" --suggest-tags        # Show tag suggestions
 keep put doc.pdf --analyze            # Index + decompose into parts
+keep get .ignore                      # View global ignore patterns
+keep put .ignore "dist/*"             # Edit ignore patterns (retroactive purge)
 
 # Retrieve
 keep get ID                           # Current version
@@ -129,6 +133,7 @@ keep find "query"                     # Semantic search
 keep find "query" --text              # Full-text search
 keep find "query" --deep              # Follow tags/edges to discover related items
 keep find "query" --since P7D         # Last 7 days
+keep find "query" --scope 'file:///path/*'  # Constrain to ID glob
 
 # List and filter
 keep list                            # Recent items
