@@ -1978,6 +1978,19 @@ def _put_store(
                 typer.echo(f"  error: {e}", err=True)
         if results:
             typer.echo(_format_items(results, as_json=_get_json_output()))
+
+        # Git changelog ingest: if this is a git repo, index commits
+        from .git_ingest import is_git_repo, ingest_git_history
+        if is_git_repo(resolved_path):
+            git_result = ingest_git_history(kp, resolved_path)
+            if git_result["commits"] > 0:
+                typer.echo(
+                    f"git: {git_result['commits']} commits, "
+                    f"{git_result['tags']} tags, "
+                    f"{git_result['files_tagged']} files linked",
+                    err=True,
+                )
+
         _handle_watch(kp, watch, unwatch, str(resolved_path), "directory",
                       parsed_tags, recurse=recurse, exclude=exclude, interval=interval)
         return None

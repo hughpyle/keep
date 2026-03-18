@@ -564,6 +564,14 @@ def _reput_source(keeper: Keeper, entry: WatchEntry) -> None:
                 keeper.put(uri=file_uri, tags=tags)
             except Exception as e:
                 logger.warning("Watch re-put failed for %s: %s", file_uri, e)
+        # Git changelog: ingest new commits if this is a git repo
+        from .git_ingest import is_git_repo, ingest_git_history
+        if is_git_repo(directory):
+            try:
+                ingest_git_history(keeper, directory)
+            except Exception as e:
+                logger.warning("Git ingest failed for %s: %s", entry.source, e)
+
     elif entry.kind == "url":
         keeper.put(uri=entry.source, tags=tags, force=True)
 

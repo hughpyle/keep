@@ -1,0 +1,279 @@
+"""Git changelog ingest — index commits as keep items.
+
+Each commit becomes an item with edges to the files it touched.
+Files get a ``git_commit`` tag pointing back to their last commit.
+Incremental: tracks a watermark SHA so re-scans only process new commits.
+"""
+
+from __future__ import annotations
+
+import logging
+import subprocess
+from pathlib import Path
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# git log format: sha\x00author\x00date\x00subject\x00body\x00files
+_LOG_FORMAT = "%H%x00%an%x00%aI%x00%s%x00%b"
+_LOG_SEP = "\x1e"  # record separator
+
+
+def _repo_name(repo_dir: Path) -> str:
+    """Derive a short repo name from the directory."""
+    return repo_dir.resolve().name
+
+
+def _run_git(repo_dir: Path, args: list[str], timeout: int = 60) -> str | None:
+    """Run a git command in a repo directory. Returns stdout or None on error."""
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(repo_dir),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def is_git_repo(directory: Path) -> bool:
+    """Check if a directory is inside a git repository."""
+    return _run_git(directory, ["rev-parse", "--git-dir"]) is not None
+
+
+def get_repo_root(directory: Path) -> Path | None:
+    """Get the root of the git repo containing directory."""
+    out = _run_git(directory, ["rev-parse", "--show-toplevel"])
+    if out:
+        return Path(out.strip())
+    return None
+
+
+def _parse_commits(raw: str, repo_dir: Path) -> list[dict[str, Any]]:
+    """Parse git log output into commit dicts.
+
+    Format: header line (NUL-delimited fields), blank line, file list,
+    blank line, next commit...
+    """
+    commits = []
+    repo = _repo_name(repo_dir)
+
+    lines = raw.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if "\x00" not in line:
+            i += 1
+            continue
+
+        parts = line.split("\x00")
+        if len(parts) < 4:
+            i += 1
+            continue
+
+        sha = parts[0]
+        author = parts[1]
+        date = parts[2]
+        subject = parts[3]
+        body = parts[4] if len(parts) > 4 else ""
+        i += 1
+
+        # Skip blank line between header and file list
+        while i < len(lines) and not lines[i].strip():
+            i += 1
+
+        # Read file list until blank line or next commit header
+        files = []
+        while i < len(lines) and lines[i].strip() and "\x00" not in lines[i]:
+            files.append(lines[i].strip())
+            i += 1
+
+        sha_short = sha[:10]
+        message = subject
+        if body.strip():
+            message = f"{subject}\n\n{body.strip()}"
+
+        commits.append({
+            "sha": sha,
+            "sha_short": sha_short,
+            "author": author,
+            "date": date,
+            "message": message,
+            "subject": subject,
+            "files": files,
+            "id": f"git://{repo}#{sha_short}",
+        })
+
+    return commits
+
+
+def get_commits_since(
+    repo_dir: Path,
+    watermark: str | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Get commits since watermark (or all if no watermark)."""
+    args = ["log", f"--format={_LOG_FORMAT}", "--name-only", f"-{limit}"]
+    if watermark:
+        args.append(f"{watermark}..HEAD")
+
+    raw = _run_git(repo_dir, args, timeout=30)
+    if not raw:
+        return []
+
+    return _parse_commits(raw, repo_dir)
+
+
+def get_tags(repo_dir: Path) -> list[dict[str, Any]]:
+    """Get annotated and lightweight tags."""
+    repo = _repo_name(repo_dir)
+    raw = _run_git(
+        repo_dir,
+        ["tag", "-l", "--format=%(refname:short)%00%(objectname:short)%00%(subject)%00%(creatordate:iso-strict)"],
+    )
+    if not raw:
+        return []
+
+    tags = []
+    for line in raw.strip().splitlines():
+        parts = line.split("\x00")
+        if len(parts) < 2:
+            continue
+        tag_name = parts[0]
+        sha_short = parts[1]
+        subject = parts[2] if len(parts) > 2 else f"Release {tag_name}"
+        date = parts[3] if len(parts) > 3 else ""
+
+        tags.append({
+            "name": tag_name,
+            "sha_short": sha_short,
+            "subject": subject or f"Release {tag_name}",
+            "date": date,
+            "id": f"git://{repo}@{tag_name}",
+        })
+
+    return tags
+
+
+def ingest_git_history(
+    keeper: Any,
+    repo_dir: Path,
+    *,
+    limit: int = 500,
+) -> dict[str, int]:
+    """Ingest git commits and tags into the keep store.
+
+    Returns: {"commits": N, "tags": N, "files_tagged": N}
+    """
+    repo_dir = repo_dir.resolve()
+    if not is_git_repo(repo_dir):
+        return {"commits": 0, "tags": 0, "files_tagged": 0}
+
+    # Find actual repo root (directory might be a subdirectory)
+    root = get_repo_root(repo_dir) or repo_dir
+    repo = _repo_name(root)
+
+    # Read watermark from the directory item
+    dir_uri = f"file://{root}"
+    dir_item = keeper.get(dir_uri)
+    watermark: str | None = None
+    if dir_item:
+        watermark = (dir_item.tags or {}).get("git_watermark")
+
+    # Get new commits
+    commits = get_commits_since(root, watermark=watermark, limit=limit)
+    if not commits:
+        logger.info("Git ingest %s: no new commits (watermark=%s)", repo, watermark or "none")
+        return {"commits": 0, "tags": 0, "files_tagged": 0}
+
+    logger.info("Git ingest %s: %d commits since %s", repo, len(commits), watermark or "initial")
+
+    # Index each commit
+    for commit in commits:
+        # Build references to touched files
+        refs = []
+        for fname in commit["files"]:
+            fpath = root / fname
+            if fpath.exists():
+                refs.append(f"file://{fpath}")
+
+        tags: dict[str, Any] = {
+            "_source": "git",
+            "_git_sha": commit["sha"],
+            "_git_author": commit["author"],
+        }
+        if refs:
+            tags["references"] = refs
+
+        try:
+            keeper.put(
+                commit["message"],
+                id=commit["id"],
+                tags=tags,
+                created_at=commit["date"],
+            )
+        except Exception as e:
+            logger.warning("Failed to index commit %s: %s", commit["sha_short"], e)
+
+    # Tag files with their last commit
+    files_tagged = 0
+    # Build file -> last commit mapping (commits are newest-first)
+    file_last_commit: dict[str, str] = {}
+    for commit in commits:
+        for fname in commit["files"]:
+            fpath = root / fname
+            file_uri = f"file://{fpath}"
+            if file_uri not in file_last_commit:
+                file_last_commit[file_uri] = commit["id"]
+
+    for file_uri, commit_id in file_last_commit.items():
+        if keeper.exists(file_uri):
+            try:
+                keeper.tag(file_uri, tags={"git_commit": commit_id})
+                files_tagged += 1
+            except Exception as e:
+                logger.debug("Failed to tag %s with git_commit: %s", file_uri, e)
+
+    # Index tags/releases
+    git_tags = get_tags(root)
+    tags_indexed = 0
+    for gt in git_tags:
+        try:
+            keeper.put(
+                gt["subject"],
+                id=gt["id"],
+                tags={
+                    "_source": "git",
+                    "_git_tag": gt["name"],
+                },
+                created_at=gt["date"] or None,
+            )
+            tags_indexed += 1
+        except Exception as e:
+            logger.debug("Failed to index tag %s: %s", gt["name"], e)
+
+    # Update watermark to newest commit
+    if commits:
+        newest_sha = commits[0]["sha"]
+        try:
+            if not keeper.exists(dir_uri):
+                keeper.put(f"Git repository: {repo}", id=dir_uri, tags={"_source": "git"})
+            keeper.tag(dir_uri, tags={"git_watermark": newest_sha})
+        except Exception:
+            pass
+
+    logger.info(
+        "Git ingest %s: indexed %d commits, %d tags, tagged %d files",
+        repo, len(commits), tags_indexed, files_tagged,
+    )
+
+    return {
+        "commits": len(commits),
+        "tags": tags_indexed,
+        "files_tagged": files_tagged,
+    }
