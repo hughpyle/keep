@@ -2,7 +2,7 @@
 
 An agent-skill: memory that pays attention.
 
-It includes [skill instructions](SKILL.md) for reflective practice, and a powerful semantic memory system with command-line and MCP interfaces. Fully local, or use API keys for model providers, or [cloud-hosted](https://keepnotes.ai) for multi-agent use.
+It includes [skill instructions](SKILL.md) for reflective practice, and a powerful semantic memory system with [command-line](docs/QUICKSTART.md) and [MCP](docs/KEEP-MCP.md) interfaces. Fully local, or use API keys for model providers, or [cloud-hosted](https://keepnotes.ai) for multi-agent use.
 
 ```bash
 uv tool install keep-skill       # or: pip install keep-skill
