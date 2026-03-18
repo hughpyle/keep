@@ -64,7 +64,6 @@ class Find:
 
         # Parts prefix query: prefix ending with @p targets the parts
         # table (document_parts), not the documents table.
-        _parts_prefix = False
         if prefix and str(prefix).endswith("@p"):
             list_parts = getattr(context, "list_parts", None)
             if callable(list_parts):
