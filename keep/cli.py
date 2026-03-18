@@ -1979,19 +1979,30 @@ def _put_store(
         if results:
             typer.echo(_format_items(results, as_json=_get_json_output()))
 
-        # Git changelog ingest: enqueue for background processing
-        from .git_ingest import is_git_repo
-        if is_git_repo(resolved_path):
+        # Git changelog ingest: find all git repos in the tree
+        git_roots: set[str] = set()
+        # Walk up from each indexed file to find .git/ directories
+        _checked_dirs: set[str] = set()
+        for fpath in files:
+            d = fpath.parent
+            while d != d.parent and str(d) not in _checked_dirs:
+                _checked_dirs.add(str(d))
+                if (d / ".git").is_dir():
+                    git_roots.add(str(d))
+                    break
+                d = d.parent
+        for root_str in sorted(git_roots):
             try:
                 kp._get_work_queue().enqueue(
                     "ingest_git",
-                    {"item_id": f"file://{resolved_path}", "directory": str(resolved_path)},
-                    supersede_key=f"git:{resolved_path}",
-                    priority=8,  # lower priority than summarize/analyze
+                    {"item_id": f"file://{root_str}", "directory": root_str},
+                    supersede_key=f"git:{root_str}",
+                    priority=8,
                 )
-                typer.echo("git: changelog ingest queued", err=True)
             except Exception as e:
-                logger.warning("Failed to queue git ingest: %s", e)
+                logger.warning("Failed to queue git ingest for %s: %s", root_str, e)
+        if git_roots:
+            typer.echo(f"git: {len(git_roots)} repo(s) queued for changelog ingest", err=True)
 
         _handle_watch(kp, watch, unwatch, str(resolved_path), "directory",
                       parsed_tags, recurse=recurse, exclude=exclude, interval=interval)
