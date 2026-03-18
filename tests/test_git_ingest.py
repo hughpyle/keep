@@ -257,6 +257,30 @@ class TestRepoNameParsing:
         )
         assert _repo_name(repo) == "gitlab.com/team/sub/repo"
 
+    def test_https_with_token(self, tmp_path):
+        """Credentials in URL must be stripped."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(repo), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin",
+             "https://x-access-token:github_pat_SECRET@github.com/acme/private.git"],
+            cwd=str(repo), capture_output=True, check=True,
+        )
+        assert _repo_name(repo) == "github.com/acme/private"
+
+    def test_ssh_with_user(self, tmp_path):
+        """ssh:// with username must strip userinfo."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=str(repo), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin",
+             "ssh://deploy@github.com/acme/project.git"],
+            cwd=str(repo), capture_output=True, check=True,
+        )
+        assert _repo_name(repo) == "github.com/acme/project"
+
     def test_no_remote(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()

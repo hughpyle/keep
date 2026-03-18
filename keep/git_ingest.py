@@ -38,6 +38,9 @@ def _repo_name(repo_dir: Path) -> str:
             if url.startswith(prefix):
                 url = url[len(prefix):]
                 break
+        # Strip credentials/userinfo (e.g. x-access-token:PAT@github.com/...)
+        if "@" in url:
+            url = url.split("@", 1)[1]
         # git@github.com:user/repo.git → github.com/user/repo
         url = url.replace(":", "/", 1) if ":" in url and "/" not in url.split(":")[0][1:] else url
         url = url.removesuffix(".git").removesuffix("/")
