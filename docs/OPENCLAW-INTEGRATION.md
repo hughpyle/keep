@@ -74,12 +74,14 @@ stage of the agent lifecycle:
 
 | Lifecycle method | What keep does |
 |-----------------|----------------|
-| **bootstrap** | Initialize session state, index resume file if present |
-| **ingest** | Capture each user and assistant message as a `now` version |
-| **assemble** | Run `.state/openclaw-assemble` flow — 5 parallel queries for intentions, similar items, meta-tags, edges, and recent session context |
-| **afterTurn** | Detect inflection points (topic shifts, commitments, substantial work), trigger background reflection |
-| **compact** | Index the session transcript into keep's store (advisory — OpenClaw still manages its own compaction) |
-| **session_end** | Archive session message versions, clean up working context |
+| **bootstrap** | Mark session for first-assemble enrichment |
+| **ingest** | Capture each message as a version of the session item (keyed by `sessionKey`) |
+| **ingestBatch** | Capture a complete turn as a single version of the session item |
+| **assemble** | Render the `openclaw-assemble` prompt template — retrieves intentions, similar items, meta, edges, and session history via state-doc bindings |
+| **afterTurn** | Detect inflection points (topic shifts, commitments, substantial work), trigger background reflection, set up workspace watches |
+| **compact** | Advisory only — logs diagnostics (OpenClaw manages its own compaction) |
+| **prepareSubagentSpawn** | Link child session to parent via tags, write spawn marker as first version of child item |
+| **onSubagentEnded** | Clean up tracking state (child session item persists) |
 
 The agent doesn't need to do anything — context flows in automatically.
 
@@ -98,12 +100,12 @@ keep flow put -p content="next steps" -p id=now  # Update intentions
 These are injected into the agent's system prompt as cacheable static
 instructions (`appendSystemContext`), so they don't add per-turn token cost.
 
-### Memory Indexing (on compaction)
+### Memory Indexing (automatic)
 
-After OpenClaw compacts conversation context, the plugin indexes workspace
-memory files (`memory/` directory and `MEMORY.md`) into keep. This uses the
-file-stat fast-path (mtime+size check) — unchanged files are skipped without
-even reading them. Safe to run on every compaction.
+The plugin sets up daemon-driven watches on the workspace directory (including
+`memory/` and `MEMORY.md`) on the first agent turn. The daemon polls for
+changes automatically — no manual indexing needed. Git repositories in the
+workspace are also discovered and their commit history is ingested incrementally.
 
 ---
 
@@ -120,11 +122,11 @@ keep config --reset-system-docs                # Restore defaults
 
 The default runs five parallel queries:
 
-1. **intentions** — current `now` content (what the agent is working on)
+1. **intentions** — current `now` content (cross-session intentions)
 2. **similar** — semantically similar items to the current user prompt
 3. **meta** — resolved meta-docs (learnings, todos, open commitments)
 4. **edges** — edge relationships from `now` (references, speakers, threads)
-5. **recent** — recent items from this session
+5. **session** — the current session item (versioned turn history)
 
 All results are token-budgeted so they fit within the context window.
 
@@ -185,23 +187,23 @@ See [QUICKSTART.md](QUICKSTART.md) for full provider options and troubleshooting
 
 ## Recommended: Daily Reflection Cron
 
-For automatic deep reflection with document analysis:
+For automatic deep reflection:
 
 ```bash
 openclaw cron add \
   --name keep-reflect \
   --cron "0 21 * * *" --tz "America/New_York" \
   --session isolated \
-  --agent-turn "Daily memory sync and reflection.
-
-1. Index memory files: run \`keep put /path/to/workspace/memory/\`
-2. Reflect: run \`keep prompt reflect\` and follow the practice.
+  --agent-turn "Daily reflection. Run \`keep prompt reflect\` and follow the practice.
 
 This is the deeper review — not just what happened, but what it means."
 ```
 
-This runs nightly in an isolated session. Analysis runs automatically via the
-after-write state doc; unchanged files cost nothing via hash-skip.
+This runs nightly in an isolated session. Memory files (workspace `memory/`
+directory, `MEMORY.md`, etc.) are indexed automatically by the plugin's
+workspace watch — no manual `keep put` needed. The watch is set up on the
+first agent turn after gateway start, and the daemon keeps it alive across
+restarts.
 
 ---
 
@@ -210,9 +212,8 @@ after-write state doc; unchanged files cost nothing via hash-skip.
 | Layer | Trigger | What it does | Latency |
 |-------|---------|-------------|---------|
 | **Context engine** | Every agent turn | Ingest messages, assemble context, detect inflections | ~10-50ms |
-| **Memory sync** | After compaction | Index workspace memory files | Background |
-| **Session archival** | Session end | Archive message trace, clean up `now` | Background |
-| **Daily reflection** | Cron (optional) | Deep analysis + practice reflection | Isolated session |
+| **Workspace watches** | Daemon-driven | Index files, memory, git history automatically | Background |
+| **Daily reflection** | Cron (optional) | Deep practice reflection | Isolated session |
 | **Agent practice** | Agent-initiated | Voluntary reflection, search, capture | On demand |
 
 ---
@@ -222,20 +223,21 @@ after-write state doc; unchanged files cost nothing via hash-skip.
 ```
 OpenClaw Gateway (Node.js)
   └── keep plugin (TypeScript, in-process)
-        ├── Context Engine (bootstrap, ingest, assemble, afterTurn, compact)
-        ├── Legacy Hooks (fallback when not context engine)
-        │     ├── before_prompt_build → context injection
-        │     ├── after_compaction → memory file indexing
-        │     └── session_end → version archival
+        ├── Context Engine
+        │     ├── bootstrap, ingest, ingestBatch
+        │     ├── assemble (via prompt template + state doc)
+        │     ├── afterTurn (inflection detection, workspace watches)
+        │     ├── compact (advisory)
+        │     └── prepareSubagentSpawn, onSubagentEnded
         └── MCP Client (stdio transport)
               └── keep mcp (Python, persistent process)
-                    └── keep store (SQLite + ChromaDB)
+                    ├── keep store (SQLite + ChromaDB)
+                    └── daemon (watches, git ingest, background work)
 ```
 
 The MCP transport bundles `@modelcontextprotocol/sdk` and spawns `keep mcp` as
 a persistent stdio process at gateway start. All operations have per-type
-timeouts (8s for assemble, 15s for writes, 30s for queries). If the MCP
-process fails, the plugin falls back to CLI (`execFileSync`) for all operations.
+timeouts (8s for assemble/prompts, 15s for writes, 30s for queries).
 
 ---
 
