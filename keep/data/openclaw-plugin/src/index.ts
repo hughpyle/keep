@@ -299,6 +299,231 @@ export default function register(api: any) {
   });
 
   // -----------------------------------------------------------------------
+  // memory_search / memory_get tools
+  // -----------------------------------------------------------------------
+
+  // Register memory tools that use keep's scoped find + line-range
+  // enrichment. These provide the same interface as memory-core's tools
+  // so OpenClaw's system prompt instructions ("run memory_search...") work.
+  api.registerTool(
+    (ctx: any) => {
+      if (!ctx.workspaceDir) return null;
+
+      const workspaceDir: string = ctx.workspaceDir;
+
+      // Build the scope prefix from workspace memory paths
+      const memoryScope = `file://${path.resolve(workspaceDir, "memory")}*`;
+      // Also match MEMORY.md at workspace root
+      const memoryMdId = `file://${path.resolve(workspaceDir, "MEMORY.md")}`;
+
+      return [
+        {
+          name: "memory_search",
+          label: "Memory Search",
+          description:
+            "Mandatory recall step: semantically search MEMORY.md + memory/*.md " +
+            "before answering questions about prior work, decisions, dates, people, " +
+            "preferences, or todos; returns top snippets with path + lines. " +
+            "If response has disabled=true, memory retrieval is unavailable.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+              maxResults: { type: "number" },
+              minScore: { type: "number" },
+            },
+            required: ["query"],
+          },
+          async execute(_toolCallId: string, params: any) {
+            const query = typeof params?.query === "string" ? params.query.trim() : "";
+            if (!query) {
+              return {
+                content: [{ type: "text", text: JSON.stringify({ results: [], error: "query required" }) }],
+              };
+            }
+
+            const maxResults = typeof params?.maxResults === "number" ? params.maxResults : 10;
+            const minScore = typeof params?.minScore === "number" ? params.minScore : 0;
+
+            if (!mcp.connected) {
+              return {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({
+                    results: [],
+                    disabled: true,
+                    unavailable: true,
+                    error: "keep MCP not connected",
+                    warning: "Memory search is unavailable because keep is not running.",
+                    action: "Check keep installation and restart the gateway.",
+                  }),
+                }],
+              };
+            }
+
+            try {
+              const result = await mcp.flow({
+                state: "query-resolve",
+                params: {
+                  query,
+                  scope: memoryScope,
+                  limit: maxResults,
+                },
+                token_budget: 4000,
+              });
+
+              const searchResults = result.data?.search?.results || [];
+
+              // Map keep results to memory_search shape
+              const mapped = (searchResults as any[])
+                .filter((r: any) => {
+                  const score = r.score ?? 0;
+                  return score >= minScore;
+                })
+                .slice(0, maxResults)
+                .map((r: any) => {
+                  const id: string = r.id || "";
+                  const tags = r.tags || {};
+
+                  // Extract workspace-relative path
+                  const filePrefix = `file://${workspaceDir}/`;
+                  const relPath = id.startsWith(filePrefix)
+                    ? id.slice(filePrefix.length)
+                    : id.startsWith("file://")
+                      ? id.slice(7)
+                      : id;
+
+                  // Use focus_summary (part match or keyword fallback) or summary
+                  const snippet = tags._focus_summary || r.summary || "";
+
+                  // Line range from part tags or keyword fallback
+                  const startLine = parseInt(tags._focus_start_line, 10) || 1;
+                  const endLine = parseInt(tags._focus_end_line, 10) || startLine;
+
+                  // Source: memory for memory/ files
+                  const source = relPath.startsWith("memory/") || relPath === "MEMORY.md"
+                    ? "memory"
+                    : "memory";
+
+                  return {
+                    path: relPath,
+                    startLine,
+                    endLine,
+                    score: r.score ?? 0,
+                    snippet,
+                    source,
+                  };
+                });
+
+              return {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({
+                    results: mapped,
+                    provider: "keep",
+                    citations: "auto",
+                  }, null, 2),
+                }],
+                details: { count: mapped.length },
+              };
+            } catch (err: any) {
+              return {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({
+                    results: [],
+                    disabled: true,
+                    unavailable: true,
+                    error: err.message,
+                    warning: "Memory search failed.",
+                    action: "Check keep store health with `keep doctor`.",
+                  }),
+                }],
+              };
+            }
+          },
+        },
+        {
+          name: "memory_get",
+          label: "Memory Get",
+          description:
+            "Safe snippet read from MEMORY.md or memory/*.md with optional " +
+            "from/lines; use after memory_search to pull only the needed " +
+            "lines and keep context small.",
+          parameters: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              from: { type: "number" },
+              lines: { type: "number" },
+            },
+            required: ["path"],
+          },
+          async execute(_toolCallId: string, params: any) {
+            const relPath = typeof params?.path === "string" ? params.path.trim() : "";
+            if (!relPath) {
+              return {
+                content: [{ type: "text", text: JSON.stringify({ path: "", text: "", disabled: true, error: "path required" }) }],
+              };
+            }
+
+            // Resolve and validate path (constrain to memory/ and MEMORY.md)
+            const absPath = path.isAbsolute(relPath)
+              ? path.resolve(relPath)
+              : path.resolve(workspaceDir, relPath);
+            const resolved = path.relative(workspaceDir, absPath);
+
+            const isMemoryPath =
+              resolved === "MEMORY.md" ||
+              resolved === "memory.md" ||
+              resolved.startsWith("memory/") ||
+              resolved.startsWith("memory" + path.sep);
+
+            if (!isMemoryPath || resolved.startsWith("..") || path.isAbsolute(resolved)) {
+              return {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({ path: relPath, text: "", disabled: true, error: "path required" }),
+                }],
+              };
+            }
+
+            try {
+              const content = fs.readFileSync(absPath, "utf-8");
+              const allLines = content.split("\n");
+
+              let text: string;
+              if (typeof params?.from === "number" && params.from > 0) {
+                const startIdx = params.from - 1; // 1-indexed to 0-indexed
+                const count = typeof params?.lines === "number" && params.lines > 0
+                  ? params.lines
+                  : 50; // default 50 lines
+                text = allLines.slice(startIdx, startIdx + count).join("\n");
+              } else if (typeof params?.lines === "number" && params.lines > 0) {
+                text = allLines.slice(0, params.lines).join("\n");
+              } else {
+                text = content;
+              }
+
+              return {
+                content: [{ type: "text", text: JSON.stringify({ path: resolved, text }) }],
+              };
+            } catch (err: any) {
+              return {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({ path: relPath, text: "", disabled: true, error: err.message }),
+                }],
+              };
+            }
+          },
+        },
+      ];
+    },
+    { names: ["memory_search", "memory_get"] },
+  );
+
+  // -----------------------------------------------------------------------
   // Context Engine registration
   // -----------------------------------------------------------------------
 
