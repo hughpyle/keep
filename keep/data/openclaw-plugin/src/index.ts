@@ -2,7 +2,7 @@
  * keep — OpenClaw plugin
  *
  * Context engine for OpenClaw. Requires plugins.slots.contextEngine: 'keep'.
- * Note remaining hook: session_end (no CE onSessionEnd lifecycle).
+ * Remaining hook: session_end (no CE onSessionEnd lifecycle for main sessions).
  */
 
 import { execFileSync } from "child_process";
@@ -614,6 +614,99 @@ export default function register(api: any) {
           api.logger?.warn(`[keep] compact error: ${err.message}`);
           return { ok: false, compacted: false, reason: err.message };
         }
+      },
+
+      // -------------------------------------------------------------------
+      // prepareSubagentSpawn: set up context linkage before child starts
+      // Practice moment: PREPARE — share context with the child
+      // -------------------------------------------------------------------
+      async prepareSubagentSpawn(params: {
+        parentSessionKey: string;
+        childSessionKey: string;
+        ttlMs?: number;
+      }) {
+        if (!mcp.connected) return undefined;
+
+        try {
+          // Snapshot parent's current intentions into a child-scoped tag.
+          // The child can later retrieve context via its session tag.
+          await mcp.flow({
+            state: "put",
+            params: {
+              content: `Subagent ${params.childSessionKey} spawned from ${params.parentSessionKey}`,
+              id: "now",
+              tags: {
+                session: params.childSessionKey,
+                parent_session: params.parentSessionKey,
+                type: "subagent-spawn",
+              },
+            },
+          });
+
+          // Mark child for first-assemble enrichment
+          sessionFirstAssemble.add(params.childSessionKey);
+
+          api.logger?.debug(
+            `[keep] Prepared subagent ${params.childSessionKey} (parent: ${params.parentSessionKey})`,
+          );
+
+          return {
+            rollback: async () => {
+              // Spawn failed — clean up the spawn marker
+              try {
+                await mcp.flow({
+                  state: "delete",
+                  params: {
+                    tags: {
+                      session: params.childSessionKey,
+                      type: "subagent-spawn",
+                    },
+                  },
+                });
+              } catch {
+                // best-effort cleanup
+              }
+              sessionFirstAssemble.delete(params.childSessionKey);
+              api.logger?.debug(
+                `[keep] Rolled back subagent prep for ${params.childSessionKey}`,
+              );
+            },
+          };
+        } catch (err: any) {
+          api.logger?.warn(`[keep] prepareSubagentSpawn error: ${err.message}`);
+          return undefined;
+        }
+      },
+
+      // -------------------------------------------------------------------
+      // onSubagentEnded: archive child context, merge learnings to parent
+      // Practice moment: REFLECT AFTER — inherit what the child learned
+      // -------------------------------------------------------------------
+      async onSubagentEnded(params: {
+        childSessionKey: string;
+        reason: string; // "deleted" | "completed" | "swept" | "released"
+      }) {
+        if (!mcp.connected) return;
+
+        try {
+          // Archive the child session's trace into a named collection
+          await mcp.flow({
+            state: "move",
+            params: {
+              name: `session-${params.childSessionKey}`,
+              tags: { session: params.childSessionKey },
+            },
+          });
+
+          api.logger?.info(
+            `[keep] Subagent ${params.childSessionKey} ended (${params.reason}), archived`,
+          );
+        } catch (err: any) {
+          api.logger?.warn(`[keep] onSubagentEnded error: ${err.message}`);
+        }
+
+        // Clean up first-assemble tracking
+        sessionFirstAssemble.delete(params.childSessionKey);
       },
 
       async dispose() {
