@@ -573,7 +573,7 @@ def _reput_source(keeper: Keeper, entry: WatchEntry) -> None:
                     "ingest_git",
                     {"item_id": f"file://{root_str}", "directory": root_str},
                     supersede_key=f"git:{root_str}",
-                    priority=8,
+                    priority=1,
                 )
             except Exception as e:
                 logger.warning("Git ingest enqueue failed for %s: %s", root_str, e)

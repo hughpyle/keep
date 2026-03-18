@@ -1988,7 +1988,7 @@ def _put_store(
                     "ingest_git",
                     {"item_id": f"file://{root_str}", "directory": root_str},
                     supersede_key=f"git:{root_str}",
-                    priority=8,
+                    priority=1,
                 )
             except Exception as e:
                 logger.warning("Failed to queue git ingest for %s: %s", root_str, e)
