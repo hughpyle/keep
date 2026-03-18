@@ -157,6 +157,7 @@ class LocalFlowEnvironment:
         until: str | None = None,
         include_hidden: bool = False,
         deep: bool = False,
+        scope: str | None = None,
     ) -> list[Any]:
         return self._keeper.find(
             query=query,
@@ -167,6 +168,7 @@ class LocalFlowEnvironment:
             until=until,
             include_hidden=include_hidden,
             deep=deep,
+            scope=scope,
         )
 
     def list_items(

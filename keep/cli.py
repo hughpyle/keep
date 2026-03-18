@@ -1536,6 +1536,10 @@ def find(
         "--all", "-a",
         help="Include hidden system notes (IDs starting with '.')"
     )] = False,
+    scope: Annotated[Optional[str], typer.Option(
+        "--scope", "-S",
+        help="ID glob to constrain results (e.g. 'file:///path/to/dir*')"
+    )] = None,
     token_budget: Annotated[Optional[int], typer.Option(
         "--tokens",
         help="Token budget for rich context output (includes parts and versions)"
@@ -1567,9 +1571,9 @@ def find(
     search_limit = limit * 5 if tag else limit
 
     if id:
-        results = kp.find(similar_to=id, limit=search_limit, since=since, until=until, include_self=include_self, include_hidden=show_all, deep=deep)
+        results = kp.find(similar_to=id, limit=search_limit, since=since, until=until, include_self=include_self, include_hidden=show_all, deep=deep, scope=scope)
     else:
-        results = kp.find(query, limit=search_limit, since=since, until=until, include_hidden=show_all, deep=deep)
+        results = kp.find(query, limit=search_limit, since=since, until=until, include_hidden=show_all, deep=deep, scope=scope)
 
     # Post-filter by tags if specified
     deep_groups = getattr(results, "deep_groups", {})

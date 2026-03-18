@@ -71,10 +71,12 @@ class _KeeperActionContext:
         since: str | None = None,
         until: str | None = None,
         include_hidden: bool = False,
+        scope: str | None = None,
     ) -> list[Any]:
         return self._keeper.find(
             query, tags=tags, similar_to=similar_to, limit=limit,
             since=since, until=until, include_hidden=include_hidden,
+            scope=scope,
         )
 
     def list_items(

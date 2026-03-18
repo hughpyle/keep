@@ -619,6 +619,26 @@ class MockDocumentStore:
             return results[offset:]
         return results[offset:offset + limit]
 
+    def query_by_id_glob(
+        self,
+        collection: str,
+        pattern: str,
+        limit: int = 0,
+        offset: int = 0,
+    ) -> list:
+        import fnmatch
+        if collection not in self._data:
+            return []
+        results = []
+        for id, rec in self._data[collection].items():
+            if fnmatch.fnmatch(id, pattern):
+                results.append(self._make_record(collection, id, rec))
+        if offset > 0:
+            results = results[offset:]
+        if limit > 0:
+            results = results[:limit]
+        return results
+
     def touch_many(self, collection: str, ids: list[str]) -> None:
         pass
 

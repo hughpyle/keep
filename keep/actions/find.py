@@ -29,6 +29,12 @@ class Find:
             bias = None
         n_excluded = sum(1 for v in (bias or {}).values() if v == 0)
 
+        scope = params.get("scope")
+        if isinstance(scope, str) and scope:
+            scope = scope
+        else:
+            scope = None
+
         has_selector = any([
             bool(query),
             bool(similar_to),
@@ -52,6 +58,7 @@ class Find:
                 since=str(since) if since is not None else None,
                 until=str(until) if until is not None else None,
                 include_hidden=include_hidden,
+                scope=scope,
             )
         else:
             rows = context.list_items(

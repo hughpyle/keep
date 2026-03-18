@@ -435,6 +435,7 @@ class _EnvActionContext:
         since: str | None = None,
         until: str | None = None,
         include_hidden: bool = False,
+        scope: str | None = None,
     ) -> list[Any]:
         return self._env.find(
             query,
@@ -445,6 +446,7 @@ class _EnvActionContext:
             until=until,
             include_hidden=include_hidden,
             deep=False,
+            scope=scope,
         )
 
     def list_items(
