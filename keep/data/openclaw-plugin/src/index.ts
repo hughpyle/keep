@@ -438,6 +438,11 @@ export default function register(api: any) {
 
       // -------------------------------------------------------------------
       // assemble: build model context with keep's memory
+      //
+      // Uses the openclaw-assemble prompt template, which references the
+      // openclaw-assemble state doc for retrieval. The prompt pipeline
+      // handles both fetching (5 parallel queries) and rendering (template
+      // expansion with flow bindings). We just inject the result.
       // -------------------------------------------------------------------
       async assemble(params: {
         sessionId: string;
@@ -472,27 +477,19 @@ export default function register(api: any) {
           const itemId = sessionItemId(params);
           const isFirstAssemble = sessionFirstAssemble.delete(itemId);
 
-          const result = await mcp.flow({
-            state: "openclaw-assemble",
-            params: {
-              prompt: prompt || "session context",
-              session_key: itemId,
-              session_id: params.sessionId,
-              ...(isFirstAssemble ? { first_turn: "true" } : {}),
-            },
+          // Call the prompt template — it runs the state doc flow internally,
+          // expands bindings into the template, and returns rendered text.
+          const contextText = await mcp.prompt({
+            name: "openclaw-assemble",
+            text: prompt || "session context",
+            id: itemId,
             token_budget: keepBudget,
           });
-
-          const contextText =
-            result.text ||
-            (result.data
-              ? formatAssembleData(result.data)
-              : "");
 
           const keepTokens = estimateTokens(contextText);
 
           const parts: string[] = [];
-          if (contextText) parts.push(`\`keep context\`:\n${contextText}`);
+          if (contextText.trim()) parts.push(`\`keep context\`:\n${contextText}`);
 
           if (isFirstAssemble) {
             parts.push(
@@ -721,72 +718,4 @@ function detectInflection(messages: any[]): InflectionSignal {
   return { shouldReflect: false, reason: "" };
 }
 
-// ---------------------------------------------------------------------------
-// Format helpers
-// ---------------------------------------------------------------------------
 
-function formatAssembleData(data: Record<string, unknown>): string {
-  if (!data || typeof data !== "object") return "";
-
-  const parts: string[] = [];
-
-  if (data.intentions && typeof data.intentions === "object") {
-    const intentions = data.intentions as any;
-    if (intentions.summary) {
-      parts.push(`## Current intentions\n${intentions.summary}`);
-    }
-  }
-
-  if (data.similar && typeof data.similar === "object") {
-    const similar = data.similar as any;
-    const results = similar.results || similar;
-    if (Array.isArray(results) && results.length > 0) {
-      const items = results
-        .slice(0, 7)
-        .map(
-          (r: any) =>
-            `- ${r.id} (${r.score?.toFixed(2) || "?"}) ${truncate(r.summary || "", 120)}`,
-        )
-        .join("\n");
-      parts.push(`## Related\n${items}`);
-    }
-  }
-
-  if (data.meta && typeof data.meta === "object") {
-    const meta = data.meta as any;
-    const sections = meta.sections || meta;
-    if (typeof sections === "object") {
-      for (const [key, items] of Object.entries(sections)) {
-        if (!Array.isArray(items) || items.length === 0) continue;
-        const formatted = (items as any[])
-          .slice(0, 5)
-          .map(
-            (item: any) =>
-              `- ${truncate(item.summary || item.id || "", 120)}`,
-          )
-          .join("\n");
-        parts.push(`## ${key}\n${formatted}`);
-      }
-    }
-  }
-
-  if (data.edges && typeof data.edges === "object") {
-    const edges = data.edges as any;
-    const edgeMap = edges.edges || edges;
-    if (typeof edgeMap === "object") {
-      for (const [predicate, items] of Object.entries(edgeMap)) {
-        if (!Array.isArray(items) || items.length === 0) continue;
-        const formatted = (items as any[])
-          .slice(0, 3)
-          .map(
-            (item: any) =>
-              `- ${item.id || ""}: ${truncate(item.summary || "", 100)}`,
-          )
-          .join("\n");
-        parts.push(`## ${predicate}\n${formatted}`);
-      }
-    }
-  }
-
-  return parts.join("\n\n");
-}

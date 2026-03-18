@@ -69,6 +69,8 @@ export type KeepPromptParams = {
   id?: string;
   tags?: Record<string, string>;
   since?: string;
+  scope?: string;
+  token_budget?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -247,8 +249,15 @@ export class KeepMcpTransport {
     if (params.id) args.id = params.id;
     if (params.tags) args.tags = params.tags;
     if (params.since) args.since = params.since;
+    if (params.scope) args.scope = params.scope;
+    if (params.token_budget != null) args.token_budget = params.token_budget;
 
-    const result = await this.callTool("keep_prompt", args, LONG_CALL_TIMEOUT_MS);
+    // Assemble prompts are on the hot path — use assemble timeout
+    const timeout = params.name === "openclaw-assemble"
+      ? ASSEMBLE_TIMEOUT_MS
+      : LONG_CALL_TIMEOUT_MS;
+
+    const result = await this.callTool("keep_prompt", args, timeout);
     return typeof result === "string" ? result : JSON.stringify(result);
   }
 

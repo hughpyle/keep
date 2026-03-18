@@ -32,11 +32,9 @@ rules:
       id: "now"
       limit: 5
 
-  - id: recent
-    do: find
+  - id: session
+    do: get
     with:
-      tags: { session: "{params.session_id}" }
-      limit: 5
-      order_by: "updated"
+      id: "{params.item_id}"
 post:
   - return: done
