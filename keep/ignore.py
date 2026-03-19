@@ -46,6 +46,66 @@ def merge_excludes(
     return result
 
 
+def _is_uri_pattern(pattern: str) -> bool:
+    """Return True if *pattern* is a URI-scheme pattern (e.g. ``git://x/*``)."""
+    idx = pattern.find("://")
+    if idx < 1:
+        return False
+    # Scheme part must be free of glob chars
+    scheme = pattern[:idx]
+    return not any(ch in scheme for ch in ("*", "?", "["))
+
+
+def uri_pattern_prefixes(patterns: list[str]) -> list[str]:
+    """Extract queryable ID prefixes from URI-scheme patterns.
+
+    For ``git://x-access-token/*`` the prefix is ``git://x-access-token/``.
+    Returned prefixes are deduplicated.
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    for pat in patterns:
+        if not _is_uri_pattern(pat):
+            continue
+        prefix_chars: list[str] = []
+        for ch in pat:
+            if ch in ("*", "?", "["):
+                break
+            prefix_chars.append(ch)
+        prefix = "".join(prefix_chars)
+        if prefix and prefix not in seen:
+            seen.add(prefix)
+            result.append(prefix)
+    return result
+
+
+def match_ignore(uri: str, patterns: list[str]) -> bool:
+    """Test if an item ID matches any ignore pattern.
+
+    Two pattern types are supported:
+
+    * **URI patterns** (contain ``://`` in the scheme portion):
+      fnmatch the full item ID against the pattern.
+    * **File-path patterns** (everything else):
+      match against ``file://`` URI path suffixes via :func:`match_file_uri`.
+    """
+    if not patterns:
+        return False
+
+    # Check URI-scheme patterns against the full item ID
+    uri_pats = [p for p in patterns if _is_uri_pattern(p)]
+    for pat in uri_pats:
+        if fnmatch.fnmatch(uri, pat):
+            return True
+
+    # Check file-path patterns via suffix matching (file:// URIs only)
+    file_pats = [p for p in patterns if not _is_uri_pattern(p)]
+    if file_pats and match_file_uri(uri, file_pats):
+        return True
+
+    return False
+
+
 def match_file_uri(uri: str, patterns: list[str]) -> bool:
     """Test if a ``file://`` URI's path matches any ignore pattern.
 

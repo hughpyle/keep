@@ -2,7 +2,14 @@
 
 import pytest
 
-from keep.ignore import parse_ignore_patterns, merge_excludes, match_file_uri
+from keep.ignore import (
+    parse_ignore_patterns,
+    merge_excludes,
+    match_file_uri,
+    match_ignore,
+    uri_pattern_prefixes,
+    _is_uri_pattern,
+)
 
 
 class TestParseIgnorePatterns:
@@ -146,3 +153,100 @@ class TestIgnorePurge:
         kp.put("dist/*", id=".ignore")
         # Inline note should not be purged (not a file:// URI)
         assert kp.exists("dist-notes")
+
+    def test_purge_git_uri_pattern(self, kp):
+        """URI-scheme patterns like git://x-access-token/* should purge matching items."""
+        kp.put("commit from token", id="git://x-access-token/repo#abc1234")
+        kp.put("commit from token 2", id="git://x-access-token/other#def5678")
+        kp.put("normal commit", id="git://myrepo#111aaaa")
+        assert kp.exists("git://x-access-token/repo#abc1234")
+        assert kp.exists("git://x-access-token/other#def5678")
+        assert kp.exists("git://myrepo#111aaaa")
+
+        kp.put("git://x-access-token/*", id=".ignore")
+
+        # Token-based items should be purged
+        assert not kp.exists("git://x-access-token/repo#abc1234")
+        assert not kp.exists("git://x-access-token/other#def5678")
+        # Normal git item should remain
+        assert kp.exists("git://myrepo#111aaaa")
+
+    def test_purge_mixed_uri_and_file_patterns(self, kp):
+        """Mix of file-path and URI-scheme patterns should both work."""
+        kp.put("token commit", id="git://x-access-token/repo#aaa")
+        assert kp.exists("file:///project/dist/bundle.js")
+        assert kp.exists("git://x-access-token/repo#aaa")
+
+        kp.put("dist/*\ngit://x-access-token/*", id=".ignore")
+
+        assert not kp.exists("file:///project/dist/bundle.js")
+        assert not kp.exists("git://x-access-token/repo#aaa")
+        # Non-matching items survive
+        assert kp.exists("file:///project/src/main.py")
+
+
+class TestMatchIgnore:
+    """Tests for the unified match_ignore() function."""
+
+    def test_uri_pattern_match(self):
+        assert match_ignore("git://x-access-token/repo#abc", ["git://x-access-token/*"]) is True
+
+    def test_uri_pattern_no_match(self):
+        assert match_ignore("git://myrepo#abc", ["git://x-access-token/*"]) is False
+
+    def test_file_path_pattern_still_works(self):
+        assert match_ignore("file:///a/b/dist/bundle.js", ["dist/*"]) is True
+
+    def test_file_path_pattern_no_match_on_non_file(self):
+        assert match_ignore("git://repo#abc", ["dist/*"]) is False
+
+    def test_mixed_patterns(self):
+        pats = ["dist/*", "git://x-access-token/*"]
+        assert match_ignore("file:///a/dist/x.js", pats) is True
+        assert match_ignore("git://x-access-token/r#1", pats) is True
+        assert match_ignore("file:///a/src/x.js", pats) is False
+        assert match_ignore("git://normal/r#1", pats) is False
+
+    def test_empty_patterns(self):
+        assert match_ignore("git://anything", []) is False
+
+    def test_https_uri_pattern(self):
+        assert match_ignore("https://example.com/foo", ["https://example.com/*"]) is True
+        assert match_ignore("https://other.com/foo", ["https://example.com/*"]) is False
+
+
+class TestUriPatternPrefixes:
+    def test_basic(self):
+        assert uri_pattern_prefixes(["git://x-access-token/*"]) == ["git://x-access-token/"]
+
+    def test_file_patterns_ignored(self):
+        assert uri_pattern_prefixes(["*.pyc", "dist/*"]) == []
+
+    def test_mixed(self):
+        result = uri_pattern_prefixes(["*.pyc", "git://x/*", "https://example.com/*"])
+        assert "git://x/" in result
+        assert "https://example.com/" in result
+        assert len(result) == 2
+
+    def test_dedup(self):
+        result = uri_pattern_prefixes(["git://x/*", "git://x/*"])
+        assert result == ["git://x/"]
+
+
+class TestIsUriPattern:
+    def test_git_uri(self):
+        assert _is_uri_pattern("git://x-access-token/*") is True
+
+    def test_https_uri(self):
+        assert _is_uri_pattern("https://example.com/*") is True
+
+    def test_file_glob(self):
+        assert _is_uri_pattern("*.pyc") is False
+        assert _is_uri_pattern("dist/*") is False
+
+    def test_no_scheme(self):
+        assert _is_uri_pattern("://no-scheme") is False
+
+    def test_glob_in_scheme(self):
+        # Pathological: glob char in the scheme part → not a URI pattern
+        assert _is_uri_pattern("g*t://foo/*") is False

@@ -1071,21 +1071,36 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._ignore_patterns_ts = 0.0
 
     def _purge_ignored_items(self, patterns: list[str]) -> dict:
-        """Delete file:// items matching ignore patterns + cancel queued work.
+        """Delete items matching ignore patterns + cancel queued work.
 
         Called automatically when ``.ignore`` gains new patterns.
+        Handles both file-path patterns (matched against ``file://`` items)
+        and URI-scheme patterns like ``git://x-access-token/*``.
         Returns ``{"deleted": int, "cancelled": int}``.
         """
-        from .ignore import match_file_uri
+        from .ignore import match_ignore, uri_pattern_prefixes
 
         doc_coll = self._resolve_doc_collection()
-        records = self._document_store.query_by_id_prefix(
-            doc_coll, "file://", limit=0,
-        )
+
+        # Always query file:// items (for path-glob patterns).
+        # Also query any URI-scheme prefixes derived from URI patterns.
+        prefixes = ["file://"]
+        for p in uri_pattern_prefixes(patterns):
+            if p not in prefixes:
+                prefixes.append(p)
+
+        seen_ids: set[str] = set()
         matched_ids: set[str] = set()
-        for rec in records:
-            if match_file_uri(rec.id, patterns):
-                matched_ids.add(rec.id)
+        for prefix in prefixes:
+            records = self._document_store.query_by_id_prefix(
+                doc_coll, prefix, limit=0,
+            )
+            for rec in records:
+                if rec.id in seen_ids:
+                    continue
+                seen_ids.add(rec.id)
+                if match_ignore(rec.id, patterns):
+                    matched_ids.add(rec.id)
 
         if not matched_ids:
             return {"deleted": 0, "cancelled": 0}
