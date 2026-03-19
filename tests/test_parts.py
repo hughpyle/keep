@@ -293,7 +293,7 @@ class TestKeeperAnalyze:
     def test_analyze_replaces_parts(self, mock_providers, tmp_path):
         """Re-analyze replaces all previous parts."""
         kp = Keeper(store_path=tmp_path)
-        kp.put("Content " * 50, id="test-doc")
+        kp.put("Content for analysis testing with enough length. " * 12, id="test-doc")
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             # First analysis
@@ -321,7 +321,7 @@ class TestKeeperAnalyze:
     def test_get_part(self, mock_providers, tmp_path):
         """get_part() returns an Item with part metadata."""
         kp = Keeper(store_path=tmp_path)
-        kp.put("Content " * 50, id="test-doc")
+        kp.put("Content for analysis testing with enough length. " * 12, id="test-doc")
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
@@ -343,7 +343,7 @@ class TestKeeperAnalyze:
     def test_list_parts(self, mock_providers, tmp_path):
         """list_parts() returns PartInfo ordered by part_num."""
         kp = Keeper(store_path=tmp_path)
-        kp.put("Content " * 50, id="test-doc")
+        kp.put("Content for analysis testing with enough length. " * 12, id="test-doc")
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
@@ -540,7 +540,7 @@ class TestFindPartUplift:
     def test_find_dedupes_multiple_part_hits(self, mock_providers, tmp_path):
         """Multiple parts of the same parent produce one result."""
         kp = Keeper(store_path=tmp_path)
-        kp.put("Travel travel travel. " * 20,
+        kp.put("Travel travel travel around the world visiting many destinations. " * 10,
                id="test-doc", tags={"project": "journal"})
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:

@@ -10,12 +10,23 @@ from keep.api import Keeper
 from keep.document_store import VersionInfo
 
 
-# Content long enough to pass the 50-char minimum
-_V1 = "First version: project kickoff and initial requirements gathering phase"
-_V2 = "Second version: architecture review and technology stack decisions made"
-_V3 = "Third version: implementation started with core module development"
-_V4 = "Fourth version: testing infrastructure and CI/CD pipeline configured"
-_V5 = "Fifth version: performance optimization and load testing results"
+# Content long enough to pass the min_analyze_length floor (500 chars total
+# across assembled version chunks).  Each version ~120 chars so 5 versions
+# produce ~600+ chars of assembled content.
+_V1 = "First version: project kickoff and initial requirements gathering phase with stakeholder interviews and scope definition"
+_V2 = "Second version: architecture review and technology stack decisions made after evaluating multiple database and framework options"
+_V3 = "Third version: implementation started with core module development including authentication, authorization, and data models"
+_V4 = "Fourth version: testing infrastructure and CI/CD pipeline configured with integration tests covering all critical user paths"
+_V5 = "Fifth version: performance optimization and load testing results showing significant improvements in query response latency"
+
+
+def _version_summary(i: int) -> str:
+    """Build a version summary long enough for assembled chunks to pass the analysis floor."""
+    return (
+        f"Version {i} summary: project milestone covering requirements, design, "
+        f"implementation, testing, and deployment activities for iteration {i} "
+        f"of the platform development cycle"
+    )
 
 
 def _make_versions(n, start=1):
@@ -24,7 +35,7 @@ def _make_versions(n, start=1):
     for i in range(n, start - 1, -1):
         versions.append(VersionInfo(
             version=i,
-            summary=f"Version {i} summary content for testing",
+            summary=_version_summary(i),
             tags={},
             created_at=f"2026-03-{i:02d}T00:00:00",
             content_hash=f"hash_{i}",
@@ -43,7 +54,7 @@ class TestIncrementalAnalyze:
     def _setup(self, kp, versions=3):
         """Put content with multiple versions."""
         for i in range(1, versions + 1):
-            kp.put(f"Version {i} summary content for testing", id="doc1")
+            kp.put(_version_summary(i), id="doc1")
 
     def test_full_analysis_sets_analyzed_version(self, mock_providers, tmp_path):
         """Full analyze() records _analyzed_version tag."""

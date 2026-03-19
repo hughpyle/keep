@@ -3731,6 +3731,23 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 logger.info("Skipping incremental analysis for %s: no new versions", id)
                 self._record_analyzed_tags(doc_coll, id, doc_record)
                 return self.list_parts(id)
+            # Diff-ratio skip: if latest target is near-identical to last
+            # context version, the change is too trivial to re-analyze.
+            diff_threshold = self._config.analyze_diff_threshold
+            if diff_threshold < 1.0 and context_chunks and target_chunks:
+                import difflib
+                prev_text = context_chunks[-1].get("content", "")
+                curr_text = target_chunks[-1].get("content", "")
+                ratio = difflib.SequenceMatcher(
+                    None, prev_text, curr_text,
+                ).ratio()
+                if ratio >= diff_threshold:
+                    logger.info(
+                        "Skipping analysis for %s: trivial diff (%.1f%% similar)",
+                        id, ratio * 100,
+                    )
+                    self._record_analyzed_tags(doc_coll, id, doc_record)
+                    return self.list_parts(id)
             chunk_dicts = context_chunks + target_chunks
         else:
             context_chunks = None
@@ -3739,8 +3756,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             incremental = False  # gather returned flat list (URI or full)
 
         total_content = "".join(c["content"] for c in chunk_dicts)
-        if len(total_content.strip()) < 50:
-            logger.info("Skipping analysis for %s: content too short", id)
+        min_len = self._config.min_analyze_length
+        if len(total_content.strip()) < min_len:
+            logger.info(
+                "Skipping analysis for %s: content too short (%d < %d)",
+                id, len(total_content.strip()), min_len,
+            )
             return []
 
         guide_context = self._gather_guide_context(tags) if tags else ""

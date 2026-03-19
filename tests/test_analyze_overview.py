@@ -5,9 +5,20 @@ from unittest.mock import patch
 from keep.api import Keeper
 from keep.document_store import VersionInfo
 
-# Content long enough so the assembled vstring passes the 50-char minimum
-_V1 = "Version one covers machine learning fundamentals and supervised algorithms"
-_V2 = "Version two adds neural network architectures and deep learning updates"
+# Content long enough so the assembled vstring passes the min_analyze_length floor.
+# Each version needs ~250+ chars so two versions + date prefixes exceed 500 chars.
+_V1 = (
+    "Version one covers machine learning fundamentals and supervised algorithms. "
+    "It introduces key concepts like linear regression, decision trees, random "
+    "forests, and gradient boosting. The section also discusses feature engineering "
+    "techniques and cross-validation strategies for model evaluation."
+)
+_V2 = (
+    "Version two adds neural network architectures and deep learning updates. "
+    "It covers convolutional neural networks for image recognition, recurrent "
+    "networks for sequence modeling, and transformer architectures. The update "
+    "includes practical guidance on hyperparameter tuning and regularization."
+)
 
 # A fake version record to make _gather_analyze_chunks produce 2+ chunks
 _FAKE_VERSION = VersionInfo(

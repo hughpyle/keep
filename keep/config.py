@@ -181,6 +181,15 @@ class StoreConfig:
     # Number of prior versions included as context in incremental analysis
     incremental_context: int = 10
 
+    # Minimum total content length (chars) before analysis runs.
+    # Below this threshold the LLM call is mostly prompt overhead.
+    min_analyze_length: int = 500
+
+    # Similarity ratio (0.0–1.0) above which incremental analysis is skipped.
+    # Compared via difflib.SequenceMatcher on the latest version summary vs
+    # the previous version summary.  1.0 = identical, 0.95 = ~5% change.
+    analyze_diff_threshold: float = 0.95
+
     # Default tick budget for `keep flow` invocations
     budget_per_flow: int = 5
 

@@ -56,6 +56,33 @@ def check_content_hash(
     return tags.get(hash_tag) == content_hash
 
 
+def check_summary_hash(
+    params: dict[str, Any], context: Any, item_id: str, hash_tag: str
+) -> bool:
+    """Return True if the item's *summary* is unchanged since the last run.
+
+    Like ``check_content_hash`` but hashes the document summary instead of
+    the raw content.  Useful for tagging, where the semantic signal comes
+    from the summary — re-tagging when only the underlying content changed
+    but the summary stayed the same would produce identical tags.
+    """
+    if params.get("force"):
+        return False
+    get_doc = getattr(context, "get_document", None)
+    if get_doc is None:
+        return False
+    doc = get_doc(item_id)
+    if doc is None:
+        return False
+    summary = getattr(doc, "summary", None)
+    if not summary or not isinstance(summary, str):
+        return False
+    import hashlib
+    summary_hash = hashlib.sha256(summary.encode("utf-8")).hexdigest()[:10]
+    tags = getattr(doc, "tags", None) or {}
+    return tags.get(hash_tag) == summary_hash
+
+
 def resolve_item_content(params: dict[str, Any], context: Any) -> tuple[str, Any, str]:
     """Resolve non-empty content text for an item-scoped action."""
     item_id, item = resolve_item(params, context)
