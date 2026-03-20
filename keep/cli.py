@@ -4001,9 +4001,8 @@ def pending_cmd(
                     typer.echo()
                 # Full breakdown by kind, sorted by processing priority
                 wq = kp._get_work_queue()
-                by_kind = wq.count_by_kind()
-                from .actions import get_action_priority
-                for kind, count in sorted(by_kind.items(), key=lambda x: get_action_priority(x[0])):
+                by_kind = wq.count_by_kind()  # pre-sorted by priority
+                for kind, count in by_kind.items():
                     typer.echo(f"  {kind:20s} {count}")
             if failed:
                 typer.echo(f"\nFailed ({len(failed)}):")
@@ -4097,11 +4096,10 @@ def _queue_status_line(kp, queue_stats: dict) -> str:
     flow_by_kind = ""
     if flow_pending:
         try:
-            from .actions import get_action_priority
             wq = kp._get_work_queue()
-            by_kind = wq.count_by_kind()
+            by_kind = wq.count_by_kind()  # pre-sorted by priority
             if by_kind:
-                flow_by_kind = ", ".join(f"{c} {k}" for k, c in sorted(by_kind.items(), key=lambda x: get_action_priority(x[0])))
+                flow_by_kind = ", ".join(f"{c} {k}" for k, c in by_kind.items())
         except Exception:
             pass
 

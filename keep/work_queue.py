@@ -411,13 +411,16 @@ class WorkQueue:
         return int(row["c"]) if row is not None else 0
 
     def count_by_kind(self) -> dict[str, int]:
-        """Count requested work items grouped by kind (task type)."""
+        """Count requested work items grouped by kind (task type).
+
+        Returns dict ordered by minimum priority (processing order).
+        """
         rows = self._conn.execute(
             """
-            SELECT kind, COUNT(1) AS c FROM continue_work
+            SELECT kind, COUNT(1) AS c, MIN(priority) AS p FROM continue_work
             WHERE status = 'requested'
             GROUP BY kind
-            ORDER BY c DESC
+            ORDER BY p ASC, kind ASC
             """
         ).fetchall()
         return {row["kind"]: int(row["c"]) for row in rows}

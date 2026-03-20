@@ -81,8 +81,8 @@ def process_work_batch(
         perf.log_summary(min_interval=60)
         remaining = queue.count()
         if remaining > 0:
-            by_kind = queue.count_by_kind()
-            parts = [f"{v} {k}" for k, v in sorted(by_kind.items(), key=lambda x: -x[1])]
+            by_kind = queue.count_by_kind()  # pre-sorted by priority
+            parts = [f"{v} {k}" for k, v in by_kind.items()]
             logger.info("Queue: %d remaining (%s)", remaining, ", ".join(parts))
 
     return stats
