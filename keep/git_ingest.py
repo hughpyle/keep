@@ -240,8 +240,13 @@ def ingest_git_history(
 
     logger.info("Git ingest %s: %d commits since %s", repo, len(commits), watermark or "initial")
 
-    # Index each commit
+    # Index each commit — skip already-indexed ones to avoid
+    # re-enqueuing after-write tasks for unchanged items.
+    new_commits = 0
     for commit in commits:
+        if keeper.exists(commit["id"]):
+            continue
+
         # Build references to touched files
         refs = []
         for fname in commit["files"]:
@@ -264,6 +269,7 @@ def ingest_git_history(
                 tags=tags,
                 created_at=commit["date"],
             )
+            new_commits += 1
         except Exception as e:
             logger.warning("Failed to index commit %s: %s", commit["sha_short"], e)
 
@@ -287,10 +293,12 @@ def ingest_git_history(
             except Exception as e:
                 logger.debug("Failed to tag %s with git_commit: %s", file_uri, e)
 
-    # Index tags/releases
+    # Index tags/releases — skip already-indexed ones
     git_tags = get_tags(root)
     tags_indexed = 0
     for gt in git_tags:
+        if keeper.exists(gt["id"]):
+            continue
         try:
             keeper.put(
                 gt["subject"],
@@ -314,13 +322,20 @@ def ingest_git_history(
         except Exception:
             pass
 
-    logger.info(
-        "Git ingest %s: indexed %d commits, %d tags, tagged %d files",
-        repo, len(commits), tags_indexed, files_tagged,
-    )
+    skipped = len(commits) - new_commits
+    if skipped:
+        logger.info(
+            "Git ingest %s: %d new commits (%d skipped), %d tags, tagged %d files",
+            repo, new_commits, skipped, tags_indexed, files_tagged,
+        )
+    else:
+        logger.info(
+            "Git ingest %s: indexed %d commits, %d tags, tagged %d files",
+            repo, new_commits, tags_indexed, files_tagged,
+        )
 
     return {
-        "commits": len(commits),
+        "commits": new_commits,
         "tags": tags_indexed,
         "files_tagged": files_tagged,
     }
