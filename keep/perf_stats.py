@@ -122,9 +122,19 @@ class PerfStats:
         finally:
             self.record(category, key, time.monotonic() - t0, context_id)
 
-    def log_summary(self) -> None:
-        """Log current stats summary."""
+    def log_summary(self, *, min_interval: float = 0) -> None:
+        """Log current stats summary.
+
+        Args:
+            min_interval: Minimum seconds between logs.  If the last
+                log was less than this many seconds ago, the call is
+                silently skipped.  Default 0 (always log).
+        """
         with self._lock:
+            if min_interval > 0:
+                now = time.monotonic()
+                if now - self._last_auto_log < min_interval:
+                    return
             self._log_unlocked()
 
     def _log_unlocked(self) -> None:

@@ -78,7 +78,7 @@ def process_work_batch(
     # Log perf summary + queue depth after each batch with actual work
     if stats["processed"] or stats["failed"]:
         from .perf_stats import perf
-        perf.log_summary()
+        perf.log_summary(min_interval=60)
         remaining = queue.count()
         if remaining > 0:
             by_kind = queue.count_by_kind()
