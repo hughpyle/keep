@@ -170,11 +170,17 @@ class TestAfterWriteStateDoc:
         return [a["action"] for a in result.actions]
 
     def test_inline_text_fires_analyze_and_tag(self, after_write_doc):
-        """Short inline text → analyze + auto_tag + resolve_duplicates."""
-        actions = self._eval(after_write_doc)
+        """Inline text above min length → analyze + auto_tag + resolve_duplicates."""
+        actions = self._eval(after_write_doc, content_length=1000)
         assert "analyze" in actions
         assert "auto_tag" in actions
         assert "resolve_duplicates" in actions
+
+    def test_short_content_skips_analyze(self, after_write_doc):
+        """Content below 500 chars skips analyze (not enough to decompose)."""
+        actions = self._eval(after_write_doc, content_length=50)
+        assert "analyze" not in actions
+        assert "auto_tag" in actions  # tagging still runs
 
     def test_long_content_fires_summarize(self, after_write_doc):
         """Content exceeding max_summary_length fires summarize."""
@@ -210,7 +216,7 @@ class TestAfterWriteStateDoc:
         """Empty content skips auto_tag (nothing to classify)."""
         actions = self._eval(after_write_doc, has_content=False)
         assert "auto_tag" not in actions
-        assert "analyze" in actions  # analyze still fires
+        assert "analyze" not in actions  # short content also skips analyze
 
     def test_markdown_fires_extract_links(self, after_write_doc):
         """Markdown content fires extract_links."""
@@ -350,7 +356,7 @@ class TestAfterWriteDispatch:
         kp = Keeper(store_path=tmp_path)
         _keeper_skip_migration(kp)
 
-        kp.put("A note about architecture", id="note1")
+        kp.put("A note about architecture. " * 30, id="note1")  # >500 chars
 
         kinds = _claimed_task_kinds(kp)
         assert "analyze" in kinds

@@ -324,7 +324,7 @@ rules:
 """,
         "analyze": """\
 rules:
-  - when: "!item.is_system_note && !(has(item.tags._source) && item.tags._source == 'link')"
+  - when: "!item.is_system_note && (item.content_length > 500 || item.has_uri) && !(has(item.tags._source) && item.tags._source == 'link') && !(has(item.tags._source) && item.tags._source == 'auto-vivify')"
     id: analyzed
     do: analyze
 """,
