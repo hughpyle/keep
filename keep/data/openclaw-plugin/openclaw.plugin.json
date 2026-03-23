@@ -3,7 +3,7 @@
   "name": "keep",
   "description": "Reflective memory — context engine + memory tools",
   "version": "0.107.1",
-  "kind": "memory",
+  "kind": "context-engine",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
