@@ -10,8 +10,12 @@ rules:
   - id: summary
     when: "item.content_length > params.max_summary_length && !item.has_summary"
     do: summarize
+    with:
+      item_id: "{params.item_id}"
   - id: described
     when: "item.has_uri && item.has_media_content && system.has_media_provider"
     do: describe
+    with:
+      item_id: "{params.item_id}"
 post:
   - return: done

@@ -15,6 +15,20 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+
+class AsyncActionEncountered(Exception):
+    """Raised by run_action when a foreground flow encounters an async action.
+
+    The flow runtime catches this to produce a cursor and delegate the
+    remaining work to the background queue.
+    """
+
+    def __init__(self, action_name: str, action_params: dict[str, Any]) -> None:
+        super().__init__(f"async action: {action_name}")
+        self.action_name = action_name
+        self.action_params = action_params
+
+
 # ---------------------------------------------------------------------------
 # Compiled rule and state-doc types
 # ---------------------------------------------------------------------------
@@ -545,6 +559,8 @@ def _eval_sequence(
                     if isinstance(output, dict) and rule.id:
                         bindings[rule.id] = output
                         eval_ctx[rule.id] = output
+                except AsyncActionEncountered:
+                    raise  # flow runtime handles delegation
                 except Exception as exc:
                     logger.warning("Action %s failed: %s", rule.do, exc)
                     error_output = {"error": str(exc)}
@@ -603,6 +619,8 @@ def _eval_all(
                     if isinstance(output, dict) and rule.id:
                         bindings[rule.id] = output
                         eval_ctx[rule.id] = output
+                except AsyncActionEncountered:
+                    raise  # flow runtime handles delegation
                 except Exception as exc:
                     logger.warning("Action %s failed: %s", rule.do, exc)
                     error_output = {"error": str(exc)}

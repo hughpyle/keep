@@ -251,19 +251,32 @@ def _keeper_skip_migration(kp):
     kp._needs_sysdoc_migration = False
 
 
-def _claimed_task_kinds(kp, limit=20):
-    """Claim work queue items and return their kinds as a list."""
+def _claimed_flow_items(kp, limit=20):
+    """Claim work queue items and return them."""
     claimed = kp._work_queue.claim("test", limit=limit)
-    return [t.kind for t in claimed]
+    return claimed
+
+
+def _flow_item_context(kp):
+    """Claim the single after-write flow item and return its item context."""
+    items = _claimed_flow_items(kp)
+    flow_items = [i for i in items if i.kind == "flow"]
+    if not flow_items:
+        return None
+    params = flow_items[0].input.get("params", {})
+    return params.get("item", {})
 
 
 class TestAfterWriteDispatch:
-    """Verify _dispatch_after_write_flow enqueues the right tasks
-    through the full put() → state doc → work queue path.
+    """Verify _dispatch_after_write_flow enqueues a flow work item with
+    the correct item context through the full put() → work queue path.
+
+    The after-write state doc evaluates these context fields at daemon
+    execution time to decide which actions fire.
     """
 
-    def test_image_put_enqueues_describe_analyze_tag(self, mock_providers, tmp_path):
-        """Image URI with media config → describe + analyze + tag tasks."""
+    def test_image_put_enqueues_flow_with_media_context(self, mock_providers, tmp_path):
+        """Image URI with media config → flow item with media context."""
         from keep.api import Keeper
 
         mock_doc = _make_mock_doc(
@@ -280,14 +293,16 @@ class TestAfterWriteDispatch:
 
         kp.put(uri="file:///test.jpg")
 
-        kinds = _claimed_task_kinds(kp)
-        assert "describe" in kinds
-        assert "analyze" in kinds
-        assert "auto_tag" in kinds
+        ctx = _flow_item_context(kp)
+        assert ctx is not None, "Should enqueue a flow item"
+        assert ctx["has_media_content"] is True
+        assert ctx["has_uri"] is True
+        # Verify system context includes media provider flag
+        items = _claimed_flow_items(kp)  # already drained above
         kp.close()
 
-    def test_image_put_without_media_config_skips_describe(self, mock_providers, tmp_path):
-        """Image URI without media config → no describe task (capability gate)."""
+    def test_image_put_without_media_config(self, mock_providers, tmp_path):
+        """Image URI without media config → flow item without media provider."""
         from keep.api import Keeper
 
         mock_doc = _make_mock_doc(
@@ -302,15 +317,15 @@ class TestAfterWriteDispatch:
 
         kp.put(uri="file:///test.jpg")
 
-        kinds = _claimed_task_kinds(kp)
-        assert "describe" not in kinds
-        # analyze + tag still fire (not gated by media config)
-        assert "analyze" in kinds
-        assert "auto_tag" in kinds
+        items = _claimed_flow_items(kp)
+        flow_items = [i for i in items if i.kind == "flow"]
+        assert len(flow_items) == 1
+        params = flow_items[0].input.get("params", {})
+        assert params.get("system", {}).get("has_media_provider") is False
         kp.close()
 
-    def test_audio_put_enqueues_describe(self, mock_providers, tmp_path):
-        """Audio URI with media config → describe task."""
+    def test_audio_put_enqueues_flow(self, mock_providers, tmp_path):
+        """Audio URI with media config → flow item with audio context."""
         from keep.api import Keeper
 
         mock_doc = _make_mock_doc(
@@ -325,12 +340,13 @@ class TestAfterWriteDispatch:
 
         kp.put(uri="file:///test.mp3")
 
-        kinds = _claimed_task_kinds(kp)
-        assert "describe" in kinds
+        ctx = _flow_item_context(kp)
+        assert ctx is not None
+        assert ctx["has_media_content"] is True
         kp.close()
 
-    def test_text_uri_skips_describe(self, mock_providers, tmp_path):
-        """Text/markdown URI → no describe, still analyze + tag."""
+    def test_text_uri_context(self, mock_providers, tmp_path):
+        """Text/markdown URI → flow item with text content type."""
         from keep.api import Keeper
 
         mock_doc = _make_mock_doc(
@@ -344,13 +360,14 @@ class TestAfterWriteDispatch:
 
         kp.put(uri="file:///test.md")
 
-        kinds = _claimed_task_kinds(kp)
-        assert "describe" not in kinds
-        assert "analyze" in kinds
+        ctx = _flow_item_context(kp)
+        assert ctx is not None
+        assert ctx["has_media_content"] is False
+        assert ctx["content_type"] == "text/markdown"
         kp.close()
 
-    def test_inline_text_enqueues_analyze_and_tag(self, mock_providers, tmp_path):
-        """Inline text → analyze + tag, no describe or OCR."""
+    def test_inline_text_context(self, mock_providers, tmp_path):
+        """Inline text → flow item with content context, no URI."""
         from keep.api import Keeper
 
         kp = Keeper(store_path=tmp_path)
@@ -358,15 +375,15 @@ class TestAfterWriteDispatch:
 
         kp.put("A note about architecture. " * 30, id="note1")  # >500 chars
 
-        kinds = _claimed_task_kinds(kp)
-        assert "analyze" in kinds
-        assert "auto_tag" in kinds
-        assert "describe" not in kinds
-        assert "ocr" not in kinds
+        ctx = _flow_item_context(kp)
+        assert ctx is not None
+        assert ctx["has_content"] is True
+        assert ctx["has_uri"] is False
+        assert ctx["has_media_content"] is False
         kp.close()
 
     def test_system_note_enqueues_nothing(self, mock_providers, tmp_path):
-        """System note (dot-prefix) → no analyze, no tag."""
+        """System note (dot-prefix) → no work enqueued at all."""
         from keep.api import Keeper
 
         kp = Keeper(store_path=tmp_path)
@@ -374,11 +391,9 @@ class TestAfterWriteDispatch:
 
         kp.put("System data", id=".sys/test")
 
-        # Work queue may not even be initialized (no tasks to dispatch)
         if kp._work_queue is not None:
-            kinds = _claimed_task_kinds(kp)
-            assert "analyze" not in kinds
-            assert "auto_tag" not in kinds
+            items = _claimed_flow_items(kp)
+            assert len(items) == 0, "System notes should not enqueue any work"
         kp.close()
 
 

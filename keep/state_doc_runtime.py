@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
 
 from .result_stats import enrich_find_output
-from .state_doc import StateDoc, evaluate_state_doc
+from .state_doc import AsyncActionEncountered, StateDoc, evaluate_state_doc
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class FlowResult:
     """Result of a completed state-doc flow."""
 
-    status: str  # "done", "error", "stopped"
+    status: str  # "done", "error", "stopped", "async"
     bindings: dict[str, dict[str, Any]] = field(default_factory=dict)
     data: Optional[dict[str, Any]] = None  # return.with payload
     ticks: int = 0
@@ -138,6 +138,7 @@ def run_flow(
     load_state_doc: StateDocLoader,
     run_action: ActionRunner,
     cursor: Optional[FlowCursor] = None,
+    foreground: bool = True,
 ) -> FlowResult:
     """Run a state-doc flow synchronously to completion.
 
@@ -148,11 +149,14 @@ def run_flow(
         load_state_doc: Callback to load a compiled StateDoc by name.
         run_action: Callback to execute an action and return its output.
         cursor: Optional cursor from a previous stopped flow to resume.
+        foreground: If True (default), async actions trigger delegation
+            to the work queue via cursor.  If False (daemon context),
+            all actions execute inline.
 
     Returns:
         FlowResult with terminal status, accumulated bindings, and
-        optional return data. When status is "stopped", the cursor
-        field contains a resumable token.
+        optional return data. When status is "stopped" or "async",
+        the cursor field contains a resumable token.
     """
     from .perf_stats import perf as _perf
     import time as _time
@@ -179,8 +183,14 @@ def run_flow(
     def _record_flow() -> None:
         _perf.record("flow", initial_state, _time.monotonic() - _flow_t0)
 
-    # Wrap run_action to enrich find output with statistics and track timing
+    # Wrap run_action to enrich find output with statistics and track timing.
+    # In foreground mode, async actions raise AsyncActionEncountered to
+    # delegate the remainder of the flow to the work queue.
     def _action_callback(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
+        if foreground:
+            from .actions import is_async_action
+            if is_async_action(action_name):
+                raise AsyncActionEncountered(action_name, action_params)
         with _perf.timer("action", action_name):
             output = run_action(action_name, action_params)
         if action_name == "find" and isinstance(output, dict):
@@ -211,6 +221,30 @@ def run_flow(
         # Evaluate state doc
         try:
             result = evaluate_state_doc(doc, eval_ctx, run_action=_action_callback)
+        except AsyncActionEncountered as aa:
+            # Foreground flow hit an async action — produce cursor for
+            # the work queue to resume from.  The cursor points at the
+            # current state doc; on resume the daemon re-evaluates from
+            # the top (sync actions re-execute — they are idempotent
+            # queries) and this time executes the async action inline.
+            total_ticks = prior_ticks + ticks
+            cursor_token = encode_cursor(
+                current_state, total_ticks, accumulated_bindings, tried_queries,
+            )
+            logger.info(
+                "flow: %s -> async (%s, %d ticks)",
+                current_state, aa.action_name, total_ticks,
+            )
+            _record_flow()
+            return FlowResult(
+                status="async",
+                bindings=accumulated_bindings,
+                data={"reason": "async_action", "action": aa.action_name},
+                ticks=total_ticks,
+                history=history,
+                cursor=cursor_token,
+                tried_queries=tried_queries,
+            )
         except Exception as exc:
             logger.warning("State doc %r evaluation failed: %s", current_state, exc)
             _record_flow()
@@ -302,9 +336,11 @@ def _build_eval_context(
     """Build the evaluation context for a state doc tick.
 
     Populates ``params.*``, ``budget.*``, and ``flow.*`` namespaces.
-    ``item.*`` is populated by the caller via params when relevant.
+    If params contains ``item`` or ``system`` dicts, they are promoted
+    to top-level context keys so CEL predicates can use ``item.foo``
+    instead of ``params.item.foo``.
     """
-    return {
+    ctx: dict[str, Any] = {
         "params": dict(params),
         "budget": {
             "total": budget,
@@ -314,6 +350,12 @@ def _build_eval_context(
             "tick": tick,
         },
     }
+    # Promote well-known namespaces to top-level for CEL convenience.
+    for key in ("item", "system"):
+        val = params.get(key)
+        if isinstance(val, dict):
+            ctx[key] = val
+    return ctx
 
 
 def _parse_transition(
@@ -394,7 +436,13 @@ def make_state_doc_loader(
     return _load
 
 
-def make_action_runner(env: Any, *, writable: bool = False) -> ActionRunner:
+def make_action_runner(
+    env: Any,
+    *,
+    writable: bool = False,
+    item_id: str | None = None,
+    item_content: str | None = None,
+) -> ActionRunner:
     """Create an action runner backed by a FlowRuntimeEnv.
 
     Args:
@@ -402,10 +450,17 @@ def make_action_runner(env: Any, *, writable: bool = False) -> ActionRunner:
         writable: If True, enable provider resolution for write actions
                   (summarize, tag, analyze). If False (default), provider
                   resolution raises NotImplementedError.
+        item_id: Default item ID for item-scoped actions (used when
+            the action's params don't specify ``item_id``).
+        item_content: Full content text for the item (not stored in the
+            document store, so must be passed explicitly for actions
+            like summarize that need it).
     """
     from .actions import get_action
 
-    ctx = _EnvActionContext(env, writable=writable)
+    ctx = _EnvActionContext(
+        env, writable=writable, item_id=item_id, item_content=item_content,
+    )
 
     def _run(action_name: str, params: dict[str, Any]) -> dict[str, Any]:
         act = get_action(action_name)
@@ -418,9 +473,18 @@ def make_action_runner(env: Any, *, writable: bool = False) -> ActionRunner:
 class _EnvActionContext:
     """ActionContext backed by a FlowRuntimeEnv."""
 
-    def __init__(self, env: Any, *, writable: bool = False) -> None:
+    def __init__(
+        self,
+        env: Any,
+        *,
+        writable: bool = False,
+        item_id: str | None = None,
+        item_content: str | None = None,
+    ) -> None:
         self._env = env
         self._writable = writable
+        self.item_id = item_id
+        self.item_content = item_content
 
     def get(self, id: str) -> Any:
         return self._env.get(id)

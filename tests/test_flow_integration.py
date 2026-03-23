@@ -38,27 +38,28 @@ class TestWritePathFlow:
     NOT hardcoded in _put_direct.  See _dispatch_after_write_flow().
     """
 
-    def test_put_enqueues_analyze_and_tag(self, kp):
-        """put() evaluates after-write state doc → enqueues analyze + tag."""
+    def test_put_enqueues_after_write_flow(self, kp):
+        """put() enqueues a single after-write flow work item."""
         # Drain any migration-enqueued tasks first
         queue = kp._get_work_queue()
         queue.claim("drain", limit=200)
         kp.put("Short note", id="s1")
         claimed = queue.claim("test", limit=20)
         kinds = {t.kind for t in claimed}
-        assert "analyze" in kinds, "State doc should fire analyze for non-system items"
-        assert "auto_tag" in kinds, "State doc should fire tag for non-system items"
+        assert kinds == {"flow"}, f"Expected single flow item, got {kinds}"
+        # Verify the flow is for after-write with the right item
+        flow_item = claimed[0]
+        assert flow_item.input.get("state") == "after-write"
+        assert flow_item.input.get("item_id") == "s1"
 
-    def test_put_system_note_skips_analyze_and_tag(self, kp):
-        """System notes: state doc rules filter out analyze and tag."""
+    def test_put_system_note_skips_background(self, kp):
+        """System notes: no background work enqueued at all."""
         # Drain any migration-enqueued tasks first
         queue = kp._get_work_queue()
         queue.claim("drain", limit=200)
         kp.put("System data", id=".sys/test")
         claimed = queue.claim("test", limit=20)
-        kinds = {t.kind for t in claimed}
-        assert "analyze" not in kinds
-        assert "auto_tag" not in kinds
+        assert len(claimed) == 0, f"Expected no work items for system note, got {len(claimed)}"
 
 
 # ---------------------------------------------------------------------------
@@ -600,3 +601,311 @@ class TestFlowValidation:
         r = kp.run_flow_command("nonexistent", params={}, budget=1)
         assert r.status == "error"
         assert "not found" in r.data["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Async action flag and delegation
+# ---------------------------------------------------------------------------
+
+class TestAsyncActionFlag:
+    """Verify async_action decorator flag and is_async_action() lookup."""
+
+    def test_async_actions_marked(self):
+        from keep.actions import is_async_action
+        assert is_async_action("summarize") is True
+        assert is_async_action("generate") is True
+        assert is_async_action("analyze") is True
+        assert is_async_action("auto_tag") is True
+        assert is_async_action("ocr") is True
+        assert is_async_action("describe") is True
+
+    def test_sync_actions_not_marked(self):
+        from keep.actions import is_async_action
+        assert is_async_action("find") is False
+        assert is_async_action("get") is False
+        assert is_async_action("put") is False
+        assert is_async_action("traverse") is False
+        assert is_async_action("resolve_meta") is False
+        assert is_async_action("extract_links") is False
+        assert is_async_action("tag") is False
+
+    def test_unknown_action_returns_false(self):
+        from keep.actions import is_async_action
+        assert is_async_action("nonexistent") is False
+        assert is_async_action("") is False
+
+
+class TestAsyncDelegation:
+    """Verify that foreground flows delegate async actions via cursor."""
+
+    def test_foreground_flow_stops_at_async_action(self):
+        """Foreground flow hitting an async action → status='async' + cursor."""
+        compiled = {
+            "mixed": parse_state_doc("mixed", """\
+match: sequence
+rules:
+  - id: search
+    do: find
+    with:
+      query: "test"
+  - id: summary
+    do: summarize
+    with:
+      item_id: "test-item"
+  - return: done
+"""),
+        }
+
+        calls = []
+        def runner(name, params):
+            calls.append(name)
+            return {"results": [], "count": 0}
+
+        result = run_flow(
+            "mixed", {}, budget=5,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=runner,
+            foreground=True,  # default, but explicit
+        )
+
+        assert result.status == "async"
+        assert result.cursor is not None
+        # find executed, summarize did not
+        assert calls == ["find"]
+        assert result.data["action"] == "summarize"
+
+    def test_daemon_flow_executes_async_actions_inline(self):
+        """Daemon flow (foreground=False) executes async actions inline."""
+        compiled = {
+            "mixed": parse_state_doc("mixed", """\
+match: sequence
+rules:
+  - id: search
+    do: find
+    with:
+      query: "test"
+  - id: summary
+    do: summarize
+    with:
+      item_id: "test-item"
+  - return: done
+"""),
+        }
+
+        calls = []
+        def runner(name, params):
+            calls.append(name)
+            return {"results": [], "count": 0}
+
+        result = run_flow(
+            "mixed", {}, budget=5,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=runner,
+            foreground=False,
+        )
+
+        assert result.status == "done"
+        assert result.cursor is None
+        # Both actions executed
+        assert calls == ["find", "summarize"]
+
+    def test_async_cursor_carries_state(self):
+        """Cursor from async delegation encodes state for resume."""
+        from keep.state_doc_runtime import decode_cursor
+
+        compiled = {
+            "two-step": parse_state_doc("two-step", """\
+match: sequence
+rules:
+  - id: prep
+    do: find
+    with:
+      query: "prep"
+  - id: gen
+    do: generate
+    with:
+      system: "test"
+      user: "test"
+  - return: done
+"""),
+        }
+
+        result = run_flow(
+            "two-step", {"context": "test"}, budget=5,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=lambda n, p: {"results": [], "count": 0, "text": "ok"},
+            foreground=True,
+        )
+
+        assert result.status == "async"
+        cursor = decode_cursor(result.cursor)
+        assert cursor is not None
+        assert cursor.state == "two-step"
+
+    def test_async_resume_completes_flow(self):
+        """Resume from async cursor in daemon context completes the flow."""
+        from keep.state_doc_runtime import decode_cursor
+
+        compiled = {
+            "async-resume": parse_state_doc("async-resume", """\
+match: sequence
+rules:
+  - id: search
+    do: find
+    with:
+      query: "test"
+  - id: gen
+    do: generate
+    with:
+      system: "test"
+      user: "test"
+  - return: done
+"""),
+        }
+
+        calls = []
+        def runner(name, params):
+            calls.append(name)
+            return {"results": [], "count": 0, "text": "generated"}
+
+        # Step 1: foreground stops at generate
+        r1 = run_flow(
+            "async-resume", {}, budget=5,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=runner,
+            foreground=True,
+        )
+        assert r1.status == "async"
+        assert calls == ["find"]
+
+        # Step 2: resume in daemon context
+        cursor = decode_cursor(r1.cursor)
+        calls.clear()
+        r2 = run_flow(
+            "async-resume", {}, budget=5,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=runner,
+            cursor=cursor,
+            foreground=False,
+        )
+        assert r2.status == "done"
+        # Re-evaluates from top: find runs again, then generate completes
+        assert "find" in calls
+        assert "generate" in calls
+
+    def test_sync_only_flow_unaffected_by_foreground(self):
+        """Flow with only sync actions completes normally in foreground."""
+        compiled = {
+            "sync-only": parse_state_doc("sync-only", """\
+match: sequence
+rules:
+  - id: s1
+    do: find
+    with:
+      query: "a"
+  - id: s2
+    do: get
+    with:
+      id: "test"
+  - return: done
+"""),
+        }
+
+        calls = []
+        def runner(name, params):
+            calls.append(name)
+            return {"results": [], "count": 0, "id": "test", "summary": "x"}
+
+        result = run_flow(
+            "sync-only", {}, budget=5,
+            load_state_doc=lambda n: compiled.get(n),
+            run_action=runner,
+            foreground=True,
+        )
+
+        assert result.status == "done"
+        assert calls == ["find", "get"]
+
+
+# ---------------------------------------------------------------------------
+# Flow work item execution (daemon)
+# ---------------------------------------------------------------------------
+
+class TestFlowWorkItemExecution:
+    """Verify _execute_flow_item handles fresh and cursor-based flows."""
+
+    def test_fresh_flow_execution(self, kp):
+        """_execute_flow_item runs a fresh flow (no cursor)."""
+        from keep.work_processor import _execute_flow_item
+
+        kp.put("Test content for flow", id="flow-test-1")
+
+        result = _execute_flow_item(kp, {
+            "state": "get-context",
+            "params": {
+                "item_id": "flow-test-1",
+                "similar_limit": 3,
+                "meta_limit": 3,
+                "parts_limit": 5,
+                "versions_limit": 3,
+                "edges_limit": 5,
+            },
+        })
+
+        assert result["status"] in ("done", "error")
+
+    def test_flow_item_requires_state(self):
+        """Flow work item without state name raises ValueError."""
+        from keep.work_processor import _execute_flow_item
+        from keep.api import Keeper
+
+        with pytest.raises(ValueError, match="missing state name"):
+            _execute_flow_item(None, {"params": {}})
+
+    def test_after_write_flow_item_has_correct_shape(self, kp):
+        """After-write enqueues a flow item with expected fields."""
+        queue = kp._get_work_queue()
+        queue.claim("drain", limit=200)
+
+        kp.put("Content for shape test " * 30, id="shape-1")
+
+        claimed = queue.claim("test", limit=10)
+        flow_items = [i for i in claimed if i.kind == "flow"]
+        assert len(flow_items) == 1
+
+        item = flow_items[0]
+        assert item.input["state"] == "after-write"
+        assert item.input["item_id"] == "shape-1"
+        assert "content" in item.input
+        params = item.input["params"]
+        assert params["item_id"] == "shape-1"
+        assert "item" in params
+        assert params["item"]["has_content"] is True
+        assert params["item"]["content_length"] > 0
+        assert "system" in params
+        assert "max_summary_length" in params
+
+
+class TestEnqueueFlowCursor:
+    """Verify _enqueue_flow_cursor puts cursor into work queue."""
+
+    def test_enqueue_and_claim_cursor(self, kp):
+        """Enqueued cursor appears as a 'flow' work item."""
+        from keep.state_doc_runtime import encode_cursor
+
+        queue = kp._get_work_queue()
+        queue.claim("drain", limit=200)
+
+        cursor_token = encode_cursor("test-state", 1, {"s": {"count": 5}})
+        kp._enqueue_flow_cursor(
+            state="test-state",
+            cursor_token=cursor_token,
+            params={"item_id": "x"},
+            priority=5,
+        )
+
+        claimed = queue.claim("test", limit=10)
+        flow_items = [i for i in claimed if i.kind == "flow"]
+        assert len(flow_items) == 1
+        assert flow_items[0].input["state"] == "test-state"
+        assert flow_items[0].input["cursor"] == cursor_token

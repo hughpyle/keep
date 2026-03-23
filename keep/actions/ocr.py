@@ -27,7 +27,7 @@ def _coerce_pages(value: Any) -> list[int]:
     return []
 
 
-@action(id="ocr", priority=5)
+@action(id="ocr", priority=5, async_action=True)
 class Ocr:
     """Extract OCR text for URI-backed target items."""
 

@@ -93,7 +93,11 @@ def _execute_work_item(
     kind: str,
     input_data: dict[str, Any],
 ) -> dict[str, Any]:
-    """Execute a single work item via keeper._run_local_task_workflow.
+    """Execute a single work item.
+
+    Handles two kinds:
+    - ``"flow"``: resume a state-doc flow from a cursor (daemon context).
+    - anything else: single action via ``keeper._run_local_task_workflow``.
 
     Returns the outcome dict (keys: status, details).
     """
@@ -105,6 +109,10 @@ def _execute_work_item(
             raise ValueError("ingest_git requires 'directory' in input")
         result = ingest_git_history(keeper, Path(directory))
         return {"status": "applied", "details": result}
+
+    # Flow resume: re-run the flow in daemon context (foreground=False)
+    if kind == "flow":
+        return _execute_flow_item(keeper, input_data)
 
     task_type = input_data.get("task_type") or kind
     item_id = str(input_data.get("item_id") or input_data.get("id") or "").strip()
@@ -129,3 +137,81 @@ def _execute_work_item(
         metadata=metadata,
     )
     return outcome or {"status": "applied"}
+
+
+def _execute_flow_item(
+    keeper: "Keeper",
+    input_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Run a state-doc flow in daemon context.
+
+    Supports both fresh starts (no cursor) and cursor-based resume.
+    The flow runs with ``foreground=False`` so async actions execute
+    inline.  If the flow produces mutations (via put, tag, etc.), they
+    happen through the normal action context.
+    """
+    from .flow_env import LocalFlowEnvironment
+    from .state_doc_runtime import (
+        decode_cursor,
+        make_action_runner,
+        make_state_doc_loader,
+        run_flow,
+    )
+
+    state_name = str(input_data.get("state") or "").strip()
+    params = input_data.get("params") or {}
+    budget = int(input_data.get("budget", 10))
+
+    # Decode cursor if resuming a stopped flow
+    cursor = None
+    cursor_token = input_data.get("cursor")
+    if cursor_token:
+        cursor = decode_cursor(str(cursor_token))
+        if cursor is None:
+            raise ValueError("flow work item has invalid cursor")
+        if not state_name:
+            state_name = cursor.state
+
+    if not state_name:
+        raise ValueError("flow work item missing state name")
+
+    # Extract item context for item-scoped actions (summarize, analyze, etc.)
+    item_id = str(input_data.get("item_id") or params.get("item_id") or "").strip() or None
+    content = input_data.get("content")
+
+    env = LocalFlowEnvironment(keeper)
+    loader = make_state_doc_loader(env)
+    base_runner = make_action_runner(
+        env, writable=True, item_id=item_id, item_content=content,
+    )
+
+    # Wrap the runner to apply mutations (set_summary, put_item, etc.)
+    # after each action — the flow runtime only captures output as
+    # bindings; mutations need explicit application.
+    collection = keeper._resolve_doc_collection()
+
+    def _mutation_runner(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
+        output = base_runner(action_name, action_params)
+        if isinstance(output, dict) and output.get("mutations"):
+            from .task_workflows import _apply_mutations
+            _apply_mutations(keeper, collection, output)
+        return output
+
+    result = run_flow(
+        state_name,
+        params,
+        budget=budget,
+        load_state_doc=loader,
+        run_action=_mutation_runner,
+        cursor=cursor,
+        foreground=False,  # daemon context — execute async actions inline
+    )
+
+    return {
+        "status": result.status,
+        "details": {
+            "ticks": result.ticks,
+            "history": result.history,
+            "data": result.data,
+        },
+    }

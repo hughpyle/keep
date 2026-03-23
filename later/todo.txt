@@ -1,6 +1,4 @@
 
-* when queueing background work: keep should tell the daemon to restart if it's running an older version
-
 * supernode-analysis: 
     - how is it actually triggered/queued?
 
@@ -298,3 +296,4 @@ x acp
 . states (for "get") --> templates (for "prompt")
 . git change detection when switch branch
 . remove 'provisional', they're not really useful
+. daemon restart if it's running an older version

@@ -107,6 +107,34 @@ class BackgroundProcessingMixin:
         digest = hashlib.sha256(f"{metadata_material}|{tag_material}".encode("utf-8")).hexdigest()[:12]
         return f"bg:{task_type}:{id}:{_content_hash(content)}:{digest}"
 
+    def _enqueue_flow_cursor(
+        self,
+        *,
+        state: str,
+        cursor_token: str,
+        params: dict[str, Any] | None = None,
+        priority: int = 5,
+    ) -> None:
+        """Enqueue a flow cursor to the work queue for daemon execution.
+
+        Called when a foreground flow encounters an async action and
+        produces a cursor for background resumption.
+        """
+        wq = self._get_work_queue()
+        if wq is None:
+            return
+        wq.enqueue(
+            "flow",
+            {
+                "state": state,
+                "cursor": cursor_token,
+                "params": params or {},
+            },
+            supersede_key=f"flow:{state}:{cursor_token[:32]}",
+            priority=priority,
+        )
+        self._spawn_processor()
+
     def _enqueue_task_background(
         self,
         *,
@@ -159,69 +187,29 @@ class BackgroundProcessingMixin:
         ocr_pages: Optional[list[int]] = None,
         doc_links: Optional[list[str]] = None,
     ) -> None:
-        """Evaluate the after-write state doc and enqueue matched tasks.
+        """Enqueue the after-write flow for background execution.
 
-        The state doc is the sole source of truth for what background work
-        runs after a write.  This method evaluates it and enqueues every
-        matched action generically — no per-action dispatch logic.
-
-        Summarize is handled separately by _upsert() because it is tightly
-        coupled with content-change detection and truncation logic.  The
-        state doc still defines the summarize rule so users can override the
-        condition, but dispatch is skipped here to avoid double-enqueue.
+        The after-write state doc is the sole source of truth for what
+        background work runs after a write.  This method enqueues a single
+        flow work item; the daemon runs the flow via ``run_flow()`` with
+        all actions executing through the standard flow runtime.
 
         System docs (dot-prefix IDs) are skipped entirely — they are
-        authored reference material that needs no summarization, analysis,
-        OCR, tagging, or link extraction.
+        authored reference material that needs no background processing.
         """
-        # System docs need no background processing — skip the entire
-        # dispatch rather than relying on each fragment's `when` guard.
         if item_id.startswith("."):
             return
 
-        from .state_doc import evaluate_state_doc
-
-        # --- Load the after-write state doc (store override → builtin) ---
-        doc = self._load_after_write_state_doc()
-        if doc is None:
-            logger.warning("after-write state doc not found; no tasks dispatched")
+        wq = self._get_work_queue()
+        if wq is None:
             return
 
-        # --- Build item context for CEL evaluation ---
+        # Build item context — passed as flow params so the state doc's
+        # CEL predicates can evaluate without re-reading the item.
         all_tags: dict[str, Any] = dict(tags or {})
         if ocr_pages:
             all_tags["_ocr_pages"] = str(ocr_pages)
 
-        item_ctx: dict[str, Any] = {
-            "content_length": len(content),
-            "has_summary": bool(summary),
-            "has_uri": bool(uri),
-            "uri": uri or "",
-            "content_type": content_type or "",
-            "is_system_note": item_id.startswith("."),
-            "tags": all_tags,
-            "has_media_content": bool(
-                content_type and not content_type.startswith("text/")
-            ),
-            "has_content": bool(content),
-        }
-
-        eval_context: dict[str, Any] = {
-            "item": item_ctx,
-            "params": {
-                "max_summary_length": self._config.max_summary_length,
-            },
-            "system": {
-                "has_media_provider": self._config.media is not None,
-            },
-        }
-
-        # --- Evaluate rules (no execution) ---
-        result = evaluate_state_doc(doc, eval_context, run_action=None)
-
-        # --- Build uniform metadata for all enqueued tasks ---
-        # Every task gets the same item context; each task workflow
-        # extracts what it needs (uri, ocr_pages, content_type, etc.).
         item_metadata: dict[str, Any] = {}
         if uri:
             item_metadata["uri"] = uri
@@ -232,37 +220,47 @@ class BackgroundProcessingMixin:
         if doc_links:
             item_metadata["doc_links"] = list(doc_links)
 
-        # --- Enqueue every matched action ---
-        doc_coll = self._resolve_doc_collection()
-        dispatched = False
+        flow_params: dict[str, Any] = {
+            "item_id": item_id,
+            "item": {
+                "content_length": len(content),
+                "has_summary": bool(summary),
+                "has_uri": bool(uri),
+                "uri": uri or "",
+                "content_type": content_type or "",
+                "is_system_note": False,
+                "tags": all_tags,
+                "has_media_content": bool(
+                    content_type and not content_type.startswith("text/")
+                ),
+                "has_content": bool(content),
+            },
+            "max_summary_length": self._config.max_summary_length,
+            "system": {
+                "has_media_provider": self._config.media is not None,
+            },
+            "metadata": item_metadata,
+        }
 
-        for action_entry in result.actions:
-            action_id = action_entry.get("action", "")
-            if not action_id:
-                continue
+        wq.enqueue(
+            "flow",
+            {
+                "state": "after-write",
+                "params": flow_params,
+                "item_id": item_id,
+                "content": content,
+            },
+            supersede_key=f"flow:after-write:{item_id}",
+            priority=3,
+        )
 
-            # Summarize is enqueued by _upsert(); skip to avoid double-enqueue.
-            if action_id == "summarize":
-                continue
-
-            self._enqueue_task_background(
-                task_type=action_id,
-                id=item_id,
-                doc_coll=doc_coll,
-                content=content,
-                metadata=item_metadata,
-            )
-            logger.info("Enqueued %s for %s", action_id, item_id)
-            dispatched = True
-
-        if dispatched:
-            # Write version file so the daemon can detect upgrades
-            try:
-                from . import __version__
-                (self._store_path / ".processor.version").write_text(__version__)
-            except Exception:
-                pass
-            self._spawn_processor()
+        # Write version file so the daemon can detect upgrades
+        try:
+            from . import __version__
+            (self._store_path / ".processor.version").write_text(__version__)
+        except Exception:
+            pass
+        self._spawn_processor()
 
     def _load_after_write_state_doc(self) -> Optional["StateDoc"]:
         """Load the after-write state doc with fragment composition."""

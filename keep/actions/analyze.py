@@ -23,7 +23,7 @@ def _normalize_part(raw: Any) -> dict[str, Any]:
     }
 
 
-@action(id="analyze", priority=7)
+@action(id="analyze", priority=7, async_action=True)
 class Analyze:
     """Decompose item content into parts and emit part `put_item` mutations."""
 

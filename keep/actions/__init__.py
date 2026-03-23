@@ -15,6 +15,7 @@ __all__ = [
     "action",
     "get_action",
     "get_action_priority",
+    "is_async_action",
     "list_actions",
     "item_to_result",
     "coerce_item_id",
@@ -78,6 +79,7 @@ def action(
     id: str | None = None,
     name: str | None = None,
     priority: int = DEFAULT_ACTION_PRIORITY,
+    async_action: bool = False,
 ):
     """Register a class as a named action.
 
@@ -86,6 +88,11 @@ def action(
     If neither is provided, the ID is derived from the class name via snake_case.
 
     ``priority`` controls work-queue ordering (0 = highest, 9 = lowest).
+
+    ``async_action`` marks actions that require daemon context (e.g. LLM
+    calls, media processing).  When a foreground flow encounters an async
+    action it stops, produces a cursor, and delegates the remainder to the
+    work queue.
     """
     effective_id = id or name
 
@@ -96,6 +103,7 @@ def action(
         _ACTION_REGISTRY[action_id] = target
         target.ACTION_ID = action_id
         target.ACTION_PRIORITY = max(0, min(9, int(priority)))
+        target.ACTION_ASYNC = bool(async_action)
         return target
 
     if cls is None:
@@ -135,6 +143,15 @@ def get_action_priority(name: str) -> int:
     if cls is None:
         return DEFAULT_ACTION_PRIORITY
     return getattr(cls, "ACTION_PRIORITY", DEFAULT_ACTION_PRIORITY)
+
+
+def is_async_action(name: str) -> bool:
+    """Return whether an action requires daemon context."""
+    _discover_actions()
+    cls = _ACTION_REGISTRY.get(str(name or "").strip())
+    if cls is None:
+        return False
+    return getattr(cls, "ACTION_ASYNC", False)
 
 
 def list_actions() -> list[str]:

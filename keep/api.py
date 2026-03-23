@@ -1649,21 +1649,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         elif content_unchanged and tags_changed:
             logger.debug("Tags changed for %s", id)
             final_summary = existing_doc.summary
-            # Only queue re-summarization if the summary is NOT the full
-            # original content (i.e. it was already truncated/summarized).
-            # If content_hash == hash(summary), the summary IS the content
-            # and must never be overwritten by an LLM summary.
-            summary_is_content = (
-                existing_doc.content_hash == _content_hash(existing_doc.summary)
-            )
-            if queue_summarize and len(content) > max_len and not summary_is_content:
-                self._enqueue_task_background(
-                    task_type="summarize",
-                    id=id,
-                    doc_coll=doc_coll,
-                    content=content,
-                    tags=merged_tags,
-                )
         elif len(content) <= max_len:
             final_summary = content
             # Content IS the summary — mark as already summarized so no
@@ -1671,14 +1656,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             merged_tags["_summarized_hash"] = new_hash
         else:
             final_summary = content[:max_len] + "..."
-            if queue_summarize:
-                self._enqueue_task_background(
-                    task_type="summarize",
-                    id=id,
-                    doc_coll=doc_coll,
-                    content=content,
-                    tags=merged_tags,
-                )
+            # Full LLM summary is handled by the after-write flow.
 
         # Cloud mode: defer embedding to background worker for faster response.
         # The doc store write happens immediately; the note is findable by
@@ -4451,7 +4429,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             env._query_embedding = query_embedding
         loader = make_state_doc_loader(env)
         runner = make_action_runner(env)
-        return run_flow(state, params, budget=budget, load_state_doc=loader, run_action=runner)
+        result = run_flow(state, params, budget=budget, load_state_doc=loader, run_action=runner)
+
+        # If a foreground flow hit an async action, enqueue the cursor
+        # for daemon execution and return what we have so far.
+        if result.status == "async" and result.cursor:
+            self._enqueue_flow_cursor(
+                state=state, cursor_token=result.cursor, params=params,
+            )
+
+        return result
 
     def run_flow_command(
         self,
@@ -4547,6 +4534,13 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             run_action=runner,
             cursor=cursor,
         )
+
+        # If a foreground flow hit an async action, enqueue the cursor
+        # for daemon execution.
+        if result.status == "async" and result.cursor:
+            self._enqueue_flow_cursor(
+                state=state, cursor_token=result.cursor, params=merged_params,
+            )
 
         # Store cursor server-side, replace with short ID
         if result.cursor:

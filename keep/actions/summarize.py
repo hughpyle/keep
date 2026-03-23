@@ -31,7 +31,7 @@ def _enrich_content_type(item_id: str, tags: dict) -> dict:
     return tags
 
 
-@action(id="summarize", priority=3)
+@action(id="summarize", priority=3, async_action=True)
 class Summarize:
     """Generate and return a summary for the target item."""
 
