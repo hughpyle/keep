@@ -1,6 +1,6 @@
 {
   "name": "keep",
-  "version": "0.107.0",
+  "version": "0.107.1",
   "type": "module",
   "openclaw": {
     "extensions": ["./dist/index.js"]
