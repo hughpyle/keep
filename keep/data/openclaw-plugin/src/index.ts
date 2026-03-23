@@ -100,8 +100,7 @@ function formatTurn(messages: any[], maxInlineLength: number): string {
     const text = extractText(msg.content);
     if (!text.trim()) continue;
 
-    const limit = role === "user" ? 500 : maxInlineLength;
-    parts.push(`[${role}] ${truncate(text, limit)}`);
+    parts.push(`[${role}] ${truncate(text, maxInlineLength)}`);
   }
   return parts.join("\n\n");
 }
@@ -606,8 +605,7 @@ export default function register(api: any) {
             return { ingested: false };
           }
 
-          const limit = role === "user" ? 500 : maxInlineLength;
-          const content = `[${role}] ${truncate(text, limit)}`;
+          const content = `[${role}] ${truncate(text, maxInlineLength)}`;
           const itemId = sessionItemId(params);
 
           await mcp.flow({
@@ -764,8 +762,17 @@ export default function register(api: any) {
         tokenBudget?: number;
         runtimeContext?: Record<string, unknown>;
       }) {
+        api.logger?.debug(`[keep] afterTurn (mcp=${mcp.connected}, sessionKey=${params.sessionKey}, newMsgs=${(params.messages?.length ?? 0) - (params.prePromptMessageCount ?? 0)})`);
         if (params.isHeartbeat) return;
-        if (!mcp.connected) return;
+        if (!mcp.connected) {
+          try {
+            api.logger?.info("[keep] afterTurn: MCP not connected, reconnecting...");
+            await mcp.connect();
+          } catch (err: any) {
+            api.logger?.warn(`[keep] afterTurn: MCP reconnect failed: ${err.message}`);
+            return;
+          }
+        }
 
         // Ensure workspace watches are set up (once per gateway lifetime).
         const workspaceDir = params.runtimeContext?.workspaceDir as string;
@@ -775,6 +782,28 @@ export default function register(api: any) {
 
         const newMessages = params.messages.slice(params.prePromptMessageCount);
         if (newMessages.length === 0) return;
+
+        // Ingest each new message as a version of the session item
+        const itemId = sessionItemId(params);
+        for (const msg of newMessages) {
+          const role: string = msg.role || "unknown";
+          if (!INGEST_ROLES.has(role)) continue;
+          const text = extractText(msg.content);
+          if (!text.trim()) continue;
+          const content = `[${role}] ${truncate(text, maxInlineLength)}`;
+          try {
+            await mcp.flow({
+              state: "put",
+              params: {
+                content,
+                id: itemId,
+                tags: sessionTags({ ...params, extra: { role } }),
+              },
+            });
+          } catch (err: any) {
+            api.logger?.warn(`[keep] afterTurn ingest error: ${err.message}`);
+          }
+        }
 
         // Detect inflection signals in the new messages
         const signals = detectInflection(newMessages);
