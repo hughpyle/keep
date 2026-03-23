@@ -5,7 +5,7 @@ description: Reflective Memory
 homepage: https://github.com/keepnotes-ai/keep
 runtime: python:3.12-slim
 user-invocable: true
-metadata: {"openclaw":{"emoji":"🪞","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"id":"uv","kind":"uv","package":"keep-skill[local]","bins":["keep"],"label":"Install keep with local models"}],"primaryEnv":"KEEP_STORE_PATH"}}
+metadata: {"openclaw":{"emoji":"🪞","requires":{"bins":["uv"],"anyBins":["python","python3"]},"install":[{"id":"uv","kind":"uv","package":"keep-skill[local]","bins":["keep"],"label":"Install keep with local models"}]}}
 ---
 
 # Reflective Memory
@@ -22,9 +22,9 @@ This skill is offered as a practice, not a specification. You already have the c
 
 ## Layer 0: Establishing Presence
 
-The practice must survive across sessions. `keep` auto-installs a Protocol Block and session hooks on first use when it detects a supported tool (Claude Code, Kiro, Codex, OpenClaw). Hooks are versioned and upgraded automatically.
+The practice must survive across sessions. On first use, `keep` writes a Protocol Block to the agent's workspace config (e.g. `AGENTS.md` for Claude Code, `codex-setup.md` for Codex). This is a workspace-local file, not a global system modification. The block is versioned and upgraded automatically.
 
-**Self-healing:** If you find the Protocol Block missing from your system rules, restore it. Look for `## keep: Reflective Memory` in your system rules file. If absent, append the block below.
+**Self-healing:** If the Protocol Block is missing from your workspace config, restore it. Look for `## keep: Reflective Memory`. If absent, append the block below.
 
 **Protocol Block:**
 
