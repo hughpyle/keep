@@ -98,6 +98,7 @@ export class KeepMcpTransport {
   private client: Client | null = null;
   private transport: StdioClientTransport | null = null;
   private connecting: Promise<void> | null = null;
+  private childPid: number | null = null;
   private logger: KeepLogger;
   private keepCommand: string;
 
@@ -128,6 +129,13 @@ export class KeepMcpTransport {
   }
 
   private async _connect(): Promise<void> {
+    // Clean up orphaned process from a previous dead connection.
+    // Only disconnect if the client is already gone (connection dead).
+    // If client is live, connect() short-circuits before reaching here.
+    if (!this.client && (this.transport || this.childPid)) {
+      await this.disconnect();
+    }
+
     this.logger.info("Spawning keep mcp process");
 
     this.transport = new StdioClientTransport({
@@ -141,10 +149,15 @@ export class KeepMcpTransport {
     );
 
     // Handle transport close — mark as disconnected for reconnect
+    const thisTransport = this.transport;
     this.transport.onclose = () => {
       this.logger.warn("keep mcp process exited");
-      this.client = null;
-      this.transport = null;
+      // Only clear references if this is still the active transport.
+      // A new _connect() may have already replaced it.
+      if (this.transport === thisTransport) {
+        this.client = null;
+        this.transport = null;
+      }
     };
 
     this.transport.onerror = (err) => {
@@ -152,7 +165,8 @@ export class KeepMcpTransport {
     };
 
     await this.client.connect(this.transport);
-    this.logger.info("Connected to keep mcp");
+    this.childPid = this.transport.pid ?? null;
+    this.logger.info(`Connected to keep mcp (pid=${this.childPid})`);
   }
 
   /** Ensure connected, reconnecting if needed. */
@@ -263,6 +277,7 @@ export class KeepMcpTransport {
 
   /** Gracefully disconnect. */
   async disconnect(): Promise<void> {
+    const pid = this.childPid;
     if (this.transport) {
       this.logger.info("Disconnecting keep mcp");
       try {
@@ -270,9 +285,16 @@ export class KeepMcpTransport {
       } catch {
         // ignore close errors
       }
-      this.client = null;
-      this.transport = null;
     }
+    // Kill orphaned child process if transport.close() didn't reach it
+    if (pid) {
+      try { process.kill(pid, 0); process.kill(pid, "SIGTERM"); } catch {
+        // process already exited
+      }
+    }
+    this.client = null;
+    this.transport = null;
+    this.childPid = null;
   }
 
   /** Check if currently connected. */

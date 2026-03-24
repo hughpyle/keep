@@ -106,6 +106,36 @@ function formatTurn(messages: any[], maxInlineLength: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Global singleton: MCP transport survives SIGUSR1 module re-evaluation.
+// Symbol.for() returns the same symbol across reloads; globalThis persists.
+// ---------------------------------------------------------------------------
+
+const KEEP_MCP_STATE = Symbol.for("keep.mcpTransportState");
+
+interface KeepMcpState {
+  mcp: KeepMcpTransport;
+  eventsRegistered: boolean;
+}
+
+function getMcpState(api: any): KeepMcpState {
+  const g = globalThis as any;
+  if (g[KEEP_MCP_STATE]) return g[KEEP_MCP_STATE];
+  const state: KeepMcpState = {
+    mcp: new KeepMcpTransport({
+      logger: {
+        debug: (m: string) => api.logger?.debug?.(m),
+        info: (m: string) => api.logger?.info(m),
+        warn: (m: string) => api.logger?.warn(m),
+        error: (m: string) => api.logger?.error(m),
+      },
+    }),
+    eventsRegistered: false,
+  };
+  g[KEEP_MCP_STATE] = state;
+  return state;
+}
+
+// ---------------------------------------------------------------------------
 // Plugin registration
 // ---------------------------------------------------------------------------
 
@@ -206,15 +236,9 @@ export default function register(api: any) {
       });
   }, { commands: ["keep"] });
 
-  // Shared MCP transport — initialized on gateway_start
-  const mcp = new KeepMcpTransport({
-    logger: {
-      debug: (m: string) => api.logger?.debug?.(m),
-      info: (m: string) => api.logger?.info(m),
-      warn: (m: string) => api.logger?.warn(m),
-      error: (m: string) => api.logger?.error(m),
-    },
-  });
+  // Shared MCP transport — global singleton survives SIGUSR1 reloads
+  const mcpState = getMcpState(api);
+  const mcp = mcpState.mcp;
 
   // Track first assemble per session (keyed by sessionKey for persistence).
   const sessionFirstAssemble = new Set<string>();
@@ -287,20 +311,23 @@ export default function register(api: any) {
   // Gateway lifecycle: start/stop MCP transport
   // -----------------------------------------------------------------------
 
-  api.on("gateway_start", async () => {
-    try {
-      await mcp.connect();
-      api.logger?.info("[keep] MCP transport connected");
-    } catch (err: any) {
-      api.logger?.warn(
-        `[keep] MCP connect failed, falling back to CLI: ${err.message}`,
-      );
-    }
-  });
+  if (!mcpState.eventsRegistered) {
+    mcpState.eventsRegistered = true;
+    api.on("gateway_start", async () => {
+      try {
+        await mcp.connect();
+        api.logger?.info("[keep] MCP transport connected");
+      } catch (err: any) {
+        api.logger?.warn(
+          `[keep] MCP connect failed, falling back to CLI: ${err.message}`,
+        );
+      }
+    });
 
-  api.on("gateway_stop", async () => {
-    await mcp.disconnect();
-  });
+    api.on("gateway_stop", async () => {
+      await mcp.disconnect();
+    });
+  }
 
   // -----------------------------------------------------------------------
   // memory_search / memory_get tools
@@ -350,19 +377,21 @@ export default function register(api: any) {
             const minScore = typeof params?.minScore === "number" ? params.minScore : 0;
 
             if (!mcp.connected) {
-              return {
-                content: [{
-                  type: "text",
-                  text: JSON.stringify({
-                    results: [],
-                    disabled: true,
-                    unavailable: true,
-                    error: "keep MCP not connected",
-                    warning: "Memory search is unavailable because keep is not running.",
-                    action: "Verify keep is installed (uv pip install keep-skill[local]) and restart: openclaw gateway restart",
-                  }),
-                }],
-              };
+              try { await mcp.connect(); } catch {
+                return {
+                  content: [{
+                    type: "text",
+                    text: JSON.stringify({
+                      results: [],
+                      disabled: true,
+                      unavailable: true,
+                      error: "keep MCP not connected",
+                      warning: "Memory search is unavailable because keep is not running.",
+                      action: "Verify keep is installed (uv pip install keep-skill[local]) and restart: openclaw gateway restart",
+                    }),
+                  }],
+                };
+              }
             }
 
             try {
@@ -558,7 +587,9 @@ export default function register(api: any) {
         sessionFile: string;
       }) {
         if (!mcp.connected) {
-          return { bootstrapped: false, reason: "MCP not connected" };
+          try { await mcp.connect(); } catch {
+            return { bootstrapped: false, reason: "MCP not connected" };
+          }
         }
 
         const itemId = sessionItemId(params);
@@ -590,7 +621,9 @@ export default function register(api: any) {
         }
 
         if (!mcp.connected) {
-          return { ingested: false };
+          try { await mcp.connect(); } catch {
+            return { ingested: false };
+          }
         }
 
         const role: string = params.message.role || "unknown";
@@ -638,7 +671,9 @@ export default function register(api: any) {
           return { ingestedCount: 0 };
         }
         if (!mcp.connected) {
-          return { ingestedCount: 0 };
+          try { await mcp.connect(); } catch {
+            return { ingestedCount: 0 };
+          }
         }
 
         // Format all messages in the batch into a single turn block
@@ -690,10 +725,12 @@ export default function register(api: any) {
         }, 0);
 
         if (!mcp.connected) {
-          return {
-            messages: params.messages,
-            estimatedTokens: conversationTokens,
-          };
+          try { await mcp.connect(); } catch {
+            return {
+              messages: params.messages,
+              estimatedTokens: conversationTokens,
+            };
+          }
         }
 
         try {
@@ -873,7 +910,9 @@ export default function register(api: any) {
         childSessionKey: string;
         ttlMs?: number;
       }) {
-        if (!mcp.connected) return undefined;
+        if (!mcp.connected) {
+          try { await mcp.connect(); } catch { return undefined; }
+        }
 
         try {
           // Write spawn marker as first version of the child session item

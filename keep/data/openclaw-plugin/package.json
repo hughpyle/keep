@@ -1,5 +1,5 @@
 {
-  "name": "keep-openclaw",
+  "name": "@keepnotes-ai/keep",
   "version": "0.108.0",
   "description": "keep — reflective memory plugin for OpenClaw (context engine + memory tools)",
   "type": "module",
