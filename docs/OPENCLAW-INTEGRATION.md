@@ -15,9 +15,9 @@ What this gives you:
 1. **Semantic context assembly** — every agent turn, keep surfaces relevant
    memories: similar items, open commitments, learnings, edge relationships.
    The agent starts each turn knowing what matters, not just what's recent.
-2. **Continuous capture** — user and assistant messages are ingested into keep's
-   versioned store. Background processing (summarize, analyze, tag, link
-   extraction) runs automatically.
+2. **Continuous capture** — user and assistant messages are ingested as
+   versioned items after each turn. Background processing (summarize, analyze,
+   tag, link extraction) runs automatically.
 3. **Inflection-aware reflection** — after each turn, keep detects topic shifts,
    commitments, and significant moments. When it finds one, it triggers the
    reflective practice in the background.
@@ -32,37 +32,44 @@ What this gives you:
 
 ## Quick Start
 
-### 1. Install keep
+### 1. Install the plugin
+
+```bash
+# From ClawHub (recommended):
+openclaw plugins install clawhub:keep
+
+# Or from a local path (for development):
+openclaw plugins install -l $(keep config openclaw-plugin)
+```
+
+The plugin auto-configures `plugins.slots.contextEngine: "keep"` on install.
+
+### 2. Agent-guided setup
+
+If the Python runtime (`keep` CLI) is not yet installed, the plugin registers
+a bootstrap context engine that instructs the agent to guide you through setup.
+On your first conversation after installing the plugin, the agent will walk
+you through:
+
+1. **Installing keep** — `uv pip install keep-skill[local]`
+2. **Configuring providers** — `openclaw keep setup` (interactive wizard)
+3. **Restarting** — `openclaw gateway restart`
+
+You can also do this manually:
 
 ```bash
 uv tool install keep-skill                    # API providers included
 # Or: uv tool install 'keep-skill[local]'    # Local models, no API keys needed
-```
-
-### 2. Configure providers
-
-```bash
-keep config --setup                           # Interactive wizard
-# Or: just have Ollama running (auto-detected)
-# Or: set OPENAI_API_KEY, GEMINI_API_KEY, etc.
-```
-
-### 3. Install the plugin
-
-```bash
-openclaw plugins install -l $(keep config openclaw-plugin)
+keep config --setup                           # Interactive provider wizard
 openclaw gateway restart
 ```
 
-### 4. Verify
+### 3. Verify
 
 ```bash
 openclaw plugins list                         # Should show: keep (loaded)
 openclaw keep doctor                          # Check keep store health
 ```
-
-The plugin spawns a persistent `keep mcp` process at gateway start. All keep
-operations go through MCP for low latency (~10-50ms per call).
 
 ---
 
@@ -77,10 +84,8 @@ stage of the agent lifecycle:
 | Lifecycle method | What keep does |
 |-----------------|----------------|
 | **bootstrap** | Mark session for first-assemble enrichment |
-| **ingest** | Capture each message as a version of the session item (keyed by `sessionKey`) |
-| **ingestBatch** | Capture a complete turn as a single version of the session item |
 | **assemble** | Render the `openclaw-assemble` prompt template — retrieves intentions, similar items, meta, edges, and session history via state-doc bindings |
-| **afterTurn** | Detect inflection points (topic shifts, commitments, substantial work), trigger background reflection, set up workspace watches |
+| **afterTurn** | Ingest each new user/assistant message as a version of the session item; detect inflection points (topic shifts, commitments, substantial work); trigger background reflection; set up workspace watches |
 | **compact** | Advisory only — logs diagnostics (OpenClaw manages its own compaction) |
 | **prepareSubagentSpawn** | Link child session to parent via tags, write spawn marker as first version of child item |
 | **onSubagentEnded** | Clean up tracking state (child session item persists) |
@@ -89,14 +94,14 @@ The agent doesn't need to do anything — context flows in automatically.
 
 ### Practice Layer (agent-initiated)
 
-The agent also has voluntary access to keep via CLI commands:
+The agent also has voluntary access to keep via MCP tools:
 
 ```
-keep prompt reflect                              # Full reflection practice
-keep flow get-context -p item_id=now             # Current intentions + context
-keep flow query-resolve -p query="topic"         # Semantic search
-keep flow put -p content="insight" -p 'tags={"type":"learning"}'  # Capture
-keep flow put -p content="next steps" -p id=now  # Update intentions
+keep_flow(state="get-context", params={item_id: "now"})          # Current intentions
+keep_flow(state="query-resolve", params={query: "topic"})        # Semantic search
+keep_flow(state="put", params={content: "insight", tags: {type: "learning"}})  # Capture
+keep_prompt(name="reflect")                                       # Full reflection
+keep_help(topic="flow-actions")                                   # Documentation
 ```
 
 These are injected into the agent's system prompt as cacheable static
@@ -117,39 +122,56 @@ OpenClaw's system prompt instructions ("run memory_search before answering
 questions about prior work...") work automatically.
 
 **`memory_search(query, maxResults?, minScore?)`** — Searches `MEMORY.md`
-and `memory/*.md` using keep's semantic search with scope-constrained
-`query-resolve` flow. Returns results in memory-core's format: `path`,
-`startLine`, `endLine`, `score`, `snippet`, `source`. Line positions come
-from keep's part analysis and keyword fallback.
+and `memory/*.md` using keep's semantic search with scope-constrained find.
+Returns results in memory-core's format: `path`, `startLine`, `endLine`,
+`score`, `snippet`, `source`. Line positions come from keep's part analysis
+and keyword fallback.
 
 **`memory_get(path, from?, lines?)`** — Safe file read constrained to
 `MEMORY.md` and `memory/*.md` paths. Supports `from` (1-indexed start line)
 and `lines` (count) for slicing. Path validation prevents traversal outside
 memory paths.
 
-To avoid tool name conflicts with memory-core, disable it:
+---
 
-```yaml
-plugins:
-  slots:
-    contextEngine: "keep"
-    memory: "none"          # disable memory-core (keep provides memory_search)
+## Slot Configuration
+
+The plugin declares `kind: "context-engine"` in its manifest. On install,
+OpenClaw automatically sets `plugins.slots.contextEngine: "keep"`.
+
+For `memory_search`/`memory_get`, the plugin registers these tools directly
+at runtime. To avoid conflicts with the built-in `memory-core` plugin, disable
+it:
+
+```json
+{
+  "plugins": {
+    "slots": {
+      "contextEngine": "keep",
+      "memory": "none"
+    }
+  }
+}
 ```
+
+If you prefer to keep memory-core active (e.g., for its QMD backend), the
+plugin's `memory_search` registration will take precedence when keep is loaded.
 
 ---
 
 ## Customizing Context Assembly
 
-The context assembly flow is a keep state doc: `.state/openclaw-assemble`.
-Edit it to change what context the agent sees:
+The context assembly is driven by a keep prompt template
+(`prompt-agent-openclaw-assemble`) backed by a state doc (`state-get/openclaw`).
+Edit them to change what context the agent sees:
 
 ```bash
-keep get .state/openclaw-assemble              # View current
-keep put --id .state/openclaw-assemble ...     # Replace
+keep get .prompt/agent/openclaw-assemble       # View prompt template
+keep get .state/get/openclaw                   # View state doc (retrieval queries)
 keep config --reset-system-docs                # Restore defaults
 ```
 
-The default runs five parallel queries:
+The default runs parallel queries for:
 
 1. **intentions** — current `now` content (cross-session intentions)
 2. **similar** — semantically similar items to the current user prompt
@@ -172,13 +194,19 @@ Configure in OpenClaw's config under `plugins.entries.keep.config`:
 
 Example:
 
-```yaml
-plugins:
-  entries:
-    keep:
-      enabled: true
-      config:
-        contextBudgetRatio: 0.25
+```json
+{
+  "plugins": {
+    "entries": {
+      "keep": {
+        "enabled": true,
+        "config": {
+          "contextBudgetRatio": 0.25
+        }
+      }
+    }
+  }
+}
 ```
 
 ---
@@ -230,9 +258,7 @@ This is the deeper review — not just what happened, but what it means."
 
 This runs nightly in an isolated session. Memory files (workspace `memory/`
 directory, `MEMORY.md`, etc.) are indexed automatically by the plugin's
-workspace watch — no manual `keep put` needed. The watch is set up on the
-first agent turn after gateway start, and the daemon keeps it alive across
-restarts.
+workspace watch — no manual `keep put` needed.
 
 ---
 
@@ -240,7 +266,7 @@ restarts.
 
 | Layer | Trigger | What it does | Latency |
 |-------|---------|-------------|---------|
-| **Context engine** | Every agent turn | Ingest messages, assemble context, detect inflections | ~10-50ms |
+| **Context engine** | Every agent turn | Assemble context (assemble), capture messages (afterTurn), detect inflections | ~10-50ms |
 | **Memory tools** | Agent-initiated | `memory_search` / `memory_get` over workspace memory files | ~50-200ms |
 | **Workspace watches** | Daemon-driven | Index files, memory, git history automatically | Background |
 | **Daily reflection** | Cron (optional) | Deep practice reflection | Isolated session |
@@ -254,20 +280,24 @@ restarts.
 OpenClaw Gateway (Node.js)
   └── keep plugin (TypeScript, in-process)
         ├── Context Engine
-        │     ├── bootstrap, ingest, ingestBatch
-        │     ├── assemble (via prompt template + state doc)
-        │     ├── afterTurn (inflection detection, workspace watches)
+        │     ├── bootstrap (session init)
+        │     ├── assemble (prompt template + state doc queries)
+        │     ├── afterTurn (message ingest + inflection detection)
         │     ├── compact (advisory)
         │     └── prepareSubagentSpawn, onSubagentEnded
-        └── MCP Client (stdio transport)
+        ├── Bootstrap CE (when keep CLI is missing or unconfigured)
+        │     └── assemble → injects setup instructions for agent
+        └── MCP Client (stdio transport, global singleton)
               └── keep mcp (Python, persistent process)
                     ├── keep store (SQLite + ChromaDB)
                     └── daemon (watches, git ingest, background work)
 ```
 
-The MCP transport bundles `@modelcontextprotocol/sdk` and spawns `keep mcp` as
-a persistent stdio process at gateway start. All operations have per-type
-timeouts (8s for assemble/prompts, 15s for writes, 30s for queries).
+The MCP transport is a `Symbol.for` global singleton that survives gateway
+soft restarts (SIGUSR1). It spawns `keep mcp` as a persistent stdio process
+at gateway start. If the MCP process exits between turns, the plugin
+auto-reconnects on the next operation. All operations have per-type timeouts
+(8s for assemble/prompts, 15s for writes, 30s for queries).
 
 ---
 
@@ -277,13 +307,15 @@ After upgrading keep:
 
 ```bash
 uv tool upgrade keep-skill
-openclaw plugins install -l $(keep config openclaw-plugin)
 openclaw gateway restart
 ```
 
-The plugin source lives at `$(keep config openclaw-plugin)` — this resolves to
-the `openclaw-plugin/` directory inside the installed keep package. The build
-step (`npm install + npm run build`) runs automatically during pip packaging.
+If using a local path install:
+
+```bash
+openclaw plugins install -l $(keep config openclaw-plugin)
+openclaw gateway restart
+```
 
 ---
 
@@ -296,6 +328,12 @@ keep config providers          # Verify providers are set
 openclaw keep doctor           # Run health check
 ```
 
+The plugin auto-reconnects MCP on each operation. If the MCP process keeps
+dying, check `keep mcp` stderr output or run it manually:
+```bash
+keep mcp                       # Should start and wait on stdin
+```
+
 **Context engine not activating:**
 Check that `plugins.slots.contextEngine` is set to `"keep"`:
 ```bash
@@ -303,18 +341,15 @@ grep contextEngine ~/.openclaw/openclaw.json
 ```
 
 **Slow context assembly:**
-The `.state/openclaw-assemble` flow runs 5 parallel queries. If one is slow
-(e.g., embedding provider timeout), it blocks the whole assembly. Check:
+The assemble flow runs parallel queries. If one is slow (e.g., embedding
+provider timeout), it blocks assembly. Check:
 ```bash
 keep doctor --log              # Watch flow execution in real time
 ```
 
-**Falling back to legacy hooks:**
-If the MCP transport fails to connect, the plugin falls back to the original
-hook-based behavior (CLI shell-outs). Check gateway logs for:
-```
-[keep] MCP connect failed, falling back to CLI
-```
+**Agent sees setup instructions instead of context:**
+The bootstrap context engine is active — keep CLI is either not installed or
+providers aren't configured. Follow the agent's instructions, then restart.
 
 **Reset to defaults:**
 ```bash

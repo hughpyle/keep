@@ -136,17 +136,61 @@ function getMcpState(api: any): KeepMcpState {
 }
 
 // ---------------------------------------------------------------------------
+// Bootstrap context engine: injects setup instructions when keep is not
+// fully available. The agent reads these and guides the user through setup.
+// ---------------------------------------------------------------------------
+
+const BOOTSTRAP_MESSAGES: Record<string, string> = {
+  install: [
+    "⚠️ keep plugin is installed but the Python runtime is not available.",
+    "",
+    "Guide the user through setup:",
+    "1. Install Python 3.13 and uv (if not present): https://docs.astral.sh/uv/",
+    "2. Install keep: uv pip install keep-skill[local]",
+    "3. Restart: openclaw gateway restart",
+    "",
+    "After restart, if providers need configuration the agent will be prompted again.",
+  ].join("\n"),
+  configure: [
+    "⚠️ keep is installed but no embedding/summarization providers are configured.",
+    "",
+    "Guide the user through provider setup:",
+    "1. Run: openclaw keep setup",
+    "   (interactive wizard — choose embedding and summarization providers)",
+    "2. Restart: openclaw gateway restart",
+  ].join("\n"),
+};
+
+function registerBootstrapContextEngine(api: any, mode: "install" | "configure") {
+  const message = BOOTSTRAP_MESSAGES[mode];
+  api.logger?.warn(`[keep] Registering bootstrap context engine (mode=${mode})`);
+
+  api.registerContextEngine("keep", () => {
+    return {
+      info: {
+        id: "keep",
+        name: "keep (setup required)",
+        version: "0.108.0",
+        ownsCompaction: false,
+      },
+      async assemble(params: { messages: any[]; tokenBudget?: number }) {
+        return {
+          messages: params.messages,
+          systemPromptAddition: message,
+        };
+      },
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Plugin registration
 // ---------------------------------------------------------------------------
 
 export default function register(api: any) {
   if (!keepAvailable()) {
-    api.logger?.warn(
-      "[keep] keep CLI not found — plugin inactive. " +
-      "Install with: uv pip install keep-skill[local]  " +
-      "(requires Python 3.13 and uv). " +
-      "Then restart the gateway: openclaw gateway restart"
-    );
+    api.logger?.warn("[keep] keep CLI not found — registering bootstrap context engine");
+    registerBootstrapContextEngine(api, "install");
     return;
   }
 
@@ -235,6 +279,14 @@ export default function register(api: any) {
         }
       });
   }, { commands: ["keep"] });
+
+  // If providers aren't configured, register bootstrap CE and stop.
+  // The CLI is already registered above so `openclaw keep setup` works.
+  if (!keepHealthy) {
+    api.logger?.warn("[keep] Providers not configured — registering bootstrap context engine");
+    registerBootstrapContextEngine(api, "configure");
+    return;
+  }
 
   // Shared MCP transport — global singleton survives SIGUSR1 reloads
   const mcpState = getMcpState(api);
