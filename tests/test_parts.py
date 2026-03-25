@@ -281,7 +281,7 @@ class TestKeeperAnalyze:
                 {"summary": "Main body", "content": "Second section text",
                  "tags": {"topic": "analysis"}},
             ]
-            parts = kp.analyze("test-doc")
+            parts = kp.analyze("test-doc", force=True)
 
         assert len(parts) == 2
         assert parts[0].part_num == 1
@@ -296,13 +296,13 @@ class TestKeeperAnalyze:
         kp.put("Content for analysis testing with enough length. " * 12, id="test-doc")
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
-            # First analysis
+            # First analysis (force to bypass single-version-untruncated skip)
             mock_llm.return_value = [
                 {"summary": "Part A", "content": "A text"},
                 {"summary": "Part B", "content": "B text"},
                 {"summary": "Part C", "content": "C text"},
             ]
-            parts1 = kp.analyze("test-doc")
+            parts1 = kp.analyze("test-doc", force=True)
             assert len(parts1) == 3
 
             # Re-analysis with different decomposition (force=True since content unchanged)
@@ -328,7 +328,7 @@ class TestKeeperAnalyze:
                 {"summary": "Part 1", "content": "Text 1"},
                 {"summary": "Part 2", "content": "Text 2"},
             ]
-            kp.analyze("test-doc")
+            kp.analyze("test-doc", force=True)
 
         item = kp.get_part("test-doc", 1)
         assert item is not None
@@ -350,7 +350,7 @@ class TestKeeperAnalyze:
                 {"summary": f"Part {i}", "content": f"Text {i}"}
                 for i in range(1, 4)
             ]
-            kp.analyze("test-doc")
+            kp.analyze("test-doc", force=True)
 
         parts = kp.list_parts("test-doc")
         assert len(parts) == 3
@@ -383,7 +383,7 @@ class TestAnalyzeSkip:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
-            kp.analyze("test-doc")
+            kp.analyze("test-doc", force=True)
 
         item = kp.get("test-doc")
         assert "_analyzed_hash" in item.tags
@@ -399,7 +399,7 @@ class TestAnalyzeSkip:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
-            parts1 = kp.analyze("test-doc")
+            parts1 = kp.analyze("test-doc", force=True)
             assert len(parts1) == 2
 
             # Second call should skip (returns existing parts, no LLM call)
@@ -415,7 +415,7 @@ class TestAnalyzeSkip:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
-            kp.analyze("test-doc")
+            kp.analyze("test-doc", force=True)
 
             # Change content
             kp.put("Completely different content. " * 20, id="test-doc")
@@ -426,7 +426,7 @@ class TestAnalyzeSkip:
                 {"summary": "New A", "content": "New text A"},
                 {"summary": "New B", "content": "New text B"},
             ]
-            parts = kp.analyze("test-doc")
+            parts = kp.analyze("test-doc", force=True)
             mock_llm.assert_called_once()
             assert parts[0].summary == "New A"
 
@@ -437,7 +437,7 @@ class TestAnalyzeSkip:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
-            kp.analyze("test-doc")
+            kp.analyze("test-doc", force=True)
 
             # Force re-analysis
             mock_llm.reset_mock()
@@ -495,6 +495,41 @@ class TestAnalyzeSkip:
         result = kp.enqueue_analyze("test-doc")
         assert result is True
 
+    def test_analyze_skips_single_version_untruncated(self, mock_providers, tmp_path):
+        """analyze() skips when content is untruncated and has no version thread."""
+        kp = Keeper(store_path=tmp_path)
+        # Content > min_analyze_length (500) but < max_summary_length (2000)
+        # Mock store has no versions → single chunk → skip applies
+        kp.put("A note about an interesting topic with details. " * 12, id="test-doc")
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
+            mock_llm.return_value = [
+                {"summary": "Part A", "content": "Text A"},
+            ]
+            parts = kp.analyze("test-doc")
+            mock_llm.assert_not_called()  # LLM should never be invoked
+
+        # No parts created — skip was applied
+        listed = kp.list_parts("test-doc")
+        assert len(listed) == 0
+
+        # _analyzed_hash should be recorded to prevent re-enqueue
+        item = kp.get("test-doc")
+        assert "_analyzed_hash" in item.tags
+
+    def test_analyze_force_bypasses_single_version_skip(self, mock_providers, tmp_path):
+        """analyze(force=True) runs even on single-version untruncated content."""
+        kp = Keeper(store_path=tmp_path)
+        # Same content as skip test above, but force=True bypasses the guard
+        kp.put("A note about an interesting topic with details. " * 12, id="test-doc")
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
+            mock_llm.return_value = [
+                {"summary": "Part A", "content": "Text A"},
+            ]
+            parts = kp.analyze("test-doc", force=True)
+            mock_llm.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Part-to-parent uplift in find()
@@ -521,7 +556,7 @@ class TestFindPartUplift:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
-            kp.analyze("test-doc")
+            kp.analyze("test-doc", force=True)
 
         # Search for something a part matches
         results = kp.find("Miami trip")
@@ -545,7 +580,7 @@ class TestFindPartUplift:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = list(self.MOCK_PARTS)
-            kp.analyze("test-doc")
+            kp.analyze("test-doc", force=True)
 
         # "travel" matches multiple parts — should still get one parent
         results = kp.find("travel")

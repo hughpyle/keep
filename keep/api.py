@@ -3724,6 +3724,22 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             except (ValueError, TypeError):
                 incremental = False
 
+        # Skip when content is untruncated and there's no version thread
+        # to synthesize — parts would be redundant copies of already-
+        # searchable content.
+        if not force and not incremental and is_vstring and not analyzed_version_str:
+            content_length = int(
+                doc_record.tags.get("_content_length", "0") or "0"
+            )
+            if content_length <= self._config.max_summary_length:
+                logger.info(
+                    "Skipping analysis for %s: single version, "
+                    "untruncated (%d <= %d chars)",
+                    id, content_length, self._config.max_summary_length,
+                )
+                self._record_analyzed_tags(doc_coll, id, doc_record)
+                return []
+
         # Phase 1: Gather — assemble chunks, guide context, tag specs (local)
         gather_result = self._gather_analyze_chunks(
             id, doc_record, since_version=since_version if incremental else None,
