@@ -159,6 +159,13 @@ class FileDocumentProvider:
         ".tif": "image/tiff",
         ".webp": "image/webp",
         ".svg": "image/svg+xml",
+        # 3D model files
+        ".stl": "model/stl",
+        ".obj": "model/obj",
+        ".ply": "application/x-ply",
+        ".gltf": "model/gltf+json",
+        ".glb": "model/gltf-binary",
+        ".3mf": "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
         # Archives / binary (skip text extraction)
         ".zip": "application/zip",
         ".gz": "application/gzip",
@@ -251,6 +258,12 @@ class FileDocumentProvider:
                 ocr_pages = [0]
             elif content_type == "message/rfc822":
                 content, extracted_tags, email_attachments = self._extract_email(path)
+            elif content_type and (
+                content_type.startswith("model/")
+                or suffix in (".ply", ".3mf")
+            ):
+                from .model_files import extract_3d_metadata
+                content = extract_3d_metadata(str(path))
             elif content_type and not content_type.startswith("text/"):
                 # Binary file without a dedicated extractor — use filename only
                 content = f"[{path.name}]"
