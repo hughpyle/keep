@@ -23,5 +23,5 @@ Include only what the evidence supports:
 
 If there is a previous description, note what has changed.
 
-Keep it under 150 words. Use plain text, not markdown.
+Keep it under 500 words. Use plain text.
 Start directly with the facts.

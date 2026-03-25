@@ -2,7 +2,7 @@
 tags:
   category: system
   context: prompt
-  scope: "*@*"
+  scope: "*@*.*"
 ---
 # .prompt/supernode/email
 
@@ -22,6 +22,8 @@ Format:
   Lists: (mailing lists they participate in)
   Notes: (any other notable patterns)
 
+If there is a previous description, note what has changed.
+
 Only state what the evidence supports. If a field has no
-evidence, omit it. Keep the total under 100 words.
+evidence, omit it. Keep it under 500 words.
 Start directly with the profile fields.

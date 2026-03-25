@@ -441,26 +441,8 @@ class AnalyzerProvider(Protocol):
         ...
 
 
-# -----------------------------------------------------------------------------
-# Tagging
-# -----------------------------------------------------------------------------
-
-# Shared system prompt for all LLM-based tagging providers
-TAGGING_SYSTEM_PROMPT = """Analyze the document and generate relevant tags as a JSON object.
-
-Generate tags for these categories when applicable:
-- content_type: The type of content (e.g., "documentation", "code", "article", "config")
-- language: Programming language if code (e.g., "python", "javascript")
-- domain: Subject domain (e.g., "authentication", "database", "api", "testing")
-- framework: Framework or library if relevant (e.g., "react", "django", "fastapi")
-
-Only include tags that clearly apply. Values should be lowercase.
-
-Respond with a JSON object only, no explanation."""
-
-
 def parse_tag_json(text: str | None) -> dict[str, str]:
-    """Parse JSON tags from LLM response, handling common quirks."""
+    """Parse JSON from LLM response, handling markdown fences and quirks."""
     if not text:
         return {}
     text = text.strip()
@@ -474,45 +456,6 @@ def parse_tag_json(text: str | None) -> dict[str, str]:
         return {str(k): str(v) for k, v in tags.items()}
     except (json.JSONDecodeError, AttributeError):
         return {}
-
-
-@runtime_checkable
-class TaggingProvider(Protocol):
-    """Generates structured tags from document content.
-    
-    Tags enable traditional navigation and filtering. The provider analyzes
-    content and returns relevant key-value pairs.
-    
-    Example implementation:
-        class OpenAITagging:
-            def __init__(self, model: str = "gpt-4o-mini"):
-                self.client = OpenAI()
-                self.model = model
-            
-            def tag(self, content: str) -> dict[str, str]:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[...],
-                    response_format={"type": "json_object"}
-                )
-                return json.loads(response.choices[0].message.content)
-    """
-    
-    def tag(self, content: str) -> dict[str, str]:
-        """Generate tags for the content.
-        
-        Args:
-            content: The full document content
-            
-        Returns:
-            Dictionary of tag key-value pairs
-            
-        Note:
-            Keys should be lowercase with underscores (e.g., "content_type").
-            Values should be simple strings.
-            System tags (keys starting with "_") should not be generated here.
-        """
-        ...
 
 
 # -----------------------------------------------------------------------------
@@ -538,7 +481,6 @@ class ProviderRegistry:
     def __init__(self):
         self._embedding_providers: dict[str, type] = {}
         self._summarization_providers: dict[str, type] = {}
-        self._tagging_providers: dict[str, type] = {}
         self._document_providers: dict[str, type] = {}
         self._media_providers: dict[str, type] = {}
         self._analyzer_providers: dict[str, type] = {}
@@ -594,10 +536,6 @@ class ProviderRegistry:
         """Register a summarization provider class."""
         self._summarization_providers[name] = provider_class
     
-    def register_tagging(self, name: str, provider_class: type) -> None:
-        """Register a tagging provider class."""
-        self._tagging_providers[name] = provider_class
-    
     def register_document(self, name: str, provider_class: type) -> None:
         """Register a document provider class."""
         self._document_providers[name] = provider_class
@@ -648,11 +586,6 @@ class ProviderRegistry:
         self._ensure_providers_loaded()
         return self._create_provider("summarization", name, self._summarization_providers, params)
 
-    def create_tagging(self, name: str, params: dict | None = None) -> TaggingProvider:
-        """Create a tagging provider instance."""
-        self._ensure_providers_loaded()
-        return self._create_provider("tagging", name, self._tagging_providers, params)
-
     def create_media(self, name: str, params: dict | None = None) -> MediaDescriber:
         """Create a media describer instance."""
         self._ensure_providers_loaded()
@@ -682,10 +615,6 @@ class ProviderRegistry:
     def list_summarization_providers(self) -> list[str]:
         """List registered summarization provider names."""
         return list(self._summarization_providers.keys())
-    
-    def list_tagging_providers(self) -> list[str]:
-        """List registered tagging provider names."""
-        return list(self._tagging_providers.keys())
     
     def list_document_providers(self) -> list[str]:
         """List registered document provider names."""

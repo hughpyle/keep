@@ -19,5 +19,7 @@ Include:
 - How it is referenced (cited as source, linked for context, etc.)
 - Key topics associated with it
 
-Keep it under 80 words. Use plain text.
+If there is a previous description, note what has changed.
+
+Keep it under 500 words. Use plain text.
 Start directly with the description.

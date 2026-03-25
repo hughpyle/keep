@@ -204,10 +204,22 @@ class TestGetContextFlow:
         """versions_limit=2 returns exactly 2 prev refs when 6 versions exist.
 
         Uses a real DocumentStore (not mocked) because versioning requires
-        actual SQLite version tracking.
+        actual SQLite version tracking.  Only mocks providers to avoid
+        hitting real LLM APIs.
         """
-        from unittest.mock import patch as _patch
-        with _patch.object(Keeper, "_spawn_processor", return_value=False):
+        from unittest.mock import patch as _patch, MagicMock
+        from tests.conftest import MockEmbeddingProvider, MockSummarizationProvider, MockDocumentProvider
+
+        mock_reg = MagicMock()
+        mock_reg.create_embedding.return_value = MockEmbeddingProvider()
+        mock_reg.create_summarization.return_value = MockSummarizationProvider()
+        mock_reg.create_document.return_value = MockDocumentProvider()
+
+        with _patch("keep.api.get_registry", return_value=mock_reg), \
+             _patch("keep._provider_lifecycle.get_registry", return_value=mock_reg), \
+             _patch("keep.api.CachingEmbeddingProvider", side_effect=lambda p, **kw: p), \
+             _patch("keep._provider_lifecycle.CachingEmbeddingProvider", side_effect=lambda p, **kw: p), \
+             _patch.object(Keeper, "_spawn_processor", return_value=False):
             kp = Keeper(store_path=tmp_path / "ver-test-store")
             kp._get_embedding_provider()
 

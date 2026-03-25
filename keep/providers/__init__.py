@@ -15,7 +15,6 @@ from .base import (
     Document,
     EmbeddingProvider,
     SummarizationProvider,
-    TaggingProvider,
     DocumentProvider,
     ProviderRegistry,
     get_registry,
@@ -27,8 +26,7 @@ from .base import (
 __all__ = [
     # Protocols
     "EmbeddingProvider",
-    "SummarizationProvider", 
-    "TaggingProvider",
+    "SummarizationProvider",
     "DocumentProvider",
     # Data types
     "Document",

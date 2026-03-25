@@ -13,8 +13,6 @@ from .base import (
     build_summarization_prompt,
     strip_summary_preamble,
     SUMMARIZATION_SYSTEM_PROMPT,
-    TAGGING_SYSTEM_PROMPT,
-    parse_tag_json,
 )
 
 
@@ -181,77 +179,6 @@ class MLXSummarization:
             verbose=False,
         )
         return response.strip()
-
-
-class MLXTagging:
-    """Tagging provider using MLX-LM on Apple Silicon.
-    
-    Uses local LLMs to generate structured tags. No API key required.
-    
-    Requires: pip install mlx-lm
-    """
-    
-    def __init__(
-        self,
-        model: str = "mlx-community/Llama-3.2-3B-Instruct-4bit",
-        max_tokens: int = 150,
-    ):
-        """Initialize.
-
-        Args:
-        model: Model name from mlx-community hub
-        max_tokens: Maximum tokens in generated response.
-        """
-        try:
-            from mlx_lm import load
-        except ImportError:
-            raise RuntimeError(
-                "MLXTagging requires 'mlx-lm'. "
-                "Install with: pip install mlx-lm"
-            )
-        
-        self.model_name = model
-        self.max_tokens = max_tokens
-
-        # Check if model is already cached
-        _downloading = False
-        try:
-            from huggingface_hub import try_to_load_from_cache
-            cached = try_to_load_from_cache(model, "config.json")
-            _downloading = cached is None
-        except ImportError:
-            pass
-
-        if _downloading:
-            import logging
-            import sys
-            logging.getLogger(__name__).info("Downloading MLX model '%s' (first use)...", model)
-            print(f"Downloading MLX model '{model}' (first use)...", file=sys.stderr)
-
-        self._model, self._tokenizer = load(model)
-
-    def tag(self, content: str) -> dict[str, str]:
-        """Generate tags using MLX-LM."""
-        from mlx_lm import generate
-
-        truncated = content[:8000] if len(content) > 8000 else content
-
-        if hasattr(self._tokenizer, "apply_chat_template"):
-            messages = [
-                {"role": "system", "content": TAGGING_SYSTEM_PROMPT},
-                {"role": "user", "content": truncated},
-            ]
-            prompt = self._tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True,
-            )
-        else:
-            prompt = f"{TAGGING_SYSTEM_PROMPT}\n\nDocument:\n{truncated}\n\nJSON:"
-
-        response = generate(
-            self._model, self._tokenizer,
-            prompt=prompt, max_tokens=self.max_tokens, verbose=False,
-        )
-        return parse_tag_json(response)
 
 
 class MLXVisionDescriber:
@@ -492,6 +419,5 @@ if is_apple_silicon():
     _registry = get_registry()
     _registry.register_embedding("mlx", MLXEmbedding)
     _registry.register_summarization("mlx", MLXSummarization)
-    _registry.register_tagging("mlx", MLXTagging)
     _registry.register_media("mlx", MLXMediaDescriber)
     _registry.register_content_extractor("mlx", MLXContentExtractor)
