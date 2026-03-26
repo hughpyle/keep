@@ -360,10 +360,15 @@ class RemoteKeeper:
         )
 
     def get_now(self, *, scope: Optional[str] = None) -> Item:
-        return self.get("now")
+        doc_id = f"now:{scope}" if scope else "now"
+        return self.get(doc_id)
 
     def set_now(self, content: str, *, scope: Optional[str] = None, tags: Optional[TagMap] = None) -> Item:
-        return self.put(content, id="now", tags=tags)
+        doc_id = f"now:{scope}" if scope else "now"
+        merged_tags = dict(tags or {})
+        if scope:
+            merged_tags.setdefault("user", scope)
+        return self.put(content, id=doc_id, tags=merged_tags or None)
 
     def exists(self, id: str) -> bool:
         return self.get(id) is not None

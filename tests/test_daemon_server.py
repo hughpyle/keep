@@ -74,6 +74,12 @@ def test_health(daemon):
     assert status == 200
     assert body["status"] == "ok"
     assert "pid" in body
+    assert "version" in body
+    assert "store" in body
+    assert "embedding" in body
+    assert "needs_setup" in body
+    assert "warnings" in body
+    assert isinstance(body["warnings"], list)
 
 
 def test_404_unknown_path(daemon):
@@ -200,6 +206,23 @@ def test_remote_keeper_round_trip(daemon):
     assert client.delete("rt-1") is True
 
     client.close()
+
+
+def test_context_endpoint(daemon):
+    """The /context endpoint returns full ItemContext in one call."""
+    _, _, port = daemon
+    _post(port, "/v1/notes", {"content": "context endpoint test", "id": "ce-1"})
+    status, body = _get(port, "/v1/notes/ce-1/context?similar_limit=2&edges_limit=1")
+    assert status == 200
+    assert body["item"]["id"] == "ce-1"
+    assert "similar" in body
+    assert "meta" in body
+    assert "parts" in body
+    assert "prev" in body
+
+    # Missing item
+    status, _ = _get(port, "/v1/notes/nonexistent/context")
+    assert status == 404
 
 
 def test_remote_keeper_get_context_via_flow(daemon):

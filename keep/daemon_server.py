@@ -55,17 +55,18 @@ def _items_response(items) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Routes: 7 endpoints
+# Routes: 8 endpoints
 # ---------------------------------------------------------------------------
 
 _ROUTES: list[tuple[str, str, str]] = [
-    ("GET",    r"^/v1/health$",                  "_handle_health"),
-    ("POST",   r"^/v1/search$",                  "_handle_find"),
-    ("POST",   r"^/v1/flow$",                    "_handle_flow"),
-    ("POST",   r"^/v1/notes$",                   "_handle_put"),
-    ("PATCH",  r"^/v1/notes/(?P<id>.+)/tags$",   "_handle_tag"),
-    ("DELETE", r"^/v1/notes/(?P<id>.+)$",        "_handle_delete"),
-    ("GET",    r"^/v1/notes/(?P<id>.+)$",        "_handle_get"),
+    ("GET",    r"^/v1/health$",                       "_handle_health"),
+    ("POST",   r"^/v1/search$",                       "_handle_find"),
+    ("POST",   r"^/v1/flow$",                         "_handle_flow"),
+    ("POST",   r"^/v1/notes$",                        "_handle_put"),
+    ("GET",    r"^/v1/notes/(?P<id>.+)/context$",     "_handle_get_context"),
+    ("PATCH",  r"^/v1/notes/(?P<id>.+)/tags$",        "_handle_tag"),
+    ("DELETE", r"^/v1/notes/(?P<id>.+)$",             "_handle_delete"),
+    ("GET",    r"^/v1/notes/(?P<id>.+)$",             "_handle_get"),
 ]
 
 _COMPILED_ROUTES = [
@@ -137,8 +138,44 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 DaemonRequestHandler._cached_version = version("keep-skill")
             except Exception:
                 DaemonRequestHandler._cached_version = "unknown"
-        self._json(200, {"status": "ok", "pid": os.getpid(),
-                         "version": DaemonRequestHandler._cached_version})
+
+        kp = self.keeper
+        config = kp._config
+
+        # Embedding provider status
+        embedding = None
+        if config.embedding:
+            embedding = config.embedding.name
+            model = config.embedding.params.get("model", "")
+            if model:
+                embedding = f"{embedding}/{model}"
+
+        # Summarization provider status
+        summarization = None
+        if config.summarization:
+            summarization = config.summarization.name
+
+        # Warnings
+        warnings = []
+        if not config.embedding:
+            warnings.append("no embedding provider configured")
+        if not config.summarization:
+            warnings.append("no summarization provider configured")
+
+        # Needs setup: no config file or no embedding provider
+        needs_setup = config.embedding is None
+
+        self._json(200, {
+            "status": "ok",
+            "pid": os.getpid(),
+            "version": DaemonRequestHandler._cached_version,
+            "store": str(kp._store_path),
+            "embedding": embedding,
+            "summarization": summarization,
+            "item_count": kp.count(),
+            "needs_setup": needs_setup,
+            "warnings": warnings,
+        })
 
     def _handle_get(self, groups: dict):
         item = self.keeper.get(groups["id"])
@@ -146,6 +183,43 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not found"})
         else:
             self._json(200, _item_to_dict(item))
+
+    def _handle_get_context(self, groups: dict):
+        qs = urlparse(self.path).query
+        params = parse_qs(qs, keep_blank_values=True)
+
+        def _int(key, default):
+            v = params.get(key)
+            if v:
+                try:
+                    return int(v[0])
+                except (ValueError, IndexError):
+                    pass
+            return default
+
+        def _bool(key, default=True):
+            v = params.get(key)
+            if v:
+                return v[0].lower() in ("true", "1", "yes")
+            return default
+
+        ctx = self.keeper.get_context(
+            groups["id"],
+            version=_int("version", None),
+            similar_limit=_int("similar_limit", 3),
+            meta_limit=_int("meta_limit", 3),
+            parts_limit=_int("parts_limit", 10),
+            edges_limit=_int("edges_limit", 5),
+            versions_limit=_int("versions_limit", 3),
+            include_similar=_bool("include_similar"),
+            include_meta=_bool("include_meta"),
+            include_parts=_bool("include_parts"),
+            include_versions=_bool("include_versions"),
+        )
+        if ctx is None:
+            self._json(404, {"error": "not found"})
+        else:
+            self._json(200, ctx.to_dict())
 
     def _handle_put(self, groups: dict):
         body = self._read_body()
