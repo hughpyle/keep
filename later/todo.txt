@@ -1,4 +1,6 @@
 
+* reranking (including a local provider)
+
 * edge limit in get frontmatter
     - other sections (similar, meta, parts) have default limit + CLI param
     - edges may not have a limit, or the limit may not be wired through

@@ -1335,18 +1335,73 @@ See: https://github.com/keepnotes-ai/keep#installation
 """
 
 
-def _get_keeper(store: Optional[Path]) -> Keeper:
+def _resolve_store_path(store: Optional[Path]) -> Path:
+    """Resolve the store path from CLI arg, env, or config — no Keeper init."""
+    actual = store if store is not None else _get_store_override()
+    if actual is not None:
+        return Path(actual).resolve()
+    from .paths import get_config_dir, get_default_store_path
+    from .config import load_or_create_config
+    config_dir = get_config_dir()
+    cfg = load_or_create_config(config_dir)
+    return get_default_store_path(cfg)
+
+
+def _read_daemon_port(store_path: Path) -> Optional[int]:
+    """Read .daemon.port file, return port or None."""
+    port_file = store_path / ".daemon.port"
+    if not port_file.exists():
+        return None
+    try:
+        return int(port_file.read_text().strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _check_daemon_health(port: int) -> bool:
+    """Quick health check against daemon HTTP server (1s timeout)."""
+    import http.client
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+        conn.request("GET", "/v1/health")
+        resp = conn.getresponse()
+        conn.close()
+        return resp.status == 200
+    except Exception:
+        return False
+
+
+def _try_daemon_connection(port: int, config) -> Optional["RemoteKeeper"]:
+    """Try connecting to daemon at given port. Returns client or None."""
+    if not _check_daemon_health(port):
+        return None
+    from .remote import RemoteKeeper
+    try:
+        return RemoteKeeper(
+            api_url=f"http://127.0.0.1:{port}",
+            api_key="",
+            config=config,
+        )
+    except Exception:
+        return None
+
+
+def _get_keeper(store: Optional[Path], *, _force_local: bool = False) -> Keeper:
     """Initialize memory, handling errors gracefully.
 
     Returns a local Keeper or RemoteKeeper depending on config.
     Both satisfy the same protocol — the CLI doesn't distinguish.
+
+    When ``_force_local`` is True, skips the daemon HTTP client path
+    and always creates a local Keeper (used by ``keep pending`` which
+    manages the daemon itself).
     """
     import atexit
 
     # Check for remote backend config (env vars or TOML [remote] section)
     api_url = os.environ.get("KEEPNOTES_API_URL", "https://api.keepnotes.ai")
     api_key = os.environ.get("KEEPNOTES_API_KEY")
-    if api_url and api_key:
+    if api_url and api_key and not _force_local:
         from .config import get_config_dir, load_or_create_config
         from .remote import RemoteKeeper
         try:
@@ -1358,6 +1413,22 @@ def _get_keeper(store: Optional[Path]) -> Keeper:
         except Exception as e:
             typer.echo(f"Error connecting to remote: {e}", err=True)
             raise typer.Exit(1)
+
+    # Try local daemon first (fast path — no model loading)
+    if not _force_local:
+        store_path = _resolve_store_path(store)
+        port = _read_daemon_port(store_path)
+    else:
+        port = None
+    if port is not None:
+        from .config import load_or_create_config
+        from .paths import get_config_dir
+        config_dir = get_config_dir()
+        config = load_or_create_config(config_dir)
+        client = _try_daemon_connection(port, config)
+        if client is not None:
+            atexit.register(client.close)
+            return client
 
     # Check global override from --store on main command
     actual_store = store if store is not None else _get_store_override()
@@ -3720,18 +3791,7 @@ def pending_cmd(
     # --stop: send SIGTERM to the daemon (lightweight — no Keeper needed)
     if stop:
         from .model_lock import ModelLock
-        from .paths import get_default_store_path, get_config_dir
-        from .config import load_or_create_config
-        if store is not None:
-            store_path = Path(store).resolve()
-        else:
-            override = _get_store_override()
-            if override is not None:
-                store_path = Path(override).resolve()
-            else:
-                config_dir = get_config_dir()
-                cfg = load_or_create_config(config_dir)
-                store_path = get_default_store_path(cfg)
+        store_path = _resolve_store_path(store)
         pid_path = store_path / "processor.pid"
         lock = ModelLock(store_path / ".processor.lock")
         if not lock.is_locked():
@@ -3748,9 +3808,12 @@ def pending_cmd(
                 pid_path.unlink(missing_ok=True)
         else:
             typer.echo("Processor running but no PID file found.", err=True)
+        # Clean up stale port file
+        (store_path / ".daemon.port").unlink(missing_ok=True)
         return
 
-    kp = _get_keeper(store)
+    # pending always needs a local Keeper (manages daemon, queues, etc.)
+    kp = _get_keeper(store, _force_local=True)
 
     # --daemon: run as the actual background processor
     if daemon:
@@ -3801,6 +3864,15 @@ def pending_cmd(
             kp._config.embedding.name if kp._config.embedding else "none",
             kp._config.embedding.params.get("model", "") if kp._config.embedding else "",
         )
+
+        # Start HTTP query server
+        from .daemon_server import DaemonServer, DEFAULT_PORT
+        _daemon_port = int(os.environ.get("KEEP_DAEMON_PORT", "0")) or DEFAULT_PORT
+        _daemon_server = DaemonServer(kp, port=_daemon_port)
+        _actual_port = _daemon_server.start()
+        _port_path = kp._store_path / ".daemon.port"
+        _port_path.write_text(str(_actual_port))
+        _daemon_logger.info("Query server on 127.0.0.1:%d", _actual_port)
 
         def handle_signal(signum, frame):
             nonlocal shutdown_requested
@@ -4021,6 +4093,14 @@ def pending_cmd(
                     )
         finally:
             _daemon_logger.info("Daemon shutting down")
+            try:
+                _daemon_server.stop()
+            except Exception:
+                pass
+            try:
+                _port_path.unlink()
+            except OSError:
+                pass
             try:
                 pid_path.unlink()
             except OSError:

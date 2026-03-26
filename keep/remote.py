@@ -1,59 +1,66 @@
-"""Remote Keeper — HTTP client for the keepnotes.ai API.
+"""Remote Keeper — HTTP client for keep's 7-endpoint API.
 
-Implements KeeperProtocol by mapping method calls to REST endpoints.
-Used when a [remote] section is configured in keep.toml or when
-KEEPNOTES_API_URL and KEEPNOTES_API_KEY environment variables are set.
+Used by the CLI to talk to the local daemon, and by the hosted
+keepnotes.ai service.  Implements KeeperProtocol through 7 endpoints:
+health, get, put, delete, find, tag, flow.
+
+Everything beyond these core operations goes through the flow endpoint.
 """
 
 import logging
 import os
 import re
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 from urllib.parse import quote
 
 import httpx
 
-# Project slug: must start with a letter, 2-63 chars, lowercase letters/numbers/hyphens
-_SLUG_RE = re.compile(r'^[a-z][a-z0-9-]{0,61}[a-z0-9]$')
-
 from .config import StoreConfig
-from .document_store import VersionInfo
-from .types import Item, ItemContext, SimilarRef, MetaRef, VersionRef, PartRef, TagMap, local_date
+from .types import (
+    Item, ItemContext, SimilarRef, MetaRef, EdgeRef, VersionRef, PartRef,
+    TagMap, local_date,
+)
 
 logger = logging.getLogger(__name__)
 
-# Default timeout for API calls (seconds)
 DEFAULT_TIMEOUT = 30.0
+
+_SLUG_RE = re.compile(r'^[a-z][a-z0-9-]{0,61}[a-z0-9]$')
 
 
 class RemoteKeeper:
-    """Keeper backend that delegates to a remote keepnotes.ai API.
+    """Keeper backend speaking the 7-endpoint API.
 
-    Satisfies KeeperProtocol — the CLI uses it interchangeably with
-    the local Keeper class.
+    Core endpoints (direct HTTP):
+        GET    /v1/notes/{id}          get
+        POST   /v1/notes               put
+        DELETE /v1/notes/{id}          delete
+        POST   /v1/search              find
+        PATCH  /v1/notes/{id}/tags     tag
+        POST   /v1/flow                run_flow_command
+
+    Everything else (context, versions, parts, meta, prompts, etc.)
+    goes through run_flow_command().
     """
 
     def __init__(self, api_url: str, api_key: str, config: StoreConfig, *, project: Optional[str] = None):
         self.api_url = api_url.rstrip("/")
         self.api_key = api_key
         self._config = config
+        self.config = config  # alias for CLI compatibility
 
-        # Project selection: explicit param > config > env var
         self.project = (
             project
             or (config.remote.project if config.remote else None)
             or os.environ.get("KEEPNOTES_PROJECT")
             or None
         )
-
-        # Validate project slug format
         if self.project and not _SLUG_RE.match(self.project):
             raise ValueError(
                 f"Invalid project slug '{self.project}'. "
                 "Must start with a letter, 2-63 chars, lowercase letters/numbers/hyphens."
             )
 
-        # Refuse non-HTTPS for remote APIs (bearer token would be sent in cleartext)
         if not self.api_url.startswith("https://"):
             from urllib.parse import urlparse
             host = urlparse(self.api_url).hostname or ""
@@ -64,77 +71,56 @@ class RemoteKeeper:
                 )
 
         from .types import user_agent
-
         headers: dict[str, str] = {
-            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "User-Agent": user_agent(),
         }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         if self.project:
             headers["X-Project"] = self.project
 
         self._client = httpx.Client(
-            base_url=self.api_url,
-            headers=headers,
-            timeout=DEFAULT_TIMEOUT,
-        )
-
-    @staticmethod
-    def _q(id: str) -> str:
-        """URL-encode an ID for safe use in URL path segments."""
-        return quote(id, safe="")
+            base_url=self.api_url, headers=headers, timeout=DEFAULT_TIMEOUT)
 
     # -- HTTP helpers --
 
+    @staticmethod
+    def _q(id: str) -> str:
+        return quote(id, safe="")
+
     def _get(self, path: str, **params: Any) -> dict:
-        """GET request, return parsed JSON."""
-        # Filter out None params
         filtered = {k: v for k, v in params.items() if v is not None}
         resp = self._client.get(path, params=filtered)
         resp.raise_for_status()
         return resp.json()
 
     def _post(self, path: str, json: dict) -> dict:
-        """POST request with JSON body."""
-        # Filter out None values
         filtered = {k: v for k, v in json.items() if v is not None}
         resp = self._client.post(path, json=filtered)
         resp.raise_for_status()
         return resp.json()
 
-    def _put(self, path: str, json: dict) -> dict:
-        """PUT request with JSON body."""
-        filtered = {k: v for k, v in json.items() if v is not None}
-        resp = self._client.put(path, json=filtered)
-        resp.raise_for_status()
-        return resp.json()
-
     def _patch(self, path: str, json: dict) -> dict:
-        """PATCH request with JSON body."""
         resp = self._client.patch(path, json=json)
         resp.raise_for_status()
         return resp.json()
 
     def _delete(self, path: str) -> dict:
-        """DELETE request."""
         resp = self._client.delete(path)
         resp.raise_for_status()
         return resp.json()
 
-    # -- Response conversion --
-
     @staticmethod
     def _to_item(data: dict) -> Item:
-        """Convert API response dict to Item, with basic validation."""
         if not isinstance(data, dict):
-            raise ValueError(f"Expected dict from API, got {type(data).__name__}")
+            raise ValueError(f"Expected dict, got {type(data).__name__}")
         item_id = data.get("id")
         if not isinstance(item_id, str) or not item_id:
-            raise ValueError(f"API response missing valid 'id' field: {data!r:.200}")
+            raise ValueError(f"Missing 'id' in response: {data!r:.200}")
         tags = data.get("tags", {})
         if not isinstance(tags, dict):
             tags = {}
-        # Ensure tag keys and values are strings
         tags = {str(k): str(v) for k, v in tags.items()}
         if data.get("created_at"):
             tags.setdefault("_created", str(data["created_at"]))
@@ -149,35 +135,26 @@ class RemoteKeeper:
                 score = float(score)
             except (TypeError, ValueError):
                 score = None
-        return Item(
-            id=item_id,
-            summary=summary,
-            tags=tags,
-            score=score,
-        )
+        return Item(id=item_id, summary=summary, tags=tags, score=score)
 
     @staticmethod
     def _to_items(data: dict) -> list[Item]:
-        """Convert API list response to list of Items."""
         if not isinstance(data, dict):
-            raise ValueError(f"Expected dict from API, got {type(data).__name__}")
+            raise ValueError(f"Expected dict, got {type(data).__name__}")
         items = data.get("notes", data.get("items", []))
         if not isinstance(items, list):
-            raise ValueError(f"Expected 'notes' list from API, got {type(items).__name__}")
-        return [RemoteKeeper._to_item(item) for item in items]
+            raise ValueError(f"Expected list, got {type(items).__name__}")
+        return [RemoteKeeper._to_item(i) for i in items]
 
-    @staticmethod
-    def _to_version_info(data: dict) -> VersionInfo:
-        """Convert API response dict to VersionInfo."""
-        return VersionInfo(
-            version=data["version"],
-            summary=data.get("summary", ""),
-            tags=data.get("tags", {}),
-            created_at=data.get("created_at", ""),
-            content_hash=data.get("content_hash"),
-        )
+    # ---- Core: 6 direct endpoints ----
 
-    # -- Write operations --
+    def get(self, id: str) -> Optional[Item]:
+        try:
+            return self._to_item(self._get(f"/v1/notes/{self._q(id)}"))
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
 
     def put(
         self,
@@ -188,75 +165,16 @@ class RemoteKeeper:
         summary: Optional[str] = None,
         tags: Optional[TagMap] = None,
         created_at: Optional[str] = None,
+        force: bool = False,
     ) -> Item:
-        resp = self._post("/v1/notes", json={
-            "content": content,
-            "uri": uri,
-            "id": id,
-            "tags": tags,
-            "summary": summary,
-            "created_at": created_at,
-        })
-        return self._to_item(resp)
+        return self._to_item(self._post("/v1/notes", json={
+            "content": content, "uri": uri, "id": id,
+            "tags": tags, "summary": summary, "created_at": created_at,
+            "force": force or None,
+        }))
 
-    def set_now(
-        self,
-        content: str,
-        *,
-        scope: Optional[str] = None,
-        tags: Optional[TagMap] = None,
-    ) -> Item:
-        params = {"scope": scope} if scope else {}
-        filtered = {k: v for k, v in {"content": content, "tags": tags}.items() if v is not None}
-        resp = self._client.put("/v1/now", params=params, json=filtered)
-        resp.raise_for_status()
-        return self._to_item(resp.json())
-
-    def tag(
-        self,
-        id: str,
-        tags: Optional[TagMap] = None,
-    ) -> Optional[Item]:
-        if tags is None:
-            return self.get(id)
-        resp = self._patch(f"/v1/notes/{self._q(id)}/tags", json={
-            "set": {k: v for k, v in tags.items() if v},
-            "remove": [k for k, v in tags.items() if not v],
-        })
-        return self._to_item(resp)
-
-    def delete(
-        self,
-        id: str,
-        *,
-        delete_versions: bool = True,
-    ) -> bool:
-        resp = self._delete(f"/v1/notes/{self._q(id)}")
-        return resp.get("deleted", False)
-
-    def revert(self, id: str) -> Optional[Item]:
-        resp = self._post(f"/v1/notes/{self._q(id)}/revert", json={})
-        if resp.get("deleted"):
-            return None
-        return self._to_item(resp)
-
-    def move(
-        self,
-        name: str,
-        *,
-        source_id: str = "now",
-        tags: Optional[TagMap] = None,
-        only_current: bool = False,
-    ) -> Item:
-        resp = self._post("/v1/move", json={
-            "target": name,
-            "source": source_id,
-            "tags": tags,
-            "only_current": only_current,
-        })
-        return self._to_item(resp)
-
-    # -- Query operations --
+    def delete(self, id: str, *, delete_versions: bool = True) -> bool:
+        return self._delete(f"/v1/notes/{self._q(id)}").get("deleted", False)
 
     def find(
         self,
@@ -270,299 +188,31 @@ class RemoteKeeper:
         include_self: bool = False,
         include_hidden: bool = False,
         deep: bool = False,
+        scope: Optional[str] = None,
     ) -> list[Item]:
         from .api import FindResults
         resp = self._post("/v1/search", json={
-            "query": query,
-            "similar_to": similar_to,
-            "tags": tags,
-            "limit": limit,
-            "since": since,
-            "until": until,
+            "query": query, "similar_to": similar_to, "tags": tags,
+            "limit": limit, "since": since, "until": until,
             "include_self": include_self or None,
             "include_hidden": include_hidden or None,
-            "deep": deep or None,
+            "deep": deep or None, "scope": scope,
         })
         items = self._to_items(resp)
-        # Parse deep groups from API response if present
         deep_groups: dict[str, list[Item]] = {}
-        for raw_group in resp.get("deep_groups", []):
-            pid = raw_group.get("id", "")
-            if pid and "items" in raw_group:
-                deep_groups[pid] = [self._to_item(i) for i in raw_group["items"]]
+        for g in resp.get("deep_groups", []):
+            pid = g.get("id", "")
+            if pid and "items" in g:
+                deep_groups[pid] = [self._to_item(i) for i in g["items"]]
         return FindResults(items, deep_groups=deep_groups)
 
-    def get_similar_for_display(
-        self,
-        id: str,
-        *,
-        limit: int = 3,
-    ) -> list[Item]:
-        resp = self._get(f"/v1/notes/{self._q(id)}/similar", limit=limit)
-        return self._to_items(resp)
-
-    def list_tags(
-        self,
-        key: Optional[str] = None,
-    ) -> list[str]:
-        if key:
-            resp = self._get(f"/v1/tags/{self._q(key)}")
-        else:
-            resp = self._get("/v1/tags")
-        return resp.get("values", [])
-
-    def resolve_meta(
-        self,
-        item_id: str,
-        *,
-        limit_per_doc: int = 3,
-    ) -> dict[str, list[Item]]:
-        resp = self._get(f"/v1/notes/{self._q(item_id)}/meta", limit=limit_per_doc)
-        result: dict[str, list[Item]] = {}
-        for name, items_data in resp.get("sections", {}).items():
-            result[name] = [self._to_item(i) for i in items_data]
-        return result
-
-    def resolve_inline_meta(
-        self,
-        item_id: str,
-        queries: list[dict[str, str]],
-        context_keys: list[str] | None = None,
-        prereq_keys: list[str] | None = None,
-        *,
-        limit: int = 3,
-    ) -> list[Item]:
-        resp = self._post(f"/v1/notes/{self._q(item_id)}/resolve", json={
-            "queries": queries,
-            "context_keys": context_keys,
-            "prerequisites": prereq_keys,
-            "limit": limit,
-        })
-        return self._to_items(resp)
-
-    def list_items(
-        self,
-        *,
-        prefix: Optional[str] = None,
-        tags: Optional[TagMap] = None,
-        tag_keys: Optional[list[str]] = None,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
-        order_by: str = "updated",
-        include_hidden: bool = False,
-        include_history: bool = False,
-        limit: int = 10,
-    ) -> list[Item]:
-        # Build tag query params: key=value for exact match, key-only for existence
-        tag_params: list[str] = []
-        if tags:
-            for k, v in tags.items():
-                tag_params.append(f"{k}={v}")
-        if tag_keys:
-            tag_params.extend(tag_keys)
-
-        params: dict = {
-            "limit": limit,
-            "since": since,
-            "until": until,
-            "order_by": order_by,
-            "include_history": include_history or None,
-            "include_hidden": include_hidden or None,
-            "prefix": prefix,
-        }
-        if tag_params:
-            params["tag"] = tag_params
-
-        resp = self._get("/v1/notes", **params)
-        return self._to_items(resp)
-
-    # -- Display context --
-
-    def get_context(
-        self,
-        id: str,
-        *,
-        version: int | None = None,
-        similar_limit: int = 3,
-        meta_limit: int = 3,
-        include_similar: bool = True,
-        include_meta: bool = True,
-        include_parts: bool = True,
-        include_versions: bool = True,
-    ) -> ItemContext | None:
-        """Assemble display context from individual remote API calls."""
-        offset = version or 0
-        if offset > 0:
-            item = self.get_version(id, offset)
-        else:
-            item = self.get(id)
-        if item is None:
-            return None
-
-        # Version navigation
-        prev_refs: list[VersionRef] = []
-        next_refs: list[VersionRef] = []
-        if include_versions:
-            nav = self.get_version_nav(id, version)
-            for i, v in enumerate(nav.get("prev", [])):
-                prev_refs.append(VersionRef(
-                    offset=offset + i + 1,
-                    date=local_date(v.tags.get("_created") or v.created_at or ""),
-                    summary=v.summary,
-                ))
-            for i, v in enumerate(nav.get("next", [])):
-                next_refs.append(VersionRef(
-                    offset=offset - i - 1,
-                    date=local_date(v.tags.get("_created") or v.created_at or ""),
-                    summary=v.summary,
-                ))
-
-        # Similar items (current version only)
-        similar_refs: list[SimilarRef] = []
-        if include_similar and offset == 0:
-            raw = self.get_similar_for_display(id, limit=similar_limit)
-            for s in raw:
-                s_offset = self.get_version_offset(s)
-                similar_refs.append(SimilarRef(
-                    id=s.tags.get("_base_id", s.id),
-                    offset=s_offset,
-                    score=s.score,
-                    date=local_date(
-                        s.tags.get("_updated") or s.tags.get("_created", "")
-                    ),
-                    summary=s.summary,
-                ))
-
-        # Meta-doc sections (current version only)
-        meta_refs: dict[str, list[MetaRef]] = {}
-        if include_meta and offset == 0:
-            raw_meta = self.resolve_meta(id, limit_per_doc=meta_limit)
-            for name, meta_items in raw_meta.items():
-                meta_refs[name] = [
-                    MetaRef(id=mi.id, summary=mi.summary)
-                    for mi in meta_items
-                ]
-
-        # Parts — remote API doesn't expose list_parts yet
-        part_refs: list[PartRef] = []
-
-        return ItemContext(
-            item=item,
-            viewing_offset=offset,
-            similar=similar_refs,
-            meta=meta_refs,
-            parts=part_refs,
-            prev=prev_refs,
-            next=next_refs,
-        )
-
-    # -- Direct access --
-
-    def get(self, id: str) -> Optional[Item]:
-        try:
-            resp = self._get(f"/v1/notes/{self._q(id)}")
-            return self._to_item(resp)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return None
-            raise
-
-    def get_now(self, *, scope: Optional[str] = None) -> Item:
-        if scope:
-            resp = self._get("/v1/now", scope=scope)
-        else:
-            resp = self._get("/v1/now")
-        return self._to_item(resp)
-
-    def get_version(
-        self,
-        id: str,
-        offset: int = 0,
-    ) -> Optional[Item]:
-        try:
-            resp = self._get(f"/v1/notes/{self._q(id)}/versions/{offset}")
-            return self._to_item(resp)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return None
-            raise
-
-    def list_versions(
-        self,
-        id: str,
-        limit: int = 10,
-    ) -> list[VersionInfo]:
-        resp = self._get(f"/v1/notes/{self._q(id)}/versions", limit=limit)
-        return [self._to_version_info(v) for v in resp.get("versions", [])]
-
-    def list_versions_around(
-        self,
-        id: str,
-        version: int,
-        radius: int = 2,
-    ) -> list[VersionInfo]:
-        # NOTE: requires server-side support for `around` and `radius`
-        # query params.  Older servers will silently ignore them and
-        # return default list_versions output (newest first, limited).
-        resp = self._get(
-            f"/v1/notes/{self._q(id)}/versions",
-            around=version, radius=radius,
-        )
-        return [self._to_version_info(v) for v in resp.get("versions", [])]
-
-    def get_version_nav(
-        self,
-        id: str,
-        current_version: Optional[int] = None,
-        limit: int = 3,
-    ) -> dict:
-        resp = self._get(
-            f"/v1/notes/{self._q(id)}/versions/nav",
-            current_version=current_version,
-            limit=limit,
-        )
-        result: dict[str, list[VersionInfo]] = {}
-        for key in ("prev", "next"):
-            if key in resp:
-                result[key] = [self._to_version_info(v) for v in resp[key]]
-        return result
-
-    def get_version_offset(self, item: Item) -> int:
-        resp = self._get(f"/v1/notes/{self._q(item.id)}/version-offset")
-        return resp.get("offset", 0)
-
-    def exists(self, id: str) -> bool:
-        try:
-            self._get(f"/v1/notes/{self._q(id)}")
-            return True
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return False
-            raise
-
-    # -- Collection management --
-
-    def list_collections(self) -> list[str]:
-        resp = self._get("/v1/collections")
-        return resp.get("collections", [])
-
-    def count(self) -> int:
-        resp = self._get("/v1/count")
-        return resp.get("count", 0)
-
-    def export_iter(self, *, include_system: bool = True) -> Iterator[dict]:
-        """Stream export is not yet supported for hosted stores."""
-        raise NotImplementedError("Export/import not yet supported for hosted stores")
-
-    def export_data(self, *, include_system: bool = True) -> dict:
-        """Export is not yet supported for hosted stores."""
-        raise NotImplementedError("Export/import not yet supported for hosted stores")
-
-    def import_data(self, data: dict, *, mode: str = "merge") -> dict:
-        """Import is not yet supported for hosted stores."""
-        raise NotImplementedError("Export/import not yet supported for hosted stores")
-
-    # -- Flows --
+    def tag(self, id: str, tags: Optional[TagMap] = None) -> Optional[Item]:
+        if tags is None:
+            return self.get(id)
+        return self._to_item(self._patch(f"/v1/notes/{self._q(id)}/tags", json={
+            "set": {k: v for k, v in tags.items() if v},
+            "remove": [k for k, v in tags.items() if not v],
+        }))
 
     def run_flow_command(
         self,
@@ -574,15 +224,10 @@ class RemoteKeeper:
         state_doc_yaml: Optional[str] = None,
         writable: bool = True,
     ) -> Any:
-        """Run a state-doc flow on the remote server."""
         from .state_doc_runtime import FlowResult
-
         resp = self._post("/v1/flow", json={
-            "state": state,
-            "params": params,
-            "budget": budget,
-            "cursor_token": cursor_token,
-            "state_doc_yaml": state_doc_yaml,
+            "state": state, "params": params, "budget": budget,
+            "cursor_token": cursor_token, "state_doc_yaml": state_doc_yaml,
             "writable": writable,
         })
         return FlowResult(
@@ -593,6 +238,140 @@ class RemoteKeeper:
             history=resp.get("history", []),
             cursor=resp.get("cursor"),
         )
+
+    # ---- Flow-based convenience methods ----
+
+    def get_context(
+        self,
+        id: str,
+        *,
+        version: int | None = None,
+        similar_limit: int = 3,
+        meta_limit: int = 3,
+        parts_limit: int = 10,
+        edges_limit: int = 5,
+        versions_limit: int = 3,
+        include_similar: bool = True,
+        include_meta: bool = True,
+        include_parts: bool = True,
+        include_versions: bool = True,
+    ) -> ItemContext | None:
+        """Assemble display context via get + flow."""
+        offset = version or 0
+        if offset > 0:
+            # Version access — get the base item first to verify it exists
+            item = self.get(id)
+            if item is None:
+                return None
+            # TODO: version-specific get once flow supports it
+        else:
+            item = self.get(id)
+            if item is None:
+                return None
+
+        # Run the "get" flow for similar/meta/parts/edges
+        flow_result = self.run_flow_command(
+            state="get",
+            params={
+                "item_id": id,
+                "similar_limit": similar_limit if include_similar else 0,
+                "meta_limit": meta_limit if include_meta else 0,
+                "parts_limit": parts_limit if include_parts else 0,
+                "edges_limit": edges_limit,
+                "versions_limit": versions_limit if include_versions else 0,
+            },
+        )
+
+        similar_refs: list[SimilarRef] = []
+        meta_refs: dict[str, list[MetaRef]] = {}
+        edge_refs: dict[str, list[EdgeRef]] = {}
+        part_refs: list[PartRef] = []
+        prev_refs: list[VersionRef] = []
+
+        if flow_result.status == "done":
+            bindings = flow_result.bindings
+
+            # Similar
+            if include_similar:
+                sim = bindings.get("similar", {})
+                for s in sim.get("results", []):
+                    similar_refs.append(SimilarRef(
+                        id=s.get("id", ""),
+                        offset=0,
+                        score=s.get("score"),
+                        date=local_date(s.get("tags", {}).get("_updated", "")),
+                        summary=s.get("summary", ""),
+                    ))
+
+            # Meta
+            if include_meta:
+                meta_binding = bindings.get("meta", {})
+                for section_name, section_data in meta_binding.get("sections", {}).items():
+                    refs = []
+                    for m in section_data:
+                        refs.append(MetaRef(
+                            id=m.get("id", ""),
+                            summary=m.get("summary", ""),
+                        ))
+                    if refs:
+                        meta_refs[section_name] = refs
+
+            # Parts
+            if include_parts:
+                parts_binding = bindings.get("parts", {})
+                for p in parts_binding.get("results", []):
+                    part_refs.append(PartRef(
+                        part_num=int(p.get("part_num", 0)),
+                        summary=p.get("summary", ""),
+                        tags=p.get("tags", {}),
+                    ))
+
+            # Edges
+            edges_binding = bindings.get("edges", {})
+            for pred, edge_list in edges_binding.get("edges", {}).items():
+                refs = []
+                for e in edge_list:
+                    refs.append(EdgeRef(
+                        source_id=e.get("source_id", e.get("id", "")),
+                        date=local_date(e.get("date", "")),
+                        summary=e.get("summary", ""),
+                    ))
+                if refs:
+                    edge_refs[pred] = refs
+
+            # Versions (prev)
+            if include_versions:
+                ver_binding = bindings.get("versions", {})
+                for i, v in enumerate(ver_binding.get("versions", [])):
+                    prev_refs.append(VersionRef(
+                        offset=i + 1,
+                        date=local_date(v.get("date", v.get("created_at", ""))),
+                        summary=v.get("summary", ""),
+                    ))
+
+        return ItemContext(
+            item=item,
+            viewing_offset=offset,
+            similar=similar_refs,
+            meta=meta_refs,
+            edges=edge_refs,
+            parts=part_refs,
+            prev=prev_refs,
+        )
+
+    def get_now(self, *, scope: Optional[str] = None) -> Item:
+        return self.get("now")
+
+    def set_now(self, content: str, *, scope: Optional[str] = None, tags: Optional[TagMap] = None) -> Item:
+        return self.put(content, id="now", tags=tags)
+
+    def exists(self, id: str) -> bool:
+        return self.get(id) is not None
+
+    def count(self) -> int:
+        # Use find with limit=0 to get count, or just return 0 for now
+        # This is rarely used in the CLI hot path
+        return 0
 
     def close(self) -> None:
         self._client.close()
