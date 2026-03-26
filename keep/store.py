@@ -723,16 +723,18 @@ class ChromaStore:
         where: dict[str, Any] | None = None,
     ) -> list[StoreResult]:
         """Query by embedding similarity.
-        
+
         Args:
             collection: Collection name
             embedding: Query embedding vector
             limit: Maximum results to return
             where: Optional metadata filter (Chroma where clause)
-            
+
         Returns:
             List of results ordered by similarity (most similar first)
         """
+        from .perf_stats import perf
+
         with self._state_lock:
             self._check_freshness()
             coll = self._get_collection(collection)
@@ -747,7 +749,8 @@ class ChromaStore:
                 if normalized_where:
                     query_params["where"] = normalized_where
 
-            result = coll.query(**query_params)
+            with perf.timer("chroma", "query"):
+                result = coll.query(**query_params)
 
             results = []
             for i, id in enumerate(result["ids"][0]):

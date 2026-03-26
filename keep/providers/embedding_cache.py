@@ -279,6 +279,8 @@ class CachingEmbeddingProvider:
 
         Cache failures are non-fatal — falls through to the real provider.
         """
+        from ..perf_stats import perf
+
         # Check cache (fail-safe)
         try:
             cached = self._cache.get(self.model_name, text)
@@ -292,7 +294,8 @@ class CachingEmbeddingProvider:
         # Cache miss - compute embedding
         with self._stats_lock:
             self._misses += 1
-        embedding = self._provider.embed(text)
+        with perf.timer("embed", "compute"):
+            embedding = self._provider.embed(text)
 
         # Store in cache (fail-safe)
         try:

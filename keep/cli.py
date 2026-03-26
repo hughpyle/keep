@@ -4068,7 +4068,7 @@ def pending_cmd(
         # Also query the work queue (flow items)
         try:
             wq = kp._get_work_queue()
-            flow_items = wq.list_pending(limit=100)
+            flow_items = wq.list_pending(limit=-1)
         except Exception:
             flow_items = []
         try:

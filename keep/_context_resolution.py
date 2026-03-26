@@ -174,6 +174,10 @@ class ContextResolutionMixin:
             include_parts: Whether to include parts manifest
             include_versions: Whether to include version navigation
         """
+        from .perf_stats import perf
+        import time
+        _ctx_t0 = time.monotonic()
+
         # Ensure state docs are in the store for the read flow.
         if self._needs_sysdoc_migration:
             try:
@@ -236,17 +240,18 @@ class ContextResolutionMixin:
 
         if offset == 0:
             if include_similar or include_meta or include_parts:
-                flow_result = self._run_read_flow(
-                    "get",
-                    {
-                        "item_id": id,
-                        "similar_limit": similar_limit if include_similar else 0,
-                        "meta_limit": meta_limit if include_meta else 0,
-                        "parts_limit": parts_limit if include_parts else 0,
-                        "edges_limit": edges_limit,
-                        "versions_limit": versions_limit if include_versions else 0,
-                    },
-                )
+                with perf.timer("get_context", "read_flow", context_id=id):
+                    flow_result = self._run_read_flow(
+                        "get",
+                        {
+                            "item_id": id,
+                            "similar_limit": similar_limit if include_similar else 0,
+                            "meta_limit": meta_limit if include_meta else 0,
+                            "parts_limit": parts_limit if include_parts else 0,
+                            "edges_limit": edges_limit,
+                            "versions_limit": versions_limit if include_versions else 0,
+                        },
+                    )
                 if flow_result.status == "done":
                     bindings = flow_result.bindings
                     if include_similar:
@@ -272,6 +277,8 @@ class ContextResolutionMixin:
                     # Fallback: inline edge resolution when flow fails
                     edge_refs = self._resolve_edge_refs(item, id)
 
+        perf.record("get_context", "total", time.monotonic() - _ctx_t0,
+                    context_id=id)
         return ItemContext(
             item=item,
             viewing_offset=offset,

@@ -2205,6 +2205,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                    Search may traverse items outside the scope, but only items whose
                    base ID matches the glob are returned.
         """
+        from .perf_stats import perf
+        _find_t0 = time.monotonic()
+
         if query and similar_to:
             raise ValueError("Specify either query or similar_to, not both")
         if not query and not similar_to:
@@ -2259,13 +2262,15 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
             embedding = self._store.get_embedding(chroma_coll, similar_to)
             if embedding is None:
-                embedding = self._get_embedding_provider().embed(item.summary)
+                with perf.timer("find", "embed"):
+                    embedding = self._get_embedding_provider().embed(item.summary)
             actual_limit = (limit + 1 if not include_self else limit) * 3
             if deep:
                 actual_limit = max(actual_limit, 30)
             if scope_ids is not None:
                 actual_limit = max(actual_limit, len(scope_ids))
-            results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit, where=where)
+            with perf.timer("find", "semantic"):
+                results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit, where=where)
 
             if not include_self:
                 results = [r for r in results if r.id != similar_to]
@@ -2277,7 +2282,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             # Hybrid search: semantic + FTS5, fused with RRF.
             # Each list over-fetches independently so RRF can discover
             # items that rank well in one signal but poorly in the other.
-            embedding = self._get_embedding_provider().embed(query)
+            with perf.timer("find", "embed"):
+                embedding = self._get_embedding_provider().embed(query)
             sem_fetch = max(limit * 10, 200)
             fts_fetch = max(limit * 10, 100)
             if deep:
@@ -2285,25 +2291,28 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if scope_ids is not None:
                 sem_fetch = max(sem_fetch, len(scope_ids))
 
-            sem_results = self._store.query_embedding(
-                chroma_coll, embedding, limit=sem_fetch, where=where,
-            )
+            with perf.timer("find", "semantic"):
+                sem_results = self._store.query_embedding(
+                    chroma_coll, embedding, limit=sem_fetch, where=where,
+                )
             sem_items = [r.to_item() for r in sem_results]
             sem_items = self._apply_recency_decay(sem_items)
 
-            if scope_ids is not None:
-                fts_rows = self._document_store.query_fts_scoped(
-                    doc_coll, query, list(scope_ids),
-                    limit=fts_fetch, tags=casefolded_tags,
-                )
-            else:
-                fts_rows = self._document_store.query_fts(
-                    doc_coll, query, limit=fts_fetch, tags=casefolded_tags,
-                )
+            with perf.timer("find", "fts"):
+                if scope_ids is not None:
+                    fts_rows = self._document_store.query_fts_scoped(
+                        doc_coll, query, list(scope_ids),
+                        limit=fts_fetch, tags=casefolded_tags,
+                    )
+                else:
+                    fts_rows = self._document_store.query_fts(
+                        doc_coll, query, limit=fts_fetch, tags=casefolded_tags,
+                    )
             fts_items = [Item(id=r[0], summary=r[1]) for r in fts_rows]
 
             if fts_items:
-                items = self._rrf_fuse(sem_items, fts_items)
+                with perf.timer("find", "rrf"):
+                    items = self._rrf_fuse(sem_items, fts_items)
             else:
                 # FTS unavailable or no matches — use semantic results as-is
                 items = sem_items
@@ -2324,26 +2333,27 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         # Hydrate search hits from canonical SQLite tags so user tags remain
         # available even when Chroma metadata stores marker fields only.
-        hydrated: list[Item] = []
-        for item in items:
-            base_id = item.tags.get(
-                "_base_id",
-                item.id.split("@")[0] if "@" in item.id else item.id,
-            )
-            head = self._document_store.get(doc_coll, base_id)
-            if head is None:
-                hydrated.append(item)
-                continue
-            head_item = _record_to_item(head, score=item.score)
-            merged_tags = dict(head_item.tags)
-            merged_tags.update(item.tags or {})
-            hydrated.append(Item(
-                id=item.id,
-                summary=item.summary or head_item.summary,
-                tags=merged_tags,
-                score=item.score,
-            ))
-        items = hydrated
+        with perf.timer("find", "hydrate"):
+            hydrated: list[Item] = []
+            for item in items:
+                base_id = item.tags.get(
+                    "_base_id",
+                    item.id.split("@")[0] if "@" in item.id else item.id,
+                )
+                head = self._document_store.get(doc_coll, base_id)
+                if head is None:
+                    hydrated.append(item)
+                    continue
+                head_item = _record_to_item(head, score=item.score)
+                merged_tags = dict(head_item.tags)
+                merged_tags.update(item.tags or {})
+                hydrated.append(Item(
+                    id=item.id,
+                    summary=item.summary or head_item.summary,
+                    tags=merged_tags,
+                    score=item.score,
+                ))
+            items = hydrated
 
         # Scope filter: keep only items whose base ID is in the scope set.
         # Applied before deep follow so traversal can still discover edges
@@ -2359,6 +2369,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         deep_groups: dict[str, list[Item]] = {}
         injected_entity_ids: set[str] = set()
         if deep and embedding is not None:
+            _deep_t0 = time.monotonic()
             if self._document_store.has_edges(doc_coll):
                 # For similar_to mode, use the anchor item's summary as FTS query
                 deep_query = query if query else ""
@@ -2444,6 +2455,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     limit=limit,
                     embedding=embedding,
                 )
+
+        if deep and embedding is not None:
+            perf.record("find", "deep", time.monotonic() - _deep_t0)
 
         # Apply common filters
         if since is not None or until is not None:
@@ -2706,15 +2720,18 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     enriched.append(item)
             return enriched
 
-        if final:
-            self._document_store.touch_many(doc_coll, [i.id for i in final])
-            final = _enrich_from_sqlite(final)
-        # Enrich deep group items too (same casefolded-tag issue)
-        if deep_groups:
-            deep_groups = {
-                pid: _enrich_from_sqlite(group)
-                for pid, group in deep_groups.items()
-            }
+        with perf.timer("find", "enrich"):
+            if final:
+                self._document_store.touch_many(doc_coll, [i.id for i in final])
+                final = _enrich_from_sqlite(final)
+            # Enrich deep group items too (same casefolded-tag issue)
+            if deep_groups:
+                deep_groups = {
+                    pid: _enrich_from_sqlite(group)
+                    for pid, group in deep_groups.items()
+                }
+        perf.record("find", "total", time.monotonic() - _find_t0,
+                    context_id=query or similar_to)
         return FindResults(final, deep_groups=deep_groups)
 
     # -------------------------------------------------------------------------
@@ -2847,13 +2864,17 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         Reads from document store (canonical), falls back to vector store for legacy data.
         Touches accessed_at on successful retrieval.
         """
+        from .perf_stats import perf
+        _get_t0 = time.monotonic()
+
         id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
         # Try document store first (canonical)
         try:
-            doc_record = self._document_store.get(doc_coll, id)
+            with perf.timer("get", "sqlite"):
+                doc_record = self._document_store.get(doc_coll, id)
         except Exception as e:
             logger.warning("DocumentStore.get(%s) failed: %s", id, e)
             if self._is_local and "malformed" in str(e):
@@ -2869,10 +2890,13 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 doc_record = None
         if doc_record:
             self._document_store.touch(doc_coll, id)
+            perf.record("get", "total", time.monotonic() - _get_t0, context_id=id)
             return _record_to_item(doc_record)
 
         # Fall back to ChromaDB for legacy data
-        result = self._store.get(chroma_coll, id)
+        with perf.timer("get", "chroma_fallback"):
+            result = self._store.get(chroma_coll, id)
+        perf.record("get", "total", time.monotonic() - _get_t0, context_id=id)
         if result is None:
             return None
         return result.to_item()

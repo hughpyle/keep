@@ -157,7 +157,7 @@ class PerfStats:
         """Clear all recorded data."""
         with self._lock:
             self._series.clear()
-            self._ops_since_log = 0
+            self._last_auto_log = 0.0
 
 
 # Module-level singleton.

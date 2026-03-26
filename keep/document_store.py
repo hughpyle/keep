@@ -2321,11 +2321,16 @@ class DocumentStore:
             bm25_rank is negative (more negative = better match).
             Returns empty list if FTS5 is not available.
         """
+        from .perf_stats import perf
+
         if not self._fts_available:
             return []
         fts_query = self._build_fts_query(query)
         if fts_query is None:
             return []
+
+        import time
+        _fts_t0 = time.monotonic()
 
         # --- Search documents ---
         doc_sql = """
@@ -2398,6 +2403,7 @@ class DocumentStore:
         combined.extend((row[0], row[1], row[2]) for row in part_rows)
         combined.extend((row[0], row[1], row[2]) for row in ver_rows)
         combined.sort(key=lambda r: r[2])  # sort by rank ascending (best first)
+        perf.record("fts", "query", time.monotonic() - _fts_t0)
         return combined[:limit]
 
     def query_fts_scoped(
