@@ -373,9 +373,6 @@ def get(
     meta: Annotated[bool, typer.Option(
         "--meta", "-M", help="List meta notes"
     )] = False,
-    resolve: Annotated[Optional[list[str]], typer.Option(
-        "--resolve", "-R", help="Inline meta query (metadoc syntax, repeatable)"
-    )] = None,
     parts: Annotated[bool, typer.Option(
         "--parts", "-P", help="List structural parts (from analyze)"
     )] = False,
@@ -402,25 +399,6 @@ def get(
         keep get doc:1 --parts          # List structural parts
         keep get doc:1 -t project=myapp # Only if tag matches
     """
-    # --resolve delegates to full CLI (complex meta-doc query parsing)
-    if resolve:
-        from keep.cli import app as full_app
-        args = ["get"]
-        for item_id in id:
-            args.append(item_id)
-        for r in resolve:
-            args += ["--resolve", r]
-        if version is not None:
-            args += ["--version", str(version)]
-        args += ["--limit", str(limit)]
-        try:
-            rc = full_app(args, standalone_mode=False)
-        except SystemExit as e:
-            rc = e.code
-        if rc:
-            raise typer.Exit(rc)
-        return
-
     port = _get_port()
     outputs = []
     errors = 0
@@ -1270,12 +1248,6 @@ def doctor(ctx: typer.Context):
     from keep.cli import app as full_app
     full_app(["doctor"] + ctx.args, standalone_mode=False)
 
-
-@app.command(hidden=True, deprecated=True)
-def validate(ctx: typer.Context):
-    """Validate system documents (delegates to full CLI)."""
-    from keep.cli import app as full_app
-    full_app(["validate"] + ctx.args, standalone_mode=False)
 
 
 @app.command()

@@ -1275,7 +1275,7 @@ def _get_keeper(store: Optional[Path], *, _force_local: bool = False) -> Keeper:
     """Initialize memory, handling errors gracefully.
 
     Returns a local Keeper or RemoteKeeper (cloud) depending on config.
-    Local daemon commands (put directory, get --resolve, pending, etc.)
+    Local daemon commands (put directory, pending, etc.)
     always use a local Keeper — the thin CLI handles the daemon HTTP path.
 
     When ``_force_local`` is True, skips the remote backend check
@@ -1863,10 +1863,6 @@ def get(
         "--meta", "-M",
         help="List meta notes"
     )] = False,
-    resolve: Annotated[Optional[list[str]], typer.Option(
-        "--resolve", "-R",
-        help="Inline meta query (metadoc syntax, repeatable)"
-    )] = None,
     parts: Annotated[bool, typer.Option(
         "--parts", "-P",
         help="List structural parts (from analyze)"
@@ -1907,7 +1903,7 @@ def get(
     errors = []
 
     for one_id in id:
-        result = _get_one(kp, one_id, version, history, similar, meta, resolve, tag, limit, parts)
+        result = _get_one(kp, one_id, version, history, similar, meta, tag, limit, parts)
         if result is None:
             errors.append(one_id)
         else:
@@ -2036,40 +2032,6 @@ def _get_meta_list(kp: Keeper, actual_id: str, limit: int) -> str:
     return "\n".join(lines)
 
 
-def _get_resolve_list(kp: Keeper, actual_id: str, resolve: list[str], limit: int) -> str:
-    """Resolve inline meta-doc syntax strings."""
-    from .utils import _parse_meta_doc
-    all_queries: list[dict[str, str]] = []
-    all_context: list[str] = []
-    all_prereqs: list[str] = []
-    for r in resolve:
-        q, c, p = _parse_meta_doc(r)
-        all_queries.extend(q)
-        all_context.extend(c)
-        all_prereqs.extend(p)
-    all_context = list(dict.fromkeys(all_context))
-    all_prereqs = list(dict.fromkeys(all_prereqs))
-    items = kp.resolve_inline_meta(
-        actual_id, all_queries, all_context, all_prereqs, limit=limit,
-    )
-    if _get_ids_output():
-        return "\n".join(_shell_quote_id(item.id) for item in items)
-    if _get_json_output():
-        result = {
-            "id": actual_id,
-            "resolve": [{"id": item.id, "summary": item.summary[:60]} for item in items],
-        }
-        return json.dumps(result, indent=2)
-    lines = [f"Resolve for {actual_id}:"]
-    for item in items:
-        summary_preview = item.summary[:50].replace("\n", " ")
-        if len(item.summary) > 50:
-            summary_preview += "..."
-        lines.append(f"  {_shell_quote_id(item.id)}  {summary_preview}")
-    if len(lines) == 1:
-        lines.append("  No matching notes found.")
-    return "\n".join(lines)
-
 
 def _get_one(
     kp: Keeper,
@@ -2078,7 +2040,6 @@ def _get_one(
     history: bool,
     similar: bool,
     meta: bool,
-    resolve: Optional[list[str]],
     tag: Optional[list[str]],
     limit: int,
     show_parts: bool = False,
@@ -2126,8 +2087,6 @@ def _get_one(
         return _get_similar_list(kp, actual_id, limit)
     if meta:
         return _get_meta_list(kp, actual_id, limit)
-    if resolve:
-        return _get_resolve_list(kp, actual_id, resolve, limit)
 
     # Default + --history + --parts: frontmatter with expanded sections
     selector = effective_version if effective_version is not None else None
@@ -2349,118 +2308,6 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
 
     return "\n".join(lines)
 
-
-@app.command(hidden=True, deprecated=True)
-def validate(
-    id: Annotated[Optional[list[str]], typer.Argument(
-        help="System doc ID(s) to validate (e.g. '.tag/act', '.meta/related')"
-    )] = None,
-    all_docs: Annotated[bool, typer.Option(
-        "--all", "-a",
-        help="Validate all system docs"
-    )] = False,
-    diagram: Annotated[bool, typer.Option(
-        "--diagram",
-        help="Print Mermaid state-transition diagram for .state/* docs"
-    )] = False,
-    store: StoreOption = None,
-):
-    """Validate system documents with parser-based semantics.
-
-    Checks .tag/*, .meta/*, .prompt/*, and .state/* documents for
-    structural correctness. Reports errors (will cause runtime failures)
-    and warnings (may cause unexpected behavior).
-
-    \b
-    Examples:
-        keep validate .tag/act               # Validate one doc
-        keep validate .tag/act .meta/related  # Validate several
-        keep validate --all                   # Validate all system docs
-        keep validate --diagram              # Mermaid state diagram
-    """
-    from .validate import validate_system_doc
-
-    if diagram:
-        from .validate import state_doc_diagram
-        from .system_docs import SYSTEM_DOC_DIR, _filename_to_id, _load_frontmatter
-        state_docs: dict[str, str] = {}
-        # Load from store if available, else from disk
-        try:
-            kp = _get_keeper(store)
-            doc_coll = kp._resolve_doc_collection()
-            for rec in kp._document_store.query_by_id_prefix(doc_coll, ".state/"):
-                name = str(getattr(rec, "id", "")).removeprefix(".state/")
-                body = str(getattr(rec, "summary", "") or "").strip()
-                if name and body:
-                    state_docs[name] = body
-        except Exception:
-            pass
-        # Fall back to / supplement with bundled files
-        if not state_docs:
-            for path in sorted(SYSTEM_DOC_DIR.glob("state-*.md")):
-                doc_id = _filename_to_id(path.name)
-                name = doc_id.removeprefix(".state/")
-                content, _ = _load_frontmatter(path)
-                if content.strip():
-                    state_docs[name] = content
-        typer.echo(state_doc_diagram(state_docs))
-        return
-
-    kp = _get_keeper(store)
-
-    # Collect docs to validate: either from --all prefix scan or explicit IDs.
-    # The prefix scan returns full records (id, summary, tags) — use them
-    # directly to avoid N redundant kp.get() calls and accessed_at writes.
-    docs_by_id: dict[str, tuple[str, dict]] = {}  # id -> (summary, tags)
-    if all_docs:
-        doc_coll = kp._resolve_doc_collection()
-        for prefix in (".tag/", ".meta/", ".prompt/", ".state/"):
-            for rec in kp._document_store.query_by_id_prefix(doc_coll, prefix):
-                doc_id = str(getattr(rec, "id", ""))
-                if doc_id:
-                    summary = str(getattr(rec, "summary", "") or "")
-                    raw_tags = getattr(rec, "tags", None)
-                    tags = dict(raw_tags) if isinstance(raw_tags, dict) else {}
-                    docs_by_id[doc_id] = (summary, tags)
-    elif id:
-        for doc_id in id:
-            item = kp.get(doc_id)
-            if item is None:
-                typer.echo(f"{doc_id}: not found", err=True)
-                continue
-            summary = str(getattr(item, "summary", "") or "")
-            raw_tags = getattr(item, "tags", None)
-            tags = dict(raw_tags) if isinstance(raw_tags, dict) else {}
-            docs_by_id[doc_id] = (summary, tags)
-    else:
-        typer.echo("Provide doc IDs or use --all. See: keep validate --help", err=True)
-        raise typer.Exit(1)
-
-    if not docs_by_id:
-        typer.echo("No system docs found.")
-        return
-
-    total_errors = 0
-    total_warnings = 0
-    for doc_id in sorted(docs_by_id):
-        content, tags = docs_by_id[doc_id]
-        result = validate_system_doc(doc_id, content, tags)
-
-        if result.diagnostics:
-            for d in result.diagnostics:
-                typer.echo(f"{doc_id}: {d}")
-            total_errors += len(result.errors)
-            total_warnings += len(result.warnings)
-        else:
-            typer.echo(f"{doc_id}: ok")
-
-    if total_errors:
-        typer.echo(f"\n{total_errors} error(s), {total_warnings} warning(s)")
-        raise typer.Exit(1)
-    elif total_warnings:
-        typer.echo(f"\n{total_warnings} warning(s)")
-    else:
-        typer.echo(f"\n{len(docs_by_id)} doc(s) ok")
 
 
 @app.command()
