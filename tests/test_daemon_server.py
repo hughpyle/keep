@@ -1,4 +1,4 @@
-"""Tests for the daemon HTTP query server (7-endpoint API).
+"""Tests for the daemon HTTP query server.
 
 Uses mock_providers to avoid loading real ML models.
 Tests both raw HTTP and RemoteKeeper round-trip.
@@ -246,3 +246,26 @@ def test_remote_keeper_get_context_via_flow(daemon):
     assert ctx is None
 
     client.close()
+
+
+# --- Prompt via flow ---
+
+def test_prompt_via_flow(daemon):
+    _, kp, port = daemon
+    kp.put(content="# Test\nA test.\n\n## Prompt\nHello {get}", id=".prompt/agent/test-render")
+    status, body = _post(port, "/v1/flow", {
+        "state": "prompt", "params": {"name": "test-render"},
+    })
+    assert status == 200
+    assert body["status"] == "done"
+    assert "text" in body.get("data", {})
+    assert len(body["data"]["text"]) > 0
+
+
+def test_prompt_not_found_via_flow(daemon):
+    _, _, port = daemon
+    status, body = _post(port, "/v1/flow", {
+        "state": "prompt", "params": {"name": "nonexistent-prompt"},
+    })
+    assert status == 200
+    assert body["status"] == "error"

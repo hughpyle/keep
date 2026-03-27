@@ -1,7 +1,8 @@
 """HTTP query server for the keep daemon.
 
-Exposes 7 endpoints on localhost — the minimal surface for all keep operations.
-Everything beyond get/put/delete/find/tag goes through the flow endpoint.
+Exposes endpoints on localhost for all keep operations.
+Core CRUD via notes endpoints, search via /search, prompt rendering
+via /prompt, and extensible operations via /flow.
 
 Usage::
 
@@ -55,13 +56,15 @@ def _items_response(items) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Routes: 8 endpoints
+# ---------------------------------------------------------------------------
+# Routes
 # ---------------------------------------------------------------------------
 
 _ROUTES: list[tuple[str, str, str]] = [
     ("GET",    r"^/v1/health$",                       "_handle_health"),
     ("POST",   r"^/v1/search$",                       "_handle_find"),
     ("POST",   r"^/v1/flow$",                         "_handle_flow"),
+    ("POST",   r"^/v1/analyze$",                      "_handle_analyze"),
     ("POST",   r"^/v1/notes$",                        "_handle_put"),
     ("GET",    r"^/v1/notes/(?P<id>.+)/context$",     "_handle_get_context"),
     ("PATCH",  r"^/v1/notes/(?P<id>.+)/tags$",        "_handle_tag"),
@@ -76,7 +79,7 @@ _COMPILED_ROUTES = [
 
 
 class DaemonRequestHandler(BaseHTTPRequestHandler):
-    """Routes requests to Keeper methods. 7 endpoints."""
+    """Routes requests to Keeper methods."""
 
     keeper: "Keeper"
 
@@ -203,8 +206,13 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 return v[0].lower() in ("true", "1", "yes")
             return default
 
+        id = groups["id"]
+        # Auto-create "now" document if missing (matches old CLI behavior)
+        if id == "now" and self.keeper.get(id) is None:
+            self.keeper.get_now()
+
         ctx = self.keeper.get_context(
-            groups["id"],
+            id,
             version=_int("version", None),
             similar_limit=_int("similar_limit", 3),
             meta_limit=_int("meta_limit", 3),
@@ -290,6 +298,46 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             "history": result.history,
             "cursor": result.cursor,
         })
+
+    def _handle_analyze(self, groups: dict):
+        body = self._read_body()
+        id = body.get("id", "")
+        if not id:
+            self._json(400, {"error": "id is required"})
+            return
+
+        tags = body.get("tags")
+        force = body.get("force", False)
+        foreground = body.get("foreground", False)
+
+        if not foreground:
+            try:
+                enqueued = self.keeper.enqueue_analyze(id, tags=tags, force=force)
+            except ValueError as e:
+                self._json(400, {"error": str(e)})
+                return
+            self._json(200, {
+                "id": id,
+                "queued": enqueued,
+                "skipped": not enqueued,
+            })
+        else:
+            try:
+                parts = self.keeper.analyze(id, tags=tags, force=force)
+            except ValueError as e:
+                self._json(400, {"error": str(e)})
+                return
+            self._json(200, {
+                "id": id,
+                "parts": [
+                    {
+                        "part_num": p.part_num,
+                        "summary": p.summary[:100],
+                        "tags": {k: v for k, v in p.tags.items() if not k.startswith("_")},
+                    }
+                    for p in (parts or [])
+                ],
+            })
 
 
 # ---------------------------------------------------------------------------

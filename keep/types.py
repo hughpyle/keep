@@ -19,6 +19,8 @@ INTERNAL_TAGS = frozenset({
     "_focus_part",
     "_focus_version",
     "_focus_summary",
+    "_focus_start_line",
+    "_focus_end_line",
     "_lane",
     "_anchor_id",
     "_anchor_type",

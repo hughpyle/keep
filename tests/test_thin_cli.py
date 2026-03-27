@@ -29,8 +29,9 @@ def test_truncate():
 
 
 def test_date():
-    assert _date({"_updated": "2026-03-26T12:00:00"}) == "2026-03-26"
-    assert _date({"_created": "2026-01-01T00:00:00"}) == "2026-01-01"
+    from keep.types import local_date
+    assert _date({"_updated": "2026-03-26T12:00:00"}) == local_date("2026-03-26T12:00:00")
+    assert _date({"_created": "2026-01-01T00:00:00"}) == local_date("2026-01-01T00:00:00")
     assert _date({}) == ""
 
 
@@ -41,19 +42,23 @@ def test_display_tags():
         "_created": "2026-03-26",
         "_content_type": "text/plain",
         "_tk::topic": "true",
+        "_focus_part": "3",
+        "_accessed_date": "2026-03-26",
     }
     display = _display_tags(tags)
     assert "topic" in display
     assert "status" in display
-    assert "_created" not in display
-    assert "_content_type" not in display
-    assert "_tk::topic" not in display
+    assert "_created" in display  # shown (matches old CLI)
+    assert "_content_type" in display  # shown (matches old CLI)
+    assert "_tk::topic" not in display  # always hidden
+    assert "_focus_part" not in display  # internal rendering tag
+    assert "_accessed_date" not in display  # internal date index
 
 
 def test_render_tags_block():
     block = _render_tags_block({"topic": "cache", "status": "open"})
-    assert "topic: cache" in block
-    assert "status: open" in block
+    assert 'topic: "cache"' in block
+    assert 'status: "open"' in block
 
 
 def test_render_item_line():
@@ -79,7 +84,7 @@ def test_render_context_minimal():
     output = _render_context(data)
     assert "---" in output
     assert "id: test-1" in output
-    assert "topic: cache" in output
+    assert 'topic: "cache"' in output
     assert "Test summary" in output
 
 

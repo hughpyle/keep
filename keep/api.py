@@ -4534,7 +4534,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         Returns:
             FlowResult with status, bindings, cursor (if stopped), etc.
         """
-        from .state_doc import parse_state_doc
         from .state_doc_runtime import (
             FlowResult,
             decode_cursor,
@@ -4542,6 +4541,34 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             make_state_doc_loader,
             run_flow,
         )
+
+        # Prompt rendering: render_prompt + expand_prompt as a flow command
+        if state == "prompt":
+            p = params or {}
+            name = p.get("name", "")
+            # list mode: return available prompts
+            if not name or p.get("list"):
+                prompts = self.list_prompts()
+                return FlowResult(status="done", data={
+                    "prompts": [{"name": pr.name, "summary": pr.summary} for pr in prompts],
+                }, ticks=1)
+            # render mode
+            result = self.render_prompt(
+                name, p.get("text"),
+                id=p.get("id"), since=p.get("since"), until=p.get("until"),
+                tags=p.get("tags"), deep=p.get("deep", False),
+                scope=p.get("scope"), token_budget=p.get("token_budget"),
+            )
+            if result is None:
+                return FlowResult(status="error", data={"error": f"prompt not found: {name}"})
+            from .cli import expand_prompt
+            expanded = expand_prompt(result, self)
+            data: dict[str, Any] = {"text": expanded}
+            if result.context:
+                data["context"] = result.context.to_dict()
+            return FlowResult(status="done", data=data, ticks=1)
+
+        from .state_doc import parse_state_doc
 
         if budget is None:
             budget = self._config.budget_per_flow

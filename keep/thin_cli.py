@@ -22,6 +22,7 @@ app = typer.Typer(
     no_args_is_help=False,
     invoke_without_command=True,
     add_completion=False,
+    rich_markup_mode=None,
 )
 
 # ---------------------------------------------------------------------------
@@ -106,7 +107,8 @@ def _resolve_store_path() -> Path:
                 return Path(val).expanduser().resolve()
         except Exception:
             pass
-    return (config_dir / "store").resolve()
+    # Default: config dir IS the store (matches get_default_store_path behavior)
+    return config_dir.resolve()
 
 
 def _check_health(port: int) -> bool:
@@ -205,40 +207,39 @@ def _width() -> int:
 
 
 def _truncate(text: str, max_len: int) -> str:
-    """Collapse newlines and truncate."""
-    text = " ".join(text.split())
+    """Replace newlines with spaces and truncate at word boundary."""
+    text = text.replace("\n", " ")
     if len(text) > max_len:
-        return text[:max_len - 3] + "..."
+        return text[:max_len - 3].rsplit(" ", 1)[0] + "..."
     return text
 
 
 def _date(tags: dict) -> str:
     """Extract display date from tags."""
+    from keep.types import local_date
     for key in ("_updated", "_created"):
         val = tags.get(key, "")
-        if val and len(val) >= 10:
-            return val[:10]
+        if val:
+            return local_date(val)
     return ""
 
 
 def _display_tags(tags: dict) -> dict:
-    """Filter to user-visible tags.
+    """Filter to user-visible tags (matches keep/types.py:INTERNAL_TAGS)."""
+    from keep.types import INTERNAL_TAGS
+    return {k: v for k, v in tags.items()
+            if k not in INTERNAL_TAGS
+            and not k.startswith("_tk::")
+            and not k.startswith("_tv::")}
 
-    NOTE: this skip set must stay in sync with keep/types.py:INTERNAL_TAGS
-    and the system tag conventions in keep/api.py.
-    """
-    skip = {"_created", "_updated", "_accessed", "_updated_date", "_accessed_date",
-            "_content_type", "_source", "_session", "_content_length", "_content_hash",
-            "_summarized_hash", "_base_id", "_part_num", "_version",
-            "_focus_part", "_focus_version", "_focus_summary", "_focus_start_line",
-            "_focus_end_line", "_lane", "_anchor_id", "_anchor_type",
-            "_analyzed_version", "_file_mtime_ns", "_file_size", "_entity",
-            "_supernode_reviewed", "_version_edges"}
-    return {k: v for k, v in tags.items() if k not in skip and not k.startswith("_tk::") and not k.startswith("_tv::")}
+
+def _yaml_quote(v: str) -> str:
+    """Quote a YAML scalar value (matches cli.py's _quote_scalar_tag_value)."""
+    return json.dumps(str(v))
 
 
 def _render_tags_block(tags: dict) -> str:
-    """Render tags as YAML-style indented block."""
+    """Render tags as YAML-style indented block matching old CLI output."""
     display = _display_tags(tags)
     if not display:
         return ""
@@ -247,25 +248,22 @@ def _render_tags_block(tags: dict) -> str:
         if isinstance(v, list):
             lines.append(f"  {k}: [{', '.join(str(x) for x in v)}]")
         else:
-            lines.append(f"  {k}: {v}")
+            lines.append(f"  {k}: {_yaml_quote(str(v))}")
     return "\n".join(lines)
 
 
-def _render_item_line(item: dict, w: int) -> str:
+def _render_item_line(item: dict, w: int, id_width: int = 0) -> str:
     """Format a single item as a summary line."""
     id = item.get("id", "")
     score = item.get("score")
     tags = item.get("tags", {})
     date = _date(tags)
-    summary = _truncate(item.get("summary", ""), w - len(id) - 20)
-
-    parts = [f"  {id}"]
-    if score is not None:
-        parts.append(f"({score:.2f})")
-    if date:
-        parts.append(date)
-    parts.append(summary)
-    return " ".join(parts)
+    padded = id.ljust(id_width) if id_width else id
+    score_str = f" ({score:.2f})" if score is not None else ""
+    date_str = f" {date}" if date else ""
+    prefix_len = len(padded) + len(score_str) + len(date_str) + 2
+    summary = _truncate(item.get("summary", ""), w - prefix_len)
+    return f"{padded}{score_str}{date_str} {summary}"
 
 
 def _render_context(data: dict) -> str:
@@ -290,25 +288,30 @@ def _render_context(data: dict) -> str:
     # Similar
     similar = data.get("similar", [])
     if similar:
+        sim_ids = [s.get("id", "") for s in similar]
+        id_width = min(max(len(s) for s in sim_ids), 20) if sim_ids else 0
         lines.append("similar:")
         for s in similar:
             sid = s.get("id", "")
             score = s.get("score")
             date = s.get("date", "")
-            summary = _truncate(s.get("summary", ""), w - len(sid) - 25)
-            score_str = f" ({score:.2f})" if score is not None else ""
-            date_str = f" {date}" if date else ""
-            lines.append(f"  - {sid}{score_str}{date_str} {summary}")
+            padded = sid.ljust(id_width)
+            score_str = f"({score:.2f})" if score is not None else ""
+            summary = _truncate(s.get("summary", ""), w - id_width - 25)
+            lines.append(f"  - {padded} {score_str} {date} {summary}")
 
     # Meta sections
     meta = data.get("meta", {})
     for section, items in sorted(meta.items()):
         if items:
+            meta_ids = [m.get("id", "") for m in items]
+            id_width = min(max(len(s) for s in meta_ids), 20) if meta_ids else 0
             lines.append(f"meta/{section}:")
             for m in items:
                 mid = m.get("id", "")
-                msummary = _truncate(m.get("summary", ""), w - len(mid) - 10)
-                lines.append(f"  - {mid} {msummary}")
+                padded = mid.ljust(id_width)
+                msummary = _truncate(m.get("summary", ""), w - id_width - 10)
+                lines.append(f"  - {padded} {msummary}")
 
     # Edges
     edges = data.get("edges", {})
@@ -321,14 +324,20 @@ def _render_context(data: dict) -> str:
                 esummary = _truncate(e.get("summary", ""), w - len(eid) - 15)
                 lines.append(f"  - {eid} {edate} {esummary}")
 
-    # Parts
+    # Parts (compact: first + "N more" + last when many)
     parts = data.get("parts", [])
     if parts:
         lines.append("parts:")
-        for p in parts:
-            pnum = p.get("part_num", 0)
-            psummary = _truncate(p.get("summary", ""), w - 15)
-            lines.append(f"  - @P{{{pnum}}} {psummary}")
+        if len(parts) <= 3:
+            for p in parts:
+                pnum = p.get("part_num", 0)
+                psummary = _truncate(p.get("summary", ""), w - 15)
+                lines.append(f"  - @P{{{pnum}}} {psummary}")
+        else:
+            first, last = parts[0], parts[-1]
+            lines.append(f"  - @P{{{first.get('part_num', 0)}}} {_truncate(first.get('summary', ''), w - 15)}")
+            lines.append(f"  # (...{len(parts) - 2} more...)")
+            lines.append(f"  - @P{{{last.get('part_num', 0)}}} {_truncate(last.get('summary', ''), w - 15)}")
 
     # Version navigation
     prev = data.get("prev", [])
@@ -365,16 +374,20 @@ def _render_find(data: dict) -> str:
     notes = data.get("notes", [])
     deep_groups = {g["id"]: g["items"] for g in data.get("deep_groups", []) if g.get("id")}
 
+    # Compute aligned ID width
+    all_ids = [n.get("id", "") for n in notes]
+    id_width = min(max((len(i) for i in all_ids), default=0), 20)
+
     lines = []
     for item in notes:
-        lines.append(_render_item_line(item, w))
+        lines.append(_render_item_line(item, w, id_width))
         # Deep group items
         item_id = item.get("id", "")
         base_id = item_id.split("@")[0] if "@" in item_id else item_id
         group = deep_groups.get(base_id, deep_groups.get(item_id, []))
         for deep in group:
-            deep_line = _render_item_line(deep, w - 4)
-            lines.append(f"    {deep_line.strip()}")
+            deep_line = _render_item_line(deep, w - 2)
+            lines.append(f"  {deep_line}")
 
     if not lines:
         return "No results."
@@ -405,21 +418,45 @@ def default(ctx: typer.Context, store: StoreOption = None, json_output: JsonFlag
 
 @app.command()
 def get(
-    id: Annotated[str, typer.Argument(help="Item ID")] = "now",
+    id: Annotated[list[str], typer.Argument(help="Item ID(s)")],
     version: Annotated[Optional[int], typer.Option("-V", "--version", help="Version offset")] = None,
-    limit: LimitOption = 3,
+    limit: LimitOption = 10,
     json_output: JsonFlag = False,
 ):
-    """Show an item with context."""
+    """Retrieve note(s) by ID.
+
+    \b
+    Accepts one or more IDs. Version: append @V{N}. Part: append @P{N}.
+    Examples:
+        keep get doc:1                  # Current version
+        keep get doc:1 doc:2 doc:3      # Multiple notes
+        keep get doc:1 -V 1             # Previous version
+        keep get "doc:1@P{1}"           # Part 1
+    """
     port = _get_port()
-    params = f"?similar_limit={limit}&meta_limit={limit}&edges_limit={limit}"
-    if version is not None:
-        params += f"&version={version}"
-    data = _get(port, f"/v1/notes/{_q(id)}/context{params}")
-    if json_output:
-        typer.echo(json.dumps(data, indent=2))
-    else:
-        typer.echo(_render_context(data))
+    outputs = []
+    errors = 0
+    for item_id in id:
+        params = f"?similar_limit={limit}&meta_limit={limit}&edges_limit={limit}"
+        if version is not None:
+            params += f"&version={version}"
+        status, data = _http("GET", port, f"/v1/notes/{_q(item_id)}/context{params}")
+        if status == 404:
+            typer.echo(f"Not found: {item_id}", err=True)
+            errors += 1
+            continue
+        if status != 200:
+            typer.echo(f"Error: {data.get('error', 'unknown')}", err=True)
+            errors += 1
+            continue
+        if json_output:
+            outputs.append(json.dumps(data, indent=2))
+        else:
+            outputs.append(_render_context(data))
+    if outputs:
+        typer.echo("\n---\n".join(outputs) if len(outputs) > 1 else outputs[0])
+    if errors and not outputs:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -433,7 +470,15 @@ def find(
     scope: Annotated[Optional[str], typer.Option("--scope", help="ID glob scope")] = None,
     json_output: JsonFlag = False,
 ):
-    """Search memory."""
+    """Find notes by hybrid search (semantic + full-text) or similarity.
+
+    \b
+    Examples:
+        keep find "auth patterns"           # Semantic + full-text search
+        keep find --similar %abc123         # Find similar to item
+        keep find "auth" --deep             # Follow tags for related items
+        keep find "auth" --since P7D        # Last 7 days only
+    """
     port = _get_port()
     body = {
         "query": query if not similar else None,
@@ -453,43 +498,120 @@ def find(
 
 @app.command()
 def put(
-    content: Annotated[str, typer.Argument(help="Content or file URI")],
+    source: Annotated[Optional[str], typer.Argument(help="Content, file path, URI, or '-' for stdin")] = None,
     id: Annotated[Optional[str], typer.Option("--id", "-i", help="Item ID")] = None,
     tags: Annotated[Optional[list[str]], typer.Option("-t", "--tag", help="Tags (key=value)")] = None,
     summary: Annotated[Optional[str], typer.Option("--summary", help="Explicit summary")] = None,
     force: Annotated[bool, typer.Option("--force", "-f", help="Force update")] = False,
     json_output: JsonFlag = False,
 ):
-    """Store content in memory."""
+    """Add or update a note in the store.
+
+    \b
+    Input modes (auto-detected):
+      keep put /path/to/file.pdf     # File mode
+      keep put https://example.com   # URI mode
+      keep put /path/to/folder/      # Directory mode
+      keep put "my note"             # Text mode (content-addressed ID)
+      keep put -                     # Stdin mode
+    """
     port = _get_port()
     parsed_tags = {}
     for t in (tags or []):
-        if "=" in t:
-            k, v = t.split("=", 1)
-            parsed_tags[k] = v
+        if "=" not in t:
+            typer.echo(f"Invalid tag format: {t!r} (expected key=value)", err=True)
+            raise typer.Exit(1)
+        k, v = t.split("=", 1)
+        parsed_tags[k] = v
 
-    # Detect file/URL
-    uri = None
-    if content.startswith("file://") or content.startswith("http://") or content.startswith("https://"):
-        uri = content
-        content = None
-    elif Path(content).exists() and not content.startswith("%"):
-        uri = f"file://{Path(content).resolve()}"
-        content = None
+    # Stdin mode
+    if source == "-" or (source is None and not sys.stdin.isatty()):
+        content = sys.stdin.read()
+        if summary is not None:
+            typer.echo("Error: --summary cannot be used with stdin (original content would be lost)", err=True)
+            raise typer.Exit(1)
+        body = {"content": content, "id": id, "tags": parsed_tags or None, "force": force or None}
+        data = _post(port, "/v1/notes", body)
+    elif source is None:
+        typer.echo("Error: provide content, URI, or '-' for stdin", err=True)
+        raise typer.Exit(1)
+    else:
+        # Detect file/URL/directory
+        content = source
+        uri = None
+        if source.startswith(("file://", "http://", "https://")):
+            uri = source
+            content = None
+        elif Path(source).is_dir():
+            if summary is not None:
+                typer.echo("Error: --summary cannot be used with directory mode", err=True)
+                raise typer.Exit(1)
+            if id is not None:
+                typer.echo("Error: --id cannot be used with directory mode", err=True)
+                raise typer.Exit(1)
+            # Directory mode — delegate to full CLI for recursion support
+            from keep.cli import app as full_app
+            args = ["put", source]
+            for t in (tags or []):
+                args += ["-t", t]
+            if force:
+                args += ["--force"]
+            try:
+                full_app(args, standalone_mode=False)
+            except SystemExit as e:
+                raise typer.Exit(e.code or 0)
+            return
+        elif Path(source).exists() and not source.startswith("%"):
+            uri = f"file://{Path(source).resolve()}"
+            content = None
 
-    body = {
-        "content": content,
-        "uri": uri,
-        "id": id,
-        "tags": parsed_tags or None,
-        "summary": summary,
-        "force": force or None,
-    }
-    data = _post(port, "/v1/notes", body)
+        # Inline text + --summary rejected (original content would be lost)
+        if content is not None and uri is None and summary is not None:
+            typer.echo("Error: --summary cannot be used with inline text (original content would be lost)", err=True)
+            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
+            raise typer.Exit(1)
+
+        body = {
+            "content": content,
+            "uri": uri,
+            "id": id,
+            "tags": parsed_tags or None,
+            "summary": summary,
+            "force": force or None,
+        }
+        data = _post(port, "/v1/notes", body)
+
     if json_output:
         typer.echo(json.dumps(data, indent=2))
     else:
         typer.echo(f"{data.get('id', '')} stored.")
+
+
+# Hidden aliases for put
+@app.command("update", hidden=True)
+def update_alias(
+    source: Annotated[Optional[str], typer.Argument()] = None,
+    id: Annotated[Optional[str], typer.Option("--id", "-i")] = None,
+    tags: Annotated[Optional[list[str]], typer.Option("-t", "--tag")] = None,
+    summary: Annotated[Optional[str], typer.Option("--summary")] = None,
+    force: Annotated[bool, typer.Option("--force", "-f")] = False,
+    json_output: JsonFlag = False,
+):
+    """Alias for 'put'."""
+    put(source=source, id=id, tags=tags, summary=summary, force=force, json_output=json_output)
+
+
+@app.command("add", hidden=True)
+def add_alias(
+    source: Annotated[Optional[str], typer.Argument()] = None,
+    id: Annotated[Optional[str], typer.Option("--id", "-i")] = None,
+    tags: Annotated[Optional[list[str]], typer.Option("-t", "--tag")] = None,
+    summary: Annotated[Optional[str], typer.Option("--summary")] = None,
+    force: Annotated[bool, typer.Option("--force", "-f")] = False,
+    json_output: JsonFlag = False,
+):
+    """Alias for 'put'."""
+    put(source=source, id=id, tags=tags, summary=summary, force=force, json_output=json_output)
 
 
 @app.command()
@@ -498,7 +620,12 @@ def tag(
     tags: Annotated[list[str], typer.Argument(help="Tags (key=value or key= to remove)")],
     json_output: JsonFlag = False,
 ):
-    """Set or remove tags."""
+    """Add, update, or remove tags on existing notes.
+
+    \b
+    Does not re-process the note — only updates tags.
+    Use key=value to set, key= (empty value) to remove.
+    """
     port = _get_port()
     set_tags = {}
     remove = []
@@ -518,17 +645,34 @@ def tag(
         typer.echo(f"{data.get('id', '')} tagged.")
 
 
+@app.command("tag-update", hidden=True)
+def tag_update_alias(
+    id: Annotated[str, typer.Argument(help="Item ID")],
+    tags: Annotated[Optional[list[str]], typer.Option("-t", "--tag")] = None,
+    json_output: JsonFlag = False,
+):
+    """Alias for 'tag'."""
+    tag(id=id, tags=[t for t in (tags or [])], json_output=json_output)
+
+
 @app.command("del")
 def delete_cmd(
-    id: Annotated[str, typer.Argument(help="Item ID")],
+    id: Annotated[list[str], typer.Argument(help="Item ID(s)")],
 ):
-    """Delete an item."""
+    """Delete the current version of note(s), or a specific version."""
     port = _get_port()
-    data = _delete(port, f"/v1/notes/{_q(id)}")
-    if data.get("deleted"):
-        typer.echo(f"{id} deleted.")
-    else:
-        typer.echo(f"{id} not found.", err=True)
+    for item_id in id:
+        data = _delete(port, f"/v1/notes/{_q(item_id)}")
+        if data.get("deleted"):
+            typer.echo(f"{item_id} deleted.")
+        else:
+            typer.echo(f"{item_id} not found.", err=True)
+
+
+@app.command("delete", hidden=True)
+def delete_alias(id: Annotated[list[str], typer.Argument(help="Item ID(s)")]):
+    """Alias for 'del'."""
+    delete_cmd(id=id)
 
 
 @app.command()
@@ -537,7 +681,12 @@ def now(
     tags: Annotated[Optional[list[str]], typer.Option("-t", "--tag", help="Tags")] = None,
     json_output: JsonFlag = False,
 ):
-    """Show or update current working context."""
+    """Get or set the current working intentions.
+
+    \b
+    With no arguments, displays the current intentions.
+    With content, replaces them (previous version is preserved).
+    """
     port = _get_port()
     if content:
         parsed_tags = {}
@@ -555,21 +704,29 @@ def now(
 
 @app.command("list")
 def list_cmd(
-    query: Annotated[Optional[str], typer.Argument(help="Search query")] = None,
+    prefix: Annotated[Optional[str], typer.Argument(help="ID prefix or glob filter")] = None,
     tags: Annotated[Optional[list[str]], typer.Option("-t", "--tag", help="Filter by tag")] = None,
     limit: LimitOption = 20,
     since: Annotated[Optional[str], typer.Option("--since")] = None,
     until: Annotated[Optional[str], typer.Option("--until")] = None,
     json_output: JsonFlag = False,
 ):
-    """List items."""
+    """List recent notes, filter by tags, or list tag keys/values.
+
+    \b
+    Examples:
+        keep list                      # Recent notes
+        keep list .tag                 # All .tag/* system docs
+        keep list -t project=myapp     # Filter by tag
+        keep list --since P7D          # Last 7 days
+    """
     port = _get_port()
     tag_filter = {}
     for t in (tags or []):
         if "=" in t:
             k, v = t.split("=", 1)
             tag_filter[k] = v
-    if not query:
+    if not prefix:
         # No query — list recent items via flow
         data = _post(port, "/v1/flow", {
             "state": "list_items",
@@ -587,8 +744,9 @@ def list_cmd(
             })
     else:
         data = _post(port, "/v1/search", {
-            "query": query, "tags": tag_filter or None, "limit": limit,
-            "since": since, "until": until,
+            "query": " ", "tags": tag_filter or None, "limit": limit,
+            "since": since, "until": until, "scope": prefix,
+            "include_hidden": prefix.startswith(".") if prefix else None,
         })
     if json_output:
         typer.echo(json.dumps(data, indent=2))
@@ -602,7 +760,7 @@ def move(
     source: Annotated[str, typer.Option("--source", help="Source item ID")] = "now",
     json_output: JsonFlag = False,
 ):
-    """Move item to a named collection."""
+    """Move versions from now (or another item) into a named item."""
     port = _get_port()
     data = _post(port, "/v1/flow", {
         "state": "move", "params": {"name": name, "source": source},
@@ -611,64 +769,340 @@ def move(
 
 
 @app.command()
-def prompt(ctx: typer.Context):
-    """Run an agent prompt (delegates to full CLI)."""
-    # TODO: add "prompt" flow state doc, then use POST /v1/flow
-    from keep.cli import app as full_app
-    full_app(["prompt"] + ctx.args, standalone_mode=False)
+def prompt(
+    name: Annotated[str, typer.Argument(help="Prompt name (e.g. 'reflect')")] = "",
+    text: Annotated[Optional[str], typer.Argument(help="Text for context search")] = None,
+    list_prompts: Annotated[bool, typer.Option("--list", "-l", help="List available prompts")] = False,
+    id: Annotated[Optional[str], typer.Option("--id", help="Item ID for {get} context")] = None,
+    tag: Annotated[Optional[list[str]], typer.Option("--tag", "-t", help="Filter by tag (key=value)")] = None,
+    since: Annotated[Optional[str], typer.Option("--since", help="Updated since")] = None,
+    until: Annotated[Optional[str], typer.Option("--until", help="Updated before")] = None,
+    deep: Annotated[bool, typer.Option("--deep", "-D", help="Follow tags to discover related items")] = False,
+    scope: Annotated[Optional[str], typer.Option("--scope", "-S", help="ID glob scope")] = None,
+    token_budget: Annotated[Optional[int], typer.Option("--tokens", help="Token budget for {find}")] = None,
+    json_output: JsonFlag = False,
+):
+    """Render an agent prompt with injected context.
+
+    \b
+    The prompt doc may contain {get} and {find} placeholders:
+      {get}  — expanded with context for --id (default: now)
+      {find} — expanded with search results for the text argument
+
+    \b
+    Examples:
+        keep prompt --list                        # List available prompts
+        keep prompt reflect                       # Reflect on current work
+        keep prompt reflect "auth flow"           # With search context
+        keep prompt reflect --since P7D           # Recent context only
+    """
+    port = _get_port()
+
+    if list_prompts or not name:
+        # List prompts via flow
+        data = _post(port, "/v1/flow", {"state": "prompt", "params": {"list": True}})
+        prompts = data.get("data", {}).get("prompts", [])
+        if not prompts:
+            typer.echo("No agent prompts available.", err=True)
+            raise typer.Exit(1)
+        if json_output:
+            typer.echo(json.dumps({"prompts": prompts}, indent=2))
+        else:
+            for p in prompts:
+                typer.echo(f"{p['name']:20s} {p.get('summary', '')}")
+        return
+
+    tags_dict = {}
+    for t in (tag or []):
+        if "=" in t:
+            k, v = t.split("=", 1)
+            tags_dict[k] = v
+
+    # Render prompt via flow
+    data = _post(port, "/v1/flow", {"state": "prompt", "params": {
+        "name": name,
+        "text": text,
+        "id": id,
+        "tags": tags_dict or None,
+        "since": since,
+        "until": until,
+        "deep": deep or None,
+        "scope": scope,
+        "token_budget": token_budget,
+    }})
+    flow_data = data.get("data", {})
+    if data.get("status") == "error":
+        typer.echo(f"Error: {flow_data.get('error', 'unknown')}", err=True)
+        raise typer.Exit(1)
+    if json_output:
+        typer.echo(json.dumps(flow_data, indent=2))
+    else:
+        typer.echo(flow_data.get("text", ""))
+
+
+@app.command(hidden=True)
+def reflect(
+    text: Annotated[Optional[str], typer.Argument(help="Text for context search")] = None,
+    id: Annotated[Optional[str], typer.Option("--id", help="Item ID for {get} context")] = None,
+    json_output: JsonFlag = False,
+):
+    """Reflect on current actions (alias for 'keep prompt reflect')."""
+    prompt(name="reflect", text=text, id=id, json_output=json_output)
+
+
+@app.command("flow")
+def flow_cmd(
+    state: Annotated[Optional[str], typer.Argument(help="State doc name")] = None,
+    target: Annotated[Optional[str], typer.Option("--target", "-t", help="Target note ID")] = None,
+    file: Annotated[Optional[str], typer.Option("--file", "-f", help="YAML state doc file or '-' for stdin")] = None,
+    budget: Annotated[Optional[int], typer.Option("--budget", "-b", help="Max ticks")] = None,
+    cursor: Annotated[Optional[str], typer.Option("--cursor", "-c", help="Resume cursor")] = None,
+    param: Annotated[Optional[list[str]], typer.Option("--param", "-p", help="Parameter as key=value")] = None,
+    json_output: JsonFlag = False,
+):
+    """Run a state-doc flow synchronously.
+
+    \b
+    Examples:
+        keep flow after-write --target %abc123
+        keep flow query-resolve -p query="auth patterns"
+        keep flow --file review.yaml --target myproject
+        keep flow --cursor <token> --budget 5
+    """
+    if state is None and file is None and cursor is None:
+        typer.echo("Error: provide a state name, --file, or --cursor", err=True)
+        raise typer.Exit(1)
+
+    flow_params: dict = {}
+    if target:
+        flow_params["id"] = target
+    for p in (param or []):
+        if "=" not in p:
+            typer.echo(f"Error: param must be key=value, got: {p!r}", err=True)
+            raise typer.Exit(1)
+        k, v = p.split("=", 1)
+        try:
+            flow_params[k] = json.loads(v)
+        except (json.JSONDecodeError, ValueError):
+            flow_params[k] = v
+
+    state_doc_yaml: Optional[str] = None
+    if file is not None:
+        if file == "-":
+            state_doc_yaml = sys.stdin.read()
+        else:
+            try:
+                state_doc_yaml = Path(file).read_text()
+            except FileNotFoundError:
+                typer.echo(f"Error: file not found: {file}", err=True)
+                raise typer.Exit(1)
+        if state is None:
+            state = "inline"
+
+    if cursor and state is None:
+        state = "__cursor__"
+
+    port = _get_port()
+    body: dict = {"state": state, "params": flow_params}
+    if budget is not None:
+        body["budget"] = budget
+    if cursor:
+        body["cursor_token"] = cursor
+    if state_doc_yaml:
+        body["state_doc_yaml"] = state_doc_yaml
+
+    data = _post(port, "/v1/flow", body)
+    if json_output:
+        typer.echo(json.dumps(data, ensure_ascii=False))
+    else:
+        typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+@app.command("edit")
+def edit_cmd(
+    id: Annotated[str, typer.Argument(help="ID of note to edit")],
+):
+    """Edit a note's content in $EDITOR.
+
+    \b
+    Opens the current content in your editor. On save, updates the note
+    if the content changed.
+    Examples:
+        keep edit .ignore                    # Edit ignore patterns
+        keep edit .prompt/agent/reflect      # Edit a prompt template
+        keep edit now                        # Edit current intentions
+    """
+    import tempfile
+    import subprocess as sp
+
+    port = _get_port()
+    data = _get(port, f"/v1/notes/{_q(id)}")
+    content = data.get("summary", "")
+
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+    suffix = ".md" if not id.endswith((".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml")) else ""
+    with tempfile.NamedTemporaryFile(suffix=suffix or Path(id).suffix, mode="w", delete=False, prefix="keep-edit-") as f:
+        f.write(content)
+        tmp = f.name
+
+    try:
+        sp.run([editor, tmp], check=True)
+        new_content = Path(tmp).read_text()
+    except (sp.CalledProcessError, KeyboardInterrupt):
+        typer.echo("Editor exited abnormally, no changes saved", err=True)
+        raise typer.Exit(1)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+    if new_content == content:
+        typer.echo("No changes", err=True)
+        return
+
+    _post(port, "/v1/notes", {"content": new_content, "id": id})
+    typer.echo(f"Updated {id}", err=True)
 
 
 @app.command()
-def reflect(ctx: typer.Context):
-    """Reflect on a topic (delegates to full CLI)."""
-    # TODO: add "prompt" flow state doc, then use POST /v1/flow
-    from keep.cli import app as full_app
-    full_app(["reflect"] + ctx.args, standalone_mode=False)
+def analyze(
+    id: Annotated[str, typer.Argument(help="ID of note to analyze")],
+    tag: Annotated[Optional[list[str]], typer.Option("--tag", "-t", help="Guidance tag keys")] = None,
+    foreground: Annotated[bool, typer.Option("--foreground", "--fg", help="Run in foreground")] = False,
+    force: Annotated[bool, typer.Option("--force", help="Re-analyze even if current")] = False,
+    json_output: JsonFlag = False,
+):
+    """Decompose a note or string into meaningful parts.
 
+    \b
+    Uses an LLM to identify sections, each with its own summary, tags,
+    and embedding. Runs in background by default; use --fg to wait.
+    """
+    port = _get_port()
+    body: dict = {"id": id, "foreground": foreground, "force": force}
+    if tag:
+        body["tags"] = tag
+    data = _post(port, "/v1/analyze", body)
+
+    if json_output:
+        typer.echo(json.dumps(data, indent=2))
+    else:
+        if data.get("parts") is not None:
+            parts = data["parts"]
+            if parts:
+                typer.echo(f"Analyzed {id} into {len(parts)} parts:")
+                for p in parts:
+                    summary = str(p.get("summary", ""))[:60].replace("\n", " ")
+                    typer.echo(f"  @P{{{p.get('part_num', '?')}}} {summary}")
+            else:
+                typer.echo(f"Content not decomposable into multiple parts: {id}")
+        elif data.get("queued"):
+            typer.echo(f"Queued {id} for background analysis.", err=True)
+        elif data.get("skipped"):
+            typer.echo(f"Already analyzed, skipping {id}.", err=True)
+
+
+@app.command("help")
+def help_cmd(
+    topic: Annotated[Optional[str], typer.Argument(help="Documentation topic")] = None,
+):
+    """Browse keep documentation.
+
+    \b
+    Examples:
+        keep help              # Documentation index
+        keep help quickstart   # CLI Quick Start guide
+        keep help keep-put     # keep put reference
+    """
+    from keep.help import get_help_topic
+    typer.echo(get_help_topic(topic or "index", link_style="cli"))
+
+
+# ---------------------------------------------------------------------------
+# Delegate commands — these stay with the full CLI
+# ---------------------------------------------------------------------------
 
 @app.command(context_settings={"allow_extra_args": True, "allow_interspersed_args": True})
 def pending(ctx: typer.Context):
-    """Manage background processing (delegates to full CLI)."""
+    """Process pending background tasks."""
     from keep.cli import app as full_app
     full_app(["pending"] + ctx.args, standalone_mode=False)
 
 
 @app.command()
 def config(
+    ctx: typer.Context,
+    path: Annotated[Optional[str], typer.Argument(
+        help="Config path (e.g., 'file', 'tool', 'store', 'providers.embedding')"
+    )] = None,
     setup: Annotated[bool, typer.Option("--setup", help="Run setup wizard")] = False,
+    reset_system_docs: Annotated[bool, typer.Option("--reset-system-docs", hidden=True)] = False,
     json_output: JsonFlag = False,
 ):
-    """Show configuration."""
+    """Show configuration. Optionally get a specific value by path.
+
+    \b
+    Special paths: file, tool, store, docs, mcpb, providers
+    Dotted paths: providers.embedding, tags, etc.
+    """
+    from keep.cli import app as full_app
+    # Check both local flag and parent context flag
+    is_json = json_output or (ctx.parent and ctx.parent.params.get("json_output", False))
+    args = []
+    if is_json:
+        args.append("--json")
+    args.append("config")
+    if path:
+        args.append(path)
     if setup:
-        from keep.cli import app as full_app
-        full_app(["config", "--setup"], standalone_mode=False)
-        return
+        args.append("--setup")
+    if reset_system_docs:
+        args.append("--reset-system-docs")
+    try:
+        full_app(args, standalone_mode=True)
+    except SystemExit as e:
+        if e.code:
+            raise typer.Exit(e.code)
 
-    store_path = _resolve_store_path()
-    port_file = store_path / ".daemon.port"
-    if port_file.exists():
-        try:
-            port = int(port_file.read_text().strip())
-            health = _get_health(port)
-        except Exception:
-            health = None
-    else:
-        health = None
 
-    if json_output and health:
-        typer.echo(json.dumps(health, indent=2))
-        return
+@app.command(hidden=True)
+def doctor(ctx: typer.Context):
+    """Diagnostic checks (delegates to full CLI)."""
+    from keep.cli import app as full_app
+    full_app(["doctor"] + ctx.args, standalone_mode=False)
 
-    typer.echo(f"store: {store_path}")
-    if health:
-        typer.echo(f"daemon: 127.0.0.1:{health.get('pid', '?')} (v{health.get('version', '?')})")
-        typer.echo(f"embedding: {health.get('embedding') or 'none'}")
-        typer.echo(f"summarization: {health.get('summarization') or 'none'}")
-        typer.echo(f"items: {health.get('item_count', 0)}")
-        for w in health.get("warnings", []):
-            typer.echo(f"warning: {w}", err=True)
-    else:
-        typer.echo("daemon: not running")
+
+@app.command(hidden=True, deprecated=True)
+def validate(ctx: typer.Context):
+    """Validate system documents (delegates to full CLI)."""
+    from keep.cli import app as full_app
+    full_app(["validate"] + ctx.args, standalone_mode=False)
+
+
+@app.command()
+def mcp(ctx: typer.Context):
+    """Start MCP stdio server."""
+    from keep.cli import app as full_app
+    full_app(["mcp"] + (ctx.args or []), standalone_mode=False)
+
+
+# ---------------------------------------------------------------------------
+# Data management subcommands — delegate to full CLI for file I/O
+# ---------------------------------------------------------------------------
+
+data_app = typer.Typer(
+    name="data",
+    help="Data management — export, import.",
+    context_settings={"allow_extra_args": True, "allow_interspersed_args": True},
+    rich_markup_mode=None,
+)
+app.add_typer(data_app)
+
+
+@data_app.callback(invoke_without_command=True)
+def data_callback(ctx: typer.Context):
+    """Delegates to full CLI."""
+    from keep.cli import app as full_app
+    args = ["data"] + (ctx.invoked_subcommand or "").split() + ctx.args
+    full_app([a for a in args if a], standalone_mode=False)
 
 
 def main():
