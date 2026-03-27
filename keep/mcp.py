@@ -76,6 +76,7 @@ _IDEMPOTENT = ToolAnnotations(idempotentHint=True, destructiveHint=False)
         '  Store with ID: state="put", params={"id": "meeting-notes", "content": "..."}\n'
         '  Store file: state="put", params={"uri": "file:///path/to/doc.md"}\n'
         '  Store URL: state="put", params={"uri": "https://example.com/article"}\n'
+        '  List items: state="list", params={"prefix": ".tag/", "include_hidden": true}\n'
         '  Resume stopped search: state="query-resolve", cursor="<cursor from previous call>"\n'
         "When status is 'stopped', pass the returned cursor to continue. "
         "Set token_budget for rendered text output instead of raw JSON. "
