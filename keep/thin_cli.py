@@ -1245,8 +1245,33 @@ def help_cmd(
 # ---------------------------------------------------------------------------
 
 @app.command(context_settings={"allow_extra_args": True, "allow_interspersed_args": True})
-def pending(ctx: typer.Context):
+def pending(
+    ctx: typer.Context,
+    stop: Annotated[bool, typer.Option("--stop", help="Stop the background daemon")] = False,
+):
     """Process pending background tasks."""
+    if stop:
+        # Lightweight stop — no Keeper needed, just read PID and signal
+        import signal
+        from ._daemon_client import resolve_store_path
+        store_path = resolve_store_path(_global_store)
+        pid_file = store_path / "processor.pid"
+        if not pid_file.exists():
+            typer.echo("No daemon running.")
+            return
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+            typer.echo(f"Sent stop signal to daemon (pid {pid}).", err=True)
+        except ProcessLookupError:
+            typer.echo("Daemon not running (stale PID file).", err=True)
+            pid_file.unlink(missing_ok=True)
+        except (ValueError, OSError) as e:
+            typer.echo(f"Error stopping daemon: {e}", err=True)
+        # Clean up stale files
+        (store_path / ".daemon.port").unlink(missing_ok=True)
+        (store_path / ".daemon.token").unlink(missing_ok=True)
+        return
     from keep.cli import app as full_app
     full_app(["pending"] + ctx.args, standalone_mode=False)
 
