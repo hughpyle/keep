@@ -612,10 +612,20 @@ rules:
 class TestFlowCLI:
     @pytest.fixture
     def cli(self, mock_providers, tmp_path):
-        """CLI runner targeting a fresh store. Kills daemon on teardown."""
-        import signal
+        """CLI runner with in-process daemon (no subprocess needed)."""
+        from keep.api import Keeper
+        from keep.daemon_server import DaemonServer
         from keep.thin_cli import app
         from typer.testing import CliRunner
+
+        kp = Keeper(store_path=tmp_path)
+        server = DaemonServer(kp, port=0)
+        port = server.start()
+
+        # Write daemon files so thin CLI connects to our in-process server
+        (tmp_path / ".daemon.port").write_text(str(port))
+        (tmp_path / ".daemon.token").write_text(server.auth_token)
+
         runner = CliRunner()
         def invoke(*args):
             env = {
@@ -624,27 +634,8 @@ class TestFlowCLI:
             }
             return runner.invoke(app, list(args), env=env, catch_exceptions=False)
         yield invoke
-        # Kill any daemon spawned during the test
-        import time
-        for pid_name in ("processor.pid",):
-            pid_file = tmp_path / pid_name
-            if pid_file.exists():
-                try:
-                    pid = int(pid_file.read_text().strip())
-                    os.kill(pid, signal.SIGTERM)
-                    for _ in range(10):
-                        time.sleep(0.2)
-                        try:
-                            os.kill(pid, 0)
-                        except ProcessLookupError:
-                            break
-                    else:
-                        os.kill(pid, signal.SIGKILL)
-                except (ProcessLookupError, ValueError, OSError):
-                    pass
-        # Clean stale daemon files
-        for f in (".daemon.port", ".daemon.token", ".processor.lock"):
-            (tmp_path / f).unlink(missing_ok=True)
+        server.stop()
+        kp.close()
 
     def test_flow_help(self, cli):
         result = cli("flow", "--help")
