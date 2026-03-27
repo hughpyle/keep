@@ -68,10 +68,18 @@ _IDEMPOTENT = ToolAnnotations(idempotentHint=True, destructiveHint=False)
 
 @mcp.tool(
     description=(
-        "Run a state-doc flow synchronously. Flows evaluate state doc rules, "
-        "execute actions (find, get, tag, summarize, etc.), and follow transitions. "
-        "Returns when done, on error, or when budget is exhausted (with a resumable cursor). "
-        "See: keep_help(topic='keep-flow') for usage."
+        "Execute a keep operation via state-doc flow. "
+        "Examples:\n"
+        '  Search: state="query-resolve", params={"query": "auth patterns"}\n'
+        '  Get context: state="get", params={"item_id": "now"}\n'
+        '  Store text: state="put", params={"content": "decision: use JWT", "tags": {"project": "auth"}}\n'
+        '  Store with ID: state="put", params={"id": "meeting-notes", "content": "..."}\n'
+        '  Store file: state="put", params={"uri": "file:///path/to/doc.md"}\n'
+        '  Store URL: state="put", params={"uri": "https://example.com/article"}\n'
+        '  Resume stopped search: state="query-resolve", cursor="<cursor from previous call>"\n'
+        "When status is 'stopped', pass the returned cursor to continue. "
+        "Set token_budget for rendered text output instead of raw JSON. "
+        'List available flows: keep_help(topic="flow_state_docs").'
     ),
     annotations=_IDEMPOTENT,
 )
@@ -225,9 +233,9 @@ async def keep_prompt(
 
 @mcp.tool(
     description=(
-        "Browse keep documentation. Returns the full text of a guide. "
-        "Call with no arguments (or topic=\"index\") to see the documentation index with all available topics. "
-        "Each topic in the index links to a detailed guide you can retrieve by name."
+        "Comprehensive keep documentation with examples for all commands, "
+        "flows, tagging, prompts, and architecture. "
+        "Call with topic=\"index\" to see all available guides."
     ),
     annotations=_READ_ONLY,
 )
