@@ -6,6 +6,7 @@ isolation.
 """
 
 import json
+import os
 
 import pytest
 from unittest.mock import patch
@@ -611,7 +612,8 @@ rules:
 class TestFlowCLI:
     @pytest.fixture
     def cli(self, mock_providers, tmp_path):
-        """CLI runner targeting a fresh store."""
+        """CLI runner targeting a fresh store. Kills daemon on teardown."""
+        import signal
         from keep.thin_cli import app
         from typer.testing import CliRunner
         runner = CliRunner()
@@ -621,7 +623,25 @@ class TestFlowCLI:
                 "KEEP_CONFIG": str(tmp_path),
             }
             return runner.invoke(app, list(args), env=env, catch_exceptions=False)
-        return invoke
+        yield invoke
+        # Kill any daemon spawned during the test
+        pid_file = tmp_path / "processor.pid"
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().strip())
+                os.kill(pid, signal.SIGTERM)
+                # Wait briefly for graceful shutdown, then force-kill
+                import time
+                for _ in range(10):
+                    time.sleep(0.2)
+                    try:
+                        os.kill(pid, 0)  # check if still alive
+                    except ProcessLookupError:
+                        break
+                else:
+                    os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, ValueError, OSError):
+                pass
 
     def test_flow_help(self, cli):
         result = cli("flow", "--help")
