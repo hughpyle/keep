@@ -612,7 +612,7 @@ class TestFlowCLI:
     @pytest.fixture
     def cli(self, mock_providers, tmp_path):
         """CLI runner targeting a fresh store."""
-        from keep.cli import app
+        from keep.thin_cli import app
         from typer.testing import CliRunner
         runner = CliRunner()
         def invoke(*args):
