@@ -117,6 +117,11 @@ def _date(tags: dict) -> str:
     return ""
 
 
+def _flow_items(resp: dict) -> list[dict]:
+    """Extract item list from a flow response (data.results.results)."""
+    return resp.get("data", {}).get("results", {}).get("results", [])
+
+
 def _display_tags(tags: dict) -> dict:
     """Filter to user-visible tags (matches keep/types.py:INTERNAL_TAGS)."""
     from keep.types import INTERNAL_TAGS
@@ -959,7 +964,7 @@ def list_cmd(
         flow_params["tag_keys"] = tag_keys
 
     resp = _post(port, "/v1/flow", {"state": "list", "params": flow_params})
-    results = resp.get("data", {}).get("results", {}).get("results", [])
+    results = _flow_items(resp)
     data: dict = {"notes": results}
 
     # Filter to notes with parts if requested
@@ -1282,7 +1287,7 @@ def config(
             "state": "list",
             "params": {"prefix": ".state/", "include_hidden": True, "limit": 100},
         })
-        results = resp.get("data", {}).get("results", {}).get("results", [])
+        results = _flow_items(resp)
         state_docs: dict[str, str] = {}
         for note in results:
             nid = note.get("id", "")
