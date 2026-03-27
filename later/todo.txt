@@ -1,5 +1,11 @@
 
+* result cacheing
+
+* mcp "tried_queries" remove??
+
 * reranking (including a local provider)
+
+* mcp descriptions include simple examples
 
 * context-focused results (get *only* the parts, similar, etc)
 
@@ -313,3 +319,5 @@ x acp
 . daemon restart if it's running an older version
 . supernode-analysis
 . pending --list show "timer events"
+. local http for daemon
+. rewrite the CLI and MCP to use local http -- no inproc impact
