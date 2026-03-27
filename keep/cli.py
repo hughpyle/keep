@@ -1580,9 +1580,6 @@ def find(
         "--id",
         help="Find notes similar to this ID (instead of text search)"
     )] = None,
-    include_self: Annotated[bool, typer.Option(
-        help="Include the queried note (only with --id)"
-    )] = False,
     tag: Annotated[Optional[list[str]], typer.Option(
         "--tag", "-t",
         help="Filter by tag (key or key=value, repeatable)"
@@ -1591,17 +1588,9 @@ def find(
     limit: LimitOption = 10,
     since: SinceOption = None,
     until: UntilOption = None,
-    history: Annotated[bool, typer.Option(
-        "--history", "-H",
-        help="Include versions of matching notes"
-    )] = False,
     deep: Annotated[bool, typer.Option(
         "--deep", "-D",
         help="Follow tags from results to discover related items"
-    )] = False,
-    show_tags: Annotated[bool, typer.Option(
-        "--tags",
-        help="Show non-system tags for each result"
     )] = False,
     show_all: Annotated[bool, typer.Option(
         "--all", "-a",
@@ -1611,10 +1600,6 @@ def find(
         "--scope", "-S",
         help="ID glob to constrain results (e.g. 'file:///path/to/dir*')"
     )] = None,
-    token_budget: Annotated[Optional[int], typer.Option(
-        "--tokens",
-        help="Token budget for rich context output (includes parts and versions)"
-    )] = None,
 ):
     """Find notes by hybrid search (semantic + full-text) or similarity.
 
@@ -1623,7 +1608,7 @@ def find(
         keep find "authentication"              # Hybrid search
         keep find --id file:///path/to/doc.md   # Find similar notes
         keep find "auth" -t project=myapp       # Search + filter by tag
-        keep find "auth" --history              # Include versions
+        keep find "auth" --deep                 # Follow tags for related items
     """
     if id and query:
         typer.echo("Error: Specify either a query or --id, not both", err=True)
@@ -1634,15 +1619,11 @@ def find(
 
     kp = _get_keeper(store)
 
-    # --deep is incompatible with --history (versions replace deep groups)
-    if history and deep:
-        deep = False
-
     # Search with higher limit if filtering, then post-filter
     search_limit = limit * 5 if tag else limit
 
     if id:
-        results = kp.find(similar_to=id, limit=search_limit, since=since, until=until, include_self=include_self, include_hidden=show_all, deep=deep, scope=scope)
+        results = kp.find(similar_to=id, limit=search_limit, since=since, until=until, include_hidden=show_all, deep=deep, scope=scope)
     else:
         results = kp.find(query, limit=search_limit, since=since, until=until, include_hidden=show_all, deep=deep, scope=scope)
 
@@ -1654,22 +1635,10 @@ def find(
     from .api import FindResults
     results = FindResults(results[:limit], deep_groups=deep_groups)
 
-    # Expand with versions if requested (--deep is not supported with --history)
-    if history:
-        expanded: list[Item] = []
-        for item in results:
-            versions = kp.list_versions(item.id, limit=limit)
-            expanded.extend(_versions_to_items(item.id, item, versions))
-        results = FindResults(expanded, deep_groups={})
-
     if _get_json_output():
-        typer.echo(_format_items(results, as_json=True, keeper=kp, show_tags=show_tags))
-    elif token_budget is not None:
-        # When deep is active, cap primaries to leave budget for deep items
-        cap = 3 if deep else None
-        typer.echo(render_find_context(results, keeper=kp, token_budget=token_budget, show_tags=show_tags, deep_primary_cap=cap))
+        typer.echo(_format_items(results, as_json=True, keeper=kp))
     else:
-        typer.echo(_format_items(results, keeper=kp, show_tags=show_tags))
+        typer.echo(_format_items(results, keeper=kp))
 
 
 @app.command("list")
@@ -1683,24 +1652,12 @@ def list_recent(
         "--tag", "-t",
         help="Filter by tag (key or key=value, repeatable)"
     )] = None,
-    tags: Annotated[Optional[str], typer.Option(
-        "--tags", "-T",
-        help="List tag keys (--tags=), or values for KEY (--tags=KEY)"
-    )] = None,
     sort: Annotated[str, typer.Option(
         "--sort",
         help="Sort order: 'updated' (default), 'accessed', 'created', or 'id'"
     )] = "updated",
     since: SinceOption = None,
     until: UntilOption = None,
-    history: Annotated[bool, typer.Option(
-        "--history", "-H",
-        help="Include versions in output"
-    )] = False,
-    parts: Annotated[bool, typer.Option(
-        "--parts", "-P",
-        help="Include structural parts (from analyze)"
-    )] = False,
     with_parts: Annotated[bool, typer.Option(
         "--with-parts",
         help="Only show notes that have been analyzed into parts"
@@ -1716,7 +1673,7 @@ def list_recent(
         help="Include hidden system notes (IDs starting with '.')"
     )] = False,
 ):
-    """List recent notes, filter by tags, or list tag keys/values.
+    """List recent notes, filter by tags, or browse by prefix.
 
     \b
     Examples:
@@ -1731,38 +1688,16 @@ def list_recent(
         keep list --tag foo            # Notes with tag 'foo' (any value)
         keep list --tag foo=bar        # Notes with tag foo=bar
         keep list --tag foo --tag bar  # Notes with both tags
-        keep list --tags=              # List all tag keys
-        keep list --tags=foo           # List values for tag 'foo'
         keep list --since P3D          # Notes updated in last 3 days
         keep list --until 2026-01-15   # Notes updated before date
-        keep list --history            # Include versions
-        keep list --parts              # Include analyzed parts
     """
     kp = _get_keeper(store)
-
-    # --tags mode: list keys or values
-    if tags is not None:
-        # Empty string means list all keys, otherwise list values for key
-        key = tags if tags else None
-        values = kp.list_tags(key)
-        if _get_json_output():
-            typer.echo(json.dumps(values))
-        else:
-            if not values:
-                if key:
-                    typer.echo(f"No values for tag '{key}'.")
-                else:
-                    typer.echo("No tags found.")
-            else:
-                for v in values:
-                    typer.echo(v)
-        return
 
     # Build unified filter kwargs
     kwargs: dict = {
         "limit": limit, "order_by": sort,
         "since": since, "until": until,
-        "include_hidden": show_all, "include_history": history,
+        "include_hidden": show_all,
     }
 
     if prefix is not None:
@@ -1790,17 +1725,6 @@ def list_recent(
         doc_coll = kp._resolve_doc_collection()
         results = [item for item in results
                    if kp._document_store.part_count(doc_coll, item.id) > 0]
-
-    # Expand with parts if requested
-    if parts:
-        expanded: list[Item] = []
-        for item in results:
-            part_list = kp.list_parts(item.id)
-            if part_list:
-                expanded.extend(_parts_to_items(item.id, item, part_list))
-            else:
-                expanded.append(item)
-        results = expanded
 
     typer.echo(_format_items(results, as_json=_get_json_output()))
 
@@ -2005,7 +1929,11 @@ def _put_store(
             typer.echo("Error: --id cannot be used with directory mode", err=True)
             raise typer.Exit(1)
         from .ignore import merge_excludes
-        combined_exclude = merge_excludes(kp._load_ignore_patterns(), exclude)
+        try:
+            ignore_patterns = kp._load_ignore_patterns()
+        except AttributeError:
+            ignore_patterns = []
+        combined_exclude = merge_excludes(ignore_patterns, exclude)
         files = _list_directory_files(resolved_path, recurse=recurse, exclude=combined_exclude or None)
         if not files:
             typer.echo(f"Error: no eligible files in {resolved_path}/", err=True)
@@ -2051,20 +1979,21 @@ def _put_store(
             typer.echo(_format_items(results, as_json=_get_json_output()))
 
         # Git changelog ingest: find all git repos in the tree
-        from .git_ingest import discover_git_roots
-        git_roots = discover_git_roots(files)
-        for root_str in sorted(git_roots):
-            try:
-                kp._get_work_queue().enqueue(
-                    "ingest_git",
-                    {"item_id": f"file://{root_str}", "directory": root_str},
-                    supersede_key=f"git:{root_str}",
-                    priority=1,
-                )
-            except Exception as e:
-                logger.warning("Failed to queue git ingest for %s: %s", root_str, e)
-        if git_roots:
-            typer.echo(f"git: {len(git_roots)} repo(s) queued for changelog ingest", err=True)
+        if hasattr(kp, "_get_work_queue"):
+            from .git_ingest import discover_git_roots
+            git_roots = discover_git_roots(files)
+            for root_str in sorted(git_roots):
+                try:
+                    kp._get_work_queue().enqueue(
+                        "ingest_git",
+                        {"item_id": f"file://{root_str}", "directory": root_str},
+                        supersede_key=f"git:{root_str}",
+                        priority=1,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to queue git ingest for %s: %s", root_str, e)
+            if git_roots:
+                typer.echo(f"git: {len(git_roots)} repo(s) queued for changelog ingest", err=True)
 
         _handle_watch(kp, watch, unwatch, str(resolved_path), "directory",
                       parsed_tags, recurse=recurse, exclude=exclude, interval=interval)
@@ -2112,10 +2041,6 @@ def put(
         "--summary",
         help="User-provided summary (skips auto-summarization)"
     )] = None,
-    suggest_tags: Annotated[bool, typer.Option(
-        "--suggest-tags",
-        help="Show tag suggestions from similar notes"
-    )] = False,
     recurse: Annotated[bool, typer.Option(
         "--recurse", "-r",
         help="Recurse into subdirectories (directory mode)"
@@ -2201,30 +2126,11 @@ def put(
         return  # directory mode already printed output
 
     # Surface similar items (occasion for reflection)
-    suggest_limit = 10 if suggest_tags else 3
     ctx = kp.get_context(
-        item.id, similar_limit=min(suggest_limit, 3),
+        item.id, similar_limit=3,
         include_meta=False, include_parts=False, include_versions=False,
     )
     typer.echo(render_context(ctx, as_json=_get_json_output()))
-
-    # Show tag suggestions from similar items (needs more than 3)
-    if suggest_tags:
-        similar_items = kp.get_similar_for_display(item.id, limit=suggest_limit) if suggest_limit > 3 else []
-        tag_counts: dict[str, int] = {}
-        for si in similar_items:
-            for k, v in si.tags.items():
-                if k.startswith("_"):
-                    continue
-                tag = f"{k}={v}" if v else k
-                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        if tag_counts:
-            # Sort by frequency (descending), then alphabetically
-            sorted_tags = sorted(tag_counts.items(), key=lambda x: (-x[1], x[0]))
-            typer.echo("\nsuggested tags:")
-            for tag, count in sorted_tags:
-                typer.echo(f"  -t {tag}  ({count})")
-            typer.echo(f"\napply with: keep tag {_shell_quote_id(item.id)} -t TAG")
 
 
 @app.command("update", hidden=True)
@@ -3600,17 +3506,9 @@ def config(
     path: Annotated[Optional[str], typer.Argument(
         help="Config path to get (e.g., 'file', 'tool', 'store', 'providers.embedding')"
     )] = None,
-    reset_system_docs: Annotated[bool, typer.Option(
-        "--reset-system-docs",
-        help="Force reload system documents from bundled content (overwrites modifications)"
-    )] = False,
     setup: Annotated[bool, typer.Option(
         "--setup",
         help="Run interactive setup wizard (provider and tool selection)"
-    )] = False,
-    state_diagram: Annotated[bool, typer.Option(
-        "--state-diagram",
-        help="Print Mermaid state-transition diagram for .state/* docs"
     )] = False,
     store: StoreOption = None,
 ):
@@ -3628,8 +3526,6 @@ def config(
         keep config providers    # All provider config
         keep config providers.embedding  # Embedding provider name
         keep config --setup      # Re-run interactive setup wizard
-        keep config --reset-system-docs  # Reset bundled system docs
-        keep config --state-diagram  # Mermaid state-transition diagram
     """
     # Handle setup wizard
     if setup:
@@ -3644,40 +3540,6 @@ def config(
             config_dir = get_config_dir()
         store_path = Path(actual_store).resolve() if actual_store else None
         run_wizard(config_dir, store_path, restart_command="keep config --setup")
-        return
-
-    # Handle state diagram
-    if state_diagram:
-        from .validate import state_doc_diagram
-        from .system_docs import SYSTEM_DOC_DIR, _filename_to_id, _load_frontmatter
-        state_docs: dict[str, str] = {}
-        # Load from store if available, else from disk
-        try:
-            kp = _get_keeper(store)
-            doc_coll = kp._resolve_doc_collection()
-            for rec in kp._document_store.query_by_id_prefix(doc_coll, ".state/"):
-                name = str(getattr(rec, "id", "")).removeprefix(".state/")
-                body = str(getattr(rec, "summary", "") or "").strip()
-                if name and body:
-                    state_docs[name] = body
-        except Exception:
-            pass
-        # Fall back to / supplement with bundled files
-        if not state_docs:
-            for p in sorted(SYSTEM_DOC_DIR.glob("state-*.md")):
-                doc_id = _filename_to_id(p.name)
-                name = doc_id.removeprefix(".state/")
-                content, _ = _load_frontmatter(p)
-                if content.strip():
-                    state_docs[name] = content
-        typer.echo(state_doc_diagram(state_docs))
-        return
-
-    # Handle system docs reset - requires full Keeper initialization
-    if reset_system_docs:
-        kp = _get_keeper(store)
-        stats = kp.reset_system_documents()
-        typer.echo(f"Reset {stats['reset']} system documents")
         return
 
     # For config display, use lightweight path (no API calls)

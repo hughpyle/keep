@@ -70,6 +70,8 @@ _ROUTES: list[tuple[str, str, str]] = [
     ("PATCH",  r"^/v1/notes/(?P<id>.+)/tags$",        "_handle_tag"),
     ("DELETE", r"^/v1/notes/(?P<id>.+)$",             "_handle_delete"),
     ("GET",    r"^/v1/notes/(?P<id>.+)$",             "_handle_get"),
+    ("POST",   r"^/v1/list$",                        "_handle_list"),
+    ("POST",   r"^/v1/admin/reset-system-docs$",     "_handle_reset_system_docs"),
 ]
 
 _COMPILED_ROUTES = [
@@ -240,7 +242,30 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             created_at=body.get("created_at"),
             force=body.get("force", False),
         )
-        self._json(200, _item_to_dict(item))
+        resp = _item_to_dict(item)
+
+        # Watch management (after successful put)
+        watch = body.get("watch", False)
+        unwatch = body.get("unwatch", False)
+        if watch or unwatch:
+            from .watches import add_watch, remove_watch
+            source = body.get("uri") or item.id
+            kind = body.get("watch_kind", "file")
+            if unwatch:
+                removed = remove_watch(self.keeper, source)
+                resp["unwatch"] = removed
+            else:
+                entry = add_watch(
+                    self.keeper, source, kind,
+                    tags=body.get("tags") or {},
+                    recurse=body.get("recurse", False),
+                    exclude=body.get("exclude") or [],
+                    interval=body.get("interval", "PT30S"),
+                    max_watches=self.keeper.config.max_watches,
+                )
+                resp["watch"] = {"source": entry.source, "interval": entry.interval}
+
+        self._json(200, resp)
 
     def _handle_delete(self, groups: dict):
         deleted = self.keeper.delete(groups["id"])
@@ -268,14 +293,39 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             ]
         self._json(200, resp)
 
+    def _handle_list(self, groups: dict):
+        body = self._read_body()
+        tag_keys = None
+        tag_dict = None
+        raw_tags = body.get("tags")
+        if isinstance(raw_tags, dict):
+            tag_dict = raw_tags
+        raw_tag_keys = body.get("tag_keys")
+        if isinstance(raw_tag_keys, list):
+            tag_keys = raw_tag_keys
+        results = self.keeper.list_items(
+            prefix=body.get("prefix"),
+            tags=tag_dict,
+            tag_keys=tag_keys,
+            since=body.get("since"),
+            until=body.get("until"),
+            order_by=body.get("order_by", "updated"),
+            include_hidden=body.get("include_hidden", False),
+            limit=body.get("limit", 20),
+        )
+        self._json(200, _items_response(results))
+
     def _handle_tag(self, groups: dict):
         body = self._read_body()
         set_tags = body.get("set", {})
         remove_keys = body.get("remove", [])
-        tags = dict(set_tags)
-        for k in remove_keys:
-            tags[k] = ""
-        item = self.keeper.tag(groups["id"], tags)
+        remove_values = body.get("remove_values", {})
+        item = self.keeper.tag(
+            groups["id"],
+            tags=set_tags or None,
+            remove=remove_keys or None,
+            remove_values=remove_values or None,
+        )
         if item is None:
             self._json(404, {"error": "not found"})
         else:
@@ -338,6 +388,10 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     for p in (parts or [])
                 ],
             })
+
+    def _handle_reset_system_docs(self, groups: dict):
+        stats = self.keeper.reset_system_documents()
+        self._json(200, stats)
 
 
 # ---------------------------------------------------------------------------
