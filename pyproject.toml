@@ -26,7 +26,7 @@ classifiers = [
 dependencies = [
     "chromadb>=0.4",
     "pyyaml>=6.0",
-    "requests>=2.20",
+    "requests>=2.33",
     "typer>=0.9",
     "tomli-w>=1.0",
     # Lightweight API SDKs (~2MB total, no heavy deps)
@@ -36,7 +36,7 @@ dependencies = [
     "mistralai>=1.0",
     # Document extraction
     "pyjwt>=2.12.0",
-    "pypdf>=6.9.1",  # CVE-2026-33123: array-based stream DoS
+    "pypdf>=6.9.2",  # CVE-2026-33699: infinite loop in non-strict mode
     "pypdfium2>=4.0",
     "beautifulsoup4>=4.9",
     "python-docx>=1.0",
