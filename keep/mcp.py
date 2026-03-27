@@ -1,31 +1,27 @@
 """MCP stdio server for keep — reflective memory for AI agents.
 
+Thin HTTP wrapper over the daemon. No local Keeper, no models, no database.
+
 Three tools: keep_flow (all operations), keep_help (documentation),
 keep_prompt (practice prompts).
 
 Usage:
     keep mcp                        # stdio server (via CLI)
     claude --mcp-server keep="keep mcp"   # Claude Code integration
-
-All Keeper calls are serialized through a single asyncio.Lock.
-ChromaDB cross-process safety is handled at the store layer.
 """
 
 import asyncio
 import json
 import os
-import platform
 import signal
 import sys
-from pathlib import Path
 from typing import Annotated, Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from .api import Keeper
-from .cli import expand_prompt
+from ._daemon_client import get_port, http_request
 
 # ---------------------------------------------------------------------------
 # Server setup
@@ -40,50 +36,21 @@ mcp = FastMCP(
     ),
 )
 
-_keeper: Optional[Keeper] = None
+_port: Optional[int] = None
 _lock = asyncio.Lock()
 
 
-def _get_keeper() -> Keeper:
-    """Lazy-init Keeper with default config (respects KEEP_STORE_PATH env).
+def _ensure_daemon() -> int:
+    """Connect to (or auto-start) the daemon. Returns port."""
+    global _port
+    if _port is None:
+        _port = get_port(os.environ.get("KEEP_STORE_PATH"))
+    return _port
 
-    Must be called inside ``async with _lock`` — Keeper init is not
-    thread-safe and we rely on the caller holding the lock to avoid
-    racing on the global.
 
-    On first init: runs system-doc migration (so prompts, tags, etc.
-    are available immediately) and validates the embedding provider.
-    """
-    global _keeper
-    if _keeper is None:
-        import os
-        store_path = os.environ.get("KEEP_STORE_PATH")
-        keeper = Keeper(store_path=Path(store_path) if store_path else None)
-
-        # Load system docs into a fresh store so the agent has prompts,
-        # tag definitions, etc. from the first request.
-        if keeper._needs_sysdoc_migration:
-            try:
-                keeper._migrate_system_documents()
-                keeper._needs_sysdoc_migration = False
-            except Exception as e:
-                print(f"keep: system doc setup deferred: {e}", file=sys.stderr)
-
-        # Validate embedding provider — quit early with a clear message
-        # rather than serving from a broken store.
-        if keeper._config.embedding is None:
-            print(
-                "keep: no embedding provider configured.\n"
-                "\n"
-                "Run the setup wizard:  keep config --setup\n"
-                "Or set an API key:     export OPENAI_API_KEY=...\n"
-                "Or install Ollama:     https://ollama.com/",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        _keeper = keeper
-    return _keeper
+def _post(path: str, body: dict) -> tuple[int, dict]:
+    """POST to the daemon. Returns (status, json_body)."""
+    return http_request("POST", _ensure_daemon(), path, body)
 
 
 # ---------------------------------------------------------------------------
@@ -130,30 +97,37 @@ async def keep_flow(
 ) -> str:
     """Run a state-doc flow."""
     async with _lock:
-        keeper = _get_keeper()
-        try:
-            result = keeper.run_flow_command(
-                state,
-                params=params,
-                budget=budget,
-                cursor_token=cursor,
-                state_doc_yaml=state_doc_yaml,
-            )
-        except (ValueError, OSError) as e:
-            return f"Error: {e}"
-    if token_budget and token_budget > 0:
-        from .cli import render_flow_response
-        return render_flow_response(result, token_budget=token_budget, keeper=_get_keeper())
+        body: dict = {
+            "state": state,
+            "params": params,
+            "budget": budget,
+            "cursor": cursor,
+            "state_doc_yaml": state_doc_yaml,
+        }
+        if token_budget and token_budget > 0:
+            body["token_budget"] = token_budget
+        status, resp = _post("/v1/flow", body)
+        if status != 200:
+            return f"Error: {resp.get('error', 'unknown')}"
+
+    # Server-side rendered output (when token_budget was provided)
+    if resp.get("rendered"):
+        return resp["rendered"]
+
+    # Build selective JSON (same shape as before — no bindings/history)
     output: dict[str, Any] = {
-        "status": result.status,
-        "ticks": result.ticks,
+        "status": resp.get("status"),
+        "ticks": resp.get("ticks"),
     }
-    if result.data:
-        output["data"] = result.data
-    if result.cursor:
-        output["cursor"] = result.cursor
-    if result.tried_queries:
-        output["tried_queries"] = result.tried_queries
+    data = resp.get("data")
+    if data:
+        output["data"] = data
+    cursor_val = resp.get("cursor")
+    if cursor_val:
+        output["cursor"] = cursor_val
+    tried = resp.get("tried_queries")
+    if tried:
+        output["tried_queries"] = tried
     return json.dumps(output, indent=2)
 
 
@@ -200,24 +174,49 @@ async def keep_prompt(
 ) -> str:
     """Render an agent prompt with injected context."""
     async with _lock:
-        keeper = _get_keeper()
-
+        flow_params: dict[str, Any] = {}
         if not name:
-            prompts = keeper.list_prompts()
-            if not prompts:
-                return "No agent prompts available."
-            lines = [f"- {p.name:20s} {p.summary}" for p in prompts]
-            return "\n".join(lines)
+            flow_params["list"] = True
+        else:
+            flow_params["name"] = name
+            if text:
+                flow_params["text"] = text
+            if id:
+                flow_params["id"] = id
+            if tags:
+                flow_params["tags"] = tags
+            if since:
+                flow_params["since"] = since
+            if until:
+                flow_params["until"] = until
+            if deep:
+                flow_params["deep"] = deep
+            if scope:
+                flow_params["scope"] = scope
+            if token_budget:
+                flow_params["token_budget"] = token_budget
 
-        result = keeper.render_prompt(
-            name, text, id=id, since=since, until=until, tags=tags,
-            deep=deep, scope=scope, token_budget=token_budget,
-        )
+        status, resp = _post("/v1/flow", {"state": "prompt", "params": flow_params})
+        if status != 200:
+            return f"Error: {resp.get('error', 'unknown')}"
 
-        if result is None:
-            return f"Prompt not found: {name}"
+    flow_data = resp.get("data", {})
+    flow_status = resp.get("status")
 
-        return expand_prompt(result, kp=keeper)
+    # List mode
+    if not name:
+        prompts = flow_data.get("prompts", [])
+        if not prompts:
+            return "No agent prompts available."
+        lines = [f"- {p['name']:20s} {p.get('summary', '')}" for p in prompts]
+        return "\n".join(lines)
+
+    # Error
+    if flow_status == "error":
+        return f"Prompt not found: {name}"
+
+    # Render mode — daemon already expanded the prompt
+    return flow_data.get("text", f"Prompt not found: {name}")
 
 
 # ---------------------------------------------------------------------------
@@ -255,9 +254,8 @@ def main():
     # can deadlock on the stdin buffer lock held by the reader thread.
     signal.signal(signal.SIGINT, lambda *_: os._exit(130))
 
-    # Eagerly init the store so system docs are loaded and provider
-    # issues surface immediately (not on the first tool call).
-    _get_keeper()
+    # Connect to daemon eagerly so setup issues surface immediately.
+    _ensure_daemon()
 
     mcp.run(transport="stdio")
 

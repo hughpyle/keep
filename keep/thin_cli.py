@@ -4,18 +4,17 @@ Parse args → one HTTP call → render JSON → exit.
 No keep internals, no models, no database. ~50ms startup.
 """
 
-import http.client
 import json
 import os
 import shutil
-import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Annotated, Optional
 from urllib.parse import quote
 
 import typer
+
+from ._daemon_client import http_request as _http_raw, get_port as _daemon_get_port
 
 app = typer.Typer(
     name="keep",
@@ -35,34 +34,8 @@ def _q(id: str) -> str:
 
 
 def _http(method: str, port: int, path: str, body: dict | None = None) -> tuple[int, dict]:
-    """Make an HTTP request to the daemon. Returns (status, json_body).
-
-    Retries once on transient connection errors (daemon may be busy with
-    initial setup when the first request arrives).
-    """
-    headers = {}
-    data = None
-    if body is not None:
-        data = json.dumps({k: v for k, v in body.items() if v is not None})
-        headers["Content-Type"] = "application/json"
-        headers["Content-Length"] = str(len(data))
-
-    last_exc: Exception | None = None
-    for attempt in range(2):
-        try:
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
-            conn.request(method, path, data, headers)
-            resp = conn.getresponse()
-            result = json.loads(resp.read())
-            status = resp.status
-            conn.close()
-            return status, result
-        except (ConnectionError, TimeoutError, http.client.RemoteDisconnected, OSError) as exc:
-            last_exc = exc
-            conn.close()
-            if attempt == 0:
-                time.sleep(0.2)
-    raise last_exc  # type: ignore[misc]
+    """Make an HTTP request to the daemon. Returns (status, json_body)."""
+    return _http_raw(method, port, path, body)
 
 
 def _get(port: int, path: str) -> dict:
@@ -101,99 +74,12 @@ def _delete(port: int, path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Daemon port resolution + auto-start
+# Daemon port resolution (delegates to _daemon_client)
 # ---------------------------------------------------------------------------
-
-def _resolve_store_path() -> Path:
-    """Resolve store path from --store flag, env, or config."""
-    override = _global_store or os.environ.get("KEEP_STORE_PATH")
-    if override:
-        return Path(override).resolve()
-    config_dir = Path(os.environ.get("KEEP_CONFIG", "")) if os.environ.get("KEEP_CONFIG") else Path.home() / ".keep"
-    config_file = config_dir / "keep.toml"
-    if config_file.exists():
-        try:
-            import tomllib
-            with open(config_file, "rb") as f:
-                data = tomllib.load(f)
-            val = data.get("store", {}).get("path")
-            if val:
-                return Path(val).expanduser().resolve()
-        except Exception:
-            pass
-    # Default: config dir IS the store (matches get_default_store_path behavior)
-    return config_dir.resolve()
-
-
-def _check_health(port: int) -> bool:
-    """Check daemon health + setup in a single round-trip."""
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-        conn.request("GET", "/v1/health")
-        resp = conn.getresponse()
-        raw = resp.read()
-        conn.close()
-        if resp.status != 200:
-            return False
-        health = json.loads(raw)
-        if health.get("needs_setup"):
-            typer.echo("keep is not configured. Run: keep config --setup", err=True)
-            raise typer.Exit(1)
-        for warning in health.get("warnings", []):
-            typer.echo(f"Warning: {warning}", err=True)
-        return True
-    except typer.Exit:
-        raise
-    except Exception:
-        return False
-
-
-def _start_daemon(store_path: Path) -> None:
-    """Spawn daemon process."""
-    cmd = [sys.executable, "-m", "keep.cli", "pending", "--daemon", "--store", str(store_path)]
-    log_path = store_path / "keep-ops.log"
-    store_path.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "a") as log_fd:
-        kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": log_fd, "stdin": subprocess.DEVNULL}
-        if sys.platform != "win32":
-            kwargs["start_new_session"] = True
-        else:
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        subprocess.Popen(cmd, **kwargs)
-
 
 def _get_port() -> int:
     """Get daemon port, auto-starting if needed."""
-    store_path = _resolve_store_path()
-    port_file = store_path / ".daemon.port"
-
-    # Try existing daemon
-    if port_file.exists():
-        try:
-            port = int(port_file.read_text().strip())
-            if _check_health(port):
-                return port
-        except (ValueError, OSError):
-            pass
-
-    # Auto-start daemon
-    typer.echo("Starting daemon...", err=True)
-    _start_daemon(store_path)
-
-    # Poll for readiness
-    deadline = time.monotonic() + 15.0
-    while time.monotonic() < deadline:
-        if port_file.exists():
-            try:
-                port = int(port_file.read_text().strip())
-                if _check_health(port):
-                    return port
-            except (ValueError, OSError):
-                pass
-        time.sleep(0.3)
-
-    typer.echo("Error: daemon did not start in time.", err=True)
-    raise typer.Exit(1)
+    return _daemon_get_port(_global_store)
 
 
 # ---------------------------------------------------------------------------
@@ -1395,8 +1281,10 @@ def validate(ctx: typer.Context):
 @app.command()
 def mcp(ctx: typer.Context):
     """Start MCP stdio server."""
-    from keep.cli import app as full_app
-    full_app(["mcp"] + (ctx.args or []), standalone_mode=False)
+    if _global_store:
+        os.environ["KEEP_STORE_PATH"] = _global_store
+    from keep.mcp import main as mcp_main
+    mcp_main()
 
 
 # ---------------------------------------------------------------------------

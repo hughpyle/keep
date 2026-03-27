@@ -340,14 +340,22 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             cursor_token=body.get("cursor_token") or body.get("cursor"),
             state_doc_yaml=body.get("state_doc_yaml"),
         )
-        self._json(200, {
+        resp: dict = {
             "status": result.status,
             "bindings": result.bindings,
             "data": result.data,
             "ticks": result.ticks,
             "history": result.history,
             "cursor": result.cursor,
-        })
+            "tried_queries": result.tried_queries,
+        }
+        token_budget = body.get("token_budget")
+        if token_budget and int(token_budget) > 0:
+            from .cli import render_flow_response
+            resp["rendered"] = render_flow_response(
+                result, token_budget=int(token_budget), keeper=self.keeper,
+            )
+        self._json(200, resp)
 
     def _handle_analyze(self, groups: dict):
         body = self._read_body()
