@@ -9,6 +9,7 @@ Usage:
 import importlib.metadata
 import importlib.resources
 import json
+import logging
 import os
 import platform
 import re
@@ -25,17 +26,8 @@ from typing import Any, Optional
 import typer
 from typing_extensions import Annotated
 
-# Pattern for version identifier suffix: @V{N} where N may be signed.
-# Public semantics:
-#   N >= 0: offset from current
-#   N < 0: ordinal from oldest archived (-1 oldest, -2 second-oldest, ...)
-VERSION_SUFFIX_PATTERN = re.compile(r'@V\{(-?\d+)\}$')
+logger = logging.getLogger(__name__)
 
-# Pattern for part identifier suffix: @P{N} where N is digits only
-PART_SUFFIX_PATTERN = re.compile(r'@P\{(\d+)\}$')
-
-# URI scheme pattern per RFC 3986: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
-# Used to distinguish URIs from plain text in the update command
 _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 
 from .api import Keeper
@@ -72,7 +64,7 @@ def _is_filesystem_path(source: str) -> Optional[Path]:
     return None
 
 
-from .utils import _git_visible_files, _list_directory_files  # noqa: E402
+from .utils import _list_directory_files  # noqa: E402
 
 
 def _output_width() -> int:
@@ -124,75 +116,6 @@ def _has_stdin_data() -> bool:
 # Stdin JSON template expansion
 # ---------------------------------------------------------------------------
 # Hooks (e.g. Claude Code) pipe JSON on stdin.  Instead of requiring jq,
-# keep can expand ${.field} and ${.field:N} (truncate to N chars) directly.
-
-_STDIN_JSON_SENTINEL = object()
-_stdin_json_cache: Any = _STDIN_JSON_SENTINEL
-
-_TEMPLATE_RE = re.compile(r'\$\{\.([A-Za-z_][A-Za-z0-9_]*)(?::(\d+))?\}')
-
-
-def _read_stdin_json() -> dict:
-    """Read and cache JSON object from stdin.  Returns {} on failure."""
-    global _stdin_json_cache
-    if _stdin_json_cache is not _STDIN_JSON_SENTINEL:
-        return _stdin_json_cache  # type: ignore[return-value]
-    _stdin_json_cache = {}
-    if _has_stdin_data():
-        try:
-            raw = sys.stdin.read()
-            obj = json.loads(raw)
-            if isinstance(obj, dict):
-                _stdin_json_cache = obj
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            pass
-    return _stdin_json_cache
-
-
-def _has_templates(s: str | None) -> bool:
-    return s is not None and '${.' in s
-
-
-def _expand_template(s: str, data: dict) -> str:
-    """Expand ${.field} and ${.field:N} in *s* from *data*."""
-    def _replace(m: re.Match) -> str:
-        key, limit = m.group(1), m.group(2)
-        val = data.get(key)
-        if val is None:
-            return ''
-        result = str(val)
-        if limit:
-            result = result[:int(limit)]
-        return result
-    return _TEMPLATE_RE.sub(_replace, s)
-
-
-def _expand_stdin_templates(
-    *strings: str | None,
-) -> tuple[str | None, ...]:
-    """Expand ${.field} templates in one or more strings from stdin JSON."""
-    if not any(_has_templates(s) for s in strings):
-        return strings
-    data = _read_stdin_json()
-    return tuple(
-        _expand_template(s, data) if _has_templates(s) else s
-        for s in strings
-    )
-
-
-def _expand_stdin_tag_list(
-    tags: list[str] | None,
-    data: dict | None = None,
-) -> list[str] | None:
-    """Expand templates in a tag list.  Returns None if input is None."""
-    if not tags:
-        return tags
-    if not any(_has_templates(t) for t in tags):
-        return tags
-    if data is None:
-        data = _read_stdin_json()
-    return [_expand_template(t, data) if _has_templates(t) else t for t in tags]
-
 
 
 def _tag_display_value(value) -> str:
@@ -1114,30 +1037,8 @@ def main_callback(
         is_eager=True,
     )] = None,
 ):
-    """Reflective memory with semantic search."""
-    # If no subcommand provided, show the current intentions (now)
-    if ctx.invoked_subcommand is None:
-        # On first run, the wizard handles everything — exit after setup
-        from .paths import get_config_dir
-        from .setup_wizard import needs_wizard
-        override = _get_store_override()
-        if os.environ.get("KEEP_CONFIG"):
-            config_dir = get_config_dir()
-        elif override:
-            config_dir = Path(override).resolve()
-        else:
-            config_dir = get_config_dir()
-        if needs_wizard(config_dir):
-            _get_keeper(None)  # triggers wizard
-            return
-
-        from .api import NOWDOC_ID
-        kp = _get_keeper(None)
-        ctx_item = kp.get_context(NOWDOC_ID, similar_limit=3, meta_limit=3)
-        if ctx_item is None:
-            kp.get_now()  # force-create nowdoc
-            ctx_item = kp.get_context(NOWDOC_ID, similar_limit=3, meta_limit=3)
-        typer.echo(render_context(ctx_item, as_json=_get_json_output()))
+    """Reflective memory with semantic search (delegated commands)."""
+    pass
 
 
 # -----------------------------------------------------------------------------
@@ -1153,60 +1054,6 @@ StoreOption = Annotated[
     )
 ]
 
-
-LimitOption = Annotated[
-    int,
-    typer.Option(
-        "--limit", "-n",
-        help="Maximum results to return"
-    )
-]
-
-
-SinceOption = Annotated[
-    Optional[str],
-    typer.Option(
-        "--since",
-        help="Only notes updated since (ISO duration: P3D, P1W, PT1H; or date: 2026-01-15)"
-    )
-]
-
-UntilOption = Annotated[
-    Optional[str],
-    typer.Option(
-        "--until",
-        help="Only notes updated before (ISO duration: P3D, P1W, PT1H; or date: 2026-01-15)"
-    )
-]
-
-
-
-def _versions_to_items(doc_id: str, current: Item | None, versions: list) -> list[Item]:
-    """Convert current item + previous VersionInfo list into Items for _format_items."""
-    items: list[Item] = []
-    if current:
-        items.append(current)
-    for i, v in enumerate(versions, start=1):
-        tags = dict(v.tags)
-        tags["_version"] = str(i)
-        tags["_updated"] = v.created_at or ""
-        tags["_updated_date"] = (v.created_at or "")[:10]
-        items.append(Item(id=doc_id, summary=v.summary, tags=tags))
-    return items
-
-
-def _parts_to_items(doc_id: str, current: Item | None, parts: list) -> list[Item]:
-    """Convert current item + PartInfo list into Items for _format_items."""
-    items: list[Item] = []
-    if current:
-        items.append(current)
-    for p in parts:
-        tags = dict(p.tags)
-        tags["_part_num"] = str(p.part_num)
-        tags["_base_id"] = doc_id
-        tags["_updated"] = p.created_at or ""
-        items.append(Item(id=doc_id, summary=p.summary, tags=tags))
-    return items
 
 
 def _format_items(items: list[Item], as_json: bool = False, keeper=None, show_tags: bool = False) -> str:
@@ -1319,66 +1166,15 @@ See: https://github.com/keepnotes-ai/keep#installation
 """
 
 
-def _resolve_store_path(store: Optional[Path]) -> Path:
-    """Resolve the store path from CLI arg, env, or config — no Keeper init."""
-    actual = store if store is not None else _get_store_override()
-    if actual is not None:
-        return Path(actual).resolve()
-    from .paths import get_config_dir, get_default_store_path
-    from .config import load_or_create_config
-    config_dir = get_config_dir()
-    cfg = load_or_create_config(config_dir)
-    return get_default_store_path(cfg)
-
-
-def _read_daemon_port(store_path: Path) -> Optional[int]:
-    """Read .daemon.port file, return port or None."""
-    port_file = store_path / ".daemon.port"
-    if not port_file.exists():
-        return None
-    try:
-        return int(port_file.read_text().strip())
-    except (ValueError, OSError):
-        return None
-
-
-def _check_daemon_health(port: int) -> bool:
-    """Quick health check against daemon HTTP server (1s timeout)."""
-    import http.client
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
-        conn.request("GET", "/v1/health")
-        resp = conn.getresponse()
-        conn.close()
-        return resp.status == 200
-    except Exception:
-        return False
-
-
-def _try_daemon_connection(port: int, config) -> Optional["RemoteKeeper"]:
-    """Try connecting to daemon at given port. Returns client or None."""
-    if not _check_daemon_health(port):
-        return None
-    from .remote import RemoteKeeper
-    try:
-        return RemoteKeeper(
-            api_url=f"http://127.0.0.1:{port}",
-            api_key="",
-            config=config,
-        )
-    except Exception:
-        return None
-
-
 def _get_keeper(store: Optional[Path], *, _force_local: bool = False) -> Keeper:
     """Initialize memory, handling errors gracefully.
 
-    Returns a local Keeper or RemoteKeeper depending on config.
-    Both satisfy the same protocol — the CLI doesn't distinguish.
+    Returns a local Keeper or RemoteKeeper (cloud) depending on config.
+    Local daemon commands (put directory, pending, etc.)
+    always use a local Keeper — the thin CLI handles the daemon HTTP path.
 
-    When ``_force_local`` is True, skips the daemon HTTP client path
-    and always creates a local Keeper (used by ``keep pending`` which
-    manages the daemon itself).
+    When ``_force_local`` is True, skips the remote backend check
+    (used by ``keep pending`` which manages the daemon itself).
     """
     import atexit
 
@@ -1397,22 +1193,6 @@ def _get_keeper(store: Optional[Path], *, _force_local: bool = False) -> Keeper:
         except Exception as e:
             typer.echo(f"Error connecting to remote: {e}", err=True)
             raise typer.Exit(1)
-
-    # Try local daemon first (fast path — no model loading)
-    if not _force_local:
-        store_path = _resolve_store_path(store)
-        port = _read_daemon_port(store_path)
-    else:
-        port = None
-    if port is not None:
-        from .config import load_or_create_config
-        from .paths import get_config_dir
-        config_dir = get_config_dir()
-        config = load_or_create_config(config_dir)
-        client = _try_daemon_connection(port, config)
-        if client is not None:
-            atexit.register(client.close)
-            return client
 
     # Check global override from --store on main command
     actual_store = store if store is not None else _get_store_override()
@@ -1512,34 +1292,6 @@ def _parse_tags(tags: Optional[list[str]]) -> dict:
             parsed[key] = [existing, v]
     return parsed
 
-
-def _filter_by_tags(items: list, tags: list[str]) -> list:
-    """Filter items by tag specifications (AND logic).
-
-    Each tag can be:
-    - "key" - item must have this tag key (any value)
-    - "key=value" - item must have this exact tag
-    """
-    if not tags:
-        return items
-
-    result = items
-    for t in tags:
-        if "=" in t:
-            key, value = t.split("=", 1)
-            key = key.casefold()
-            result = [item for item in result
-                      if value in tag_values(item.tags, key)]
-        elif ":" in t:
-            # Colon separator — treat as key=value (common mistake)
-            key, value = t.split(":", 1)
-            key = key.casefold()
-            result = [item for item in result
-                      if value in tag_values(item.tags, key)]
-        else:
-            # Key only - check if key exists
-            result = [item for item in result if t.casefold() in item.tags]
-    return result
 
 
 def _parse_frontmatter(text: str) -> tuple[str, dict[str, str]]:
@@ -1841,29 +1593,6 @@ def put(
     typer.echo(render_context(ctx, as_json=_get_json_output()))
 
 
-@app.command("update", hidden=True)
-def update(
-    source: Annotated[Optional[str], typer.Argument(help="URI to fetch, text content, or '-' for stdin")] = None,
-    id: Annotated[Optional[str], typer.Option("--id", "-i")] = None,
-    store: StoreOption = None,
-    tags: Annotated[Optional[list[str]], typer.Option("--tag", "-t")] = None,
-    summary: Annotated[Optional[str], typer.Option("--summary")] = None,
-):
-    """Add or update a note (alias for 'put')."""
-    put(source=source, id=id, store=store, tags=tags, summary=summary)
-
-
-@app.command("add", hidden=True)
-def add(
-    source: Annotated[Optional[str], typer.Argument(help="URI to fetch, text content, or '-' for stdin")] = None,
-    id: Annotated[Optional[str], typer.Option("--id", "-i")] = None,
-    store: StoreOption = None,
-    tags: Annotated[Optional[list[str]], typer.Option("--tag", "-t")] = None,
-    summary: Annotated[Optional[str], typer.Option("--summary")] = None,
-):
-    """Add a note (alias for 'put')."""
-    put(source=source, id=id, store=store, tags=tags, summary=summary)
-
 
 def _render_binding(name: str, binding: dict, kp=None, token_budget: int = 4000) -> str:
     """Render a single flow binding to text by dispatching on shape."""
@@ -1980,342 +1709,6 @@ def expand_prompt(result: "PromptResult", kp=None) -> str:
         output = output.replace("\n\n\n", "\n\n")
 
     return output.strip()
-
-
-@app.command()
-def get(
-    id: Annotated[list[str], typer.Argument(help="URI(s) of note(s) (append @V{N} for version)")],
-    version: Annotated[Optional[int], typer.Option(
-        "--version", "-V",
-        help="Version selector (>=0 from current, <0 from oldest: -1 oldest)"
-    )] = None,
-    history: Annotated[bool, typer.Option(
-        "--history", "-H",
-        help="List all versions"
-    )] = False,
-    similar: Annotated[bool, typer.Option(
-        "--similar", "-S",
-        help="List similar notes"
-    )] = False,
-    meta: Annotated[bool, typer.Option(
-        "--meta", "-M",
-        help="List meta notes"
-    )] = False,
-    resolve: Annotated[Optional[list[str]], typer.Option(
-        "--resolve", "-R",
-        help="Inline meta query (metadoc syntax, repeatable)"
-    )] = None,
-    parts: Annotated[bool, typer.Option(
-        "--parts", "-P",
-        help="List structural parts (from analyze)"
-    )] = False,
-    tag: Annotated[Optional[list[str]], typer.Option(
-        "--tag", "-t",
-        help="Require tag (key or key=value, repeatable)"
-    )] = None,
-    limit: Annotated[int, typer.Option(
-        "--limit", "-n",
-        help="Max items per section: similar, meta, edges, parts, versions (default: 10)"
-    )] = 10,
-    store: StoreOption = None,
-):
-    """Retrieve note(s) by ID.
-
-    Accepts one or more IDs. Version identifiers: Append @V{N} to get a specific version.
-    N>=0 selects from current; N<0 selects from oldest archived (-1 oldest).
-    Part identifiers: Append @P{N} to get a specific part.
-
-    \b
-    Examples:
-        keep get doc:1                  # Current version with similar notes
-        keep get doc:1 doc:2 doc:3      # Multiple notes
-        keep get doc:1 -V 1             # Previous version with prev/next nav
-        keep get doc:1 -V -1            # Oldest archived version
-        keep get "doc:1@V{1}"           # Same as -V 1
-        keep get "doc:1@V{-1}"          # Same as -V -1
-        keep get "doc:1@P{1}"           # Part 1 of analyzed note
-        keep get doc:1 --history        # List all versions
-        keep get doc:1 --parts          # List structural parts
-        keep get doc:1 --similar        # List similar items
-        keep get doc:1 --meta           # List meta items
-        keep get doc:1 -t project=myapp # Only if tag matches
-    """
-    kp = _get_keeper(store)
-    outputs = []
-    errors = []
-
-    for one_id in id:
-        result = _get_one(kp, one_id, version, history, similar, meta, resolve, tag, limit, parts)
-        if result is None:
-            errors.append(one_id)
-        else:
-            outputs.append(result)
-
-    if outputs:
-        separator = "\n" if _get_ids_output() else "\n---\n" if len(outputs) > 1 else ""
-        typer.echo(separator.join(outputs))
-
-    if errors:
-        raise typer.Exit(1)
-
-
-def _get_part_direct(kp: Keeper, actual_id: str, part_num: int) -> Optional[str]:
-    """Get a single part by ID@P{N} and return formatted output."""
-    item = kp.get_part(actual_id, part_num)
-    if item is None:
-        typer.echo(f"Part not found: {actual_id}@P{{{part_num}}}", err=True)
-        return None
-
-    if _get_ids_output():
-        return f"{_shell_quote_id(actual_id)}@P{{{part_num}}}"
-    if _get_json_output():
-        return json.dumps({
-            "id": actual_id,
-            "part": part_num,
-            "total_parts": int(item.tags.get("_total_parts", 0)),
-            "summary": item.summary,
-            "tags": _filter_display_tags(item.tags),
-        }, indent=2)
-
-    total = int(item.tags.get("_total_parts", 0))
-    lines = ["---", f"id: {_shell_quote_id(actual_id)}@P{{{part_num}}}"]
-    display_tags = _filter_display_tags(item.tags)
-    lines.extend(_render_tags_frontmatter(display_tags))
-    if part_num > 1:
-        lines.append("prev:")
-        lines.append(f"  - @P{{{part_num - 1}}}")
-    if part_num < total:
-        lines.append("next:")
-        lines.append(f"  - @P{{{part_num + 1}}}")
-    lines.append("---")
-    lines.append(item.summary)
-    return "\n".join(lines)
-
-
-def _get_parts_list(kp: Keeper, actual_id: str) -> str:
-    """List all parts of a document (same format as 'keep list')."""
-    part_list = kp.list_parts(actual_id)
-    if not part_list:
-        return f"No parts for {actual_id}. Use 'keep analyze {actual_id}' to create parts."
-    items = _parts_to_items(actual_id, None, part_list)
-    return _format_items(items, as_json=_get_json_output())
-
-
-def _get_similar_list(kp: Keeper, actual_id: str, limit: int) -> str:
-    """List similar items for a document."""
-    similar_items = kp.get_similar_for_display(actual_id, limit=limit)
-    similar_offsets = {s.id: kp.get_version_offset(s) for s in similar_items}
-
-    if _get_ids_output():
-        lines = []
-        for item in similar_items:
-            base_id = item.tags.get("_base_id", item.id)
-            offset = similar_offsets.get(item.id, 0)
-            lines.append(f"{base_id}@V{{{offset}}}")
-        return "\n".join(lines)
-    if _get_json_output():
-        result = {
-            "id": actual_id,
-            "similar": [
-                {
-                    "id": f"{item.tags.get('_base_id', item.id)}@V{{{similar_offsets.get(item.id, 0)}}}",
-                    "score": item.score,
-                    "date": local_date(item.tags.get("_updated") or item.tags.get("_created", "")),
-                    "summary": item.summary[:60],
-                }
-                for item in similar_items
-            ],
-        }
-        return json.dumps(result, indent=2)
-    lines = [f"Similar to {actual_id}:"]
-    if similar_items:
-        for item in similar_items:
-            base_id = item.tags.get("_base_id", item.id)
-            offset = similar_offsets.get(item.id, 0)
-            score_str = f"({item.score:.2f})" if item.score else ""
-            date_part = local_date(item.tags.get("_updated") or item.tags.get("_created", ""))
-            summary_preview = item.summary[:50].replace("\n", " ")
-            if len(item.summary) > 50:
-                summary_preview += "..."
-            lines.append(f"  {base_id}@V{{{offset}}} {score_str} {date_part} {summary_preview}")
-    else:
-        lines.append("  No similar notes found.")
-    return "\n".join(lines)
-
-
-def _get_meta_list(kp: Keeper, actual_id: str, limit: int) -> str:
-    """List meta items for a document."""
-    meta_sections = kp.resolve_meta(actual_id, limit_per_doc=limit)
-    if _get_ids_output():
-        lines = []
-        for name, items in meta_sections.items():
-            for item in items:
-                lines.append(_shell_quote_id(item.id))
-        return "\n".join(lines)
-    if _get_json_output():
-        result = {
-            "id": actual_id,
-            "meta": {
-                name: [{"id": item.id, "summary": item.summary[:60]} for item in items]
-                for name, items in meta_sections.items()
-            },
-        }
-        return json.dumps(result, indent=2)
-    lines = [f"Meta for {actual_id}:"]
-    for name, items in meta_sections.items():
-        lines.append(f"  {name}:")
-        for item in items:
-            summary_preview = item.summary[:50].replace("\n", " ")
-            if len(item.summary) > 50:
-                summary_preview += "..."
-            lines.append(f"    {_shell_quote_id(item.id)}  {summary_preview}")
-    if len(lines) == 1:
-        lines.append("  No meta notes found.")
-    return "\n".join(lines)
-
-
-def _get_resolve_list(kp: Keeper, actual_id: str, resolve: list[str], limit: int) -> str:
-    """Resolve inline meta-doc syntax strings."""
-    from .utils import _parse_meta_doc
-    all_queries: list[dict[str, str]] = []
-    all_context: list[str] = []
-    all_prereqs: list[str] = []
-    for r in resolve:
-        q, c, p = _parse_meta_doc(r)
-        all_queries.extend(q)
-        all_context.extend(c)
-        all_prereqs.extend(p)
-    all_context = list(dict.fromkeys(all_context))
-    all_prereqs = list(dict.fromkeys(all_prereqs))
-    items = kp.resolve_inline_meta(
-        actual_id, all_queries, all_context, all_prereqs, limit=limit,
-    )
-    if _get_ids_output():
-        return "\n".join(_shell_quote_id(item.id) for item in items)
-    if _get_json_output():
-        result = {
-            "id": actual_id,
-            "resolve": [{"id": item.id, "summary": item.summary[:60]} for item in items],
-        }
-        return json.dumps(result, indent=2)
-    lines = [f"Resolve for {actual_id}:"]
-    for item in items:
-        summary_preview = item.summary[:50].replace("\n", " ")
-        if len(item.summary) > 50:
-            summary_preview += "..."
-        lines.append(f"  {_shell_quote_id(item.id)}  {summary_preview}")
-    if len(lines) == 1:
-        lines.append("  No matching notes found.")
-    return "\n".join(lines)
-
-
-def _get_one(
-    kp: Keeper,
-    one_id: str,
-    version: Optional[int],
-    history: bool,
-    similar: bool,
-    meta: bool,
-    resolve: Optional[list[str]],
-    tag: Optional[list[str]],
-    limit: int,
-    show_parts: bool = False,
-    focus_part: Optional[int] = None,
-) -> Optional[str]:
-    """Get a single item and return its formatted output, or None on error."""
-    # Parse @V{N} (signed) or @P{N} identifier from ID (security: check literal first)
-    actual_id = one_id
-    version_from_id = None
-    part_from_id = None
-
-    if kp.exists(one_id):
-        actual_id = one_id
-    else:
-        match = PART_SUFFIX_PATTERN.search(one_id)
-        if match:
-            part_from_id = int(match.group(1))
-            actual_id = one_id[:match.start()]
-        else:
-            match = VERSION_SUFFIX_PATTERN.search(one_id)
-            if match:
-                version_from_id = int(match.group(1))
-                actual_id = one_id[:match.start()]
-
-    effective_version = version
-    if version is None and version_from_id is not None:
-        effective_version = version_from_id
-
-    # Dispatch to sub-mode handlers
-    if part_from_id is not None:
-        return _get_part_direct(kp, actual_id, part_from_id)
-
-    # --history / --parts with --ids: flat list for piping
-    if _get_ids_output() and history:
-        versions = kp.list_versions(actual_id, limit=limit)
-        current = kp.get(actual_id)
-        return _format_items(_versions_to_items(actual_id, current, versions))
-    if _get_ids_output() and show_parts:
-        part_list = kp.list_parts(actual_id)
-        if not part_list:
-            return f"No parts for {actual_id}. Use 'keep analyze {actual_id}' to create parts."
-        return _format_items(_parts_to_items(actual_id, None, part_list))
-
-    if similar:
-        return _get_similar_list(kp, actual_id, limit)
-    if meta:
-        return _get_meta_list(kp, actual_id, limit)
-    if resolve:
-        return _get_resolve_list(kp, actual_id, resolve, limit)
-
-    # Default + --history + --parts: frontmatter with expanded sections
-    selector = effective_version if effective_version is not None else None
-    ctx = kp.get_context(
-        actual_id, version=selector,
-        similar_limit=limit, meta_limit=limit, edges_limit=limit,
-        parts_limit=limit, versions_limit=min(limit, 5),
-    )
-    if ctx is None:
-        if selector is not None:
-            typer.echo(f"Version not found: {actual_id}@V{{{selector}}}", err=True)
-        else:
-            typer.echo(f"Not found: {actual_id}", err=True)
-        return None
-
-    # Expand parts section: show all parts without windowing
-    if show_parts:
-        all_parts = kp.list_parts(actual_id)
-        if not all_parts:
-            typer.echo(f"No parts for {actual_id}. Use 'keep analyze {actual_id}' to create parts.", err=True)
-            return None
-        ctx.parts = [PartRef(part_num=p.part_num, summary=p.summary, tags=dict(p.tags)) for p in all_parts]
-        ctx.expand_parts = True
-
-    # Expand history: show all versions in prev section
-    if history:
-        all_versions = kp.list_versions(actual_id, limit=limit)
-        ctx.prev = [
-            VersionRef(
-                offset=i + 1,
-                date=local_date(v.tags.get("_created") or v.created_at or ""),
-                summary=v.summary,
-            )
-            for i, v in enumerate(all_versions)
-        ]
-        ctx.next = []  # full history replaces navigation
-
-    if tag:
-        filtered = _filter_by_tags([ctx.item], tag)
-        if not filtered:
-            typer.echo(f"Tag filter not matched: {actual_id}", err=True)
-            return None
-
-    if _get_ids_output():
-        return _format_versioned_id(ctx.item)
-    return render_context(ctx, as_json=_get_json_output())
-
-
-
-
 
 
 def _get_config_value(cfg, store_path: Path, path: str):
@@ -2488,118 +1881,6 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
     return "\n".join(lines)
 
 
-@app.command(hidden=True, deprecated=True)
-def validate(
-    id: Annotated[Optional[list[str]], typer.Argument(
-        help="System doc ID(s) to validate (e.g. '.tag/act', '.meta/related')"
-    )] = None,
-    all_docs: Annotated[bool, typer.Option(
-        "--all", "-a",
-        help="Validate all system docs"
-    )] = False,
-    diagram: Annotated[bool, typer.Option(
-        "--diagram",
-        help="Print Mermaid state-transition diagram for .state/* docs"
-    )] = False,
-    store: StoreOption = None,
-):
-    """Validate system documents with parser-based semantics.
-
-    Checks .tag/*, .meta/*, .prompt/*, and .state/* documents for
-    structural correctness. Reports errors (will cause runtime failures)
-    and warnings (may cause unexpected behavior).
-
-    \b
-    Examples:
-        keep validate .tag/act               # Validate one doc
-        keep validate .tag/act .meta/related  # Validate several
-        keep validate --all                   # Validate all system docs
-        keep validate --diagram              # Mermaid state diagram
-    """
-    from .validate import validate_system_doc
-
-    if diagram:
-        from .validate import state_doc_diagram
-        from .system_docs import SYSTEM_DOC_DIR, _filename_to_id, _load_frontmatter
-        state_docs: dict[str, str] = {}
-        # Load from store if available, else from disk
-        try:
-            kp = _get_keeper(store)
-            doc_coll = kp._resolve_doc_collection()
-            for rec in kp._document_store.query_by_id_prefix(doc_coll, ".state/"):
-                name = str(getattr(rec, "id", "")).removeprefix(".state/")
-                body = str(getattr(rec, "summary", "") or "").strip()
-                if name and body:
-                    state_docs[name] = body
-        except Exception:
-            pass
-        # Fall back to / supplement with bundled files
-        if not state_docs:
-            for path in sorted(SYSTEM_DOC_DIR.glob("state-*.md")):
-                doc_id = _filename_to_id(path.name)
-                name = doc_id.removeprefix(".state/")
-                content, _ = _load_frontmatter(path)
-                if content.strip():
-                    state_docs[name] = content
-        typer.echo(state_doc_diagram(state_docs))
-        return
-
-    kp = _get_keeper(store)
-
-    # Collect docs to validate: either from --all prefix scan or explicit IDs.
-    # The prefix scan returns full records (id, summary, tags) — use them
-    # directly to avoid N redundant kp.get() calls and accessed_at writes.
-    docs_by_id: dict[str, tuple[str, dict]] = {}  # id -> (summary, tags)
-    if all_docs:
-        doc_coll = kp._resolve_doc_collection()
-        for prefix in (".tag/", ".meta/", ".prompt/", ".state/"):
-            for rec in kp._document_store.query_by_id_prefix(doc_coll, prefix):
-                doc_id = str(getattr(rec, "id", ""))
-                if doc_id:
-                    summary = str(getattr(rec, "summary", "") or "")
-                    raw_tags = getattr(rec, "tags", None)
-                    tags = dict(raw_tags) if isinstance(raw_tags, dict) else {}
-                    docs_by_id[doc_id] = (summary, tags)
-    elif id:
-        for doc_id in id:
-            item = kp.get(doc_id)
-            if item is None:
-                typer.echo(f"{doc_id}: not found", err=True)
-                continue
-            summary = str(getattr(item, "summary", "") or "")
-            raw_tags = getattr(item, "tags", None)
-            tags = dict(raw_tags) if isinstance(raw_tags, dict) else {}
-            docs_by_id[doc_id] = (summary, tags)
-    else:
-        typer.echo("Provide doc IDs or use --all. See: keep validate --help", err=True)
-        raise typer.Exit(1)
-
-    if not docs_by_id:
-        typer.echo("No system docs found.")
-        return
-
-    total_errors = 0
-    total_warnings = 0
-    for doc_id in sorted(docs_by_id):
-        content, tags = docs_by_id[doc_id]
-        result = validate_system_doc(doc_id, content, tags)
-
-        if result.diagnostics:
-            for d in result.diagnostics:
-                typer.echo(f"{doc_id}: {d}")
-            total_errors += len(result.errors)
-            total_warnings += len(result.warnings)
-        else:
-            typer.echo(f"{doc_id}: ok")
-
-    if total_errors:
-        typer.echo(f"\n{total_errors} error(s), {total_warnings} warning(s)")
-        raise typer.Exit(1)
-    elif total_warnings:
-        typer.echo(f"\n{total_warnings} warning(s)")
-    else:
-        typer.echo(f"\n{len(docs_by_id)} doc(s) ok")
-
 
 @app.command()
 def config(
@@ -2734,7 +2015,8 @@ def pending_cmd(
     # --stop: send SIGTERM to the daemon (lightweight — no Keeper needed)
     if stop:
         from .model_lock import ModelLock
-        store_path = _resolve_store_path(store)
+        from ._daemon_client import resolve_store_path
+        store_path = resolve_store_path(str(store) if store else None)
         pid_path = store_path / "processor.pid"
         lock = ModelLock(store_path / ".processor.lock")
         if not lock.is_locked():
@@ -2814,7 +2096,9 @@ def pending_cmd(
         _daemon_server = DaemonServer(kp, port=_daemon_port)
         _actual_port = _daemon_server.start()
         _port_path = kp._store_path / ".daemon.port"
+        _token_path = kp._store_path / ".daemon.token"
         _port_path.write_text(str(_actual_port))
+        _token_path.write_text(_daemon_server.auth_token)
         _daemon_logger.info("Query server on 127.0.0.1:%d", _actual_port)
 
         def handle_signal(signum, frame):
@@ -3042,6 +2326,10 @@ def pending_cmd(
                 pass
             try:
                 _port_path.unlink()
+            except OSError:
+                pass
+            try:
+                _token_path.unlink()
             except OSError:
                 pass
             try:
@@ -3811,35 +3099,12 @@ def doctor(
     typer.echo()
 
 
-@app.command()
-def mcp(
-    store: StoreOption = None,
-):
-    """Start MCP stdio server for AI agent integration."""
-    if store is not None:
-        os.environ["KEEP_STORE_PATH"] = str(store)
-    elif _get_store_override() is not None:
-        os.environ["KEEP_STORE_PATH"] = str(_get_store_override())
-    from .mcp import main as mcp_main
-    mcp_main()
-
-
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Entry point (used by daemon subprocess: python -m keep.cli pending --daemon)
+# ---------------------------------------------------------------------------
 
 def main():
-    try:
-        app()
-    except SystemExit:
-        raise  # Let typer handle exit codes
-    except KeyboardInterrupt:
-        raise SystemExit(130)  # Standard exit code for Ctrl+C
-    except Exception as e:
-        # Log full traceback to file, show clean message to user
-        from .errors import log_exception
-        log_path = log_exception(e, context="keep CLI")
-        typer.echo(f"Error: {e}", err=True)
-        typer.echo(f"Details logged to {log_path}", err=True)
-        raise SystemExit(1)
+    app()
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 import typer
 
-from ._daemon_client import http_request as _http_raw, get_port as _daemon_get_port
+from ._daemon_client import http_request as _http, get_port as _daemon_get_port
 
 app = typer.Typer(
     name="keep",
@@ -32,10 +32,6 @@ def _q(id: str) -> str:
     """URL-encode an ID for path segments."""
     return quote(id, safe="")
 
-
-def _http(method: str, port: int, path: str, body: dict | None = None) -> tuple[int, dict]:
-    """Make an HTTP request to the daemon. Returns (status, json_body)."""
-    return _http_raw(method, port, path, body)
 
 
 def _get(port: int, path: str) -> dict:
@@ -119,6 +115,11 @@ def _date(tags: dict) -> str:
         if val:
             return local_date(val)
     return ""
+
+
+def _flow_items(resp: dict) -> list[dict]:
+    """Extract item list from a flow response (data.results.results)."""
+    return resp.get("data", {}).get("results", {}).get("results", [])
 
 
 def _display_tags(tags: dict) -> dict:
@@ -377,9 +378,6 @@ def get(
     meta: Annotated[bool, typer.Option(
         "--meta", "-M", help="List meta notes"
     )] = False,
-    resolve: Annotated[Optional[list[str]], typer.Option(
-        "--resolve", "-R", help="Inline meta query (metadoc syntax, repeatable)"
-    )] = None,
     parts: Annotated[bool, typer.Option(
         "--parts", "-P", help="List structural parts (from analyze)"
     )] = False,
@@ -406,25 +404,6 @@ def get(
         keep get doc:1 --parts          # List structural parts
         keep get doc:1 -t project=myapp # Only if tag matches
     """
-    # --resolve delegates to full CLI (complex meta-doc query parsing)
-    if resolve:
-        from keep.cli import app as full_app
-        args = ["get"]
-        for item_id in id:
-            args.append(item_id)
-        for r in resolve:
-            args += ["--resolve", r]
-        if version is not None:
-            args += ["--version", str(version)]
-        args += ["--limit", str(limit)]
-        try:
-            rc = full_app(args, standalone_mode=False)
-        except SystemExit as e:
-            rc = e.code
-        if rc:
-            raise typer.Exit(rc)
-        return
-
     port = _get_port()
     outputs = []
     errors = 0
@@ -597,6 +576,94 @@ def find(
         typer.echo(_render_find(data, port))
 
 
+def _put_directory(
+    port: int, resolved_path: Path, parsed_tags: dict, *,
+    recurse: bool, exclude: list[str] | None,
+    watch: bool, unwatch: bool, interval: str | None,
+    force: bool, json_output: bool,
+) -> None:
+    """Index files from a directory via the daemon HTTP API."""
+    from .utils import _list_directory_files
+
+    # Get ignore patterns from the store's .ignore doc (if any)
+    ignore_patterns: list[str] = []
+    try:
+        status, data = _http("GET", port, f"/v1/notes/{_q('.ignore')}")
+        if status == 200 and data.get("summary"):
+            from .ignore import parse_ignore_patterns
+            ignore_patterns = parse_ignore_patterns(data["summary"])
+    except Exception:
+        pass
+
+    from .ignore import merge_excludes
+    combined_exclude = merge_excludes(ignore_patterns, exclude)
+    files = _list_directory_files(resolved_path, recurse=recurse, exclude=combined_exclude or None)
+    if not files:
+        typer.echo(f"Error: no eligible files in {resolved_path}/", err=True)
+        hint = "hidden files and symlinks are skipped"
+        if not recurse:
+            hint += "; use -r to recurse into subdirectories"
+        typer.echo(f"Hint: {hint}", err=True)
+        raise typer.Exit(1)
+
+    MAX_DIR_FILES = 1000
+    if len(files) > MAX_DIR_FILES:
+        typer.echo(f"Error: directory has {len(files)} files (max {MAX_DIR_FILES})", err=True)
+        typer.echo("Hint: increase max_dir_files in keep.toml or index files individually", err=True)
+        raise typer.Exit(1)
+
+    indexed = 0
+    errors: list[str] = []
+    total = len(files)
+    is_tty = sys.stderr.isatty()
+    for i, fpath in enumerate(files, 1):
+        file_uri = f"file://{fpath}"
+        rel = str(fpath.relative_to(resolved_path) if recurse else fpath.name)
+        body: dict = {"uri": file_uri, "tags": parsed_tags or None, "force": force or None}
+        try:
+            status, data = _http("POST", port, "/v1/notes", body)
+            if status == 200:
+                indexed += 1
+                if is_tty:
+                    pct = i * 100 // total
+                    typer.echo(f"\r[{pct:3d}%] {rel[:60]}", err=True, nl=False)
+                else:
+                    typer.echo(f"[{i}/{total}] {rel} ok", err=True)
+            else:
+                errors.append(f"{rel}: {data.get('error', 'unknown')}")
+                if not is_tty:
+                    typer.echo(f"[{i}/{total}] {rel} error", err=True)
+        except Exception as e:
+            errors.append(f"{rel}: {e}")
+
+    if is_tty:
+        typer.echo("", err=True)
+    typer.echo(f"{indexed} indexed, {len(errors)} errors from {resolved_path.name}/", err=True)
+    for e in errors:
+        typer.echo(f"  error: {e}", err=True)
+
+    # Watch management
+    if watch or unwatch:
+        watch_body: dict = {
+            "uri": f"file://{resolved_path}",
+            "tags": parsed_tags or None,
+            "force": None,
+        }
+        if watch:
+            watch_body["watch"] = True
+            watch_body["watch_kind"] = "directory"
+            watch_body["recurse"] = recurse
+            watch_body["exclude"] = exclude
+            if interval:
+                watch_body["interval"] = interval
+        elif unwatch:
+            watch_body["unwatch"] = True
+        try:
+            _http("POST", port, "/v1/notes", watch_body)
+        except Exception:
+            pass
+
+
 @app.command()
 def put(
     source: Annotated[Optional[str], typer.Argument(help="Content, file path, URI, or '-' for stdin")] = None,
@@ -669,29 +736,13 @@ def put(
             if id is not None:
                 typer.echo("Error: --id cannot be used with directory mode", err=True)
                 raise typer.Exit(1)
-            # Directory mode — delegate to full CLI for recursion/exclude support
-            from keep.cli import app as full_app
-            args = ["put", source]
-            for t in (tags or []):
-                args += ["-t", t]
-            if recurse:
-                args += ["--recurse"]
-            for x in (exclude or []):
-                args += ["--exclude", x]
-            if watch:
-                args += ["--watch"]
-            if unwatch:
-                args += ["--unwatch"]
-            if interval:
-                args += ["--interval", interval]
-            if force:
-                args += ["--force"]
-            try:
-                rc = full_app(args, standalone_mode=False)
-            except SystemExit as e:
-                rc = e.code
-            if rc:
-                raise typer.Exit(rc)
+            # Directory mode — iterate locally, put each file via HTTP
+            _put_directory(
+                port, Path(source).resolve(), parsed_tags,
+                recurse=recurse, exclude=exclude,
+                watch=watch, unwatch=unwatch, interval=interval,
+                force=force, json_output=json_output,
+            )
             return
         elif Path(source).exists() and not source.startswith("%"):
             uri = f"file://{Path(source).resolve()}"
@@ -913,7 +964,7 @@ def list_cmd(
         flow_params["tag_keys"] = tag_keys
 
     resp = _post(port, "/v1/flow", {"state": "list", "params": flow_params})
-    results = resp.get("data", {}).get("results", {}).get("results", [])
+    results = _flow_items(resp)
     data: dict = {"notes": results}
 
     # Filter to notes with parts if requested
@@ -1194,8 +1245,33 @@ def help_cmd(
 # ---------------------------------------------------------------------------
 
 @app.command(context_settings={"allow_extra_args": True, "allow_interspersed_args": True})
-def pending(ctx: typer.Context):
+def pending(
+    ctx: typer.Context,
+    stop: Annotated[bool, typer.Option("--stop", help="Stop the background daemon")] = False,
+):
     """Process pending background tasks."""
+    if stop:
+        # Lightweight stop — no Keeper needed, just read PID and signal
+        import signal
+        from ._daemon_client import resolve_store_path
+        store_path = resolve_store_path(_global_store)
+        pid_file = store_path / "processor.pid"
+        if not pid_file.exists():
+            typer.echo("No daemon running.")
+            return
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+            typer.echo(f"Sent stop signal to daemon (pid {pid}).", err=True)
+        except ProcessLookupError:
+            typer.echo("Daemon not running (stale PID file).", err=True)
+            pid_file.unlink(missing_ok=True)
+        except (ValueError, OSError) as e:
+            typer.echo(f"Error stopping daemon: {e}", err=True)
+        # Clean up stale files
+        (store_path / ".daemon.port").unlink(missing_ok=True)
+        (store_path / ".daemon.token").unlink(missing_ok=True)
+        return
     from keep.cli import app as full_app
     full_app(["pending"] + ctx.args, standalone_mode=False)
 
@@ -1236,7 +1312,7 @@ def config(
             "state": "list",
             "params": {"prefix": ".state/", "include_hidden": True, "limit": 100},
         })
-        results = resp.get("data", {}).get("results", {}).get("results", [])
+        results = _flow_items(resp)
         state_docs: dict[str, str] = {}
         for note in results:
             nid = note.get("id", "")
@@ -1274,12 +1350,6 @@ def doctor(ctx: typer.Context):
     from keep.cli import app as full_app
     full_app(["doctor"] + ctx.args, standalone_mode=False)
 
-
-@app.command(hidden=True, deprecated=True)
-def validate(ctx: typer.Context):
-    """Validate system documents (delegates to full CLI)."""
-    from keep.cli import app as full_app
-    full_app(["validate"] + ctx.args, standalone_mode=False)
 
 
 @app.command()

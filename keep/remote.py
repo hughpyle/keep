@@ -256,108 +256,25 @@ class RemoteKeeper:
         include_parts: bool = True,
         include_versions: bool = True,
     ) -> ItemContext | None:
-        """Assemble display context via get + flow."""
-        offset = version or 0
-        if offset > 0:
-            # Version access — get the base item first to verify it exists
-            item = self.get(id)
-            if item is None:
-                return None
-            # TODO: version-specific get once flow supports it
-        else:
-            item = self.get(id)
-            if item is None:
-                return None
-
-        # Run the "get" flow for similar/meta/parts/edges
-        flow_result = self.run_flow_command(
-            state="get",
-            params={
-                "item_id": id,
-                "similar_limit": similar_limit if include_similar else 0,
-                "meta_limit": meta_limit if include_meta else 0,
-                "parts_limit": parts_limit if include_parts else 0,
-                "edges_limit": edges_limit,
-                "versions_limit": versions_limit if include_versions else 0,
-            },
-        )
-
-        similar_refs: list[SimilarRef] = []
-        meta_refs: dict[str, list[MetaRef]] = {}
-        edge_refs: dict[str, list[EdgeRef]] = {}
-        part_refs: list[PartRef] = []
-        prev_refs: list[VersionRef] = []
-
-        if flow_result.status == "done":
-            bindings = flow_result.bindings
-
-            # Similar
-            if include_similar:
-                sim = bindings.get("similar", {})
-                for s in sim.get("results", []):
-                    similar_refs.append(SimilarRef(
-                        id=s.get("id", ""),
-                        offset=0,
-                        score=s.get("score"),
-                        date=local_date(s.get("tags", {}).get("_updated", "")),
-                        summary=s.get("summary", ""),
-                    ))
-
-            # Meta
-            if include_meta:
-                meta_binding = bindings.get("meta", {})
-                for section_name, section_data in meta_binding.get("sections", {}).items():
-                    refs = []
-                    for m in section_data:
-                        refs.append(MetaRef(
-                            id=m.get("id", ""),
-                            summary=m.get("summary", ""),
-                        ))
-                    if refs:
-                        meta_refs[section_name] = refs
-
-            # Parts
-            if include_parts:
-                parts_binding = bindings.get("parts", {})
-                for p in parts_binding.get("results", []):
-                    part_refs.append(PartRef(
-                        part_num=int(p.get("part_num", 0)),
-                        summary=p.get("summary", ""),
-                        tags=p.get("tags", {}),
-                    ))
-
-            # Edges
-            edges_binding = bindings.get("edges", {})
-            for pred, edge_list in edges_binding.get("edges", {}).items():
-                refs = []
-                for e in edge_list:
-                    refs.append(EdgeRef(
-                        source_id=e.get("source_id", e.get("id", "")),
-                        date=local_date(e.get("date", "")),
-                        summary=e.get("summary", ""),
-                    ))
-                if refs:
-                    edge_refs[pred] = refs
-
-            # Versions (prev)
-            if include_versions:
-                ver_binding = bindings.get("versions", {})
-                for i, v in enumerate(ver_binding.get("versions", [])):
-                    prev_refs.append(VersionRef(
-                        offset=i + 1,
-                        date=local_date(v.get("date", v.get("created_at", ""))),
-                        summary=v.get("summary", ""),
-                    ))
-
-        return ItemContext(
-            item=item,
-            viewing_offset=offset,
-            similar=similar_refs,
-            meta=meta_refs,
-            edges=edge_refs,
-            parts=part_refs,
-            prev=prev_refs,
-        )
+        """Assemble display context via the /context endpoint."""
+        params: dict[str, str | int] = {
+            "similar_limit": similar_limit if include_similar else 0,
+            "meta_limit": meta_limit if include_meta else 0,
+            "parts_limit": parts_limit if include_parts else 0,
+            "edges_limit": edges_limit,
+            "versions_limit": versions_limit if include_versions else 0,
+            "include_similar": str(include_similar).lower(),
+            "include_meta": str(include_meta).lower(),
+            "include_parts": str(include_parts).lower(),
+            "include_versions": str(include_versions).lower(),
+        }
+        if version is not None:
+            params["version"] = version
+        resp = self._client.get(f"/v1/notes/{self._q(id)}/context", params=params)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return ItemContext.from_dict(resp.json())
 
     def get_now(self, *, scope: Optional[str] = None) -> Item:
         doc_id = f"now:{scope}" if scope else "now"
@@ -374,8 +291,12 @@ class RemoteKeeper:
         return self.get(id) is not None
 
     def count(self) -> int:
-        # Use find with limit=0 to get count, or just return 0 for now
-        # This is rarely used in the CLI hot path
+        try:
+            resp = self._client.get("/v1/health")
+            if resp.status_code == 200:
+                return resp.json().get("item_count", 0)
+        except Exception:
+            pass
         return 0
 
     def close(self) -> None:

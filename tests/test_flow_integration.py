@@ -625,23 +625,26 @@ class TestFlowCLI:
             return runner.invoke(app, list(args), env=env, catch_exceptions=False)
         yield invoke
         # Kill any daemon spawned during the test
-        pid_file = tmp_path / "processor.pid"
-        if pid_file.exists():
-            try:
-                pid = int(pid_file.read_text().strip())
-                os.kill(pid, signal.SIGTERM)
-                # Wait briefly for graceful shutdown, then force-kill
-                import time
-                for _ in range(10):
-                    time.sleep(0.2)
-                    try:
-                        os.kill(pid, 0)  # check if still alive
-                    except ProcessLookupError:
-                        break
-                else:
-                    os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, ValueError, OSError):
-                pass
+        import time
+        for pid_name in ("processor.pid",):
+            pid_file = tmp_path / pid_name
+            if pid_file.exists():
+                try:
+                    pid = int(pid_file.read_text().strip())
+                    os.kill(pid, signal.SIGTERM)
+                    for _ in range(10):
+                        time.sleep(0.2)
+                        try:
+                            os.kill(pid, 0)
+                        except ProcessLookupError:
+                            break
+                    else:
+                        os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, ValueError, OSError):
+                    pass
+        # Clean stale daemon files
+        for f in (".daemon.port", ".daemon.token", ".processor.lock"):
+            (tmp_path / f).unlink(missing_ok=True)
 
     def test_flow_help(self, cli):
         result = cli("flow", "--help")
