@@ -70,7 +70,6 @@ _ROUTES: list[tuple[str, str, str]] = [
     ("PATCH",  r"^/v1/notes/(?P<id>.+)/tags$",        "_handle_tag"),
     ("DELETE", r"^/v1/notes/(?P<id>.+)$",             "_handle_delete"),
     ("GET",    r"^/v1/notes/(?P<id>.+)$",             "_handle_get"),
-    ("POST",   r"^/v1/list$",                        "_handle_list"),
     ("POST",   r"^/v1/admin/reset-system-docs$",     "_handle_reset_system_docs"),
 ]
 
@@ -292,28 +291,6 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 for pid, items in results.deep_groups.items()
             ]
         self._json(200, resp)
-
-    def _handle_list(self, groups: dict):
-        body = self._read_body()
-        tag_keys = None
-        tag_dict = None
-        raw_tags = body.get("tags")
-        if isinstance(raw_tags, dict):
-            tag_dict = raw_tags
-        raw_tag_keys = body.get("tag_keys")
-        if isinstance(raw_tag_keys, list):
-            tag_keys = raw_tag_keys
-        results = self.keeper.list_items(
-            prefix=body.get("prefix"),
-            tags=tag_dict,
-            tag_keys=tag_keys,
-            since=body.get("since"),
-            until=body.get("until"),
-            order_by=body.get("order_by", "updated"),
-            include_hidden=body.get("include_hidden", False),
-            limit=body.get("limit", 20),
-        )
-        self._json(200, _items_response(results))
 
     def _handle_tag(self, groups: dict):
         body = self._read_body()

@@ -24,6 +24,7 @@ class Find:
         query = params.get("query")
         similar_to = params.get("similar_to")
         tags = params.get("tags") if isinstance(params.get("tags"), dict) else None
+        tag_keys = params.get("tag_keys") if isinstance(params.get("tag_keys"), list) else None
         prefix = params.get("prefix")
         since = params.get("since")
         until = params.get("until")
@@ -50,12 +51,15 @@ class Find:
         else:
             scope = None
 
+        list_all = bool(params.get("list_all"))
         has_selector = any([
             bool(query),
             bool(similar_to),
             bool(tags),
+            bool(tag_keys),
             bool(prefix),
             bool(since),
+            list_all,
         ])
         if not has_selector:
             raise ValueError("find requires one of query, similar_to, tags, prefix, or since")
@@ -89,15 +93,18 @@ class Find:
                 scope=scope,
             )
         else:
-            rows = context.list_items(
-                prefix=str(prefix) if prefix is not None else None,
-                tags=tags,
-                since=str(since) if since is not None else None,
-                until=str(until) if until is not None else None,
-                order_by=order_by,
-                include_hidden=include_hidden,
-                limit=fetch_limit,
-            )
+            list_kwargs: dict[str, Any] = {
+                "prefix": str(prefix) if prefix is not None else None,
+                "tags": tags,
+                "since": str(since) if since is not None else None,
+                "until": str(until) if until is not None else None,
+                "order_by": order_by,
+                "include_hidden": include_hidden,
+                "limit": fetch_limit,
+            }
+            if tag_keys:
+                list_kwargs["tag_keys"] = tag_keys
+            rows = context.list_items(**list_kwargs)
 
         # Apply bias exclusions (weight=0) before converting to result dicts
         if bias:

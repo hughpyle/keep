@@ -8,8 +8,10 @@ rules:
   - id: results
     do: find
     with:
+      list_all: "true"
       prefix: "{params.prefix}"
       tags: "{params.tags}"
+      tag_keys: "{params.tag_keys}"
       since: "{params.since}"
       until: "{params.until}"
       order_by: "{params.order_by}"

@@ -898,7 +898,7 @@ def list_cmd(
     port = _get_port()
     tag_dict, tag_keys = _parse_tag_args(tag)
 
-    body: dict = {
+    flow_params: dict = {
         "limit": limit,
         "order_by": sort,
         "since": since,
@@ -906,17 +906,19 @@ def list_cmd(
         "include_hidden": show_all or (prefix.startswith(".") if prefix else False),
     }
     if prefix:
-        body["prefix"] = prefix
+        flow_params["prefix"] = prefix
     if tag_dict:
-        body["tags"] = tag_dict
+        flow_params["tags"] = tag_dict
     if tag_keys:
-        body["tag_keys"] = tag_keys
+        flow_params["tag_keys"] = tag_keys
 
-    data = _post(port, "/v1/list", body)
+    resp = _post(port, "/v1/flow", {"state": "list", "params": flow_params})
+    results = resp.get("data", {}).get("results", {}).get("results", [])
+    data: dict = {"notes": results}
 
     # Filter to notes with parts if requested
     if with_parts:
-        notes = [n for n in data.get("notes", []) if n.get("tags", {}).get("_has_parts")]
+        notes = [n for n in results if n.get("tags", {}).get("_has_parts")]
         data = {"notes": notes}
 
     if _is_json(json_output):
@@ -1230,11 +1232,13 @@ def config(
     # --state-diagram: query server for .state/* docs, render locally
     if state_diagram:
         port = _get_port()
-        data = _post(port, "/v1/list", {
-            "prefix": ".state/", "include_hidden": True, "limit": 100,
+        resp = _post(port, "/v1/flow", {
+            "state": "list",
+            "params": {"prefix": ".state/", "include_hidden": True, "limit": 100},
         })
+        results = resp.get("data", {}).get("results", {}).get("results", [])
         state_docs: dict[str, str] = {}
-        for note in data.get("notes", []):
+        for note in results:
             nid = note.get("id", "")
             body = (note.get("summary") or "").strip()
             if nid.startswith(".state/") and body:
