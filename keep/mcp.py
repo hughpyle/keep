@@ -48,7 +48,13 @@ def _ensure_daemon() -> int:
 
 def _post(path: str, body: dict) -> tuple[int, dict]:
     """POST to the daemon. Returns (status, json_body)."""
-    return http_request("POST", _ensure_daemon(), path, body)
+    global _port
+    status, result = http_request("POST", _ensure_daemon(), path, body)
+    if status == 401:
+        # Daemon may have restarted on a new port. Re-resolve.
+        _port = None
+        status, result = http_request("POST", _ensure_daemon(), path, body)
+    return status, result
 
 
 # ---------------------------------------------------------------------------

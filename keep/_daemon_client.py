@@ -18,11 +18,12 @@ DEFAULT_PORT = 5337
 _auth_token: str = ""
 
 
-def _load_token(store_override: str | None = None) -> str:
+def _load_token(store_override: str | None = None, *, force: bool = False) -> str:
     """Read the daemon auth token from .daemon.token."""
     global _auth_token
-    if _auth_token:
+    if _auth_token and not force:
         return _auth_token
+    _auth_token = ""
     store = resolve_store_path(store_override)
     token_file = store / ".daemon.token"
     if token_file.exists():
@@ -66,6 +67,12 @@ def http_request(
             result = json.loads(resp.read())
             status = resp.status
             conn.close()
+            if status == 401 and attempt == 0:
+                # Token may be stale (daemon restarted). Re-read and retry.
+                _load_token(force=True)
+                if _auth_token:
+                    headers["Authorization"] = f"Bearer {_auth_token}"
+                continue
             return status, result
         except (ConnectionError, TimeoutError, http.client.RemoteDisconnected, OSError) as exc:
             last_exc = exc
