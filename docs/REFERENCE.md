@@ -10,16 +10,18 @@
 |---------|-------------|------|
 | `keep now` | Get or set current working intentions | [KEEP-NOW.md](KEEP-NOW.md) |
 | `keep put` | Add or update a document | [KEEP-PUT.md](KEEP-PUT.md) |
-| `keep get` | Retrieve item(s) by ID | [KEEP-GET.md](KEEP-GET.md) |
+| `keep get` | Retrieve note(s) by ID | [KEEP-GET.md](KEEP-GET.md) |
 | `keep find` | Search by meaning or text | [KEEP-FIND.md](KEEP-FIND.md) |
-| `keep list` | List recent items, filter by tags | [KEEP-LIST.md](KEEP-LIST.md) |
+| `keep list` | List recent notes, filter by tags | [KEEP-LIST.md](KEEP-LIST.md) |
 | `keep config` | Show configuration and paths | [KEEP-CONFIG.md](KEEP-CONFIG.md) |
-| `keep move` | Move versions into a named item (`-t` or `--only` required) | [KEEP-MOVE.md](KEEP-MOVE.md) |
+| `keep move` | Move versions into a named note | [KEEP-MOVE.md](KEEP-MOVE.md) |
 | `keep analyze` | Decompose a note into structural parts | [KEEP-ANALYZE.md](KEEP-ANALYZE.md) |
 | `keep prompt` | Render agent prompt with context | [KEEP-PROMPT.md](KEEP-PROMPT.md) |
 | `keep mcp` | Start MCP stdio server for AI agents | [KEEP-MCP.md](KEEP-MCP.md) |
-| `keep del` | Remove item or revert to previous version | — |
+| `keep edit` | Edit content in $EDITOR | — |
+| `keep del` | Remove note or revert to previous version | — |
 | `keep tag` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
+| `keep flow` | Run or inspect a state-machine flow | — |
 | `keep data export` | Export store to JSON for backup or migration | [KEEP-DATA.md](KEEP-DATA.md) |
 | `keep data import` | Import documents from JSON export file | [KEEP-DATA.md](KEEP-DATA.md) |
 | `keep pending` | Process pending tasks (summarize, embed, OCR, analyze, reindex) | — |
@@ -27,50 +29,25 @@
 ## Global Flags
 
 ```bash
-keep --json  (-j) <cmd>  # Output as JSON
-keep --ids   (-I) <cmd>  # Output only versioned IDs (for piping)
-keep --full  (-F) <cmd>  # Output full YAML frontmatter
+keep --json <cmd>        # Output as JSON (supported by most commands)
+keep --ids <cmd>         # Output only IDs, one per line (for piping)
+keep --full <cmd>        # Output full notes with context (overrides --ids)
 keep -v <cmd>            # Enable debug logging to stderr
 ```
 
+`--json`, `--ids`, and `--full` control output format globally. `--ids` is useful for shell composition (`keep find --ids foo | xargs keep get`). `--full` expands each result with frontmatter context. These are mutually exclusive; `--full` takes precedence over `--ids`.
+
 ## Output Formats
 
-Three output formats, consistent across all commands:
+Two output formats, consistent across all commands:
 
 ### Default: Summary Lines
-One line per item: `id date summary` (search results include score: `id (score) date summary`)
+One line per note: `id date summary` (search results include score: `id (score) date summary`)
 ```
 %a1b2c3d4         2026-01-14 URI detection should use proper scheme validation...
 %e5f6a7b8         (0.89) 2026-01-14 OAuth2 token refresh pattern...
 file:///path/doc  2026-01-15 Document about authentication patterns...
 ```
-
-### With `--ids`: Versioned IDs Only
-```
-%a1b2c3d4@V{0}
-file:///path/doc@V{0}
-```
-
-### With `--full`: YAML Frontmatter
-Full details with tags, similar items, and version navigation:
-```yaml
----
-id: %a1b2c3d4
-tags:
-  project: "myapp"
-  status: "reviewed"
-similar:
-  - %e5f6a7b8@V{0} (0.89) 2026-01-14 Related authentication...
-meta/todo:
-  - %c9d0e1f2 Update auth docs for new flow
-score: 0.823
-prev:
-  - @V{1} 2026-01-14 Previous summary text...
----
-Document summary here...
-```
-
-**Note:** `keep get` and `keep now` default to full format since they display a single item.
 
 ### With `--json`: JSON Output
 ```json
@@ -85,13 +62,10 @@ Part numbers are **1-indexed**: @P{1} = first part, @P{2} = second part, etc.
 ### Pipe Composition
 
 ```bash
-keep --ids find "auth" | xargs keep get              # Get full details for all matches
-keep --ids list -n 5 | xargs keep get                # Get details for recent items
-keep --ids list --tag project=foo | xargs keep tag --tag status=done
-keep --json --ids find "query"                       # JSON array: ["id@V{0}", ...]
+keep find "auth" --json | ...                        # Process search results
+keep list -n 5 --json | ...                          # Process recent notes
 
 # Version history composition
-keep --ids now --history | xargs -I{} keep get "{}"  # Get all versions
 diff <(keep get doc:1) <(keep get "doc:1@V{1}")      # Diff current vs previous
 ```
 
@@ -105,10 +79,8 @@ keep prompt reflect                   # Structured reflection practice
 keep prompt reflect "auth flow"       # Reflect with search context
 keep prompt query "what do I know about auth?"  # Answer from memory context
 keep prompt conversation              # Conversation analysis
-keep move "name" -t project=foo       # Move matching versions from now
-keep move "name" --only               # Move just the current version
-keep move "name" --from "source" -t X # Reorganize between items
-keep move "name" --only --analyze     # Move + decompose into parts
+keep move "name"                      # Move versions from now into named note
+keep move "name" --source "other"     # Move from a different source note
 
 # Add or update
 keep put "inline text" -t topic=auth  # Text mode
@@ -116,8 +88,10 @@ keep put file:///path/to/doc.pdf      # URI mode
 keep put /path/to/folder/             # Directory mode
 keep put /path/to/repo/ -r            # Recursive + git changelog
 keep put /path/ -r --watch            # Watch for changes
-keep put "note" --suggest-tags        # Show tag suggestions
-keep put doc.pdf --analyze            # Index + decompose into parts
+keep put /path/ -r -x "*.log"        # Recursive, excluding pattern
+keep put "note" -i my-id             # Specify note ID
+keep put "update" --summary "short"  # Provide explicit summary
+keep put /path/ -f                   # Force re-index
 keep get .ignore                      # View global ignore patterns
 keep edit .ignore                     # Edit ignore patterns in $EDITOR
 
@@ -127,32 +101,46 @@ keep get ID -V 1                      # Previous version
 keep get "ID@P{1}"                    # Part 1 (from analyze)
 keep get ID --history                 # List all versions
 keep get ID --parts                   # List structural parts
+keep get ID --similar                 # Show similar notes
+keep get ID --meta                    # Show metadata
+keep get ID -t project=foo            # Filter by tag
 keep edit ID                          # Edit content in $EDITOR
 keep edit .ignore                     # Edit system docs
 
 # Search
 keep find "query"                     # Semantic search
-keep find "query" --text              # Full-text search
-keep find "query" --deep              # Follow tags/edges to discover related items
+keep find "query" --deep              # Follow tags/edges to discover related notes
 keep find "query" --since P7D         # Last 7 days
+keep find "query" --until 2026-01-01  # Before a date
 keep find "query" --scope 'file:///path/*'  # Constrain to ID glob
+keep find "query" -t project=foo      # Filter by tag
+keep find "query" -a                  # Include all (no limit)
+keep find --id ID                     # Find by ID
 
 # List and filter
-keep list                            # Recent items
-keep list --tag project=myapp        # Filter by tag
-keep list --tags=                    # List all tag keys
+keep list                            # Recent notes
+keep list -t project=myapp           # Filter by tag
+keep list --sort created              # Sort order
+keep list --since P7D --until now    # Date range
+keep list --with-parts               # Only notes with parts
+keep list -a                         # Include system notes
+keep list "file:///"                 # Filter by ID prefix
 
-# Modify
-keep tag ID --tag key=value   # Add/update tag
-keep tag ID --remove key      # Remove tag
-keep tag "ID@P{1}" -t topic=x # Edit tags on a part
-keep del ID                          # Remove item or revert to previous version
+# Remove
+keep del ID                          # Remove note or revert to previous version
 
 # Analyze (skips if parts are already current)
 keep analyze ID                      # Decompose into parts (background)
 keep analyze ID -t topic -t type     # With guidance tags
 keep analyze ID --fg                 # Wait for completion
 keep analyze ID --force              # Re-analyze even if current
+
+# Flow
+keep flow                            # Show current flow state
+keep flow "state" -t target          # Transition to state
+keep flow -f file.yaml               # Load flow from file
+keep flow -b 10 -c cursor            # Budget and cursor control
+keep flow -p key=value               # Pass parameters
 
 # Data management
 keep data export backup.json         # Export store to JSON
@@ -162,9 +150,16 @@ keep data import backup.json -m replace  # Import (replace all)
 
 # Maintenance
 keep pending                         # Process pending tasks, tail progress
-keep pending --reindex               # Re-embed all items + process
-keep pending --retry                 # Reset failed items back to pending
+keep pending --reindex               # Re-embed all notes + process
+keep pending --retry                 # Reset failed notes back to pending
 keep pending --stop                  # Stop background processor
+
+# Config
+keep config                          # Show configuration
+keep config "path"                   # Show specific config path
+keep config --setup                  # Run interactive setup
+keep config --reset-system-docs      # Reset system docs
+keep config --state-diagram          # Show state diagram
 ```
 
 ## Python API
@@ -190,7 +185,7 @@ See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) for full details.
 - `put` / `put(uri=...)` — when referencing any file/URL worth remembering
 - `put` / `put("text")` — capture conversation insights, decisions, notes
 - `find` — before searching filesystem; may already be indexed
-- `find --since` — filter to recent items when recency matters
+- `find --since` — filter to recent notes when recency matters
 
 ## Topics
 
@@ -208,5 +203,3 @@ See [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) for full details.
 - [PYTHON-API.md](PYTHON-API.md) — Python API reference
 - [LANGCHAIN-INTEGRATION.md](LANGCHAIN-INTEGRATION.md) — LangChain/LangGraph integration
 - [ARCHITECTURE.md](ARCHITECTURE.md) — How it works under the hood
-- `.domains` — Domain organization patterns (`keep get .domains`)
-- `.conversations` — Conversation framework (`keep get .conversations`)

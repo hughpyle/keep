@@ -29,17 +29,17 @@ keep prompt reflect
 
 ## What It Does
 
-Store anything — notes, files, URLs — and `keep` summarizes, embeds, and tags each item. You search by meaning, not keywords. Content goes in as text, PDF, HTML, Office documents, audio, or images; what comes back is a summary with tags and semantic neighbors. Audio and image files auto-extract metadata tags (artist, album, camera, date, etc.).
+Store anything — notes, files, URLs — and `keep` summarizes, embeds, and tags each note. You search by meaning, by keyword, and by graph traversal. Content goes in as text, PDF, HTML, Office documents, audio, or images; what comes back is a summary with tags and semantic neighbors. Audio and image files auto-extract metadata tags (artist, album, camera, date, etc.).
 
-What makes this more than a vector store: tags become edges. Define a tag like `author` or `git_commit` and keep creates bidirectional links — a user-defined graph model where every tag can be a navigable relationship. When you retrieve any item, keep follows these edges and fires standing queries — surfacing open commitments, past learnings, referenced files, commit history. The right things appear at the right time, without manual graph construction.
+What makes this more than a vector store: tags become edges. Define a tag like `author` or `git_commit` and keep creates bidirectional links — a user-defined graph model where every tag can be a navigable relationship. When you retrieve any note, keep follows these edges and fires standing queries — surfacing open commitments, past learnings, referenced files, commit history. The right things appear at the right time, without manual graph construction.
 
 - **Summarize, embed, tag** — URLs, files, and text are summarized and indexed on ingest
 - **Contextual feedback** — Open commitments and past learnings surface automatically
-- **Semantic search** — Find by meaning, not keywords; scope to a folder or project
+- **Search** — Semantic similarity, BM25 full-text, and ranked graph traversal; scope to a folder or project
 - **Tag organization** — Speech acts, status, project, topic, type — structured and queryable
-- **Deep search** — Follow edges and tags from results to discover related items across the graph
+- **Deep search** — Follow edges and tags from results to discover related notes across the graph
 - **Edge tags** — Turn tags into navigable relationships with automatic inverse links
-- **Git changelog** — Commits indexed as searchable items with edges to touched files
+- **Git changelog** — Commits indexed as searchable notes with edges to touched files
 - **Parts** — `analyze` decomposes documents into searchable sections, each with its own embedding and tags
 - **Strings** — Every note is a string of versions; reorganize history by meaning with `keep move`
 - **Watches** — Daemon-driven directory and file monitoring; re-indexes on change
@@ -117,7 +117,7 @@ keep put ./my-project/ -r --watch
 
 # Search
 keep find "authentication flow" --limit 5
-keep find "auth" --deep                # Follow edges to discover related items
+keep find "auth" --deep                # Follow edges to discover related notes
 keep find "auth" --scope 'file:///Users/me/project/*'  # Scoped to a folder
 
 # Retrieve

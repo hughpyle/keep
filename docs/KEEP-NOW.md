@@ -17,37 +17,12 @@ echo "piped content" | keep now       # Set from stdin
 
 | Option | Description |
 |--------|-------------|
-| `--reset` | Reset to default from system |
-| `-V`, `--version N` | Version selector (`N>=0` from current, `N<0` from oldest; `-1` oldest) |
-| `-H`, `--history` | Expand version history in frontmatter |
-| `-t`, `--tag KEY=VALUE` | Set tag (with content) or filter (without content) |
-| `-n`, `--limit N` | Max similar/meta items to show (default 3) |
-| `--scope SCOPE` | Scope for multi-user isolation (e.g. user ID) |
-| `-s`, `--store PATH` | Override store directory |
+| `-t`, `--tag KEY=VALUE` | Set tag on the update (repeatable) |
+| `--truncate` | Truncate content to `max_inline_length` instead of failing |
 
-## Tag behavior
+## Version history
 
-Tags behave differently depending on mode:
-
-- **With content:** `-t` sets tags on the update
-- **Without content:** `-t` filters version history to find the most recent version with matching tags
-
-```bash
-keep now "Auth work" -t project=myapp   # Sets project=myapp tag
-keep now -t project=myapp               # Finds recent version with that tag
-```
-
-## Version navigation
-
-The nowdoc retains full history. Each update creates a new version.
-
-```bash
-keep now -V 1              # Previous intentions
-keep now -V 2              # Two versions ago
-keep now --history         # List all versions
-```
-
-Output includes `prev:` navigation for browsing version history. See [VERSIONING.md](VERSIONING.md) for details.
+The nowdoc retains full history. Each update creates a new version. See [VERSIONING.md](VERSIONING.md) for details.
 
 ## Similar items and meta sections
 

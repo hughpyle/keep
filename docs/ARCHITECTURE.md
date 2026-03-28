@@ -2,9 +2,7 @@
 
 ## What is keep?
 
-**keep** is a reflective memory system providing persistent storage with vector similarity search. It's designed as an agent skill for Claude Code, OpenClaw, LangChain/LangGraph, and other agentic environments, enabling agents to remember information across sessions over time.
-
-Think of it as: **vector search + embeddings + summarization + tagging** wrapped in a simple API.
+**keep** is a reflective memory system. It gives agents a comprehensive tool for persistent indexing, tagging, entity relationship management, summarization, semantic and timeline analysis, and powerful contextual recall. It's designed as an agent skill for Claude Code, OpenClaw, LangChain/LangGraph, and other agentic environments, enabling agents to remember information across sessions over time.
 
 Published by Hugh Pyle, "inguz ᛜ outcomes", under the MIT license.
 Contributions are welcome; code is conversation, "right speech" is encouraged.

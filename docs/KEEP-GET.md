@@ -19,13 +19,11 @@ keep get "ID@V{-1}"                   # Same as -V -1
 |--------|-------------|
 | `-V`, `--version N` | Version selector (`N>=0` from current, `N<0` from oldest; `-1` oldest) |
 | `-H`, `--history` | Expand version history in frontmatter (default 10, use `-n` to override) |
-| `-S`, `--similar` | List similar items (default 10) |
-| `-M`, `--meta` | List meta items |
-| `-R`, `--resolve QUERY` | Inline meta query (meta-tag syntax, repeatable) |
+| `-S`, `--similar` | List similar notes (default 10) |
+| `-M`, `--meta` | List meta notes |
 | `-P`, `--parts` | Expand all parts in frontmatter (from `analyze`) |
-| `-t`, `--tag KEY=VALUE` | Require tag (error if item doesn't match) |
+| `-t`, `--tag KEY=VALUE` | Require tag (error if note doesn't match) |
 | `-n`, `--limit N` | Max items for --history, --similar, --meta (default 10) |
-| `-s`, `--store PATH` | Override store directory |
 
 ## Default output
 

@@ -24,12 +24,12 @@ Directory mode indexes all regular files in the folder (non-recursive by default
 | `-t`, `--tag KEY=VALUE` | Tag as key=value (repeatable) |
 | `-i`, `--id ID` | Custom document ID (auto-generated for text/stdin) |
 | `--summary TEXT` | User-provided summary (skips auto-summarization) |
-| `-r`, `--recursive` | Recurse into subdirectories (directory mode) |
+| `-r`, `--recurse` | Recurse into subdirectories (directory mode) |
 | `-x`, `--exclude PATTERN` | Glob pattern to exclude (repeatable, directory mode) |
 | `--watch` | Set up a daemon watch — re-index automatically on file changes |
-| `--suggest-tags` | Show tag suggestions from similar items |
-| `--analyze` | Queue background analysis after put (skips if parts are already current) |
-| `-s`, `--store PATH` | Override store directory |
+| `--unwatch` | Remove an existing watch |
+| `--interval DURATION` | Polling interval for watches (ISO 8601 duration, e.g. `PT5M`) |
+| `-f`, `--force` | Force re-index even if content is unchanged |
 
 ## Directory mode
 
@@ -85,15 +85,6 @@ Same content = same ID = enables versioning through tag changes.
 - **`--summary` provided**: used as-is, skips auto-summarization
 
 The LLM prompt used for summarization is configurable. Create a `.prompt/summarize/*` document whose match rules target specific tags, and its `## Prompt` section replaces the default summarization prompt for matching documents. See [PROMPTS.md](PROMPTS.md) for details.
-
-## Tag suggestions
-
-The `--suggest-tags` flag shows tags from similar existing items, helping maintain consistent tagging:
-
-```bash
-keep put "OAuth2 token handling" --suggest-tags
-# Suggests: project=myapp (3 similar), topic=auth (5 similar)
-```
 
 ## Update behavior
 

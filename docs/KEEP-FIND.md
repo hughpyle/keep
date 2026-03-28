@@ -1,48 +1,39 @@
 # keep find
 
-Find items by semantic similarity or full-text search.
+Find notes by unified semantic + full-text search.
 
 ## Usage
 
 ```bash
-keep find "authentication"            # Semantic similarity search
-keep find "auth" --text               # Full-text search on summaries
-keep find --id ID                     # Find items similar to an existing item
+keep find "authentication"            # Unified semantic + full-text search
+keep find --id ID                     # Find notes similar to an existing note
 ```
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `--text` | Use full-text search instead of semantic similarity |
-| `--id ID` | Find items similar to this ID (instead of text query) |
-| `--include-self` | Include the queried item (only with `--id`) |
+| `--id ID` | Find notes similar to this ID (instead of text query) |
 | `-t`, `--tag KEY=VALUE` | Filter by tag (repeatable, AND logic) |
 | `-n`, `--limit N` | Maximum results (default 10) |
-| `--since DURATION` | Only items updated since (see time filtering below) |
-| `--until DURATION` | Only items updated before (see time filtering below) |
-| `-D`, `--deep` | Follow tags/edges from results to discover related items |
-| `-S`, `--scope GLOB` | Constrain results to IDs matching glob pattern |
-| `--tags` | Show non-system tags for each result |
-| `-H`, `--history` | Include archived versions of matching items |
-| `--tokens N` | Token budget for rich context output (includes parts and versions) |
+| `--since DURATION` | Only notes updated since (see time filtering below) |
+| `--until DURATION` | Only notes updated before (see time filtering below) |
+| `-D`, `--deep` | Follow tags/edges from results to discover related notes |
 | `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
-| `-s`, `--store PATH` | Override store directory |
+| `-S`, `--scope GLOB` | Constrain results to IDs matching glob pattern |
 
-## Semantic vs full-text search
+## Unified search
 
-**Semantic search** (default) finds items by meaning using embeddings. "authentication" matches items about "login", "OAuth", "credentials" even if they don't contain the word "authentication".
+Search is unified semantic + full-text: a query like "authentication" finds notes by meaning using embeddings *and* by matching words in summaries. Results from both strategies are merged and ranked.
 
-**Full-text search** (`--text`) matches exact words in summaries. Faster but literal.
+## Similar-to-note search
 
-## Similar-to-item search
-
-Find items similar to an existing document:
+Find notes similar to an existing document:
 
 ```bash
 keep find --id file:///path/to/doc.md           # Similar to this document
-keep find --id %a1b2c3d4                        # Similar to this item
-keep find --id %a1b2c3d4 --since P30D           # Similar items from last 30 days
+keep find --id %a1b2c3d4                        # Similar to this note
+keep find --id %a1b2c3d4 --since P30D           # Similar notes from last 30 days
 ```
 
 ## Tag filtering
@@ -79,11 +70,11 @@ Results are displayed as summary lines with similarity score and date:
 %e5f6a7b8         (0.82) 2026-01-13 Token handling and session management...
 ```
 
-Dates reflect when the item was created. Use `--full` for complete frontmatter with tags, similar items, and version navigation.
+Dates reflect when the note was created. Use `--full` for complete frontmatter with tags, similar notes, and version navigation.
 
 ## Scoped search
 
-Constrain results to items whose IDs match a glob pattern:
+Constrain results to notes whose IDs match a glob pattern:
 
 ```bash
 keep find "auth" --scope 'file:///Users/me/notes/*'       # Only files in notes/
@@ -91,30 +82,22 @@ keep find "auth" --scope 'file:///path/to/memory*'         # memory/ dir + MEMOR
 keep find "auth" --scope '*myproject*'                      # IDs containing myproject
 ```
 
-The search runs globally (traversing all items for semantic matching), but only items whose base ID matches the glob are returned. Deep search can follow edges through out-of-scope items, but results are still scoped.
+The search runs globally (traversing all notes for semantic matching), but only notes whose base ID matches the glob are returned. Deep search can follow edges through out-of-scope notes, but results are still scoped.
 
 ## Deep search
 
-Deep search (`--deep`) follows tags and edges from the primary results to discover related items that wouldn't appear in a normal search. Results are grouped under the primary item that led to them.
+Deep search (`--deep`) follows tags and edges from the primary results to discover related notes that wouldn't appear in a normal search. Results are grouped under the primary note that led to them.
 
 ```bash
-keep find "authentication" --deep      # Primary results + related items
+keep find "authentication" --deep      # Primary results + related notes
 keep find "auth" --deep -n 5           # Top 5 with deep groups
 ```
 
-When edge tags are defined (see [EDGE-TAGS.md](EDGE-TAGS.md)), deep search follows edges to find related items via graph traversal. Without edges, it falls back to tag-based discovery — finding items that share tags with the primary results.
-
-Deep search is incompatible with `--history`; if both are specified, `--deep` is ignored.
-
-## Including archived versions
-
-```bash
-keep find "auth" --history             # Also search old versions of items
-```
+When edge tags are defined (see [EDGE-TAGS.md](EDGE-TAGS.md)), deep search follows edges to find related notes via graph traversal. Without edges, it falls back to tag-based discovery — finding notes that share tags with the primary results.
 
 ## See Also
 
 - [KEEP-LIST.md](KEEP-LIST.md) — List and filter by tags
-- [KEEP-GET.md](KEEP-GET.md) — Retrieve full item details
+- [KEEP-GET.md](KEEP-GET.md) — Retrieve full note details
 - [TAGGING.md](TAGGING.md) — Tag filtering patterns
 - [REFERENCE.md](REFERENCE.md) — Quick reference index

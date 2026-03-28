@@ -1,6 +1,6 @@
 # keep list
 
-List recent items, filter by tags, or list tag keys and values.
+List recent items or filter by tags and prefix.
 
 ## Usage
 
@@ -16,18 +16,14 @@ keep list .tag/act                    # Items under ".tag/act/"
 
 | Argument / Option | Description |
 |--------|-------------|
-| `PREFIX` | Optional positional — filter items by ID prefix |
-| `-n`, `--limit N` | Maximum results (default 10) |
+| `PREFIX` | Optional positional — filter notes by ID prefix or glob (e.g. `session-*`) |
 | `-t`, `--tag KEY=VALUE` | Filter by tag (repeatable, AND logic) |
-| `-T`, `--tags=` | List all tag keys |
-| `-T`, `--tags=KEY` | List values for a specific tag key |
-| `--sort ORDER` | Sort by `updated` (default) or `accessed` |
-| `--since DURATION` | Only items updated since (ISO duration or date) |
-| `--until DURATION` | Only items updated before (ISO duration or date) |
-| `-H`, `--history` | Include archived versions |
-| `-P`, `--parts` | Include structural parts (from `analyze`) |
+| `--sort ORDER` | Sort by `updated` (default), `accessed`, `created`, or `id` |
+| `-n`, `--limit N` | Maximum results (default 20) |
+| `--since DURATION` | Only notes updated since (ISO duration or date) |
+| `--until DURATION` | Only notes updated before (ISO duration or date) |
+| `--with-parts` | Only show notes that have been analyzed into parts |
 | `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
-| `-s`, `--store PATH` | Override store directory |
 
 ## Prefix filtering
 
@@ -48,15 +44,6 @@ keep list --tag foo --tag bar         # Items with both tags (AND)
 keep list --tag project --since P7D   # Combine tag filter with recency
 ```
 
-## Listing tags
-
-The `--tags` option (note: different from `--tag`) lists tag metadata:
-
-```bash
-keep list --tags=                     # List all distinct tag keys
-keep list --tags=project              # List all values for 'project' tag
-```
-
 ## Time filtering
 
 ```bash
@@ -68,11 +55,10 @@ keep list --until 2026-02-01         # Before specific date
 keep list --since P30D --until P7D   # Between 30 and 7 days ago
 ```
 
-## Including versions and parts
+## Filtering by parts
 
 ```bash
-keep list --history                   # Include archived versions
-keep list --parts                     # Include structural parts (from analyze)
+keep list --with-parts                # Only notes analyzed into parts
 ```
 
 ## Pipe composition
