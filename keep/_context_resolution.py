@@ -24,6 +24,7 @@ from .types import (
     local_date,
     normalize_id,
     is_part_id,
+    parse_version_ref,
 )
 from .utils import _is_hidden, _parse_meta_doc
 
@@ -186,6 +187,11 @@ class ContextResolutionMixin:
             except Exception as e:
                 logger.warning("System doc migration deferred: %s", e, exc_info=True)
 
+        # Parse @V{N} version ref from ID (explicit version= takes precedence)
+        base_id, id_version = parse_version_ref(id)
+        if id_version is not None and version is None:
+            version = id_version
+            id = base_id
         id = normalize_id(id)
         resolved = self.resolve_version_offset(id, version)
         if resolved is None:

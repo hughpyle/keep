@@ -171,7 +171,7 @@ function registerBootstrapContextEngine(api: any, mode: "install" | "configure")
       info: {
         id: "keep",
         name: "keep (setup required)",
-        version: "0.115.3",
+        version: "0.115.4",
         ownsCompaction: false,
       },
       async assemble(params: { messages: any[]; tokenBudget?: number }) {
@@ -625,7 +625,7 @@ export default function register(api: any) {
       info: {
         id: "keep",
         name: "keep reflective memory",
-        version: "0.115.3",
+        version: "0.115.4",
         ownsCompaction: false,
       },
 
@@ -792,7 +792,7 @@ export default function register(api: any) {
           const prompt = params.prompt
             ?? (() => {
               const lastUser = [...params.messages].reverse().find((m: any) => m.role === "user");
-              return lastUser ? truncate(extractText(lastUser.content), 500) : "";
+              return lastUser ? truncate(extractText(lastUser.content), maxInlineLength) : "";
             })();
 
           const totalBudget = params.tokenBudget || 8000;

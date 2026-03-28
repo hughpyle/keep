@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "keep now 'User prompt: ${.prompt:500}' -t 'session=${.session_id}' 2>/dev/null || echo 'keep warning: memory not recorded — embedding provider unavailable. Run: ollama serve'",
+            "command": "keep now 'User prompt: ${.prompt|text}' --truncate -t 'session=${.session_id}' 2>/dev/null || echo 'keep warning: memory not recorded — embedding provider unavailable. Run: ollama serve'",
             "statusMessage": "Reflecting..."
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "keep now 'Assistant response: ${.last_assistant_message:1000}' -t 'session=${.session_id}' 2>/dev/null || echo 'keep warning: memory not recorded — embedding provider unavailable. Run: ollama serve'",
+            "command": "keep now 'Assistant response: ${.last_assistant_message}' --truncate -t 'session=${.session_id}' 2>/dev/null || echo 'keep warning: memory not recorded — embedding provider unavailable. Run: ollama serve'",
             "statusMessage": "Reflecting..."
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "keep now 'Subagent response: ${.last_assistant_message:500}' -t 'session=${.session_id}' 2>/dev/null || echo 'keep warning: memory not recorded — embedding provider unavailable. Run: ollama serve'",
+            "command": "keep now 'Subagent response: ${.last_assistant_message}' --truncate -t 'session=${.session_id}' 2>/dev/null || echo 'keep warning: memory not recorded — embedding provider unavailable. Run: ollama serve'",
             "statusMessage": "Reflecting..."
           }
         ]

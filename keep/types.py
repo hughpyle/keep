@@ -95,6 +95,12 @@ _ID_BLOCKED_RE = re.compile(r'[\x00-\x1f\x7f\\`<>|;"\']')
 # Part ID suffix: @p or @P followed by optional braces and digits
 _PART_ID_RE = re.compile(r'@[pP]\{?\d+\}?$')
 
+# Version ref suffix: @V{N} (display format only — not stored in IDs)
+_VERSION_REF_RE = re.compile(r'@V\{(\d+)\}$')
+
+# Combined: any ref suffix (@V{N}, @P{N}, @p{N})
+_REF_SUFFIX_RE = re.compile(r'@([VvPp])\{?(\d+)\}?$')
+
 
 def is_part_id(id: str) -> bool:
     """Check if an ID looks like a part reference (e.g. 'doc@p3' or 'doc@P{3}')."""
@@ -109,6 +115,18 @@ def parse_part_id(id: str) -> tuple[str, int]:
     base = id[:m.start()]
     digits = "".join(c for c in m.group() if c.isdigit())
     return base, int(digits)
+
+
+def parse_version_ref(id: str) -> tuple[str, int | None]:
+    """Extract @V{N} version suffix from an ID.
+
+    Returns (base_id, version_offset) where version_offset is None
+    if no @V{N} suffix is present.
+    """
+    m = _VERSION_REF_RE.search(id)
+    if not m:
+        return id, None
+    return id[:m.start()], int(m.group(1))
 
 
 def validate_tag_key(key: str) -> None:
@@ -233,11 +251,18 @@ def normalize_id(id: str) -> str:
 
     For HTTP/HTTPS URIs, applies RFC 3986 §6.2.2 safe normalizations
     so that equivalent URIs map to the same document ID.
+    Normalizes display-format part refs (@P{N}) to storage format (@p{N}).
     For all other IDs, validates only.
 
     Returns the (possibly normalized) ID.
     Raises ValueError for invalid IDs.
     """
+    # Normalize @P{N} display format → @p{N} storage format before validation
+    m = _PART_ID_RE.search(id)
+    if m and 'P' in m.group():
+        base = id[:m.start()]
+        digits = "".join(c for c in m.group() if c.isdigit())
+        id = f"{base}@p{digits}"
     validate_id(id)
     id = unicodedata.normalize("NFC", id)
     if id[:8].lower().startswith(('http://', 'https://')):

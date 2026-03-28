@@ -75,11 +75,10 @@ export default function register(api: any) {
       let now: string | null;
       const trimmed = userText.trim();
       if (trimmed) {
-        const truncated = trimmed.slice(0, 500);
         // Update + get context in one call (set_now outputs context with similar/meta)
-        const args = ["now", "-n", "10"];
+        const args = ["now", "--truncate", "-n", "10"];
         if (sid) args.push("-t", `session=${sid}`);
-        now = runKeep(args, truncated);
+        now = runKeep(args, trimmed);
       } else {
         now = runKeep(["now", "-n", "10"]);
       }

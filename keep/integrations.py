@@ -77,7 +77,7 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "jq -r '\"User prompt: \" + .prompt[:500]' 2>/dev/null | keep now 2>/dev/null || true",
+                    "command": "keep now 'User prompt: ${.prompt|text}' --truncate 2>/dev/null || true",
                     "statusMessage": "Reflecting...",
                 }
             ],

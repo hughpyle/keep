@@ -36,12 +36,14 @@ def _q(id: str) -> str:
 # ---------------------------------------------------------------------------
 # Stdin JSON template expansion
 # ---------------------------------------------------------------------------
-# Hooks pipe JSON on stdin.  ${.field} and ${.field:N} (truncate to N chars)
-# expand from that JSON, removing the jq dependency.
+# Hooks pipe JSON on stdin.  ${.field}, ${.field|text} (strip XML tags),
+# and ${.field:N} (truncate to N chars) expand from that JSON.
 
 import re
 
-_TEMPLATE_RE = re.compile(r'\$\{\.([A-Za-z_][A-Za-z0-9_]*)(?::(\d+))?\}')
+_TEMPLATE_RE = re.compile(r'\$\{\.([A-Za-z_][A-Za-z0-9_]*)(?:\|([a-z]+))?(?::(\d+))?\}')
+# Strip XML-style tags from text (used by |text template filter)
+_XML_TAG_RE = re.compile(r'<([a-z][\w-]*)[\s>].*?</\1>', re.DOTALL)
 _STDIN_JSON_SENTINEL = object()
 _stdin_json_cache = _STDIN_JSON_SENTINEL
 
@@ -79,13 +81,18 @@ def _has_templates(s: str | None) -> bool:
 
 
 def _expand_template(s: str, data: dict) -> str:
-    """Expand ${.field} and ${.field:N} in *s* from *data*."""
+    """Expand ${.field}, ${.field|filter}, and ${.field:N} in *s* from *data*.
+
+    Filters: |text — strip XML-style tags from the value.
+    """
     def _replace(m: re.Match) -> str:
-        key, limit = m.group(1), m.group(2)
+        key, filt, limit = m.group(1), m.group(2), m.group(3)
         val = data.get(key)
         if val is None:
             return ''
         result = str(val)
+        if filt == 'text':
+            result = _XML_TAG_RE.sub('', result).strip()
         if limit:
             result = result[:int(limit)]
         return result
@@ -988,6 +995,7 @@ def delete_alias(id: Annotated[list[str], typer.Argument(help="Item ID(s)")]):
 def now(
     content: Annotated[Optional[str], typer.Argument(help="New content")] = None,
     tags: Annotated[Optional[list[str]], typer.Option("-t", "--tag", help="Tags")] = None,
+    truncate_flag: Annotated[bool, typer.Option("--truncate", help="Truncate content to max_inline_length instead of failing")] = False,
     json_output: JsonFlag = False,
 ):
     """Get or set the current working intentions.
@@ -1002,6 +1010,13 @@ def now(
 
     port = _get_port()
     if content:
+        if truncate_flag:
+            from .config import load_or_create_config
+            from .paths import get_config_dir
+            config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
+            cfg = load_or_create_config(config_dir)
+            if len(content) > cfg.max_inline_length:
+                content = content[:cfg.max_inline_length]
         parsed_tags, _ = _parse_tag_args(tags)
         _post(port, "/v1/notes", {"content": content, "id": "now", "tags": parsed_tags or None})
     data = _get(port, f"/v1/notes/{_q('now')}/context")
