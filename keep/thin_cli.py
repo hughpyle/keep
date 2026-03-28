@@ -1258,14 +1258,17 @@ def help_cmd(
 # Delegate commands — these stay with the full CLI
 # ---------------------------------------------------------------------------
 
-@app.command(context_settings={"allow_extra_args": True, "allow_interspersed_args": True})
+@app.command()
 def pending(
-    ctx: typer.Context,
     stop: Annotated[bool, typer.Option("--stop", help="Stop the background daemon")] = False,
+    list_items: Annotated[bool, typer.Option("--list", "-l", help="List pending work items")] = False,
+    reindex: Annotated[bool, typer.Option("--reindex", help="Enqueue all items for re-embedding")] = False,
+    retry: Annotated[bool, typer.Option("--retry", help="Reset failed items back to pending")] = False,
+    purge: Annotated[bool, typer.Option("--purge", help="Delete all pending work items")] = False,
+    daemon: Annotated[bool, typer.Option("--daemon", hidden=True, help="Run as background daemon")] = False,
 ):
     """Process pending background tasks."""
     if stop:
-        # Lightweight stop — no Keeper needed, just read PID and signal
         import signal
         from ._daemon_client import resolve_store_path
         store_path = resolve_store_path(_global_store)
@@ -1282,12 +1285,55 @@ def pending(
             pid_file.unlink(missing_ok=True)
         except (ValueError, OSError) as e:
             typer.echo(f"Error stopping daemon: {e}", err=True)
-        # Clean up stale files
         (store_path / ".daemon.port").unlink(missing_ok=True)
         (store_path / ".daemon.token").unlink(missing_ok=True)
         return
-    from keep.cli import app as full_app
-    full_app(["pending"] + ctx.args, standalone_mode=False)
+
+    from .api import Keeper
+    from ._daemon_client import resolve_store_path
+    kp = Keeper(store_path=resolve_store_path(_global_store))
+
+    if daemon:
+        from .cli import run_pending_daemon
+        run_pending_daemon(kp)
+        return
+
+    if purge:
+        wq = kp._get_work_queue()
+        n = wq.purge()
+        typer.echo(f"Purged {n} pending work items.", err=True)
+        kp.close()
+        return
+
+    if retry:
+        n = kp._pending_queue.retry_failed()
+        if n:
+            typer.echo(f"Reset {n} failed items back to pending.", err=True)
+        else:
+            typer.echo("No failed items to retry.", err=True)
+            kp.close()
+            return
+
+    if reindex:
+        count = kp.count()
+        if count == 0:
+            typer.echo("No notes to reindex.")
+            kp.close()
+            raise typer.Exit(0)
+        typer.echo(f"Enqueuing {count} notes for reindex...", err=True)
+        stats = kp.enqueue_reindex()
+        typer.echo(f"Enqueued {stats['enqueued']} items + {stats['versions']} versions", err=True)
+
+    if list_items:
+        from .cli import print_pending_list
+        print_pending_list(kp)
+        kp.close()
+        return
+
+    # Interactive mode: show status, ensure daemon running, tail log
+    from .cli import print_pending_interactive
+    print_pending_interactive(kp)
+    kp.close()
 
 
 @app.command()
@@ -1311,7 +1357,6 @@ def config(
     Special paths: file, tool, store, docs, mcpb, providers
     Dotted paths: providers.embedding, tags, etc.
     """
-    # --reset-system-docs: server-side operation
     if reset_system_docs:
         port = _get_port()
         data = _post(port, "/v1/admin/reset-system-docs", {})
@@ -1319,7 +1364,6 @@ def config(
         typer.echo(f"Reset {count} system documents")
         return
 
-    # --state-diagram: query server for .state/* docs, render locally
     if state_diagram:
         port = _get_port()
         resp = _post(port, "/v1/flow", {
@@ -1340,30 +1384,69 @@ def config(
         typer.echo(state_doc_diagram(state_docs))
         return
 
-    # Everything else delegates to the full CLI
-    from keep.cli import app as full_app
-    is_json = json_output or (ctx.parent and ctx.parent.params.get("json_output", False))
-    args = []
-    if is_json:
-        args.append("--json")
-    args.append("config")
-    if path:
-        args.append(path)
     if setup:
-        args.append("--setup")
-    try:
-        full_app(args, standalone_mode=True)
-    except SystemExit as e:
-        if e.code:
-            raise typer.Exit(e.code)
+        from .paths import get_config_dir
+        from .setup_wizard import run_wizard
+        from ._daemon_client import resolve_store_path
+        store_path = resolve_store_path(_global_store)
+        config_dir = store_path if _global_store else get_config_dir()
+        run_wizard(config_dir, store_path, restart_command="keep config --setup")
+        return
+
+    from .config import load_or_create_config
+    from .paths import get_config_dir, get_default_store_path
+    from .cli import _get_config_value, _format_config_with_defaults
+
+    config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
+    cfg = load_or_create_config(config_dir)
+    store_path = get_default_store_path(cfg) if not _global_store else _global_store
+
+    if path:
+        try:
+            value = _get_config_value(cfg, Path(str(store_path)), path)
+        except typer.BadParameter as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1)
+        is_json = json_output or (ctx.parent and ctx.parent.params.get("json_output", False))
+        if is_json:
+            typer.echo(json.dumps({path: value}, indent=2))
+        elif isinstance(value, (list, dict)):
+            typer.echo(json.dumps(value))
+        else:
+            typer.echo(value)
+        return
+
+    is_json = json_output or (ctx.parent and ctx.parent.params.get("json_output", False))
+    if is_json:
+        import importlib.resources
+        from .cli import get_tool_directory
+        result = {
+            "file": str(cfg.config_path) if cfg else None,
+            "tool": str(get_tool_directory()),
+            "docs": str(get_tool_directory() / "docs"),
+            "store": str(store_path),
+            "openclaw-plugin": str(Path(str(importlib.resources.files("keep"))) / "data" / "openclaw-plugin"),
+            "providers": {
+                "embedding": cfg.embedding.name if cfg and cfg.embedding else None,
+                "summarization": cfg.summarization.name if cfg else None,
+                "document": cfg.document.name if cfg else None,
+            },
+        }
+        if cfg and cfg.default_tags:
+            result["tags"] = cfg.default_tags
+        typer.echo(json.dumps(result, indent=2))
+    else:
+        typer.echo(_format_config_with_defaults(cfg, Path(str(store_path))))
 
 
 @app.command(hidden=True)
-def doctor(ctx: typer.Context):
-    """Diagnostic checks (delegates to full CLI)."""
-    from keep.cli import app as full_app
-    full_app(["doctor"] + ctx.args, standalone_mode=False)
-
+def doctor(
+    log: Annotated[bool, typer.Option("--log", "-l", help="Tail the ops log")] = False,
+    use_faulthandler: Annotated[bool, typer.Option("--faulthandler", help="Enable faulthandler")] = False,
+):
+    """Diagnostic checks for debugging setup and crash issues."""
+    from .cli import doctor as doctor_impl
+    doctor_impl(log=log, use_faulthandler=use_faulthandler)
 
 
 @app.command()
@@ -1376,24 +1459,98 @@ def mcp(ctx: typer.Context):
 
 
 # ---------------------------------------------------------------------------
-# Data management subcommands — delegate to full CLI for file I/O
+# Data management subcommands
 # ---------------------------------------------------------------------------
 
 data_app = typer.Typer(
     name="data",
     help="Data management — export, import.",
-    context_settings={"allow_extra_args": True, "allow_interspersed_args": True},
     rich_markup_mode=None,
 )
 app.add_typer(data_app)
 
 
-@data_app.callback(invoke_without_command=True)
-def data_callback(ctx: typer.Context):
-    """Delegates to full CLI."""
-    from keep.cli import app as full_app
-    args = ["data"] + (ctx.invoked_subcommand or "").split() + ctx.args
-    full_app([a for a in args if a], standalone_mode=False)
+@data_app.command("export")
+def data_export(
+    output: Annotated[str, typer.Argument(help="Output file path (use '-' for stdout)")],
+    exclude_system: Annotated[bool, typer.Option("--exclude-system", help="Exclude system documents")] = False,
+):
+    """Export the store to JSON for backup or migration."""
+    from .api import Keeper
+    from ._daemon_client import resolve_store_path
+    kp = Keeper(store_path=resolve_store_path(_global_store))
+    it = kp.export_iter(include_system=not exclude_system)
+    header = next(it)
+
+    dest = sys.stdout if output == "-" else open(output, "w", encoding="utf-8")
+    try:
+        dest.write("{\n")
+        for key in ("format", "version", "exported_at", "store_info"):
+            dest.write(f"  {json.dumps(key)}: {json.dumps(header[key], ensure_ascii=False)},\n")
+        dest.write('  "documents": [\n')
+        first = True
+        for doc in it:
+            if not first:
+                dest.write(",\n")
+            dest.write("    " + json.dumps(doc, ensure_ascii=False))
+            first = False
+        dest.write("\n  ]\n}\n")
+    finally:
+        if dest is not sys.stdout:
+            dest.close()
+    kp.close()
+
+    if output != "-":
+        info = header["store_info"]
+        typer.echo(
+            f"Exported {info['document_count']} documents "
+            f"({info['version_count']} versions, {info['part_count']} parts) "
+            f"to {output}",
+            err=True,
+        )
+
+
+@data_app.command("import")
+def data_import(
+    file: Annotated[str, typer.Argument(help="JSON export file to import")],
+    mode: Annotated[str, typer.Option("--mode", "-m", help="merge or replace")] = "merge",
+):
+    """Import documents from a JSON export file."""
+    if mode not in ("merge", "replace"):
+        typer.echo(f"Error: --mode must be 'merge' or 'replace', got '{mode}'", err=True)
+        raise SystemExit(1)
+
+    if file == "-":
+        data = json.loads(sys.stdin.read())
+    else:
+        p = Path(file)
+        if not p.exists():
+            typer.echo(f"Error: file not found: {file}", err=True)
+            raise SystemExit(1)
+        data = json.loads(p.read_text(encoding="utf-8"))
+
+    if mode == "replace":
+        doc_count = len(data.get("documents", []))
+        if not typer.confirm(
+            f"This will delete all existing documents and import {doc_count} from {file}. Continue?"
+        ):
+            raise SystemExit(0)
+
+    from .api import Keeper
+    from ._daemon_client import resolve_store_path
+    kp = Keeper(store_path=resolve_store_path(_global_store))
+    stats = kp.import_data(data, mode=mode)
+    kp.close()
+
+    typer.echo(
+        f"Imported {stats['imported']} documents "
+        f"({stats['versions']} versions, {stats['parts']} parts), "
+        f"skipped {stats['skipped']}. "
+        f"Queued {stats['queued']} for embedding.",
+        err=True,
+    )
+    if stats["queued"] > 0:
+        typer.echo("Run 'keep pending' to process embeddings.", err=True)
 
 
 def main():

@@ -442,6 +442,7 @@ def make_action_runner(
     writable: bool = False,
     item_id: str | None = None,
     item_content: str | None = None,
+    context_cache: Any | None = None,
 ) -> ActionRunner:
     """Create an action runner backed by a FlowRuntimeEnv.
 
@@ -463,9 +464,16 @@ def make_action_runner(
     )
 
     def _run(action_name: str, params: dict[str, Any]) -> dict[str, Any]:
+        if context_cache is not None:
+            cached = context_cache.check(action_name, params, ctx)
+            if cached is not None:
+                return cached
         act = get_action(action_name)
         output = act.run(params, ctx)
-        return dict(output) if isinstance(output, dict) else {}
+        result = dict(output) if isinstance(output, dict) else {}
+        if context_cache is not None:
+            context_cache.store(action_name, params, result)
+        return result
 
     return _run
 

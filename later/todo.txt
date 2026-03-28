@@ -1,6 +1,8 @@
 
 * result cacheing
 
+* when get a system doc, don't get_context, just return it.
+
 * mcp "tried_queries" remove??
 
 * reranking (including a local provider)

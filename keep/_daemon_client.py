@@ -168,16 +168,21 @@ def get_port(store_override: str | None = None) -> int:
     # Auto-start daemon (generates new token)
     global _auth_token
     _auth_token = ""  # clear stale token
+    # Remove stale token/port files so we don't poll with old credentials
+    (store_path / ".daemon.token").unlink(missing_ok=True)
+    port_file.unlink(missing_ok=True)
     print("Starting daemon...", file=sys.stderr)
     start_daemon(store_path)
 
     # Poll for readiness
     deadline = time.monotonic() + 15.0
-    token_loaded = False
     while time.monotonic() < deadline:
-        if not token_loaded:
-            _load_token(store_override)
-            token_loaded = bool(_auth_token)
+        # Re-read token each iteration — daemon writes it at startup
+        _auth_token = ""
+        _load_token(store_override)
+        if not _auth_token:
+            time.sleep(0.1)
+            continue
         if port_file.exists():
             try:
                 port = int(port_file.read_text().strip())
@@ -185,7 +190,7 @@ def get_port(store_override: str | None = None) -> int:
                     return port
             except (ValueError, OSError):
                 pass
-        time.sleep(0.3)
+        time.sleep(0.1)
 
     print("Error: daemon did not start in time.", file=sys.stderr)
     sys.exit(1)

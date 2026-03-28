@@ -60,6 +60,7 @@ from .types import (
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     MAX_TAG_VALUE_LENGTH,
 )
+from .context_cache import ContextCache
 from .flow_env import LocalFlowEnvironment
 from ._background_processing import BackgroundProcessingMixin
 from ._provider_lifecycle import ProviderLifecycleMixin
@@ -215,6 +216,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
         self._ignore_patterns: Optional[list[str]] = None
         self._ignore_patterns_ts: float = 0.0
+        self._context_cache = ContextCache()
 
         # Check store consistency and reconcile in background if needed
         # (safe for all backends — uses abstract store interface)
@@ -533,6 +535,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         from .system_docs import migrate_system_documents
         result = migrate_system_documents(self, progress=progress)
         self._tagdoc_cache.clear()  # tagdocs may have changed
+        self._context_cache.clear()
         self._scan_tagdoc_backfills()
         return result
 
@@ -1808,6 +1811,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         ):
             self._spawn_processor()
 
+        self._context_cache.notify_write(id, merged_tags)
+
         return _record_to_item(result, changed=not content_unchanged)
 
     def _put_direct(
@@ -3041,6 +3046,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._document_store.delete_edges_for_target(doc_coll, id)
         self._document_store.delete_version_edges_for_source(doc_coll, id)
         self._document_store.delete_version_edges_for_target(doc_coll, id)
+        self._context_cache.notify_delete(id)
         return doc_deleted or chroma_deleted
 
     def revert(self, id: str) -> Optional[Item]:
@@ -3493,6 +3499,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # Dual-write: SQLite gets original values, ChromaDB gets casefolded
         self._document_store.update_tags(doc_coll, id, final_tags)
         self._store.update_tags(chroma_coll, id, casefold_tags_for_index(final_tags))
+
+        # Tag changes can affect meta-doc resolution (tag-based queries)
+        self._context_cache.notify_write(id, final_tags)
 
         # Return updated item
         return self.get(id)
@@ -4494,7 +4503,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if query_embedding is not None:
             env._query_embedding = query_embedding
         loader = make_state_doc_loader(env)
-        runner = make_action_runner(env)
+        runner = make_action_runner(env, context_cache=self._context_cache)
         result = run_flow(state, params, budget=budget, load_state_doc=loader, run_action=runner)
 
         # If a foreground flow hit an async action, enqueue the cursor
