@@ -109,6 +109,9 @@ class _FakeCtx:
     def get(self, id):
         return self._items.get(id)
 
+    def peek(self, id):
+        return self._items.get(id)
+
 
 class TestHydration:
     def test_hydrate_find_results(self):

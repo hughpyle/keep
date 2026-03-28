@@ -2906,6 +2906,23 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             return None
         return result.to_item()
 
+    def peek(self, id: str) -> Optional[Item]:
+        """Read an item without updating accessed_at.
+
+        Used for cache hydration where context items shouldn't count
+        as direct accesses.
+        """
+        id = normalize_id(id)
+        doc_coll = self._resolve_doc_collection()
+        doc_record = self._document_store.get(doc_coll, id)
+        if doc_record:
+            return _record_to_item(doc_record)
+        # Fall back to ChromaDB for legacy data
+        result = self._store.get(self._resolve_chroma_collection(), id)
+        if result is None:
+            return None
+        return result.to_item()
+
     def get_version(
         self,
         id: str,

@@ -145,6 +145,10 @@ class LocalFlowEnvironment:
     def get(self, id: str) -> Any | None:
         return self._keeper.get(id)
 
+    def peek(self, id: str) -> Any | None:
+        """Read an item without updating accessed_at."""
+        return self._keeper.peek(id)
+
     def find(
         self,
         query: str | None = None,

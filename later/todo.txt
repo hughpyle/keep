@@ -9,6 +9,8 @@
 
 * mcp descriptions include simple examples
 
+* mcp prompts
+
 * context-focused results (get *only* the parts, similar, etc)
 
 * edge limit in get frontmatter

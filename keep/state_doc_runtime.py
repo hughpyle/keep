@@ -497,6 +497,11 @@ class _EnvActionContext:
     def get(self, id: str) -> Any:
         return self._env.get(id)
 
+    def peek(self, id: str) -> Any:
+        """Read without updating accessed_at (for cache hydration)."""
+        peek_fn = getattr(self._env, "peek", None)
+        return peek_fn(id) if peek_fn else self._env.get(id)
+
     def find(
         self,
         query: str | None = None,

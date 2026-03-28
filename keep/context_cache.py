@@ -65,7 +65,7 @@ def _hydrate_find_results(
     """Rebuild find action output from cached IDs+scores."""
     results = []
     for item_id, score in ids_scores:
-        item = ctx.get(item_id)
+        item = ctx.peek(item_id)
         if item is not None:
             r = item_to_result(item)
             r["score"] = score  # override with cached score
@@ -83,7 +83,7 @@ def _hydrate_meta_results(
     for section, ids_scores in sections.items():
         refs = []
         for item_id, score in ids_scores:
-            item = ctx.get(item_id)
+            item = ctx.peek(item_id)
             if item is not None:
                 r = item_to_result(item)
                 r["score"] = score
