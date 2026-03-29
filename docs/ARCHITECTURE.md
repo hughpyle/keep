@@ -56,8 +56,14 @@ The original document content is **not stored** — only the summary and embeddi
 - Content-based embedding dedup (skips re-embedding when content matches an existing document)
 
 **[protocol.py](keep/protocol.py)** — Abstract interfaces
-- `KeeperProtocol`, `VectorStoreProtocol`, `DocumentStoreProtocol`, `PendingQueueProtocol`
+- `FlowHostProtocol`: minimal backend-neutral boundary (`run_flow` + `close`)
+- `KeeperProtocol` (extends `FlowHostProtocol`), `VectorStoreProtocol`, `DocumentStoreProtocol`, `PendingQueueProtocol`
 - Enables pluggable backends (local SQLite/ChromaDB or remote PostgreSQL/pgvector)
+
+**[flow_client.py](keep/flow_client.py)** — Shared wrapper layer
+- Convenience operations (get, put, find, tag, delete, move, now) over `FlowHostProtocol.run_flow`
+- Used by both `Keeper` and `RemoteKeeper` — one semantic path for local and hosted
+- Parameter normalization and response coercion only; no semantic behavior
 
 **[store.py](keep/store.py)** — Vector persistence (local)
 - `ChromaStore` wraps ChromaDB
@@ -77,8 +83,14 @@ The original document content is **not stored** — only the summary and embeddi
 - Returns `StoreBundle` (doc store, vector store, pending queue)
 
 **[remote.py](keep/remote.py)** — Remote client
-- HTTP client implementing `KeeperProtocol`
+- HTTP client implementing `FlowHostProtocol`
+- Public methods delegate through `flow_client` wrappers, same as local `Keeper`
 - Connects to the hosted REST API (keepmem)
+
+**[projections.py](keep/projections.py)** — Context projection planning
+- Token-budgeted rendering plans for find-context responses
+- Separates planning (what fits in the budget) from formatting (how to render)
+- Used by CLI rendering to produce structured output within token limits
 
 **[config.py](keep/config.py)** — Configuration
 - Detects available providers (platform, API keys, Ollama)

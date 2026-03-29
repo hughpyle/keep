@@ -207,7 +207,7 @@ kp.get_part(id, part_num) → PartInfo | None
 
 ```python
 # Run a state-doc flow (same as keep_flow MCP tool)
-result = kp.run_flow_command("query-resolve", params={"query": "auth"})
+result = kp.run_flow("query-resolve", params={"query": "auth"})
 # result.status, result.data, result.bindings, result.cursor
 
 # Render an agent prompt with context injection
