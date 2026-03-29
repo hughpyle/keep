@@ -1408,6 +1408,8 @@ def pending(
         pid_file = store_path / "processor.pid"
         if not pid_file.exists():
             typer.echo("No daemon running.")
+            (store_path / DAEMON_PORT_FILE).unlink(missing_ok=True)
+            (store_path / DAEMON_TOKEN_FILE).unlink(missing_ok=True)
             return
         try:
             pid = int(pid_file.read_text().strip())

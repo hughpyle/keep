@@ -9,6 +9,7 @@ This is the minimal working implementation focused on:
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from dataclasses import replace
@@ -130,6 +131,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         doc_store: Optional["DocumentStoreProtocol"] = None,
         vector_store: Optional["VectorStoreProtocol"] = None,
         pending_queue: Optional["PendingQueueProtocol"] = None,
+        defer_startup_maintenance: bool = False,
     ) -> None:
         """Initialize or open an existing reflective memory store.
 
@@ -143,6 +145,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             doc_store: Injected document store (skips default backend creation).
             vector_store: Injected vector store (skips default backend creation).
             pending_queue: Injected summary queue (skips default backend creation).
+            defer_startup_maintenance: If True, skip expensive startup scans and
+                background-reconcile checks during initialization. Call
+                ``start_deferred_startup_maintenance()`` after the daemon is
+                ready to serve requests.
         """
         self._decay_half_life_days = decay_half_life_days
 
@@ -218,21 +224,19 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 self._work_queue = bundle.work_queue
 
         # Guard against concurrent background reconciliation
-        import threading
         self._reconcile_lock = threading.Lock()
         self._reconcile_done = threading.Event()
         self._closing = threading.Event()  # signals reconcile to abort
         self._closed = False
         self._provider_init_lock = threading.RLock()
+        self._startup_maintenance_deferred = bool(defer_startup_maintenance)
+        self._startup_maintenance_started = threading.Event()
+        self._startup_maintenance_thread: Optional[threading.Thread] = None
         self._last_spawn_time: float = 0.0
         self._tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
         self._ignore_patterns: Optional[list[str]] = None
         self._ignore_patterns_ts: float = 0.0
         self._context_cache = ContextCache()
-
-        # Check store consistency and reconcile in background if needed
-        # (safe for all backends — uses abstract store interface)
-        needs_reconcile = self._check_store_consistency() and self._config.embedding is not None
 
         # If cosine migration fired (L2→cosine), auto-enqueue reindex
         if getattr(self._store, "migrated_to_cosine", False):
@@ -254,50 +258,26 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     f"Details: {e}",
                     file=sys.stderr,
                 )
-            needs_reconcile = False  # reindex will handle everything
-
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
+
+        # Check store consistency and reconcile in background if needed
+        # (safe for all backends — uses abstract store interface)
+        needs_reconcile = False
+        if not self._startup_maintenance_deferred:
+            needs_reconcile = (
+                self._check_store_consistency() and self._config.embedding is not None
+            )
+            if getattr(self._store, "migrated_to_cosine", False):
+                needs_reconcile = False  # reindex will handle everything
 
         # Legacy metadata migration: old key=value Chroma metadata does not
         # satisfy marker-based tag filters. Rewrite metadata in-place.
         #
         # The detection scan is O(number of indexed rows), so persist a
         # per-store "verified" flag after a successful check/migration.
-        if not self._config.chroma_tag_markers_verified:
-            marker_migration_state = self._detect_chroma_tag_marker_migration_need(
-                chroma_coll, doc_coll,
-            )
-            if marker_migration_state is True:
-                import sys
-                try:
-                    print(
-                        "Migrating search metadata to multivalue tag markers "
-                        "(this may take a while on larger stores)...",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    stats = self._migrate_chroma_tag_markers(chroma_coll, doc_coll)
-                    logger.info(
-                        "Tag marker migration complete: %d docs, %d versions, %d parts",
-                        stats["docs"], stats["versions"], stats["parts"],
-                    )
-                    print(
-                        "Search metadata migrated to multivalue tag markers "
-                        f"({stats['docs']} docs, {stats['versions']} versions, {stats['parts']} parts).",
-                        file=sys.stderr,
-                    )
-                    self._mark_chroma_tag_markers_verified()
-                except Exception as e:
-                    logger.warning("Tag marker migration failed: %s", e)
-                    print(
-                        "WARNING: tag metadata migration failed; "
-                        "tag-filtered semantic search may be incomplete.\n"
-                        "Run: keep pending --reindex",
-                        file=sys.stderr,
-                    )
-            elif marker_migration_state is False:
-                self._mark_chroma_tag_markers_verified()
+        if not self._startup_maintenance_deferred:
+            self._run_tag_marker_startup_check(chroma_coll, doc_coll)
 
         if needs_reconcile:
             self._reconcile_thread = threading.Thread(
@@ -363,7 +343,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 if isinstance(p, FileDocumentProvider):
                     p.max_size = max_size
 
-    def _check_store_consistency(self) -> bool:
+    def _check_store_consistency(
+        self,
+        *,
+        _doc_store: Optional["DocumentStoreProtocol"] = None,
+    ) -> bool:
         """Check if document store and vector store ID sets match.
 
         Returns True if reconciliation is needed. Does not fix —
@@ -371,7 +355,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         embedding provider is available.
         """
         try:
-            result = self.reconcile(fix=False)
+            result = self.reconcile(fix=False, _doc_store=_doc_store)
             if result["missing_from_index"] or result["orphaned_in_index"]:
                 logger.info(
                     "Store inconsistency: %d missing from search index, %d orphaned (will auto-reconcile)",
@@ -393,7 +377,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             logger.debug("Failed to persist chroma_tag_markers_verified: %s", e)
 
     def _detect_chroma_tag_marker_migration_need(
-        self, chroma_coll: str, doc_coll: str,
+        self,
+        chroma_coll: str,
+        doc_coll: str,
+        *,
+        _doc_store: Optional["DocumentStoreProtocol"] = None,
     ) -> Optional[bool]:
         """Detect legacy Chroma metadata without multivalue tag markers.
 
@@ -412,17 +400,18 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 for key in tags
             )
 
+        doc_store = _doc_store or self._document_store
         try:
             indexed_ids = set(self._store.list_ids(chroma_coll))
             if not indexed_ids:
                 return False
-            for doc_id in self._document_store.list_ids(doc_coll):
-                doc = self._document_store.get(doc_coll, doc_id)
+            for doc_id in doc_store.list_ids(doc_coll):
+                doc = doc_store.get(doc_coll, doc_id)
                 if doc is not None and doc_id in indexed_ids:
                     if _has_user_tags(doc.tags) and not has_tag_markers(chroma_coll, doc_id):
                         return True
 
-                for vi in self._document_store.list_versions(
+                for vi in doc_store.list_versions(
                     doc_coll, doc_id, limit=1_000_000,
                 ):
                     version_id = f"{doc_id}@v{vi.version}"
@@ -434,7 +423,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     if _has_user_tags(ver_tags) and not has_tag_markers(chroma_coll, version_id):
                         return True
 
-                for part in self._document_store.list_parts(doc_coll, doc_id):
+                for part in doc_store.list_parts(doc_coll, doc_id):
                     part_id = f"{doc_id}@p{part.part_num}"
                     if part_id not in indexed_ids:
                         continue
@@ -449,27 +438,32 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         return False
 
     def _migrate_chroma_tag_markers(
-        self, chroma_coll: str, doc_coll: str,
+        self,
+        chroma_coll: str,
+        doc_coll: str,
+        *,
+        _doc_store: Optional["DocumentStoreProtocol"] = None,
     ) -> dict[str, int]:
         """Rewrite legacy Chroma metadata to marker-based tag encoding."""
         rewrite_tags = getattr(self._store, "rewrite_tags", None)
         if not callable(rewrite_tags):
             return {"docs": 0, "versions": 0, "parts": 0}
 
+        doc_store = _doc_store or self._document_store
         indexed_ids = set(self._store.list_ids(chroma_coll))
         if not indexed_ids:
             return {"docs": 0, "versions": 0, "parts": 0}
 
         docs = versions = parts = 0
-        for doc_id in self._document_store.list_ids(doc_coll):
+        for doc_id in doc_store.list_ids(doc_coll):
             if doc_id in indexed_ids:
-                doc = self._document_store.get(doc_coll, doc_id)
+                doc = doc_store.get(doc_coll, doc_id)
                 if doc is not None and rewrite_tags(
                     chroma_coll, doc_id, casefold_tags_for_index(doc.tags),
                 ):
                     docs += 1
 
-            for vi in self._document_store.list_versions(
+            for vi in doc_store.list_versions(
                 doc_coll, doc_id, limit=1_000_000,
             ):
                 version_id = f"{doc_id}@v{vi.version}"
@@ -483,7 +477,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 ):
                     versions += 1
 
-            for part in self._document_store.list_parts(doc_coll, doc_id):
+            for part in doc_store.list_parts(doc_coll, doc_id):
                 part_id = f"{doc_id}@p{part.part_num}"
                 if part_id not in indexed_ids:
                     continue
@@ -496,6 +490,113 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     parts += 1
 
         return {"docs": docs, "versions": versions, "parts": parts}
+
+    def _run_tag_marker_startup_check(
+        self,
+        chroma_coll: str,
+        doc_coll: str,
+        *,
+        _doc_store: Optional["DocumentStoreProtocol"] = None,
+    ) -> None:
+        """Run the legacy tag-marker migration check during startup."""
+        if self._config.chroma_tag_markers_verified:
+            return
+
+        marker_migration_state = self._detect_chroma_tag_marker_migration_need(
+            chroma_coll, doc_coll, _doc_store=_doc_store,
+        )
+        if marker_migration_state is True:
+            import sys
+
+            try:
+                print(
+                    "Migrating search metadata to multivalue tag markers "
+                    "(this may take a while on larger stores)...",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                stats = self._migrate_chroma_tag_markers(
+                    chroma_coll, doc_coll, _doc_store=_doc_store,
+                )
+                logger.info(
+                    "Tag marker migration complete: %d docs, %d versions, %d parts",
+                    stats["docs"], stats["versions"], stats["parts"],
+                )
+                print(
+                    "Search metadata migrated to multivalue tag markers "
+                    f"({stats['docs']} docs, {stats['versions']} versions, {stats['parts']} parts).",
+                    file=sys.stderr,
+                )
+                self._mark_chroma_tag_markers_verified()
+            except Exception as e:
+                logger.warning("Tag marker migration failed: %s", e)
+                print(
+                    "WARNING: tag metadata migration failed; "
+                    "tag-filtered semantic search may be incomplete.\n"
+                    "Run: keep pending --reindex",
+                    file=sys.stderr,
+                )
+        elif marker_migration_state is False:
+            self._mark_chroma_tag_markers_verified()
+
+    def _run_deferred_startup_maintenance(self) -> None:
+        """Run deferred startup scans after the daemon is already reachable."""
+        startup_doc_store = None
+        try:
+            if self._closing.is_set():
+                return
+
+            if self._is_local and hasattr(self._document_store, "_db_path"):
+                from .document_store import DocumentStore
+
+                startup_doc_store = DocumentStore(self._document_store._db_path)
+
+            chroma_coll = self._resolve_chroma_collection()
+            doc_coll = self._resolve_doc_collection()
+            self._run_tag_marker_startup_check(
+                chroma_coll, doc_coll, _doc_store=startup_doc_store,
+            )
+
+            if self._closing.is_set():
+                return
+
+            needs_reconcile = (
+                self._check_store_consistency(_doc_store=startup_doc_store)
+                and self._config.embedding is not None
+            )
+            if needs_reconcile:
+                self._reconcile_done.clear()
+                self._reconcile_thread = threading.Thread(
+                    target=self._auto_reconcile_safe,
+                    args=(chroma_coll, doc_coll),
+                    daemon=True,
+                    name="startup-reconcile",
+                )
+                self._reconcile_thread.start()
+            else:
+                self._reconcile_done.set()
+        except Exception as e:
+            logger.warning("Deferred startup maintenance failed: %s", e, exc_info=True)
+            self._reconcile_done.set()
+        finally:
+            self._startup_maintenance_deferred = False
+            if startup_doc_store is not None:
+                startup_doc_store.close()
+
+    def start_deferred_startup_maintenance(self) -> bool:
+        """Start deferred startup scans once the daemon is ready to serve."""
+        if not self._startup_maintenance_deferred:
+            return False
+        if self._startup_maintenance_started.is_set():
+            return False
+        self._startup_maintenance_started.set()
+        self._startup_maintenance_thread = threading.Thread(
+            target=self._run_deferred_startup_maintenance,
+            daemon=True,
+            name="startup-maintenance",
+        )
+        self._startup_maintenance_thread.start()
+        return True
 
     def _auto_reconcile_safe(self, chroma_coll: str, doc_coll: str) -> None:
         """Background-safe wrapper for auto-reconcile. Logs failures."""

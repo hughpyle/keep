@@ -69,6 +69,7 @@ def _items_response(items) -> dict:
 # ---------------------------------------------------------------------------
 
 _ROUTES: list[tuple[str, str, str]] = [
+    ("GET",    r"^/v1/ready$",                        "_handle_ready"),
     ("GET",    r"^/v1/health$",                       "_handle_health"),
     ("POST",   r"^/v1/search$",                       "_handle_find"),
     ("POST",   r"^/v1/flow$",                         "_handle_flow"),
@@ -173,7 +174,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     _cached_version: str = ""
 
-    def _handle_health(self, groups: dict):
+    def _daemon_status(self, *, include_item_count: bool) -> dict[str, Any]:
         if not DaemonRequestHandler._cached_version:
             from importlib.metadata import version
             try:
@@ -207,17 +208,30 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         # Needs setup: no config file or no embedding provider
         needs_setup = config.embedding is None
 
-        self._json(200, {
+        data: dict[str, Any] = {
             "status": "ok",
             "pid": os.getpid(),
             "version": DaemonRequestHandler._cached_version,
             "store": str(kp._store_path),
             "embedding": embedding,
             "summarization": summarization,
-            "item_count": kp.count(),
             "needs_setup": needs_setup,
             "warnings": warnings,
-        })
+        }
+        if include_item_count:
+            try:
+                data["item_count"] = kp.count()
+            except Exception as exc:
+                logger.warning("Health diagnostics count failed: %s", exc, exc_info=True)
+                data["item_count"] = None
+                warnings.append("item count unavailable")
+        return data
+
+    def _handle_ready(self, groups: dict):
+        self._json(200, self._daemon_status(include_item_count=False))
+
+    def _handle_health(self, groups: dict):
+        self._json(200, self._daemon_status(include_item_count=True))
 
     def _handle_get(self, groups: dict):
         item = flow_get_item(self.keeper, groups["id"])

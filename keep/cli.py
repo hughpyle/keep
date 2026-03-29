@@ -1142,11 +1142,11 @@ def run_pending_daemon(kp) -> None:
     timer events, and version-aware restart.  Called from the CLI
     ``pending --daemon`` path.
     """
-    import logging
-
     from .model_lock import ModelLock
+    from .shutdown import clear_shutdown
     from .tracing import init_tracing
     init_tracing(tree_log=True)
+    clear_shutdown()
 
     _daemon_logger = logging.getLogger("keep.cli.daemon")
     pid_path = kp._processor_pid_path
@@ -1159,11 +1159,7 @@ def run_pending_daemon(kp) -> None:
         kp.close()
         return
 
-    try:
-        from importlib.metadata import version as _pkg_version
-        _ver = _pkg_version("keep-skill")
-    except Exception:
-        _ver = "unknown"
+    _ver = _daemon_version()
     _daemon_logger.info(
         "Daemon started (pid=%d) keep-skill=%s python=%s store=%s",
         os.getpid(), _ver, sys.executable, kp._store_path,
@@ -1172,147 +1168,51 @@ def run_pending_daemon(kp) -> None:
         (kp._store_path / ".processor.version").write_text(_ver)
     except Exception:
         pass
-    wq = kp._get_work_queue()
-    released = wq.release_stale_leases(flow_worker_id)
-    if released:
-        _daemon_logger.info("Released %d stale leases from previous daemon", released)
+    _daemon_server, _port_path, _token_path = _start_daemon_query_server(kp, _daemon_logger)
 
-    _daemon_logger.info(
-        "Queue: %d pending, %d flow, %d failed",
-        kp._pending_queue.count(),
-        kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0,
-        0,
-    )
-    _daemon_logger.info(
-        "Embedding: %s/%s",
-        kp._config.embedding.name if kp._config.embedding else "none",
-        kp._config.embedding.params.get("model", "") if kp._config.embedding else "",
+    from .shutdown import wait_or_shutdown
+
+    shutdown_state = _install_daemon_signal_handlers(
+        logger=_daemon_logger,
+        port_path=_port_path,
+        token_path=_token_path,
     )
 
-    from .daemon_server import DaemonServer
-    _daemon_port = int(os.environ.get("KEEP_DAEMON_PORT", "0")) or DAEMON_PORT
-    _daemon_server = DaemonServer(kp, port=_daemon_port)
-    _actual_port = _daemon_server.start()
-    _port_path = kp._store_path / DAEMON_PORT_FILE
-    _token_path = kp._store_path / DAEMON_TOKEN_FILE
-    _port_path.write_text(str(_actual_port))
-    _token_path.touch(mode=0o600, exist_ok=True)
-    _token_path.write_text(_daemon_server.auth_token)
-    _daemon_logger.info("Query server on 127.0.0.1:%d", _actual_port)
+    if kp.start_deferred_startup_maintenance():
+        _daemon_logger.info("Deferred startup maintenance running in background")
 
-    from .shutdown import is_shutting_down, request_shutdown, wait_or_shutdown
-
-    def handle_signal(signum, frame):
-        nonlocal shutdown_requested
-        shutdown_requested = True
-        request_shutdown()
-        # Close the shared HTTP session to unblock any in-flight
-        # requests (ollama generate, embedding, etc.)
-        from .providers.http import close_http_session
-        close_http_session()
-        _daemon_logger.info("Received signal %d, shutting down", signum)
-
-    def _is_shutdown():
-        return shutdown_requested
-
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
+    _release_stale_daemon_leases(kp, flow_worker_id, _daemon_logger)
+    _log_daemon_startup_state(kp, _daemon_logger)
 
     _last_cleanup_ts = 0.0
     _CLEANUP_INTERVAL = 86400
     _CLEANUP_MAX_AGE = 86400
     _REPLENISH_INTERVAL = 1800
-
-    try:
-        from .timer_state import read_timer_state
-        _saved_timers = read_timer_state(kp._store_path)
-        _last_replenish_ts = _saved_timers.get("supernode-replenish", {}).get("last_run", 0.0)
-    except Exception:
-        _last_replenish_ts = 0.0
-
-    def _replenish_supernodes():
-        nonlocal _last_replenish_ts
-        now = time.time()
-        if now - _last_replenish_ts < _REPLENISH_INTERVAL:
-            return
-        _last_replenish_ts = now
-        try:
-            enqueued = kp.replenish_supernode_queue()
-            detail = f"{enqueued} enqueued" if enqueued else "no candidates"
-            if enqueued > 0:
-                _daemon_logger.info("Replenished %d supernode review(s)", enqueued)
-        except Exception as exc:
-            detail = f"error: {exc}"
-            _daemon_logger.debug("Supernode replenishment error: %s", exc)
-        try:
-            from .timer_state import write_timer_event
-            write_timer_event(
-                kp._store_path, "supernode-replenish",
-                interval=_REPLENISH_INTERVAL, detail=detail,
-            )
-        except Exception as _te:
-            _daemon_logger.warning("Failed to write timer state: %s", _te)
-
-    def _cleanup_temp_files():
-        nonlocal _last_cleanup_ts
-        now = time.time()
-        if now - _last_cleanup_ts < _CLEANUP_INTERVAL:
-            return
-        _last_cleanup_ts = now
-        cache_dirs = [Path.home() / ".cache" / "keep" / "email-att"]
-        total_removed = 0
-        for cache_dir in cache_dirs:
-            if not cache_dir.is_dir():
-                continue
-            for entry in cache_dir.iterdir():
-                if not entry.is_dir():
-                    continue
-                try:
-                    age = now - entry.stat().st_mtime
-                    if age > _CLEANUP_MAX_AGE:
-                        shutil.rmtree(entry)
-                        total_removed += 1
-                except OSError:
-                    pass
-        if total_removed:
-            _daemon_logger.info("Cleaned up %d temp directories", total_removed)
+    _last_replenish_ts = _load_daemon_replenish_timestamp(kp._store_path)
 
     _version_file = kp._store_path / ".processor.version"
 
-    def _check_version_restart():
-        try:
-            if not _version_file.exists():
-                return
-            requested = _version_file.read_text().strip()
-            if requested and requested != _ver:
-                _daemon_logger.info("Version changed (%s → %s), restarting daemon", _ver, requested)
-                try:
-                    kp.close()
-                except Exception:
-                    pass
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-        except Exception as e:
-            _daemon_logger.debug("Version check failed: %s", e)
-
     try:
         pid_path.write_text(str(os.getpid()))
-        while not shutdown_requested:
-            _check_version_restart()
+        while not shutdown_state["requested"]:
+            _check_daemon_version_restart(_version_file, _ver, kp, _daemon_logger)
             _daemon_logger.debug("Tick: process_pending_work")
             flow_result = kp.process_pending_work(
                 limit=1, worker_id=flow_worker_id,
-                lease_seconds=180, shutdown_check=_is_shutdown,
+                lease_seconds=180, shutdown_check=lambda: bool(shutdown_state["requested"]),
             )
-            if shutdown_requested:
+            if shutdown_state["requested"]:
                 break
             _daemon_logger.debug("Tick: process_pending")
-            result = kp.process_pending(limit=1, shutdown_check=_is_shutdown)
+            result = kp.process_pending(
+                limit=1,
+                shutdown_check=lambda: bool(shutdown_state["requested"]),
+            )
             delegated = result.get("delegated", 0)
-            if shutdown_requested:
+            if shutdown_state["requested"]:
                 break
 
             _daemon_logger.debug("Tick: poll_watches")
-            from .watches import has_active_watches, load_watches, next_check_delay
             from .watches import poll_watches as _poll_watches
             watch_result = _poll_watches(kp)
             if watch_result["checked"] > 0:
@@ -1322,74 +1222,52 @@ def run_pending_daemon(kp) -> None:
                     watch_result["stale"], watch_result["errors"],
                 )
 
-            if shutdown_requested:
+            if shutdown_state["requested"]:
                 break
-            _cleanup_temp_files()
-            _replenish_supernodes()
-            if shutdown_requested:
+            _last_cleanup_ts = _cleanup_temp_files_if_due(
+                logger=_daemon_logger,
+                last_cleanup_ts=_last_cleanup_ts,
+                cleanup_interval=_CLEANUP_INTERVAL,
+                cleanup_max_age=_CLEANUP_MAX_AGE,
+            )
+            _last_replenish_ts = _replenish_supernodes_if_due(
+                kp,
+                logger=_daemon_logger,
+                last_replenish_ts=_last_replenish_ts,
+                replenish_interval=_REPLENISH_INTERVAL,
+            )
+            if shutdown_state["requested"]:
                 break
 
-            _daemon_logger.info(
-                "Daemon batch: processed=%d failed=%d delegated=%d flow_processed=%d flow_failed=%d",
-                result["processed"], result["failed"], delegated,
-                int(flow_result.get("processed", 0)),
-                int(flow_result.get("failed", 0)) + int(flow_result.get("dead_lettered", 0)),
+            _log_daemon_batch_result(
+                logger=_daemon_logger,
+                result=result,
+                delegated=delegated,
+                flow_result=flow_result,
             )
-            flow_activity = (
-                int(flow_result.get("claimed", 0)) > 0
-                or int(flow_result.get("processed", 0)) > 0
-                or int(flow_result.get("failed", 0)) > 0
-                or int(flow_result.get("dead_lettered", 0)) > 0
-            )
+            flow_activity = _daemon_has_flow_activity(flow_result)
             if result["processed"] == 0 and result["failed"] == 0 and delegated == 0 and not flow_activity:
-                delegated_remaining = kp._pending_queue.count_delegated() if hasattr(kp._pending_queue, "count_delegated") else 0
-                flow_remaining = kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0
-                pending_remaining = kp._pending_queue.count()
-                if delegated_remaining > 0:
-                    _daemon_logger.info("Waiting for %d delegated tasks", delegated_remaining)
-                    wait_or_shutdown(5)
-                    continue
-                if flow_remaining > 0:
-                    _daemon_logger.info("Waiting for %d flow work items", flow_remaining)
-                    wait_or_shutdown(1)
-                    continue
-                if pending_remaining > 0:
-                    _daemon_logger.info("Waiting for %d pending items (retry backoff)", pending_remaining)
-                    wait_or_shutdown(5)
-                    continue
-
-                _has_timers = has_active_watches(kp)
-                if not _has_timers:
-                    _has_timers = (
-                        _last_replenish_ts == 0
-                        or (time.time() - _last_replenish_ts) < _REPLENISH_INTERVAL
-                    )
-
-                if _has_timers:
-                    if has_active_watches(kp):
-                        delay = next_check_delay(load_watches(kp))
-                    else:
-                        _time_to_replenish = max(0, _REPLENISH_INTERVAL - (time.time() - _last_replenish_ts))
-                        delay = min(_time_to_replenish, 60.0)
-                    delay = max(1.0, min(delay, 60.0))
-                    _daemon_logger.debug("Sleeping %.1fs (timer events pending)", delay)
-                    wait_or_shutdown(delay)
+                if _maybe_wait_for_daemon_idle(
+                    kp,
+                    logger=_daemon_logger,
+                    last_replenish_ts=_last_replenish_ts,
+                    replenish_interval=_REPLENISH_INTERVAL,
+                    wait_or_shutdown=wait_or_shutdown,
+                ):
                     continue
 
                 wait_or_shutdown(1)
-                if shutdown_requested:
+                if shutdown_state["requested"]:
                     break
                 flow_result = kp.process_pending_work(
                     limit=1, worker_id=flow_worker_id,
-                    lease_seconds=180, shutdown_check=_is_shutdown,
+                    lease_seconds=180, shutdown_check=lambda: bool(shutdown_state["requested"]),
                 )
-                result = kp.process_pending(limit=1, shutdown_check=_is_shutdown)
-                flow_activity = (
-                    int(flow_result.get("claimed", 0)) > 0
-                    or int(flow_result.get("processed", 0)) > 0
-                    or int(flow_result.get("failed", 0)) > 0
-                    or int(flow_result.get("dead_lettered", 0)) > 0
+                result = kp.process_pending(
+                    limit=1,
+                    shutdown_check=lambda: bool(shutdown_state["requested"]),
                 )
+                flow_activity = _daemon_has_flow_activity(flow_result)
                 if (
                     result["processed"] == 0
                     and result["failed"] == 0
@@ -1397,11 +1275,12 @@ def run_pending_daemon(kp) -> None:
                     and not flow_activity
                 ):
                     break
-                _daemon_logger.info(
-                    "Daemon batch (drain): processed=%d failed=%d flow_processed=%d flow_failed=%d",
-                    result["processed"], result["failed"],
-                    int(flow_result.get("processed", 0)),
-                    int(flow_result.get("failed", 0)) + int(flow_result.get("dead_lettered", 0)),
+                _log_daemon_batch_result(
+                    logger=_daemon_logger,
+                    result=result,
+                    delegated=result.get("delegated", 0),
+                    flow_result=flow_result,
+                    drain=True,
                 )
     finally:
         _daemon_logger.info("Daemon shutting down")
@@ -1416,6 +1295,254 @@ def run_pending_daemon(kp) -> None:
                 pass
         kp.close()
         processor_lock.release()
+
+
+def _daemon_version() -> str:
+    """Best-effort package version for daemon lifecycle logging."""
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return _pkg_version("keep-skill")
+    except Exception:
+        return "unknown"
+
+
+def _start_daemon_query_server(kp, daemon_logger):
+    """Start the daemon HTTP server and publish discovery files."""
+    from .daemon_server import DaemonServer
+
+    daemon_port = int(os.environ.get("KEEP_DAEMON_PORT", "0")) or DAEMON_PORT
+    daemon_server = DaemonServer(kp, port=daemon_port)
+    actual_port = daemon_server.start()
+    port_path = kp._store_path / DAEMON_PORT_FILE
+    token_path = kp._store_path / DAEMON_TOKEN_FILE
+    port_path.write_text(str(actual_port))
+    token_path.touch(mode=0o600, exist_ok=True)
+    token_path.write_text(daemon_server.auth_token)
+    daemon_logger.info("Query server on 127.0.0.1:%d", actual_port)
+    return daemon_server, port_path, token_path
+
+
+def _install_daemon_signal_handlers(*, logger, port_path: Path, token_path: Path) -> dict[str, bool]:
+    """Install signal handlers that hide the daemon immediately on shutdown."""
+    from .shutdown import request_shutdown
+
+    state = {"requested": False}
+
+    def handle_signal(signum, frame):
+        state["requested"] = True
+        request_shutdown()
+        for path in (port_path, token_path):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        from .providers.http import close_http_session
+
+        close_http_session()
+        logger.info("Received signal %d, shutting down", signum)
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+    return state
+
+
+def _release_stale_daemon_leases(kp, flow_worker_id: str, daemon_logger) -> None:
+    """Release work leases left behind by a prior daemon instance."""
+    wq = kp._get_work_queue()
+    released = wq.release_stale_leases(flow_worker_id) if wq is not None else 0
+    if released:
+        daemon_logger.info("Released %d stale leases from previous daemon", released)
+
+
+def _log_daemon_startup_state(kp, daemon_logger) -> None:
+    """Log initial queue and provider state once the daemon is reachable."""
+    daemon_logger.info(
+        "Queue: %d pending, %d flow, %d failed",
+        kp._pending_queue.count(),
+        kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0,
+        0,
+    )
+    daemon_logger.info(
+        "Embedding: %s/%s",
+        kp._config.embedding.name if kp._config.embedding else "none",
+        kp._config.embedding.params.get("model", "") if kp._config.embedding else "",
+    )
+
+
+def _load_daemon_replenish_timestamp(store_path: Path) -> float:
+    """Restore the last supernode replenishment timestamp from timer state."""
+    try:
+        from .timer_state import read_timer_state
+
+        saved_timers = read_timer_state(store_path)
+        return saved_timers.get("supernode-replenish", {}).get("last_run", 0.0)
+    except Exception:
+        return 0.0
+
+
+def _replenish_supernodes_if_due(
+    kp,
+    *,
+    logger,
+    last_replenish_ts: float,
+    replenish_interval: float,
+) -> float:
+    """Run periodic supernode queue replenishment when its timer is due."""
+    now = time.time()
+    if now - last_replenish_ts < replenish_interval:
+        return last_replenish_ts
+
+    try:
+        enqueued = kp.replenish_supernode_queue()
+        detail = f"{enqueued} enqueued" if enqueued else "no candidates"
+        if enqueued > 0:
+            logger.info("Replenished %d supernode review(s)", enqueued)
+    except Exception as exc:
+        detail = f"error: {exc}"
+        logger.debug("Supernode replenishment error: %s", exc)
+
+    try:
+        from .timer_state import write_timer_event
+
+        write_timer_event(
+            kp._store_path,
+            "supernode-replenish",
+            interval=replenish_interval,
+            detail=detail,
+        )
+    except Exception as timer_exc:
+        logger.warning("Failed to write timer state: %s", timer_exc)
+
+    return now
+
+
+def _cleanup_temp_files_if_due(
+    *,
+    logger,
+    last_cleanup_ts: float,
+    cleanup_interval: float,
+    cleanup_max_age: float,
+) -> float:
+    """Run periodic temp-file cleanup for cache directories."""
+    now = time.time()
+    if now - last_cleanup_ts < cleanup_interval:
+        return last_cleanup_ts
+
+    cache_dirs = [Path.home() / ".cache" / "keep" / "email-att"]
+    total_removed = 0
+    for cache_dir in cache_dirs:
+        if not cache_dir.is_dir():
+            continue
+        for entry in cache_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                age = now - entry.stat().st_mtime
+                if age > cleanup_max_age:
+                    shutil.rmtree(entry)
+                    total_removed += 1
+            except OSError:
+                pass
+    if total_removed:
+        logger.info("Cleaned up %d temp directories", total_removed)
+    return now
+
+
+def _check_daemon_version_restart(version_file: Path, running_version: str, kp, daemon_logger) -> None:
+    """Exec-restart the daemon when the requested package version changes."""
+    try:
+        if not version_file.exists():
+            return
+        requested = version_file.read_text().strip()
+        if requested and requested != running_version:
+            daemon_logger.info(
+                "Version changed (%s → %s), restarting daemon",
+                running_version,
+                requested,
+            )
+            try:
+                kp.close()
+            except Exception:
+                pass
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as exc:
+        daemon_logger.debug("Version check failed: %s", exc)
+
+
+def _daemon_has_flow_activity(flow_result: dict[str, Any]) -> bool:
+    """Return True if a flow work batch claimed or changed any items."""
+    return (
+        int(flow_result.get("claimed", 0)) > 0
+        or int(flow_result.get("processed", 0)) > 0
+        or int(flow_result.get("failed", 0)) > 0
+        or int(flow_result.get("dead_lettered", 0)) > 0
+    )
+
+
+def _log_daemon_batch_result(*, logger, result: dict[str, Any], delegated: int, flow_result: dict[str, Any], drain: bool = False) -> None:
+    """Emit a consistent batch-progress log line for daemon work ticks."""
+    label = "Daemon batch (drain)" if drain else "Daemon batch"
+    logger.info(
+        "%s: processed=%d failed=%d delegated=%d flow_processed=%d flow_failed=%d",
+        label,
+        result["processed"],
+        result["failed"],
+        delegated,
+        int(flow_result.get("processed", 0)),
+        int(flow_result.get("failed", 0)) + int(flow_result.get("dead_lettered", 0)),
+    )
+
+
+def _maybe_wait_for_daemon_idle(
+    kp,
+    *,
+    logger,
+    last_replenish_ts: float,
+    replenish_interval: float,
+    wait_or_shutdown,
+) -> bool:
+    """Sleep when the daemon is idle but has background timers or queued retries."""
+    from .watches import has_active_watches, load_watches, next_check_delay
+
+    delegated_remaining = (
+        kp._pending_queue.count_delegated()
+        if hasattr(kp._pending_queue, "count_delegated")
+        else 0
+    )
+    flow_remaining = kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0
+    pending_remaining = kp._pending_queue.count()
+    if delegated_remaining > 0:
+        logger.info("Waiting for %d delegated tasks", delegated_remaining)
+        wait_or_shutdown(5)
+        return True
+    if flow_remaining > 0:
+        logger.info("Waiting for %d flow work items", flow_remaining)
+        wait_or_shutdown(1)
+        return True
+    if pending_remaining > 0:
+        logger.info("Waiting for %d pending items (retry backoff)", pending_remaining)
+        wait_or_shutdown(5)
+        return True
+
+    has_timers = has_active_watches(kp)
+    if not has_timers:
+        has_timers = (
+            last_replenish_ts == 0
+            or (time.time() - last_replenish_ts) < replenish_interval
+        )
+    if not has_timers:
+        return False
+
+    if has_active_watches(kp):
+        delay = next_check_delay(load_watches(kp))
+    else:
+        time_to_replenish = max(0, replenish_interval - (time.time() - last_replenish_ts))
+        delay = min(time_to_replenish, 60.0)
+    delay = max(1.0, min(delay, 60.0))
+    logger.debug("Sleeping %.1fs (timer events pending)", delay)
+    wait_or_shutdown(delay)
+    return True
 
 
 def print_pending_list_lightweight(store_path: "Path") -> None:

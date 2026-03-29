@@ -40,6 +40,19 @@ def http(daemon):
 
 # --- Health ---
 
+def test_ready(http):
+    r = http.get("/v1/ready")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert "pid" in body
+    assert "version" in body
+    assert "store" in body
+    assert "needs_setup" in body
+    assert "warnings" in body
+    assert "item_count" not in body
+
+
 def test_health(http):
     r = http.get("/v1/health")
     assert r.status_code == 200
@@ -54,9 +67,51 @@ def test_health(http):
     assert isinstance(body["warnings"], list)
 
 
+def test_ready_avoids_expensive_count(daemon):
+    server, kp, port = daemon
+    original = kp.count
+
+    def fail_count():
+        raise RuntimeError("count should not run on readiness probe")
+
+    kp.count = fail_count  # type: ignore[method-assign]
+    try:
+        r = httpx.get(
+            f"http://127.0.0.1:{port}/v1/ready",
+            headers={"Authorization": f"Bearer {server.auth_token}"},
+            timeout=5,
+        )
+        assert r.status_code == 200
+        assert "item_count" not in r.json()
+    finally:
+        kp.count = original  # type: ignore[method-assign]
+
+
+def test_health_tolerates_count_failure(daemon):
+    server, kp, port = daemon
+    original = kp.count
+
+    def fail_count():
+        raise RuntimeError("count failed")
+
+    kp.count = fail_count  # type: ignore[method-assign]
+    try:
+        r = httpx.get(
+            f"http://127.0.0.1:{port}/v1/health",
+            headers={"Authorization": f"Bearer {server.auth_token}"},
+            timeout=5,
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["item_count"] is None
+        assert "item count unavailable" in body["warnings"]
+    finally:
+        kp.count = original  # type: ignore[method-assign]
+
+
 def test_401_without_token(daemon):
     _, _, port = daemon
-    r = httpx.get(f"http://127.0.0.1:{port}/v1/health", timeout=5)
+    r = httpx.get(f"http://127.0.0.1:{port}/v1/ready", timeout=5)
     assert r.status_code == 401
 
 
@@ -182,7 +237,7 @@ def test_port_fallback(mock_providers, tmp_path):
         actual_port = server.start()
         assert actual_port != occupied_port
         r = httpx.get(
-            f"http://127.0.0.1:{actual_port}/v1/health",
+            f"http://127.0.0.1:{actual_port}/v1/ready",
             headers={"Authorization": f"Bearer {server.auth_token}"},
             timeout=5,
         )
