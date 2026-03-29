@@ -165,9 +165,14 @@ def run_flow(
         optional return data. When status is "stopped" or "async",
         the cursor field contains a resumable token.
     """
-    from .perf_stats import perf as _perf
     import time as _time
+    from .perf_stats import perf as _perf
+    from .tracing import get_tracer as _get_tracer
     _flow_t0 = _time.monotonic()
+    _flow_tracer = _get_tracer("flow")
+
+    def _elapsed_ms() -> float:
+        return (_time.monotonic() - _flow_t0) * 1000.0
 
     # Resume from cursor or start fresh
     if cursor is not None:
@@ -195,7 +200,13 @@ def run_flow(
         cursor_token = encode_cursor(
             current_state, total_ticks, accumulated_bindings, tried_queries,
         )
-        logger.info("flow: %s -> stopped (%s, %d ticks)", current_state, reason, total_ticks)
+        logger.info(
+            "flow: %s -> stopped (%s, %d ticks, %.1fms)",
+            current_state,
+            reason,
+            total_ticks,
+            _elapsed_ms(),
+        )
         _record_flow()
         return FlowResult(
             status="stopped",
@@ -227,9 +238,17 @@ def run_flow(
     while ticks < budget:
         if should_stop and should_stop():
             return _stopped_flow("shutdown")
-        doc = load_state_doc(current_state)
+        with _flow_tracer.start_as_current_span(
+            "state_doc.load",
+            attributes={"state": current_state},
+        ):
+            doc = load_state_doc(current_state)
         if doc is None:
-            logger.info("flow: %s -> error (state doc not found)", current_state)
+            logger.info(
+                "flow: %s -> error (state doc not found, %.1fms)",
+                current_state,
+                _elapsed_ms(),
+            )
             _record_flow()
             return FlowResult(
                 status="error",
@@ -246,7 +265,11 @@ def run_flow(
 
         # Evaluate state doc
         try:
-            result = evaluate_state_doc(doc, eval_ctx, run_action=_action_callback)
+            with _flow_tracer.start_as_current_span(
+                "state_doc.evaluate",
+                attributes={"state": current_state},
+            ):
+                result = evaluate_state_doc(doc, eval_ctx, run_action=_action_callback)
         except AsyncActionEncountered as aa:
             # Foreground flow hit an async action — produce cursor for
             # the work queue to resume from.  The cursor points at the
@@ -258,8 +281,8 @@ def run_flow(
                 current_state, total_ticks, accumulated_bindings, tried_queries,
             )
             logger.info(
-                "flow: %s -> async (%s, %d ticks)",
-                current_state, aa.action_name, total_ticks,
+                "flow: %s -> async (%s, %d ticks, %.1fms)",
+                current_state, aa.action_name, total_ticks, _elapsed_ms(),
             )
             _record_flow()
             return FlowResult(
@@ -272,7 +295,12 @@ def run_flow(
                 tried_queries=tried_queries,
             )
         except Exception as exc:
-            logger.warning("State doc %r evaluation failed: %s", current_state, exc)
+            logger.warning(
+                "State doc %r evaluation failed after %.1fms: %s",
+                current_state,
+                _elapsed_ms(),
+                exc,
+            )
             _record_flow()
             return FlowResult(
                 status="error",
@@ -286,7 +314,13 @@ def run_flow(
 
         # Terminal
         if result.terminal is not None:
-            logger.info("flow: %s -> %s (%d ticks)", current_state, result.terminal, ticks)
+            logger.info(
+                "flow: %s -> %s (%d ticks, %.1fms)",
+                current_state,
+                result.terminal,
+                ticks,
+                _elapsed_ms(),
+            )
             _record_flow()
             return FlowResult(
                 status=result.terminal,
@@ -301,7 +335,11 @@ def run_flow(
         if result.transition is not None:
             next_state, transition_params = _parse_transition(result.transition)
             if next_state is None:
-                logger.info("flow: %s -> error (invalid transition)", current_state)
+                logger.info(
+                    "flow: %s -> error (invalid transition, %.1fms)",
+                    current_state,
+                    _elapsed_ms(),
+                )
                 _record_flow()
                 return FlowResult(
                     status="error",
@@ -309,7 +347,7 @@ def run_flow(
                     ticks=prior_ticks + ticks,
                     history=history,
                 )
-            logger.info("flow: %s -> %s", current_state, next_state)
+            logger.info("flow: %s -> %s (%.1fms)", current_state, next_state, _elapsed_ms())
             # Transition params merge into (override) current params
             current_params = dict(current_params)
             current_params.update(transition_params)
@@ -317,7 +355,12 @@ def run_flow(
             continue
 
         # No terminal, no transition — shouldn't happen (evaluator defaults to done)
-        logger.info("flow: %s -> done (implicit, %d ticks)", current_state, ticks)
+        logger.info(
+            "flow: %s -> done (implicit, %d ticks, %.1fms)",
+            current_state,
+            ticks,
+            _elapsed_ms(),
+        )
         _record_flow()
         return FlowResult(
             status="done",
@@ -330,7 +373,12 @@ def run_flow(
     # Budget exhausted — return cursor for resumption
     total_ticks = prior_ticks + ticks
     cursor_token = encode_cursor(current_state, total_ticks, accumulated_bindings, tried_queries)
-    logger.info("flow: %s -> stopped (budget, %d ticks)", current_state, total_ticks)
+    logger.info(
+        "flow: %s -> stopped (budget, %d ticks, %.1fms)",
+        current_state,
+        total_ticks,
+        _elapsed_ms(),
+    )
     _record_flow()
     # Surface latest search results and signals in stopped data
     stopped_data: dict[str, Any] = {"reason": "budget"}

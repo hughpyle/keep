@@ -83,6 +83,38 @@ def kp(mock_providers, tmp_path):
 class TestResolveMetaPersistent:
     """Tests for resolve_meta() using persistent .meta/* documents."""
 
+    def test_resolve_meta_emits_doc_level_trace_spans(self, kp):
+        """Persistent meta resolution emits section-level OTel spans."""
+        spans = []
+
+        class _Span:
+            def __init__(self, name, attributes=None):
+                self.name = name
+                self.attributes = dict(attributes or {})
+
+            def __enter__(self):
+                spans.append(self)
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        class _Tracer:
+            def start_as_current_span(self, name, attributes=None):
+                return _Span(name, attributes)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("keep.tracing.get_tracer", lambda name: _Tracer())
+            result = kp.resolve_meta("anchor")
+
+        assert result
+        doc_spans = [s for s in spans if s.name == "resolve_meta.doc"]
+        assert any(s.attributes.get("meta_doc") == "todo" for s in doc_spans)
+        assert any(s.attributes.get("meta_doc") == "learnings" for s in doc_spans)
+
     def test_resolve_finds_open_commitments(self, kp):
         """The todo meta-doc should surface open commitments."""
         result = kp.resolve_meta("anchor")

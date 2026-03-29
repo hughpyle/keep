@@ -4,8 +4,6 @@
 * "skill install" (skill.md and _all the docs_) -> docs index, etc
     separate from "tool install"
 
-* when get a system doc, don't get_context, just return it.
-
 * mcp "tried_queries" remove??
 
 * reranking (including a local provider)
@@ -332,4 +330,5 @@ x acp
 . local http for daemon
 . rewrite the CLI and MCP to use local http -- no inproc impact
 . mcp description examples
-. observability and initial cacheing strategy
+. OTel observability and initial cacheing strategy
+. when get a system doc, don't get_context, just return it.

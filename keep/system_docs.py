@@ -190,21 +190,42 @@ def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
         return stats
 
     filename_to_id = _all_system_doc_ids()
+    doc_coll = keeper._resolve_doc_collection()
+    chroma_coll_name = keeper._resolve_chroma_collection()
+
+    def _copy_system_doc_record(old_id: str, new_id: str) -> None:
+        """Copy a system-doc record to a new stable ID without public flows."""
+        existing = keeper._document_store.get(doc_coll, old_id)
+        if existing is None:
+            return
+        keeper._document_store.upsert(
+            collection=doc_coll,
+            id=new_id,
+            summary=existing.summary,
+            tags=dict(existing.tags or {}),
+            content_hash=_content_hash(existing.summary),
+            archive=False,
+        )
 
     # First pass: clean up old file:// URIs with category=system tag
     try:
-        old_system_docs = keeper.list_items(tags={"category": "system"}, limit=100)
+        old_system_docs = keeper._document_store.query_by_tag_value(
+            doc_coll,
+            "category",
+            "system",
+            limit=10000,
+        )
         for doc in old_system_docs:
             if doc.id.startswith("file://") and doc.id.endswith(".md"):
                 filename = Path(doc.id.replace("file://", "")).name
                 new_id = filename_to_id.get(filename)
-                if new_id and not keeper.exists(new_id):
-                    keeper.put(doc.summary, id=new_id, tags=doc.tags)
-                    keeper.delete(doc.id)
+                if new_id and not keeper._document_store.get(doc_coll, new_id):
+                    _copy_system_doc_record(doc.id, new_id)
+                    keeper._delete_direct(doc.id)
                     stats["migrated"] += 1
                     logger.info("Migrated system doc: %s -> %s", doc.id, new_id)
                 elif new_id:
-                    keeper.delete(doc.id)
+                    keeper._delete_direct(doc.id)
                     stats["cleaned"] += 1
                     logger.info("Cleaned up old system doc: %s", doc.id)
     except (OSError, ValueError, KeyError, RuntimeError) as e:
@@ -213,14 +234,14 @@ def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
     # Second pass: rename old prefixes to new
     for old_id, new_id in _OLD_ID_RENAMES.items():
         try:
-            old_item = keeper.get(old_id)
-            if old_item and not keeper.exists(new_id):
-                keeper.put(old_item.summary, id=new_id, tags=old_item.tags)
-                keeper.delete(old_id)
+            old_item = keeper._document_store.get(doc_coll, old_id)
+            if old_item and not keeper._document_store.get(doc_coll, new_id):
+                _copy_system_doc_record(old_id, new_id)
+                keeper._delete_direct(old_id)
                 stats["migrated"] += 1
                 logger.info("Renamed ID: %s -> %s", old_id, new_id)
             elif old_item:
-                keeper.delete(old_id)
+                keeper._delete_direct(old_id)
                 stats["cleaned"] += 1
         except (OSError, ValueError, KeyError, RuntimeError) as e:
             logger.debug("Error renaming %s: %s", old_id, e)
@@ -228,8 +249,6 @@ def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
     # Rename _text:hash -> %hash (transfer embeddings directly, no re-embedding)
     # Preserves original timestamps - these are user memories with meaningful dates
     try:
-        doc_coll = keeper._resolve_doc_collection()
-        chroma_coll_name = keeper._resolve_chroma_collection()
         old_text_docs = keeper._document_store.query_by_id_prefix(doc_coll, "_text:")
         for rec in old_text_docs:
             new_id = "%" + rec.id[len("_text:"):]
@@ -258,8 +277,8 @@ def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
     _RETIRED_SYSTEM_IDS = [".meta/decisions"]
     for old_id in _RETIRED_SYSTEM_IDS:
         try:
-            if keeper.exists(old_id):
-                keeper.delete(old_id)
+            if keeper._document_store.get(doc_coll, old_id):
+                keeper._delete_direct(old_id)
                 stats["cleaned"] += 1
                 logger.info("Removed retired system doc: %s", old_id)
         except (OSError, ValueError, KeyError) as e:

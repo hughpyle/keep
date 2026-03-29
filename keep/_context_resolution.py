@@ -621,15 +621,26 @@ class ContextResolutionMixin:
         Returns:
             Dict of {meta_name: [matching Items]}. Empty results omitted.
         """
+        from .tracing import get_tracer
+
         doc_coll = self._resolve_doc_collection()
+        tracer = get_tracer("keeper")
 
         # Find all .meta/* documents
-        meta_records = self._document_store.query_by_id_prefix(doc_coll, ".meta/")
+        with tracer.start_as_current_span(
+            "resolve_meta.load_docs",
+            attributes={"item_id": item_id},
+        ):
+            meta_records = self._document_store.query_by_id_prefix(doc_coll, ".meta/")
         if not meta_records:
             return {}
 
         # Get current item's tags for context
-        current = self.get(item_id)
+        with tracer.start_as_current_span(
+            "resolve_meta.load_item",
+            attributes={"item_id": item_id},
+        ):
+            current = self.get(item_id)
         if current is None:
             return {}
         current_tags = current.tags
@@ -652,25 +663,36 @@ class ContextResolutionMixin:
 
         result: dict[str, list[Item]] = {}
 
-        for rec in meta_records:
-            meta_id = rec.id
-            short_name = meta_id.split("/", 1)[1] if "/" in meta_id else meta_id
-            body = (rec.summary or "").strip()
-            if not body:
-                continue
+        with tracer.start_as_current_span(
+            "resolve_meta",
+            attributes={"item_id": item_id, "meta_doc_count": len(meta_records)},
+        ):
+            for rec in meta_records:
+                meta_id = rec.id
+                short_name = meta_id.split("/", 1)[1] if "/" in meta_id else meta_id
+                body = (rec.summary or "").strip()
+                if not body:
+                    continue
 
-            matches = self._run_meta_flow(
-                short_name, body, flow_params, loader=loader, runner=runner,
-            )
+                with tracer.start_as_current_span(
+                    "resolve_meta.doc",
+                    attributes={"item_id": item_id, "meta_doc": short_name},
+                ) as span:
+                    matches = self._run_meta_flow(
+                        short_name, body, flow_params, loader=loader, runner=runner,
+                    )
 
-            # Legacy fallback: try old line-based format
-            if matches is None:
-                matches = self._resolve_meta_legacy(
-                    item_id, current_tags, body, limit_per_doc,
-                )
+                    # Legacy fallback: try old line-based format
+                    if matches is None:
+                        span.set_attribute("legacy", True)
+                        matches = self._resolve_meta_legacy(
+                            item_id, current_tags, body, limit_per_doc,
+                        )
+                    if matches is not None:
+                        span.set_attribute("result_count", len(matches))
 
-            if matches:
-                result[short_name] = matches
+                if matches:
+                    result[short_name] = matches
 
         return result
 

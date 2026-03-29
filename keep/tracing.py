@@ -125,8 +125,19 @@ class TimingTreeProcessor:
             attrs = ""
             if span.attributes:
                 parts = []
-                for k in ("cache", "source", "count", "item_id", "query",
-                          "similar_to", "http.method", "http.path"):
+                for k in (
+                    "cache",
+                    "source",
+                    "count",
+                    "item_id",
+                    "meta_doc",
+                    "result_count",
+                    "state",
+                    "query",
+                    "similar_to",
+                    "http.method",
+                    "http.path",
+                ):
                     v = span.attributes.get(k)
                     if v is not None and v != "":
                         parts.append(f"{k}={v}")

@@ -1,5 +1,7 @@
 """Tests for the synchronous state-doc flow runtime."""
 
+from unittest.mock import patch
+
 import pytest
 
 from keep.state_doc import parse_state_doc
@@ -38,6 +40,37 @@ def _make_runner(outputs: dict[str, dict] | None = None):
 # ---------------------------------------------------------------------------
 # Basic terminal flow
 # ---------------------------------------------------------------------------
+
+def test_run_flow_emits_runtime_trace_spans():
+    """run_flow emits trace spans for state-doc load and evaluation."""
+    loader = _make_loader({
+        "simple": "match: sequence\nrules:\n  - return: done",
+    })
+    spans = []
+
+    class _Span:
+        def __init__(self, name, attributes=None):
+            self.name = name
+            self.attributes = dict(attributes or {})
+
+        def __enter__(self):
+            spans.append(self)
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Tracer:
+        def start_as_current_span(self, name, attributes=None):
+            return _Span(name, attributes)
+
+    with patch("keep.tracing.get_tracer", return_value=_Tracer()):
+        result = run_flow("simple", {}, load_state_doc=loader, run_action=_make_runner())
+
+    assert result.status == "done"
+    assert any(s.name == "state_doc.load" and s.attributes.get("state") == "simple" for s in spans)
+    assert any(s.name == "state_doc.evaluate" and s.attributes.get("state") == "simple" for s in spans)
+
 
 class TestBasicFlow:
     """Tests for basic runtime flow."""

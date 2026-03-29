@@ -660,11 +660,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         """Run deferred system-doc migration if needed (idempotent, best-effort)."""
         if not self._needs_sysdoc_migration:
             return
-        try:
-            self._migrate_system_documents()
-            self._needs_sysdoc_migration = False  # clear AFTER success only
-        except Exception as e:
-            logger.warning("System doc migration deferred: %s", e, exc_info=True)
+        with _get_tracer("keeper").start_as_current_span("ensure_sysdocs"):
+            try:
+                self._migrate_system_documents()
+                self._needs_sysdoc_migration = False  # clear AFTER success only
+            except Exception as e:
+                logger.warning("System doc migration deferred: %s", e, exc_info=True)
 
     def _migrate_system_documents(self, progress=None) -> dict:
         """Migrate system documents to stable IDs and current version."""

@@ -760,6 +760,36 @@ class TestSystemDocVersioning:
         assert current.summary == "bundled-v2"
 
 
+class TestTagQueries:
+    """Tag-value query behavior."""
+
+    @pytest.fixture
+    def store(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "documents.db"
+            with DocumentStore(db_path) as store:
+                yield store
+
+    def test_query_by_tag_value_matches_scalar_tags(self, store: DocumentStore) -> None:
+        """query_by_tag_value() matches scalar tag values without JSON errors."""
+        store.upsert(
+            "default",
+            ".state/foo",
+            "bundled",
+            {"category": "system", "bundled_hash": "bh1"},
+        )
+        store.upsert(
+            "default",
+            "doc:1",
+            "user",
+            {"category": "user"},
+        )
+
+        docs = store.query_by_tag_value("default", "category", "system")
+
+        assert [doc.id for doc in docs] == [".state/foo"]
+
+
 class TestAccessedAt:
     """Last-accessed timestamp tracking."""
 

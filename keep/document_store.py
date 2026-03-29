@@ -2978,7 +2978,7 @@ class DocumentStore:
                   OR EXISTS (
                       SELECT 1 FROM json_each(
                           CASE
-                              WHEN json_type(json_extract(tags_json, ?)) = 'array'
+                              WHEN json_type(tags_json, ?) = 'array'
                               THEN json_extract(tags_json, ?)
                               ELSE '[]'
                           END
@@ -3001,7 +3001,7 @@ class DocumentStore:
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
-                content_hash_full=row.get("content_hash_full"),
+                content_hash_full=row["content_hash_full"],
                 accessed_at=row["accessed_at"],
             ))
         return results

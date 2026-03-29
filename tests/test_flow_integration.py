@@ -69,6 +69,7 @@ class TestWritePathFlow:
 
 class TestGetContextFlow:
     """Tests for get-context flow invocation."""
+
     def test_get_context_invokes_read_flow(self, kp):
         """get_context() calls _run_read_flow('get-context')."""
         kp.put("Test note about architecture", id="arch1")
