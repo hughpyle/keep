@@ -97,6 +97,30 @@ class TestKeepFlow:
         call_body = mock_daemon.call_args[0][3]  # body arg
         assert call_body.get("token_budget") == 4000
 
+    @pytest.mark.asyncio
+    async def test_flow_retries_after_connection_refused(self):
+        from keep.mcp import keep_flow
+
+        with (
+            patch("keep.mcp._ensure_daemon", side_effect=[9999, 10000]),
+            patch("keep.mcp.http_request") as mock_http,
+        ):
+            mock_http.side_effect = [
+                ConnectionRefusedError(61, "refused"),
+                (200, {
+                    "status": "done", "ticks": 1,
+                    "data": {"ok": True},
+                    "bindings": {}, "history": [], "cursor": None, "tried_queries": [],
+                }),
+            ]
+
+            result = await keep_flow(state="put", params={"content": "hello"})
+
+        parsed = json.loads(result)
+        assert parsed["status"] == "done"
+        assert mock_http.call_args_list[0].args[1] == 9999
+        assert mock_http.call_args_list[1].args[1] == 10000
+
 
 # ---------------------------------------------------------------------------
 # keep_prompt

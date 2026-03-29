@@ -14,6 +14,7 @@ import json
 import os
 import signal
 import sys
+import http.client
 from typing import Annotated, Any, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -49,7 +50,11 @@ def _ensure_daemon() -> int:
 def _post(path: str, body: dict) -> tuple[int, dict]:
     """POST to the daemon. Returns (status, json_body)."""
     global _port
-    status, result = http_request("POST", _ensure_daemon(), path, body)
+    try:
+        status, result = http_request("POST", _ensure_daemon(), path, body)
+    except (ConnectionError, TimeoutError, http.client.RemoteDisconnected, OSError):
+        _port = None
+        status, result = http_request("POST", _ensure_daemon(), path, body)
     if status == 401:
         # Daemon may have restarted on a new port. Re-resolve.
         _port = None
