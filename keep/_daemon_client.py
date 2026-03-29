@@ -177,41 +177,45 @@ def get_port(store_override: str | None = None) -> int:
     _load_token(store_override)
 
     # Try existing daemon
+    existing_port = None
     if port_file.exists():
         try:
-            port = int(port_file.read_text().strip())
-            if check_health(port):
-                return port
+            existing_port = int(port_file.read_text().strip())
+            if check_health(existing_port):
+                return existing_port
         except (ValueError, OSError):
             pass
 
-    # Auto-start daemon (generates new token)
+    # Spawn a new daemon.  Do NOT delete discovery files first — the
+    # existing daemon may be alive but briefly unhealthy (heavy work,
+    # slow startup).  If it still holds .processor.lock the new process
+    # exits harmlessly and we retry the health check below.
     global _auth_token, _auth_token_store
     _auth_token = ""  # clear stale token
     _auth_token_store = ""
-    # Remove stale token/port files so we don't poll with old credentials
-    (store_path / DAEMON_TOKEN_FILE).unlink(missing_ok=True)
-    port_file.unlink(missing_ok=True)
     print("Starting daemon...", file=sys.stderr)
     start_daemon(store_path)
 
-    # Poll for readiness
+    # Poll for readiness.  Check both the old port (daemon may recover)
+    # and any new port file written by a replacement daemon.
     deadline = time.monotonic() + 15.0
     while time.monotonic() < deadline:
-        # Re-read token each iteration — daemon writes it at startup
-        _auth_token = ""
-        _load_token(store_override)
-        if not _auth_token:
-            time.sleep(0.1)
-            continue
+        # The original daemon may have recovered — try its port first
+        if existing_port is not None:
+            _load_token(store_override, force=True)
+            if check_health(existing_port):
+                return existing_port
+
+        # A replacement daemon writes new discovery files at startup
+        _load_token(store_override, force=True)
         if port_file.exists():
             try:
                 port = int(port_file.read_text().strip())
-                if check_health(port):
+                if port != existing_port and check_health(port):
                     return port
             except (ValueError, OSError):
                 pass
-        time.sleep(0.1)
+        time.sleep(0.3)
 
     print("Error: daemon did not start in time.", file=sys.stderr)
     sys.exit(1)

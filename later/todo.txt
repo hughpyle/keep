@@ -1,7 +1,7 @@
 
 * "skill install" (skill.md and _all the docs_) -> docs index, etc
     separate from "tool install"
-    
+
 * when get a system doc, don't get_context, just return it.
 
 * mcp "tried_queries" remove??
@@ -11,6 +11,11 @@
 * mcp prompts
 
 * context-focused results (get *only* the parts, similar, etc)
+
+* Remove hard-coded default docs, fix consistency:
+    - .state/*: user can edit a state doc, break it -> reverts to hard-coded behavior
+    - render_prompt() falls back to Python
+    - analysis and summarization falls back to DEFAULT_ANALYSIS_PROMPT, INCREMENTAL_ANALYSIS_PROMPT, etc.
 
 * edge limit in get frontmatter
     - other sections (similar, meta, parts) have default limit + CLI param

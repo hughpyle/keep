@@ -239,3 +239,27 @@ def test_prompt_not_found_via_flow(http):
     })
     assert r.status_code == 200
     assert r.json()["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# Server lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_stop_releases_socket(mock_providers, tmp_path):
+    """stop() calls server_close() so the port is immediately reusable."""
+    kp = Keeper(store_path=tmp_path)
+    server = DaemonServer(kp, port=0)
+    port = server.start()
+
+    server.stop()
+
+    # The port should be free for immediate rebind
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError as e:
+        pytest.fail(f"Port {port} still bound after stop(): {e}")
+    finally:
+        sock.close()
+        kp.close()

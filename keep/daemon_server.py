@@ -448,9 +448,10 @@ class DaemonServer:
         return port
 
     def stop(self):
-        """Shut down the HTTP server."""
+        """Shut down the HTTP server and release the listening socket."""
         if self._server:
             self._server.shutdown()
+            self._server.server_close()
         if self._thread:
             self._thread.join(timeout=5)
         logger.info("Query server stopped")
