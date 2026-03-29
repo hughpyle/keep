@@ -30,4 +30,6 @@ class Put:
         return {
             "id": getattr(item, "id", None),
             "summary": getattr(item, "summary", None),
+            "tags": dict(getattr(item, "tags", None) or {}),
+            "changed": getattr(item, "changed", None),
         }

@@ -522,7 +522,9 @@ class _EnvActionContext:
         limit: int = 10,
         since: str | None = None,
         until: str | None = None,
+        include_self: bool = False,
         include_hidden: bool = False,
+        deep: bool = False,
         scope: str | None = None,
     ) -> list[Any]:
         return self._env.find(
@@ -532,8 +534,9 @@ class _EnvActionContext:
             limit=limit,
             since=since,
             until=until,
+            include_self=include_self,
             include_hidden=include_hidden,
-            deep=False,
+            deep=deep,
             scope=scope,
         )
 

@@ -270,7 +270,7 @@ class TestGetContextFlow:
 class TestFindDeepFlow:
     """Tests for find-deep flow invocation."""
     def test_find_deep_invokes_flow_when_no_edges(self, kp):
-        """find(deep=True) calls _deep_follow_via_flow when store has no edges."""
+        """find(deep=True) dispatches through the flow-host compat path."""
         kp.put("OAuth2 token design for project X", id="a",
                tags={"project": "x", "topic": "auth"})
         for i in range(35):
@@ -279,17 +279,17 @@ class TestFindDeepFlow:
                tags={"project": "x"})
 
         calls = []
-        original = kp._run_read_flow
+        original = kp.run_flow
 
-        def tracking_flow(state, params, **kwargs):
+        def tracking_flow(state, **kwargs):
             calls.append(state)
-            return original(state, params, **kwargs)
+            return original(state, **kwargs)
 
-        kp._run_read_flow = tracking_flow
+        kp.run_flow = tracking_flow  # type: ignore[method-assign]
         results = kp.find("OAuth2 auth token design", deep=True, limit=5)
 
-        assert "find-deep" in calls, \
-            "find(deep=True) should invoke the find-deep state-doc flow"
+        assert "compat-find" in calls, \
+            "find(deep=True) should invoke the flow-backed compat path"
 
     def test_find_deep_flow_discovers_bridge_items(self, kp):
         """The flow path discovers bridge items via tag-follow."""

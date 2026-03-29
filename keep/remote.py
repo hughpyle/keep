@@ -19,6 +19,7 @@ from .flow_client import (
     find_items as flow_find_items,
     get_item as flow_get_item,
     get_now_item as flow_get_now_item,
+    move_item as flow_move_item,
     put_item as flow_put_item,
     set_now_item as flow_set_now_item,
     tag_item as flow_tag_item,
@@ -286,6 +287,22 @@ class RemoteKeeper:
 
     def set_now(self, content: str, *, scope: Optional[str] = None, tags: Optional[TagMap] = None) -> Item:
         return flow_set_now_item(self, content, scope=scope, tags=tags)
+
+    def move(
+        self,
+        name: str,
+        *,
+        source_id: str = "now",
+        tags: Optional[TagMap] = None,
+        only_current: bool = False,
+    ) -> Item:
+        return flow_move_item(
+            self,
+            name,
+            source_id=source_id,
+            tags=tags,
+            only_current=only_current,
+        )
 
     def exists(self, id: str) -> bool:
         return self.get(id) is not None

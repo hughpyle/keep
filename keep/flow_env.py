@@ -32,8 +32,10 @@ class FlowRuntimeEnv(Protocol):
         limit: int = 10,
         since: str | None = None,
         until: str | None = None,
+        include_self: bool = False,
         include_hidden: bool = False,
         deep: bool = False,
+        scope: str | None = None,
     ) -> list[Any]: ...
 
     def list_items(
@@ -161,6 +163,7 @@ class LocalFlowEnvironment:
         limit: int = 10,
         since: str | None = None,
         until: str | None = None,
+        include_self: bool = False,
         include_hidden: bool = False,
         deep: bool = False,
         scope: str | None = None,
@@ -175,6 +178,7 @@ class LocalFlowEnvironment:
             limit=limit,
             since=since,
             until=until,
+            include_self=include_self,
             include_hidden=include_hidden,
             deep=deep,
             scope=scope,

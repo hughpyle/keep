@@ -62,16 +62,11 @@ from .types import (
 )
 from .context_cache import ContextCache
 from .flow_client import (
-    FLOW_STATE_DELETE_ITEM,
-    FLOW_STATE_FIND_ITEMS,
-    FLOW_STATE_GET_ITEM,
-    FLOW_STATE_GET_NOW,
-    FLOW_STATE_PUT_ITEM,
-    FLOW_STATE_TAG_ITEM,
     delete_item as flow_delete_item,
     find_items as flow_find_items,
     get_item as flow_get_item,
     get_now_item as flow_get_now_item,
+    move_item as flow_move_item,
     put_item as flow_put_item,
     set_now_item as flow_set_now_item,
     tag_item as flow_tag_item,
@@ -3361,6 +3356,22 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             ValueError: If name is empty, source doesn't exist,
                         or no versions match the filter.
         """
+        return flow_move_item(
+            self,
+            name,
+            source_id=source_id,
+            tags=tags,
+            only_current=only_current,
+        )
+
+    def _move_direct(
+        self,
+        name: str,
+        *,
+        source_id: str = NOWDOC_ID,
+        tags: Optional[TagMap] = None,
+        only_current: bool = False,
+    ) -> Item:
         if not name:
             raise ValueError("Name cannot be empty")
         name = normalize_id(name)
@@ -4662,108 +4673,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         return result
 
-    @staticmethod
-    def _flow_item_dict(item: Item | None) -> dict[str, Any] | None:
-        if item is None:
-            return None
-        return {
-            "id": item.id,
-            "summary": item.summary,
-            "tags": dict(item.tags),
-            "score": item.score,
-            "changed": item.changed,
-        }
-
-    def _run_builtin_item_flow(
-        self,
-        state: str,
-        params: dict[str, Any] | None = None,
-    ) -> Optional["FlowResult"]:
-        from .state_doc_runtime import FlowResult
-
-        p = params or {}
-        if state == FLOW_STATE_GET_ITEM:
-            item = self._get_direct(str(p.get("id") or ""))
-            return FlowResult(
-                status="done",
-                data={"item": self._flow_item_dict(item)},
-                ticks=1,
-                history=[state],
-            )
-        if state == FLOW_STATE_PUT_ITEM:
-            item = self._put_direct(
-                content=p.get("content"),
-                uri=p.get("uri"),
-                id=p.get("id"),
-                summary=p.get("summary"),
-                tags=p.get("tags"),
-                created_at=p.get("created_at"),
-                force=bool(p.get("force", False)),
-            )
-            return FlowResult(
-                status="done",
-                data={"item": self._flow_item_dict(item)},
-                ticks=1,
-                history=[state],
-            )
-        if state == FLOW_STATE_FIND_ITEMS:
-            results = self._find_direct(
-                query=p.get("query"),
-                tags=p.get("tags"),
-                similar_to=p.get("similar_to"),
-                limit=int(p.get("limit", 10)),
-                since=p.get("since"),
-                until=p.get("until"),
-                include_self=bool(p.get("include_self", False)),
-                include_hidden=bool(p.get("include_hidden", False)),
-                deep=bool(p.get("deep", False)),
-                scope=p.get("scope"),
-            )
-            deep_groups = getattr(results, "deep_groups", {}) or {}
-            return FlowResult(
-                status="done",
-                data={
-                    "items": [self._flow_item_dict(item) for item in results],
-                    "deep_groups": {
-                        key: [self._flow_item_dict(item) for item in values]
-                        for key, values in deep_groups.items()
-                    },
-                },
-                ticks=1,
-                history=[state],
-            )
-        if state == FLOW_STATE_TAG_ITEM:
-            item = self._tag_direct(
-                str(p.get("id") or ""),
-                tags=p.get("tags"),
-            )
-            return FlowResult(
-                status="done",
-                data={"item": self._flow_item_dict(item)},
-                ticks=1,
-                history=[state],
-            )
-        if state == FLOW_STATE_DELETE_ITEM:
-            deleted = self._delete_direct(
-                str(p.get("id") or ""),
-                delete_versions=bool(p.get("delete_versions", True)),
-            )
-            return FlowResult(
-                status="done",
-                data={"deleted": bool(deleted)},
-                ticks=1,
-                history=[state],
-            )
-        if state == FLOW_STATE_GET_NOW:
-            item = self._get_now_direct(scope=p.get("scope"))
-            return FlowResult(
-                status="done",
-                data={"item": self._flow_item_dict(item)},
-                ticks=1,
-                history=[state],
-            )
-        return None
-
     def run_flow(
         self,
         state: str,
@@ -4819,10 +4728,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             run_flow,
         )
 
-        builtin = self._run_builtin_item_flow(state, params)
-        if builtin is not None:
-            return builtin
-
         # Prompt rendering: render_prompt + expand_prompt as a flow command
         if state == "prompt":
             p = params or {}
@@ -4855,7 +4760,18 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             budget = self._config.budget_per_flow
 
         env = LocalFlowEnvironment(self)
-        runner = make_action_runner(env, writable=writable)
+        base_runner = make_action_runner(env, writable=writable)
+        if writable:
+            collection = self._resolve_doc_collection()
+
+            def runner(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
+                output = base_runner(action_name, action_params)
+                if isinstance(output, dict) and output.get("mutations"):
+                    from .task_workflows import _apply_mutations
+                    _apply_mutations(self, collection, output)
+                return output
+        else:
+            runner = base_runner
 
         # Build loader: inline YAML overrides store lookup
         if state_doc_yaml is not None:

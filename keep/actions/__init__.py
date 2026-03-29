@@ -45,7 +45,10 @@ class ActionContext(Protocol):
         limit: int = 10,
         since: str | None = None,
         until: str | None = None,
+        include_self: bool = False,
         include_hidden: bool = False,
+        deep: bool = False,
+        scope: str | None = None,
     ) -> list[Any]: ...
 
     def list_items(
