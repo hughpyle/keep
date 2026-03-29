@@ -61,6 +61,21 @@ from .types import (
     MAX_TAG_VALUE_LENGTH,
 )
 from .context_cache import ContextCache
+from .flow_client import (
+    FLOW_STATE_DELETE_ITEM,
+    FLOW_STATE_FIND_ITEMS,
+    FLOW_STATE_GET_ITEM,
+    FLOW_STATE_GET_NOW,
+    FLOW_STATE_PUT_ITEM,
+    FLOW_STATE_TAG_ITEM,
+    delete_item as flow_delete_item,
+    find_items as flow_find_items,
+    get_item as flow_get_item,
+    get_now_item as flow_get_now_item,
+    put_item as flow_put_item,
+    set_now_item as flow_set_now_item,
+    tag_item as flow_tag_item,
+)
 from .flow_env import LocalFlowEnvironment
 from .tracing import get_tracer as _get_tracer
 from ._background_processing import BackgroundProcessingMixin
@@ -2206,8 +2221,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         created_at: Optional[str] = None,
         force: bool = False,
     ) -> Item:
-        """Store content in memory."""
-        return self._put_direct(
+        """Store content in memory via the flow host interface."""
+        return flow_put_item(
+            self,
             content=content,
             uri=uri,
             id=id,
@@ -2223,7 +2239,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
     # _apply_recency_decay, _rrf_fuse, _deep_tag_follow, _deep_edge_follow,
     # _deep_follow_via_flow are provided by SearchAugmentationMixin.
 
-    def find(
+    def _find_direct(
         self,
         query: Optional[str] = None,
         *,
@@ -2785,6 +2801,35 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     context_id=query or similar_to)
         return FindResults(final, deep_groups=deep_groups)
 
+    def find(
+        self,
+        query: Optional[str] = None,
+        *,
+        tags: Optional[TagMap] = None,
+        similar_to: Optional[str] = None,
+        limit: int = 10,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        include_self: bool = False,
+        include_hidden: bool = False,
+        deep: bool = False,
+        scope: Optional[str] = None,
+    ) -> list[Item]:
+        """Find items via the flow host interface."""
+        return flow_find_items(
+            self,
+            query,
+            tags=tags,
+            similar_to=similar_to,
+            limit=limit,
+            since=since,
+            until=until,
+            include_self=include_self,
+            include_hidden=include_hidden,
+            deep=deep,
+            scope=scope,
+        )
+
     # -------------------------------------------------------------------------
     # State-doc flow binding mappers for get_context
     # -------------------------------------------------------------------------
@@ -2909,7 +2954,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
     # Direct Access
     # -------------------------------------------------------------------------
     
-    def get(self, id: str) -> Optional[Item]:
+    def _get_direct(self, id: str) -> Optional[Item]:
         """Retrieve a specific item by ID.
 
         Reads from document store (canonical), falls back to vector store for legacy data.
@@ -2951,6 +2996,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if result is None:
             return None
         return result.to_item()
+
+    def get(self, id: str) -> Optional[Item]:
+        """Retrieve a specific item via the flow host interface."""
+        return flow_get_item(self, id)
 
     def peek(self, id: str) -> Optional[Item]:
         """Read an item without updating accessed_at.
@@ -3078,7 +3127,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # Check document store first, then ChromaDB
         return self._document_store.exists(doc_coll, id) or self._store.exists(chroma_coll, id)
     
-    def delete(
+    def _delete_direct(
         self,
         id: str,
         *,
@@ -3111,6 +3160,15 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._document_store.delete_version_edges_for_target(doc_coll, id)
         self._context_cache.notify_delete(id)
         return doc_deleted or chroma_deleted
+
+    def delete(
+        self,
+        id: str,
+        *,
+        delete_versions: bool = True,
+    ) -> bool:
+        """Delete an item via the flow host interface."""
+        return flow_delete_item(self, id, delete_versions=delete_versions)
 
     def revert(self, id: str) -> Optional[Item]:
         """Revert to the previous version, or delete if no versions exist.
@@ -3202,7 +3260,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
     # Current Working Context (Now)
     # -------------------------------------------------------------------------
 
-    def get_now(self, *, scope: Optional[str] = None) -> Item:
+    def _get_now_direct(self, *, scope: Optional[str] = None) -> Item:
         """Get the current working intentions.
 
         A singleton document representing what you're currently working on.
@@ -3217,11 +3275,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             The current intentions Item (never None - auto-creates if missing)
         """
         doc_id = f"now:{scope}" if scope else NOWDOC_ID
-        item = self.get(doc_id)
+        item = self._get_direct(doc_id)
         if item is None:
             if scope:
                 # Scoped now: initialize with minimal content
-                item = self.set_now(f"# Now ({scope})\n\nWorking context.", scope=scope)
+                item = self._set_now_direct(f"# Now ({scope})\n\nWorking context.", scope=scope)
             else:
                 # Singleton now: use bundled system doc
                 try:
@@ -3229,10 +3287,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 except FileNotFoundError:
                     default_content = "# Now\n\nYour working context."
                     default_tags = {}
-                item = self.set_now(default_content, tags=default_tags)
+                item = self._set_now_direct(default_content, tags=default_tags)
         return item
 
-    def set_now(
+    def get_now(self, *, scope: Optional[str] = None) -> Item:
+        """Get the current working intentions via the flow host interface."""
+        return flow_get_now_item(self, scope=scope)
+
+    def _set_now_direct(
         self,
         content: str,
         *,
@@ -3257,7 +3319,17 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         merged_tags = dict(tags or {})
         if scope:
             merged_tags.setdefault("user", scope)
-        return self.put(content, id=doc_id, tags=merged_tags or None)
+        return self._put_direct(content, id=doc_id, tags=merged_tags or None)
+
+    def set_now(
+        self,
+        content: str,
+        *,
+        scope: Optional[str] = None,
+        tags: Optional[TagMap] = None,
+    ) -> Item:
+        """Set the current working intentions via the flow host interface."""
+        return flow_set_now_item(self, content, scope=scope, tags=tags)
 
     def move(
         self,
@@ -3455,16 +3527,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             except FileNotFoundError:
                 default_content = "# Now\n\nYour working context."
                 default_tags = {}
-            self.set_now(default_content, tags=default_tags)
+            self._set_now_direct(default_content, tags=default_tags)
 
-        return self.get(name)
+        return self._get_direct(name)
 
     def reset_system_documents(self) -> dict:
         """Force reload all system documents from bundled content."""
         from .system_docs import reset_system_documents
         return reset_system_documents(self)
 
-    def tag(
+    def _tag_direct(
         self,
         id: str,
         tags: Optional[dict[str, Any]] = None,
@@ -3524,7 +3596,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             }
 
         # Get existing item (prefer document store, fall back to ChromaDB)
-        existing = self.get(id)
+        existing = self._get_direct(id)
         if existing is None:
             return None
 
@@ -3562,7 +3634,24 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._context_cache.notify_write(id, final_tags)
 
         # Return updated item
-        return self.get(id)
+        return self._get_direct(id)
+
+    def tag(
+        self,
+        id: str,
+        tags: Optional[dict[str, Any]] = None,
+        remove: Optional[list[str]] = None,
+        remove_values: Optional[dict[str, Any]] = None,
+    ) -> Optional[Item]:
+        """Update tags via the flow host interface when possible."""
+        if remove or remove_values:
+            return self._tag_direct(
+                id,
+                tags=tags,
+                remove=remove,
+                remove_values=remove_values,
+            )
+        return flow_tag_item(self, id, tags)
 
     def tag_part(
         self,
@@ -4573,6 +4662,127 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         return result
 
+    @staticmethod
+    def _flow_item_dict(item: Item | None) -> dict[str, Any] | None:
+        if item is None:
+            return None
+        return {
+            "id": item.id,
+            "summary": item.summary,
+            "tags": dict(item.tags),
+            "score": item.score,
+            "changed": item.changed,
+        }
+
+    def _run_builtin_item_flow(
+        self,
+        state: str,
+        params: dict[str, Any] | None = None,
+    ) -> Optional["FlowResult"]:
+        from .state_doc_runtime import FlowResult
+
+        p = params or {}
+        if state == FLOW_STATE_GET_ITEM:
+            item = self._get_direct(str(p.get("id") or ""))
+            return FlowResult(
+                status="done",
+                data={"item": self._flow_item_dict(item)},
+                ticks=1,
+                history=[state],
+            )
+        if state == FLOW_STATE_PUT_ITEM:
+            item = self._put_direct(
+                content=p.get("content"),
+                uri=p.get("uri"),
+                id=p.get("id"),
+                summary=p.get("summary"),
+                tags=p.get("tags"),
+                created_at=p.get("created_at"),
+                force=bool(p.get("force", False)),
+            )
+            return FlowResult(
+                status="done",
+                data={"item": self._flow_item_dict(item)},
+                ticks=1,
+                history=[state],
+            )
+        if state == FLOW_STATE_FIND_ITEMS:
+            results = self._find_direct(
+                query=p.get("query"),
+                tags=p.get("tags"),
+                similar_to=p.get("similar_to"),
+                limit=int(p.get("limit", 10)),
+                since=p.get("since"),
+                until=p.get("until"),
+                include_self=bool(p.get("include_self", False)),
+                include_hidden=bool(p.get("include_hidden", False)),
+                deep=bool(p.get("deep", False)),
+                scope=p.get("scope"),
+            )
+            deep_groups = getattr(results, "deep_groups", {}) or {}
+            return FlowResult(
+                status="done",
+                data={
+                    "items": [self._flow_item_dict(item) for item in results],
+                    "deep_groups": {
+                        key: [self._flow_item_dict(item) for item in values]
+                        for key, values in deep_groups.items()
+                    },
+                },
+                ticks=1,
+                history=[state],
+            )
+        if state == FLOW_STATE_TAG_ITEM:
+            item = self._tag_direct(
+                str(p.get("id") or ""),
+                tags=p.get("tags"),
+            )
+            return FlowResult(
+                status="done",
+                data={"item": self._flow_item_dict(item)},
+                ticks=1,
+                history=[state],
+            )
+        if state == FLOW_STATE_DELETE_ITEM:
+            deleted = self._delete_direct(
+                str(p.get("id") or ""),
+                delete_versions=bool(p.get("delete_versions", True)),
+            )
+            return FlowResult(
+                status="done",
+                data={"deleted": bool(deleted)},
+                ticks=1,
+                history=[state],
+            )
+        if state == FLOW_STATE_GET_NOW:
+            item = self._get_now_direct(scope=p.get("scope"))
+            return FlowResult(
+                status="done",
+                data={"item": self._flow_item_dict(item)},
+                ticks=1,
+                history=[state],
+            )
+        return None
+
+    def run_flow(
+        self,
+        state: str,
+        *,
+        params: dict[str, Any] | None = None,
+        budget: int | None = None,
+        cursor_token: str | None = None,
+        state_doc_yaml: str | None = None,
+        writable: bool = True,
+    ) -> "FlowResult":
+        return self.run_flow_command(
+            state,
+            params=params,
+            budget=budget,
+            cursor_token=cursor_token,
+            state_doc_yaml=state_doc_yaml,
+            writable=writable,
+        )
+
     def run_flow_command(
         self,
         state: str,
@@ -4608,6 +4818,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             make_state_doc_loader,
             run_flow,
         )
+
+        builtin = self._run_builtin_item_flow(state, params)
+        if builtin is not None:
+            return builtin
 
         # Prompt rendering: render_prompt + expand_prompt as a flow command
         if state == "prompt":
