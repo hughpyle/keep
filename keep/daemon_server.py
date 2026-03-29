@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PORT = 5337
+from .const import DAEMON_PORT
 
 
 def _item_to_dict(item) -> dict:
@@ -420,7 +420,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 class DaemonServer:
     """HTTP server lifecycle for the daemon."""
 
-    def __init__(self, keeper: "Keeper", port: int = DEFAULT_PORT):
+    def __init__(self, keeper: "Keeper", port: int = DAEMON_PORT):
         self._keeper = keeper
         self._preferred_port = port
         self._server: Optional[ThreadingHTTPServer] = None

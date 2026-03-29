@@ -11,6 +11,7 @@ from keep.validate import Diagnostic, ValidationResult, validate_system_doc
 
 
 class TestDiagnosticBasics:
+    """Tests for diagnostic basics."""
     def test_str_with_location(self):
         d = Diagnostic("error", "bad syntax", "line 3")
         assert "[error] (line 3) bad syntax" == str(d)
@@ -43,6 +44,7 @@ class TestDiagnosticBasics:
 
 
 class TestDispatcher:
+    """Tests for validation dispatcher."""
     def test_unknown_prefix(self):
         r = validate_system_doc(".foo/bar", "content")
         assert r.doc_type == "unknown"
@@ -70,6 +72,7 @@ class TestDispatcher:
 
 
 class TestTagValidation:
+    """Tests for tag validation."""
     def test_valid_parent_unconstrained(self):
         r = validate_system_doc(".tag/topic", "Topic classification")
         assert r.ok
@@ -149,6 +152,7 @@ class TestTagValidation:
 
 
 class TestMetaValidation:
+    """Tests for meta validation."""
     def test_valid_query_lines(self):
         r = validate_system_doc(".meta/related", "topic=auth\nstatus=open")
         assert r.ok
@@ -215,6 +219,7 @@ class TestMetaValidation:
 
 
 class TestPromptValidation:
+    """Tests for prompt validation."""
     def test_valid_prompt(self):
         r = validate_system_doc(
             ".prompt/analyze/default",
@@ -318,6 +323,7 @@ rules:
 
 
 class TestStateDocValidation:
+    """Tests for state document validation."""
     def test_valid_match_all(self):
         r = validate_system_doc(".state/after-write", VALID_STATE_DOC)
         assert r.doc_type == "state"

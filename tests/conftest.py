@@ -1,5 +1,4 @@
-"""
-Shared pytest fixtures for keep tests.
+"""Shared pytest fixtures for keep tests.
 
 Provides mock providers to avoid loading heavy ML models during testing.
 """
@@ -14,8 +13,7 @@ from keep.types import SYSTEM_TAG_PREFIX, tag_values
 
 
 class MockEmbeddingProvider:
-    """
-    Deterministic mock embedding provider for testing.
+    """Deterministic mock embedding provider for testing.
 
     Generates consistent embeddings based on text hash - no ML model loading.
     """
@@ -916,8 +914,7 @@ class MockPendingSummaryQueue:
 
 @pytest.fixture
 def mock_providers():
-    """
-    Fixture that patches all providers AND stores to use mocks.
+    """Fixture that patches all providers AND stores to use mocks.
 
     This avoids loading:
     - Real ML models (sentence-transformers, etc.)
@@ -965,3 +962,27 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "e2e: marks tests as end-to-end (require real providers)"
     )
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _kill_leaked_test_daemons():
+    """Kill any subprocess daemons spawned during the test session.
+
+    Tests may trigger daemon auto-start via the thin CLI's get_port().
+    Those daemons run in their own session (start_new_session=True) and
+    survive test teardown.  This fixture kills them by PID file after all
+    tests complete.
+    """
+    yield
+    import glob
+    import os
+    import signal
+    import tempfile
+    tmp_root = tempfile.gettempdir()
+    # pytest tmp dirs live under /tmp/pytest-of-<user>/
+    for pid_file in glob.glob(os.path.join(tmp_root, "pytest-*/**/processor.pid"), recursive=True):
+        try:
+            pid = int(Path(pid_file).read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+        except (ValueError, OSError, ProcessLookupError):
+            pass

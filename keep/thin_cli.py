@@ -14,7 +14,9 @@ from urllib.parse import quote
 
 import typer
 
-from ._daemon_client import http_request as _http, get_port as _daemon_get_port
+from ._daemon_client import get_port as _daemon_get_port
+from ._daemon_client import http_request as _http
+from .const import DAEMON_PORT_FILE, DAEMON_TOKEN_FILE
 
 app = typer.Typer(
     name="keep",
@@ -444,7 +446,7 @@ def default(
         callback=_version_callback, is_eager=True,
     )] = None,
 ):
-    """keep — reflective memory for AI agents."""
+    """Keep — reflective memory for AI agents."""
     global _global_json, _global_ids, _global_full, _global_store
     _global_json = json_output
     _global_ids = ids_only
@@ -528,7 +530,6 @@ def _get_one_item(
     tag: Optional[list[str]], json_output: bool,
 ) -> Optional[str]:
     """Fetch and render a single item. Returns formatted string or None on error."""
-
     # --similar: flat list via search endpoint
     if similar:
         data = _post(port, "/v1/search", {
@@ -803,21 +804,48 @@ def put(
     tags = _expand_stdin_tag_list(tags)
 
     port = _get_port()
-    parsed_tags = {}
+    parsed_tags: dict = {}
     for t in (tags or []):
         if "=" not in t:
-            typer.echo(f"Invalid tag format: {t!r} (expected key=value)", err=True)
+            hint = f"Invalid tag format: {t!r}."
+            if ":" in t:
+                k2, v2 = t.split(":", 1)
+                hint += f" Did you mean: {k2}={v2}?"
+            else:
+                hint += " Use key=value"
+            typer.echo(hint, err=True)
             raise typer.Exit(1)
         k, v = t.split("=", 1)
-        parsed_tags[k] = v
+        key = k.casefold()
+        existing = parsed_tags.get(key)
+        if existing is None:
+            parsed_tags[key] = v
+        elif isinstance(existing, list):
+            if v not in existing:
+                existing.append(v)
+        elif existing != v:
+            parsed_tags[key] = [existing, v]
 
     # Stdin mode
-    if source == "-" or (source is None and not sys.stdin.isatty()):
-        content = sys.stdin.read()
+    if source == "-" or (source is None and _has_stdin_data()):
+        try:
+            content = sys.stdin.read()
+        except UnicodeDecodeError:
+            typer.echo("Error: stdin contains binary data (not valid UTF-8)", err=True)
+            typer.echo("Hint: for binary files, use: keep put file:///path/to/file", err=True)
+            raise typer.Exit(1)
         if summary is not None:
             typer.echo("Error: --summary cannot be used with stdin (original content would be lost)", err=True)
             raise typer.Exit(1)
-        body: dict = {"content": content, "id": id, "tags": parsed_tags or None, "force": force or None}
+        # Extract YAML frontmatter as tags (CLI tags override)
+        from keep.utils import _extract_markdown_frontmatter
+        body_text, fm_tags = _extract_markdown_frontmatter(content)
+        if fm_tags:
+            merged = {**fm_tags, **parsed_tags}
+            content = body_text
+        else:
+            merged = parsed_tags
+        body: dict = {"content": content, "id": id, "tags": merged or None, "force": force or None}
         data = _post(port, "/v1/notes", body)
     elif source is None:
         typer.echo("Error: provide content, URI, or '-' for stdin", err=True)
@@ -1273,8 +1301,8 @@ def edit_cmd(
         keep edit .prompt/agent/reflect      # Edit a prompt template
         keep edit now                        # Edit current intentions
     """
-    import tempfile
     import subprocess as sp
+    import tempfile
 
     port = _get_port()
     data = _get(port, f"/v1/notes/{_q(id)}")
@@ -1374,6 +1402,7 @@ def pending(
     if stop:
         import signal
         import time as _time
+
         from ._daemon_client import resolve_store_path
         store_path = resolve_store_path(_global_store)
         pid_file = store_path / "processor.pid"
@@ -1405,21 +1434,21 @@ def pending(
             pid_file.unlink(missing_ok=True)
         except (ValueError, OSError) as e:
             typer.echo(f"Error stopping daemon: {e}", err=True)
-        (store_path / ".daemon.port").unlink(missing_ok=True)
-        (store_path / ".daemon.token").unlink(missing_ok=True)
+        (store_path / DAEMON_PORT_FILE).unlink(missing_ok=True)
+        (store_path / DAEMON_TOKEN_FILE).unlink(missing_ok=True)
         return
 
     if list_items:
+        from ._daemon_client import get_port, resolve_store_path
         from .cli import print_pending_list_lightweight
-        from ._daemon_client import resolve_store_path, get_port
         store_path = resolve_store_path(_global_store)
         print_pending_list_lightweight(store_path)
         # Ensure daemon is running so pending items get processed
         get_port(_global_store)
         return
 
-    from .api import Keeper
     from ._daemon_client import resolve_store_path
+    from .api import Keeper
     kp = Keeper(store_path=resolve_store_path(_global_store))
 
     if daemon:
@@ -1509,17 +1538,17 @@ def config(
         return
 
     if setup:
+        from ._daemon_client import resolve_store_path
         from .paths import get_config_dir
         from .setup_wizard import run_wizard
-        from ._daemon_client import resolve_store_path
         store_path = resolve_store_path(_global_store)
         config_dir = store_path if _global_store else get_config_dir()
         run_wizard(config_dir, store_path, restart_command="keep config --setup")
         return
 
+    from .cli import _format_config_with_defaults, _get_config_value
     from .config import load_or_create_config
     from .paths import get_config_dir, get_default_store_path
-    from .cli import _get_config_value, _format_config_with_defaults
 
     config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
     cfg = load_or_create_config(config_dir)
@@ -1543,6 +1572,7 @@ def config(
     is_json = json_output or (ctx.parent and ctx.parent.params.get("json_output", False))
     if is_json:
         import importlib.resources
+
         from .cli import get_tool_directory
         result = {
             "file": str(cfg.config_path) if cfg else None,
@@ -1600,8 +1630,8 @@ def data_export(
     exclude_system: Annotated[bool, typer.Option("--exclude-system", help="Exclude system documents")] = False,
 ):
     """Export the store to JSON for backup or migration."""
-    from .api import Keeper
     from ._daemon_client import resolve_store_path
+    from .api import Keeper
     kp = Keeper(store_path=resolve_store_path(_global_store))
     it = kp.export_iter(include_system=not exclude_system)
     header = next(it)
@@ -1660,8 +1690,8 @@ def data_import(
         ):
             raise SystemExit(0)
 
-    from .api import Keeper
     from ._daemon_client import resolve_store_path
+    from .api import Keeper
     kp = Keeper(store_path=resolve_store_path(_global_store))
     stats = kp.import_data(data, mode=mode)
     kp.close()

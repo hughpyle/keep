@@ -29,6 +29,7 @@ from keep.watches import (
 # ---------------------------------------------------------------------------
 
 class TestParseDuration:
+    """Tests for duration string parsing."""
 
     def test_seconds(self):
         assert parse_duration("PT30S") == timedelta(seconds=30)
@@ -62,6 +63,7 @@ class TestParseDuration:
 # ---------------------------------------------------------------------------
 
 class TestWatchEntryIsDue:
+    """Tests for watch entry due-check."""
 
     def test_never_checked(self):
         entry = WatchEntry(source="x", kind="file")
@@ -94,6 +96,7 @@ class TestWatchEntryIsDue:
 # ---------------------------------------------------------------------------
 
 class TestWatchCRUD:
+    """Tests for watch CRUD operations."""
 
     @pytest.fixture
     def kp(self, mock_providers, tmp_path):
@@ -179,6 +182,7 @@ class TestWatchCRUD:
 # ---------------------------------------------------------------------------
 
 class TestCheckFile:
+    """Tests for file change detection."""
 
     def test_unchanged(self, tmp_path):
         f = tmp_path / "test.txt"
@@ -222,6 +226,7 @@ class TestCheckFile:
 # ---------------------------------------------------------------------------
 
 class TestCheckDirectory:
+    """Tests for directory change detection."""
 
     def test_unchanged(self, tmp_path):
         (tmp_path / "a.txt").write_text("A")
@@ -259,6 +264,7 @@ class TestCheckDirectory:
 # ---------------------------------------------------------------------------
 
 class TestCheckURL:
+    """Tests for URL change detection."""
 
     def test_304_not_modified(self):
         entry = WatchEntry(
@@ -304,6 +310,7 @@ class TestCheckURL:
 # ---------------------------------------------------------------------------
 
 class TestPollWatches:
+    """Tests for watch polling."""
 
     @pytest.fixture
     def kp(self, mock_providers, tmp_path):
@@ -364,6 +371,7 @@ class TestPollWatches:
 # ---------------------------------------------------------------------------
 
 class TestNextCheckDelay:
+    """Tests for next-check delay calculation."""
 
     def test_empty(self):
         assert next_check_delay([]) == 30.0
@@ -450,6 +458,7 @@ class TestHandleWatch:
 # ---------------------------------------------------------------------------
 
 class TestURLContentHashFallback:
+    """Tests for URL content hash fallback."""
 
     def test_no_cache_headers_uses_content_hash(self):
         entry = WatchEntry(source="https://example.com/doc", kind="url")

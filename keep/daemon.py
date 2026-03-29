@@ -1,4 +1,4 @@
-"""Daemon entry point: python -m keep.daemon --store PATH
+"""Daemon entry point: python -m keep.daemon --store PATH.
 
 Minimal argument parsing — no typer, no CLI framework.
 Starts a Keeper and runs the daemon loop directly.

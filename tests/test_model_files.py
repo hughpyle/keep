@@ -142,6 +142,7 @@ def _write_3mf(path: Path, objects: int = 1, verts_per: int = 4,
 # ---------------------------------------------------------------------------
 
 class TestSTL:
+    """Tests for STL file parsing."""
     def test_binary_stl(self, tmp_path):
         p = tmp_path / "cube.stl"
         tris = [
@@ -176,6 +177,7 @@ class TestSTL:
 
 
 class TestOBJ:
+    """Tests for OBJ file parsing."""
     def test_basic_obj(self, tmp_path):
         p = tmp_path / "cube.obj"
         verts = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
@@ -199,6 +201,7 @@ class TestOBJ:
 
 
 class TestPLY:
+    """Tests for PLY file parsing."""
     def test_ply_header(self, tmp_path):
         p = tmp_path / "scan.ply"
         _write_ply(p, vertex_count=50000, face_count=100000)
@@ -210,6 +213,7 @@ class TestPLY:
 
 
 class TestGLTF:
+    """Tests for glTF file parsing."""
     def test_gltf_json(self, tmp_path):
         p = tmp_path / "scene.gltf"
         _write_gltf(p, meshes=2, materials=3, scene_name="MyScene")
@@ -234,6 +238,7 @@ class TestGLTF:
 
 
 class TestThreeMF:
+    """Tests for 3MF file parsing."""
     def test_basic_3mf(self, tmp_path):
         p = tmp_path / "print.3mf"
         _write_3mf(p, objects=2, verts_per=8, tris_per=12)
@@ -245,6 +250,7 @@ class TestThreeMF:
 
 
 class TestFallback:
+    """Tests for unknown extension fallback."""
     def test_unknown_extension(self, tmp_path):
         p = tmp_path / "model.fbx"
         p.write_bytes(b"\x00" * 100)

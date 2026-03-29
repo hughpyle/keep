@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test sliding-window analysis with different providers on real data.
+"""Test sliding-window analysis with different providers on real data.
 
 Providers:
   --provider ollama      Local Ollama model (default)

@@ -8,6 +8,7 @@ def _result(id, score=None, tags=None):
 
 
 class TestMargin:
+    """Tests for dominant result margin."""
     def test_dominant_result(self):
         out = enrich_find_output({
             "results": [_result("a", 0.95), _result("b", 0.30)],
@@ -42,6 +43,7 @@ class TestMargin:
 
 
 class TestEntropy:
+    """Tests for score entropy calculation."""
     def test_uniform_scores(self):
         out = enrich_find_output({
             "results": [_result("a", 0.5), _result("b", 0.5), _result("c", 0.5)],
@@ -72,6 +74,7 @@ class TestEntropy:
 
 
 class TestLineage:
+    """Tests for lineage tag extraction."""
     def test_no_lineage_tags(self):
         out = enrich_find_output({
             "results": [_result("a", 0.9, {"topic": "x"}), _result("b", 0.8)],
@@ -117,6 +120,7 @@ class TestLineage:
 
 
 class TestTopFacetTags:
+    """Tests for top facet tag extraction."""
     def test_common_facet(self):
         out = enrich_find_output({
             "results": [
@@ -169,6 +173,7 @@ class TestTopFacetTags:
 
 
 class TestEnrichPreservesOutput:
+    """Tests for enrichment output preservation."""
     def test_original_fields_preserved(self):
         out = enrich_find_output({
             "results": [_result("a", 0.9)],

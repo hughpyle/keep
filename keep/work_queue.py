@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from .const import SQLITE_BUSY_TIMEOUT_MS
 
 # Fixed flow_id for directly-enqueued work (no FlowEngine flow).
 _DIRECT_FLOW_ID = "_direct"
@@ -57,7 +58,7 @@ class WorkQueue:
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
 
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS continue_work (
@@ -160,7 +161,10 @@ class WorkQueue:
         return work_id
 
     def _supersede_prior(self, supersede_key: str, keep_work_id: str) -> int:
-        """Mark older unclaimed work with the same key as superseded."""
+        """Mark older unclaimed work with the same key as superseded.
+
+        Caller must already hold self._lock.
+        """
         now = self._now()
         cursor = self._conn.execute(
             """
@@ -184,7 +188,7 @@ class WorkQueue:
         worker_id: str,
         *,
         limit: int = 10,
-        lease_seconds: int = 120,
+        lease_seconds: int = 120,  # see const.DEFAULT_LEASE_SECONDS
     ) -> list[WorkItem]:
         """Claim up to *limit* requested items for *worker_id*."""
         worker = str(worker_id or "").strip()
@@ -198,50 +202,51 @@ class WorkQueue:
             tz=timezone.utc,
         ).isoformat()
 
-        self._conn.execute("BEGIN IMMEDIATE")
-        try:
-            rows = self._conn.execute(
-                """
-                SELECT work_id
-                FROM continue_work
-                WHERE status = 'requested'
-                  AND dead_lettered_at IS NULL
-                  AND (retry_after IS NULL OR retry_after <= ?)
-                  AND (claimed_by IS NULL OR lease_until IS NULL OR lease_until <= ?)
-                ORDER BY priority ASC, created_at ASC
-                LIMIT ?
-                """,
-                (now, now, max(int(limit), 1)),
-            ).fetchall()
-            work_ids = [str(r["work_id"]) for r in rows]
-            if not work_ids:
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = self._conn.execute(
+                    """
+                    SELECT work_id
+                    FROM continue_work
+                    WHERE status = 'requested'
+                      AND dead_lettered_at IS NULL
+                      AND (retry_after IS NULL OR retry_after <= ?)
+                      AND (claimed_by IS NULL OR lease_until IS NULL OR lease_until <= ?)
+                    ORDER BY priority ASC, created_at ASC
+                    LIMIT ?
+                    """,
+                    (now, now, max(int(limit), 1)),
+                ).fetchall()
+                work_ids = [str(r["work_id"]) for r in rows]
+                if not work_ids:
+                    self._conn.commit()
+                    return []
+
+                self._conn.executemany(
+                    """
+                    UPDATE continue_work
+                    SET claimed_by = ?, claimed_at = ?, lease_until = ?, updated_at = ?
+                    WHERE work_id = ?
+                    """,
+                    [(worker, now, lease_until, now, wid) for wid in work_ids],
+                )
+
+                placeholders = ", ".join("?" for _ in work_ids)
+                claimed = self._conn.execute(
+                    f"""
+                    SELECT work_id, kind, input_json, attempt, supersede_key, created_at
+                    FROM continue_work
+                    WHERE work_id IN ({placeholders})
+                    ORDER BY created_at ASC
+                    """,
+                    tuple(work_ids),
+                ).fetchall()
                 self._conn.commit()
-                return []
-
-            self._conn.executemany(
-                """
-                UPDATE continue_work
-                SET claimed_by = ?, claimed_at = ?, lease_until = ?, updated_at = ?
-                WHERE work_id = ?
-                """,
-                [(worker, now, lease_until, now, wid) for wid in work_ids],
-            )
-
-            placeholders = ", ".join("?" for _ in work_ids)
-            claimed = self._conn.execute(
-                f"""
-                SELECT work_id, kind, input_json, attempt, supersede_key, created_at
-                FROM continue_work
-                WHERE work_id IN ({placeholders})
-                ORDER BY created_at ASC
-                """,
-                tuple(work_ids),
-            ).fetchall()
-            self._conn.commit()
-            return [self._to_item(r) for r in claimed]
-        except Exception:
-            self._conn.rollback()
-            raise
+                return [self._to_item(r) for r in claimed]
+            except Exception:
+                self._conn.rollback()
+                raise
 
     @staticmethod
     def _to_item(row: sqlite3.Row) -> WorkItem:
@@ -269,15 +274,16 @@ class WorkQueue:
     def complete(self, work_id: str, result: dict[str, Any] | None = None) -> None:
         """Mark work as completed."""
         result_json = json.dumps(result or {}, ensure_ascii=False, default=str)
-        self._conn.execute(
-            """
-            UPDATE continue_work
-            SET status = 'completed', result_json = ?, updated_at = ?,
-                claimed_by = NULL, claimed_at = NULL, lease_until = NULL, retry_after = NULL
-            WHERE work_id = ?
-            """,
-            (result_json, self._now(), work_id),
-        )
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE continue_work
+                SET status = 'completed', result_json = ?, updated_at = ?,
+                    claimed_by = NULL, claimed_at = NULL, lease_until = NULL, retry_after = NULL
+                WHERE work_id = ?
+                """,
+                (result_json, self._now(), work_id),
+            )
 
     def fail(
         self,
@@ -285,51 +291,53 @@ class WorkQueue:
         worker_id: str,
         error: Optional[str] = None,
         *,
-        backoff_base: int = 30,
-        backoff_max: int = 3600,
+        backoff_base: int = 30,   # see const.BACKOFF_BASE_SECONDS
+        backoff_max: int = 3600,  # see const.BACKOFF_MAX_SECONDS
     ) -> None:
         """Release work for retry, or dead-letter if max attempts exceeded."""
-        row = self._conn.execute(
-            """
-            SELECT attempt, max_attempts
-            FROM continue_work
-            WHERE work_id = ? AND status = 'requested'
-              AND dead_lettered_at IS NULL AND claimed_by = ?
-            """,
-            (work_id, worker_id),
-        ).fetchone()
-        if row is None:
-            return
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT attempt, max_attempts
+                FROM continue_work
+                WHERE work_id = ? AND status = 'requested'
+                  AND dead_lettered_at IS NULL AND claimed_by = ?
+                """,
+                (work_id, worker_id),
+            ).fetchone()
+            if row is None:
+                return
 
-        attempt = int(row["attempt"]) if row["attempt"] is not None else 1
-        max_attempts = int(row["max_attempts"]) if row["max_attempts"] is not None else 5
-        now = self._now()
+            attempt = int(row["attempt"]) if row["attempt"] is not None else 1
+            max_attempts = int(row["max_attempts"]) if row["max_attempts"] is not None else 5
+            now = self._now()
 
-        if attempt >= max_attempts:
-            self._dead_letter(work_id, worker_id, error)
-            return
+            if attempt >= max_attempts:
+                self._dead_letter_locked(work_id, worker_id, error)
+                return
 
-        base = max(int(backoff_base), 1)
-        cap = max(int(backoff_max), base)
-        delay = min(base * (2 ** max(attempt - 1, 0)), cap)
-        retry_after = datetime.fromtimestamp(
-            datetime.now(timezone.utc).timestamp() + delay,
-            tz=timezone.utc,
-        ).isoformat()
-        self._conn.execute(
-            """
-            UPDATE continue_work
-            SET retry_after = ?, last_error = ?, attempt = attempt + 1,
-                claimed_by = NULL, claimed_at = NULL, lease_until = NULL,
-                updated_at = ?
-            WHERE work_id = ? AND claimed_by = ?
-            """,
-            (retry_after, error, now, work_id, worker_id),
-        )
+            base = max(int(backoff_base), 1)
+            cap = max(int(backoff_max), base)
+            delay = min(base * (2 ** max(attempt - 1, 0)), cap)
+            retry_after = datetime.fromtimestamp(
+                datetime.now(timezone.utc).timestamp() + delay,
+                tz=timezone.utc,
+            ).isoformat()
+            self._conn.execute(
+                """
+                UPDATE continue_work
+                SET retry_after = ?, last_error = ?, attempt = attempt + 1,
+                    claimed_by = NULL, claimed_at = NULL, lease_until = NULL,
+                    updated_at = ?
+                WHERE work_id = ? AND claimed_by = ?
+                """,
+                (retry_after, error, now, work_id, worker_id),
+            )
 
-    def _dead_letter(
+    def _dead_letter_locked(
         self, work_id: str, worker_id: str, error: Optional[str] = None,
     ) -> None:
+        """Caller must already hold self._lock."""
         now = self._now()
         self._conn.execute(
             """
@@ -351,18 +359,19 @@ class WorkQueue:
         Returns the number of items released.
         """
         now = self._now()
-        cursor = self._conn.execute(
-            """
-            UPDATE continue_work
-            SET claimed_by = NULL, claimed_at = NULL, lease_until = NULL,
-                updated_at = ?
-            WHERE status = 'requested'
-              AND claimed_by IS NOT NULL
-              AND claimed_by != ?
-            """,
-            (now, current_worker),
-        )
-        return cursor.rowcount
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                UPDATE continue_work
+                SET claimed_by = NULL, claimed_at = NULL, lease_until = NULL,
+                    updated_at = ?
+                WHERE status = 'requested'
+                  AND claimed_by IS NOT NULL
+                  AND claimed_by != ?
+                """,
+                (now, current_worker),
+            )
+            return cursor.rowcount
 
     def cancel_by_item_ids(self, item_ids: set[str]) -> int:
         """Cancel unclaimed work items targeting any of the given item IDs.
@@ -375,17 +384,18 @@ class WorkQueue:
             return 0
         now = self._now()
         placeholders = ",".join("?" * len(item_ids))
-        cursor = self._conn.execute(
-            f"""
-            UPDATE continue_work
-            SET status = 'superseded', updated_at = ?
-            WHERE status = 'requested'
-              AND claimed_by IS NULL
-              AND json_extract(input_json, '$.item_id') IN ({placeholders})
-            """,
-            (now, *item_ids),
-        )
-        return cursor.rowcount
+        with self._lock:
+            cursor = self._conn.execute(
+                f"""
+                UPDATE continue_work
+                SET status = 'superseded', updated_at = ?
+                WHERE status = 'requested'
+                  AND claimed_by IS NULL
+                  AND json_extract(input_json, '$.item_id') IN ({placeholders})
+                """,
+                (now, *item_ids),
+            )
+            return cursor.rowcount
 
     # ------------------------------------------------------------------
     # Query
@@ -393,58 +403,60 @@ class WorkQueue:
 
     def count(self, *, claimable_only: bool = False) -> int:
         """Count requested work items."""
-        if claimable_only:
-            now = self._now()
-            row = self._conn.execute(
-                """
-                SELECT COUNT(1) AS c FROM continue_work
-                WHERE status = 'requested'
-                  AND (retry_after IS NULL OR retry_after <= ?)
-                  AND (lease_until IS NULL OR lease_until <= ?)
-                """,
-                (now, now),
-            ).fetchone()
-        else:
-            row = self._conn.execute(
-                "SELECT COUNT(1) AS c FROM continue_work WHERE status = 'requested'"
-            ).fetchone()
-        return int(row["c"]) if row is not None else 0
+        with self._lock:
+            if claimable_only:
+                now = self._now()
+                row = self._conn.execute(
+                    """
+                    SELECT COUNT(1) AS c FROM continue_work
+                    WHERE status = 'requested'
+                      AND (retry_after IS NULL OR retry_after <= ?)
+                      AND (lease_until IS NULL OR lease_until <= ?)
+                    """,
+                    (now, now),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT COUNT(1) AS c FROM continue_work WHERE status = 'requested'"
+                ).fetchone()
+            return int(row["c"]) if row is not None else 0
 
     def count_by_kind(self) -> dict[str, int]:
         """Count requested work items grouped by kind (task type).
 
         Returns dict ordered by minimum priority (processing order).
         """
-        rows = self._conn.execute(
-            """
-            SELECT kind, COUNT(1) AS c, MIN(priority) AS p FROM continue_work
-            WHERE status = 'requested'
-            GROUP BY kind
-            ORDER BY p ASC, kind ASC
-            """
-        ).fetchall()
-        return {row["kind"]: int(row["c"]) for row in rows}
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT kind, COUNT(1) AS c, MIN(priority) AS p FROM continue_work
+                WHERE status = 'requested'
+                GROUP BY kind
+                ORDER BY p ASC, kind ASC
+                """
+            ).fetchall()
+            return {row["kind"]: int(row["c"]) for row in rows}
 
     def list_pending(self, limit: int = 50) -> list[dict]:
         """List pending work items with their type, target, and input."""
-        import json as _json
-        rows = self._conn.execute(
-            """
-            SELECT work_id, kind, supersede_key, created_at, retry_after, input_json
-            FROM continue_work
-            WHERE status = 'requested'
-            ORDER BY priority ASC, created_at ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT work_id, kind, supersede_key, created_at, retry_after, input_json
+                FROM continue_work
+                WHERE status = 'requested'
+                ORDER BY priority ASC, created_at ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
         result = []
         for r in rows:
             d = dict(r)
             raw = d.pop("input_json", None)
             if raw:
                 try:
-                    d["input"] = _json.loads(raw)
+                    d["input"] = json.loads(raw)
                 except Exception:
                     d["input"] = {}
             else:
@@ -456,30 +468,33 @@ class WorkQueue:
         self, work_id: str, supersede_key: str, created_at: str,
     ) -> bool:
         """Check if a newer requested item exists for the same supersede_key."""
-        row = self._conn.execute(
-            """
-            SELECT 1 FROM continue_work
-            WHERE supersede_key = ? AND work_id != ?
-              AND status = 'requested' AND created_at > ?
-            LIMIT 1
-            """,
-            (supersede_key, work_id, created_at),
-        ).fetchone()
-        return row is not None
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT 1 FROM continue_work
+                WHERE supersede_key = ? AND work_id != ?
+                  AND status = 'requested' AND created_at > ?
+                LIMIT 1
+                """,
+                (supersede_key, work_id, created_at),
+            ).fetchone()
+            return row is not None
 
     def purge(self) -> int:
         """Delete all requested (unclaimed) work items. Returns count deleted."""
-        cur = self._conn.execute(
-            "DELETE FROM continue_work WHERE status = 'requested'"
-        )
-        self._conn.commit()
-        return cur.rowcount
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM continue_work WHERE status = 'requested'"
+            )
+            self._conn.commit()
+            return cur.rowcount
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None

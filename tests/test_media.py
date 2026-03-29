@@ -35,6 +35,7 @@ class TestMediaDescriberProtocol:
 # -----------------------------------------------------------------------------
 
 class TestMediaRegistry:
+    """Tests for media describer registry."""
 
     def test_register_and_create(self):
         registry = get_registry()
@@ -63,6 +64,7 @@ class TestMediaRegistry:
 # -----------------------------------------------------------------------------
 
 class TestMediaConfig:
+    """Tests for media configuration."""
 
     def test_config_media_defaults_to_none(self, tmp_path):
         from keep.config import StoreConfig
@@ -103,6 +105,7 @@ class TestMediaConfig:
 # -----------------------------------------------------------------------------
 
 class TestLockedMediaDescriber:
+    """Tests for locked media describer delegation."""
 
     def test_locked_describer_delegates(self, tmp_path):
         from keep.model_lock import LockedMediaDescriber
@@ -129,10 +132,9 @@ class TestLockedMediaDescriber:
 # -----------------------------------------------------------------------------
 
 class TestAfterWriteStateDoc:
-    """Verify the after-write state doc rules are the source of truth
-    for which background tasks fire after put().
+    """Verify after-write state doc rules drive background tasks.
 
-    These tests evaluate the state doc directly — no Keeper, no mocks.
+    These tests evaluate the state doc directly -- no Keeper, no mocks.
     If a rule is wrong here, the entire post-write pipeline is wrong.
     """
 
@@ -268,8 +270,7 @@ def _flow_item_context(kp):
 
 
 class TestAfterWriteDispatch:
-    """Verify _dispatch_after_write_flow enqueues a flow work item with
-    the correct item context through the full put() → work queue path.
+    """Verify _dispatch_after_write_flow enqueues correct flow work items.
 
     The after-write state doc evaluates these context fields at daemon
     execution time to decide which actions fire.
@@ -503,6 +504,7 @@ class TestDescribeTaskWorkflow:
 # -----------------------------------------------------------------------------
 
 class TestMLXMediaDescriber:
+    """Tests for MLX media describer."""
 
     def test_returns_none_for_text(self):
         from keep.providers.mlx import MLXMediaDescriber

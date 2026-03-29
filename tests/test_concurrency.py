@@ -1,5 +1,4 @@
-"""
-Concurrency tests for DocumentStore.
+"""Concurrency tests for DocumentStore.
 
 Verifies that multiple processes can safely access the same SQLite database
 simultaneously — the real scenario when hooks fire concurrently.

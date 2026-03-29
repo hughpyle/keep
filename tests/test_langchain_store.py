@@ -1,5 +1,4 @@
-"""
-Tests for KeepStore (LangGraph BaseStore).
+"""Tests for KeepStore (LangGraph BaseStore).
 
 Uses mock providers — no ML models or network.
 """
@@ -69,6 +68,7 @@ def scoped_store(keeper):
 # ── Helper tests ─────────────────────────────────────────────────────
 
 class TestHelpers:
+    """Tests for store helper functions."""
 
     def test_namespace_to_id(self):
         assert _namespace_to_id(("memories", "alice"), "fact-1") == "memories/alice/fact-1"
@@ -176,6 +176,7 @@ class TestHelpers:
 # ── Put / Get tests (default namespace_keys=["user"]) ───────────────
 
 class TestPutGet:
+    """Tests for store put and get operations."""
 
     def test_put_and_get(self, store):
         """Basic put/get round-trip with default single-level namespace."""
@@ -243,6 +244,7 @@ class TestPutGet:
 # ── Two-level namespace tests ──────────────────────────────────────
 
 class TestTwoLevelNamespace:
+    """Tests for two-level namespace operations."""
 
     def test_two_level_put_get(self, two_level_store):
         """Two-level namespace maps to two regular tags."""
@@ -275,6 +277,7 @@ class TestTwoLevelNamespace:
 # ── Delete tests ─────────────────────────────────────────────────────
 
 class TestDelete:
+    """Tests for store deletion."""
 
     def test_delete(self, store):
         """delete() removes the item."""
@@ -290,6 +293,7 @@ class TestDelete:
 # ── Search tests ─────────────────────────────────────────────────────
 
 class TestSearch:
+    """Tests for store search."""
 
     def test_search_with_query(self, two_level_store):
         """search() with query returns matching items."""
@@ -327,6 +331,7 @@ class TestSearch:
 # ── List namespaces tests ────────────────────────────────────────────
 
 class TestListNamespaces:
+    """Tests for namespace listing."""
 
     def test_list_namespaces_basic(self, two_level_store):
         """list_namespaces() returns stored namespace tuples."""
@@ -363,7 +368,7 @@ class TestListNamespaces:
         assert ("a", "b") not in namespaces
 
     def test_list_namespaces_limit(self, two_level_store):
-        """limit caps the number of results."""
+        """Limit caps the number of results."""
         two_level_store.put(("ns1", "x"), "k", {"content": "test"})
         two_level_store.put(("ns2", "x"), "k", {"content": "test"})
         two_level_store.put(("ns3", "x"), "k", {"content": "test"})
@@ -379,6 +384,7 @@ class TestListNamespaces:
 # ── Batch tests ──────────────────────────────────────────────────────
 
 class TestBatch:
+    """Tests for batch mixed operations."""
 
     def test_batch_mixed_ops(self, store):
         """batch() handles mixed operation types."""
@@ -416,6 +422,7 @@ class TestBatch:
 # ── User scoping tests ──────────────────────────────────────────────
 
 class TestUserScoping:
+    """Tests for user scoping on put."""
 
     def test_user_tag_added_on_put(self, scoped_store):
         """user_id adds user tag alongside namespace-provided tags."""
@@ -437,6 +444,7 @@ class TestUserScoping:
 # ── Config-based namespace_keys ──────────────────────────────────────
 
 class TestConfigNamespaceKeys:
+    """Tests for config-driven namespace keys."""
 
     def test_reads_from_config(self, mock_providers, tmp_path):
         """KeepStore picks up namespace_keys from keep.toml config."""
@@ -468,6 +476,7 @@ class TestConfigNamespaceKeys:
 # ── Content key tests ────────────────────────────────────────────────
 
 class TestContentKey:
+    """Tests for custom content key."""
 
     def test_custom_content_key(self, keeper):
         """Custom content_key extracts from different field."""
@@ -487,6 +496,7 @@ class TestContentKey:
 # ── Index parameter tests ───────────────────────────────────────────
 
 class TestIndex:
+    """Tests for index-false storage behavior."""
 
     def test_index_false_stores_but_minimal_embedding(self, store):
         """index=False stores the item with content preserved (no embedding)."""
@@ -510,6 +520,7 @@ class TestIndex:
 # ── Async tests ──────────────────────────────────────────────────────
 
 class TestAsync:
+    """Tests for async store operations."""
 
     @pytest.mark.asyncio
     async def test_aget(self, store):

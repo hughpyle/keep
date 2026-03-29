@@ -13,10 +13,9 @@ import logging
 import os
 import platform
 import re
-import select
 import shutil
-import subprocess
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -26,13 +25,23 @@ from typing import Any, Optional
 import typer
 from typing_extensions import Annotated
 
+from .const import (
+    DAEMON_PORT,
+    DAEMON_PORT_FILE,
+    DAEMON_TOKEN_FILE,
+    DOCUMENTS_DB,
+    OPS_LOG_FILE,
+    PENDING_SUMMARIES_DB,
+    WORK_QUEUE_DB,
+)
+
 logger = logging.getLogger(__name__)
 
 _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 
 from .api import Keeper
-from .utils import _text_content_id
 from .config import get_tool_directory
+from .logging_config import configure_quiet_mode, enable_debug_mode
 from .types import (
     SYSTEM_TAG_PREFIX,
     EdgeRef,
@@ -43,8 +52,7 @@ from .types import (
     local_date,
     tag_values,
 )
-from .logging_config import configure_quiet_mode, enable_debug_mode
-
+from .utils import _text_content_id
 
 
 def _is_filesystem_path(source: str) -> Optional[Path]:
@@ -95,21 +103,6 @@ def _progress_bar(current: int, total: int, label: str, *, err: bool = False) ->
     stream.write(line)
     stream.flush()
 
-
-def _has_stdin_data() -> bool:
-    """Check if stdin has data available without blocking.
-
-    Returns True only when stdin is a pipe with data ready to read.
-    Returns False for TTYs, sockets (exec sandbox), and empty pipes.
-    This prevents hanging when stdin is a socket that never sends EOF.
-    """
-    if sys.stdin.isatty():
-        return False
-    try:
-        ready, _, _ = select.select([sys.stdin], [], [], 0)
-        return bool(ready)
-    except (ValueError, OSError):
-        return False
 
 
 def _tag_display_value(value) -> str:
@@ -184,56 +177,23 @@ else:
     configure_quiet_mode(quiet=True)
 
 
-def _version_callback(value: bool):
-    if value:
-        from importlib.metadata import version
-        print(f"keep {version('keep-skill')}")
-        raise typer.Exit()
-
-
-def _verbose_callback(value: bool):
-    if value:
-        enable_debug_mode()
-
-
-# Global state for CLI options
+# Global state for CLI options (set by thin_cli callbacks)
 _json_output = False
 _ids_output = False
 _full_output = False
 _store_override: Optional[Path] = None
 
 
-def _json_callback(value: bool):
-    global _json_output
-    _json_output = value
-
-
 def _get_json_output() -> bool:
     return _json_output
-
-
-def _ids_callback(value: bool):
-    global _ids_output
-    _ids_output = value
 
 
 def _get_ids_output() -> bool:
     return _ids_output
 
 
-def _full_callback(value: bool):
-    global _full_output
-    _full_output = value
-
-
 def _get_full_output() -> bool:
     return _full_output
-
-
-def _store_callback(value: Optional[Path]):
-    global _store_override
-    if value is not None:
-        _store_override = value
 
 
 def _get_store_override() -> Optional[Path]:
@@ -1209,50 +1169,6 @@ def _get_keeper(store: Optional[Path], *, _force_local: bool = False) -> Keeper:
         raise typer.Exit(1)
 
 
-def _parse_tags(tags: Optional[list[str]]) -> dict:
-    """Parse key=value tag list to multivalue dict."""
-    if not tags:
-        return {}
-    parsed: dict[str, str | list[str]] = {}
-    for tag in tags:
-        if "=" not in tag:
-            hint = f"Error: Invalid tag format '{tag}'."
-            if ":" in tag:
-                k, v = tag.split(":", 1)
-                hint += f" Did you mean: {k}={v}?"
-            else:
-                hint += " Use key=value"
-            typer.echo(hint, err=True)
-            raise typer.Exit(1)
-        k, v = tag.split("=", 1)
-        key = k.casefold()
-        existing = parsed.get(key)
-        if existing is None:
-            parsed[key] = v
-        elif isinstance(existing, list):
-            if v not in existing:
-                existing.append(v)
-        elif existing != v:
-            parsed[key] = [existing, v]
-    return parsed
-
-
-
-def _parse_frontmatter(text: str) -> tuple[str, dict[str, str]]:
-    """Parse YAML frontmatter from text, return (content, tags).
-
-    Extracts all scalar frontmatter values as tags, plus values from
-    a ``tags`` dict.  Keys starting with ``_`` are skipped (system reserved).
-    Non-scalar values (lists, nested dicts) are dropped except ``tags`` dict.
-    """
-    from .utils import _extract_markdown_frontmatter
-    return _extract_markdown_frontmatter(text)
-
-
-# -----------------------------------------------------------------------------
-# Commands
-# -----------------------------------------------------------------------------
-
 def _handle_watch(
     kp: "Keeper",
     watch: bool,
@@ -1290,251 +1206,6 @@ def _handle_watch(
             typer.echo(f"Stopped watching: {source}", err=True)
         else:
             typer.echo(f"Not watching: {source}", err=True)
-
-
-def _put_store(
-    kp: "Keeper",
-    source: Optional[str],
-    resolved_path: Optional[Path],
-    parsed_tags: dict,
-    id: Optional[str],
-    summary: Optional[str],
-    force: bool = False,
-    recurse: bool = False,
-    exclude: list[str] | None = None,
-    watch: bool = False,
-    unwatch: bool = False,
-    interval: str | None = None,
-) -> Optional["Item"]:
-    """Execute the store operation for put(). Returns Item, or None for directory mode."""
-    if source == "-" or (source is None and _has_stdin_data()):
-        # Stdin mode: explicit '-' or piped input
-        try:
-            content = sys.stdin.read()
-        except UnicodeDecodeError:
-            typer.echo("Error: stdin contains binary data (not valid UTF-8)", err=True)
-            typer.echo("Hint: for binary files, use: keep put file:///path/to/file", err=True)
-            raise typer.Exit(1)
-        content, frontmatter_tags = _parse_frontmatter(content)
-        parsed_tags = {**frontmatter_tags, **parsed_tags}  # CLI tags override
-        if summary is not None:
-            typer.echo("Error: --summary cannot be used with stdin input (original content would be lost)", err=True)
-            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
-            raise typer.Exit(1)
-        # Use content-addressed ID for stdin text (enables versioning)
-        doc_id = id or _text_content_id(content)
-        return kp.put(content, id=doc_id, tags=parsed_tags or None, force=force)
-    elif resolved_path is not None and resolved_path.is_dir():
-        # Directory mode: index files in directory
-        if summary is not None:
-            typer.echo("Error: --summary cannot be used with directory mode", err=True)
-            raise typer.Exit(1)
-        if id is not None:
-            typer.echo("Error: --id cannot be used with directory mode", err=True)
-            raise typer.Exit(1)
-        from .ignore import merge_excludes
-        try:
-            ignore_patterns = kp._load_ignore_patterns()
-        except AttributeError:
-            ignore_patterns = []
-        combined_exclude = merge_excludes(ignore_patterns, exclude)
-        files = _list_directory_files(resolved_path, recurse=recurse, exclude=combined_exclude or None)
-        if not files:
-            typer.echo(f"Error: no eligible files in {resolved_path}/", err=True)
-            hint = "hidden files and symlinks are skipped"
-            if not recurse:
-                hint += "; use -r to recurse into subdirectories"
-            typer.echo(f"Hint: {hint}", err=True)
-            raise typer.Exit(1)
-        max_files = kp.config.max_dir_files
-        if len(files) > max_files:
-            typer.echo(f"Error: directory has {len(files)} files (max {max_files})", err=True)
-            typer.echo("Hint: increase max_dir_files in keep.toml or index files individually", err=True)
-            raise typer.Exit(1)
-        results: list[Item] = []
-        errors: list[str] = []
-        total = len(files)
-        is_tty = sys.stderr.isatty()
-        for i, fpath in enumerate(files, 1):
-            file_uri = f"file://{fpath}"
-            rel = fpath.relative_to(resolved_path) if recurse else fpath.name
-            try:
-                item = kp.put(uri=file_uri, tags=parsed_tags or None, force=force)
-                results.append(item)
-                if is_tty:
-                    _progress_bar(i, total, str(rel), err=True)
-                else:
-                    typer.echo(f"[{i}/{total}] {rel} ok", err=True)
-            except Exception as e:
-                errors.append(f"{rel}: {e}")
-                if is_tty:
-                    _progress_bar(i, total, f"{rel} ERROR", err=True)
-                else:
-                    typer.echo(f"[{i}/{total}] {rel} error: {e}", err=True)
-        if is_tty:
-            typer.echo("", err=True)  # newline after progress bar
-        indexed = len(results)
-        skipped = len(errors)
-        typer.echo(f"{indexed} indexed, {skipped} errors from {resolved_path.name}/", err=True)
-        if errors:
-            for e in errors:
-                typer.echo(f"  error: {e}", err=True)
-        if results:
-            typer.echo(_format_items(results, as_json=_get_json_output()))
-
-        # Git changelog ingest: find all git repos in the tree
-        if hasattr(kp, "_get_work_queue"):
-            from .git_ingest import discover_git_roots
-            git_roots = discover_git_roots(files)
-            for root_str in sorted(git_roots):
-                try:
-                    kp._get_work_queue().enqueue(
-                        "ingest_git",
-                        {"item_id": f"file://{root_str}", "directory": root_str},
-                        supersede_key=f"git:{root_str}",
-                        priority=1,
-                    )
-                except Exception as e:
-                    logger.warning("Failed to queue git ingest for %s: %s", root_str, e)
-            if git_roots:
-                typer.echo(f"git: {len(git_roots)} repo(s) queued for changelog ingest", err=True)
-
-        _handle_watch(kp, watch, unwatch, str(resolved_path), "directory",
-                      parsed_tags, recurse=recurse, exclude=exclude, interval=interval)
-        return None
-    elif resolved_path is not None and resolved_path.is_file():
-        # File mode: bare file path → normalize to file:// URI
-        file_uri = f"file://{resolved_path}"
-        item = kp.put(uri=file_uri, id=id or None, tags=parsed_tags or None, summary=summary, force=force)
-        _handle_watch(kp, watch, unwatch, file_uri, "file", parsed_tags, interval=interval)
-        return item
-    elif source and _URI_SCHEME_PATTERN.match(source):
-        # URI mode: fetch from URI (--id overrides the document ID)
-        item = kp.put(uri=source, id=id or None, tags=parsed_tags or None, summary=summary, force=force)
-        _handle_watch(kp, watch, unwatch, source, "url", parsed_tags, interval=interval)
-        return item
-    elif source:
-        # Text mode: inline content (no :// in source)
-        if summary is not None:
-            typer.echo("Error: --summary cannot be used with inline text (original content would be lost)", err=True)
-            typer.echo("Hint: write to a file first, then: keep put file:///path/to/file --summary '...'", err=True)
-            raise typer.Exit(1)
-        # Use content-addressed ID for text (enables versioning)
-        doc_id = id or _text_content_id(source)
-        return kp.put(source, id=doc_id, tags=parsed_tags or None, force=force)
-    else:
-        typer.echo("Error: Provide content, URI, or '-' for stdin", err=True)
-        raise typer.Exit(1)
-
-
-def put(
-    source: Annotated[Optional[str], typer.Argument(
-        help="URI to fetch, text content, or '-' for stdin"
-    )] = None,
-    id: Annotated[Optional[str], typer.Option(
-        "--id", "-i",
-        help="Note ID (auto-generated for text/stdin modes)"
-    )] = None,
-    store: StoreOption = None,
-    tags: Annotated[Optional[list[str]], typer.Option(
-        "--tag", "-t",
-        help="Tag as key=value (can be repeated)"
-    )] = None,
-    summary: Annotated[Optional[str], typer.Option(
-        "--summary",
-        help="User-provided summary (skips auto-summarization)"
-    )] = None,
-    recurse: Annotated[bool, typer.Option(
-        "--recurse", "-r",
-        help="Recurse into subdirectories (directory mode)"
-    )] = False,
-    exclude: Annotated[Optional[list[str]], typer.Option(
-        "--exclude", "-x",
-        help="Glob pattern to exclude files (directory mode, repeatable)"
-    )] = None,
-    watch: Annotated[bool, typer.Option(
-        "--watch",
-        help="Watch this source for changes (daemon re-imports on change)"
-    )] = False,
-    unwatch: Annotated[bool, typer.Option(
-        "--unwatch",
-        help="Stop watching this source for changes"
-    )] = False,
-    interval: Annotated[Optional[str], typer.Option(
-        "--interval",
-        help="Watch poll interval as ISO 8601 duration (default PT30S, e.g. PT5M, P1D)"
-    )] = None,
-    _analyze: Annotated[bool, typer.Option(
-        "--analyze", hidden=True, help="(deprecated, no-op)"
-    )] = False,
-    force: Annotated[bool, typer.Option(
-        "--force",
-        help="Re-process even if content is unchanged"
-    )] = False,
-):
-    """Add or update a note in the store.
-
-    \b
-    Input modes (auto-detected):
-      keep put /path/to/folder/      # Directory mode: index top-level files
-      keep put /path/to/folder/ -r   # Directory mode: recurse into subdirs
-      keep put /path/to/file.pdf     # File mode: index single file
-      keep put file:///path          # URI mode: has ://
-      keep put "my note"             # Text mode: content-addressed ID
-      keep put -                     # Stdin mode: explicit -
-      echo "pipe" | keep put         # Stdin mode: piped input
-
-    \b
-    Directory mode skips hidden files/dirs and symlinks.
-    Use --exclude/-x to skip additional patterns (repeatable, fnmatch globs):
-      keep put ./src/ -r -x "*.pyc" -x "test_*"
-
-    \b
-    Text mode uses content-addressed IDs for versioning:
-      keep put "my note"           # Creates %{hash}
-      keep put "my note" -t done   # Same ID, new version (tag change)
-      keep put "different note"    # Different ID (new doc)
-    """
-    if watch and unwatch:
-        typer.echo("Error: --watch and --unwatch are mutually exclusive", err=True)
-        raise typer.Exit(1)
-    if interval and not watch:
-        typer.echo("Error: --interval requires --watch", err=True)
-        raise typer.Exit(1)
-    if interval:
-        from .watches import parse_duration
-        try:
-            parse_duration(interval)
-        except ValueError:
-            typer.echo(f"Error: invalid interval {interval!r} (use ISO 8601: PT30S, PT5M, P1D)", err=True)
-            raise typer.Exit(1)
-
-    kp = _get_keeper(store)
-    parsed_tags = _parse_tags(tags)
-
-    # Determine mode based on source content
-    # Check for filesystem path (directory or file) before other modes
-    resolved_path = _is_filesystem_path(source) if source and source != "-" else None
-
-    try:
-        item = _put_store(
-            kp, source, resolved_path, parsed_tags, id, summary, force,
-            recurse=recurse, exclude=exclude, watch=watch, unwatch=unwatch,
-            interval=interval,
-        )
-    except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-    if item is None:
-        return  # directory mode already printed output
-
-    # Surface similar items (occasion for reflection)
-    ctx = kp.get_context(
-        item.id, similar_limit=3,
-        include_meta=False, include_parts=False, include_versions=False,
-    )
-    typer.echo(render_context(ctx, as_json=_get_json_output()))
-
 
 
 def _render_binding(name: str, binding: dict, kp=None, token_budget: int = 4000) -> str:
@@ -1825,100 +1496,6 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
 
 
 
-def config(
-    path: Annotated[Optional[str], typer.Argument(
-        help="Config path to get (e.g., 'file', 'tool', 'store', 'providers.embedding')"
-    )] = None,
-    setup: Annotated[bool, typer.Option(
-        "--setup",
-        help="Run interactive setup wizard (provider and tool selection)"
-    )] = False,
-    store: StoreOption = None,
-):
-    """Show configuration. Optionally get a specific value by path.
-
-    \b
-    Examples:
-        keep config              # Show all config
-        keep config file         # Config file location
-        keep config tool         # Package directory (SKILL.md location)
-        keep config docs         # Documentation directory
-        keep config openclaw-plugin  # OpenClaw plugin directory
-        keep config mcpb         # Generate .mcpb for Claude Desktop
-        keep config store        # Store path
-        keep config providers    # All provider config
-        keep config providers.embedding  # Embedding provider name
-        keep config --setup      # Re-run interactive setup wizard
-    """
-    # Handle setup wizard
-    if setup:
-        from .paths import get_config_dir
-        from .setup_wizard import run_wizard
-        actual_store = store if store is not None else _get_store_override()
-        if os.environ.get("KEEP_CONFIG"):
-            config_dir = get_config_dir()
-        elif actual_store:
-            config_dir = Path(actual_store).resolve()
-        else:
-            config_dir = get_config_dir()
-        store_path = Path(actual_store).resolve() if actual_store else None
-        run_wizard(config_dir, store_path, restart_command="keep config --setup")
-        return
-
-    # For config display, use lightweight path (no API calls)
-    from .config import load_or_create_config
-    from .paths import get_config_dir, get_default_store_path
-
-    actual_store = store if store is not None else _get_store_override()
-    if actual_store is not None:
-        config_dir = Path(actual_store).resolve()
-    else:
-        config_dir = get_config_dir()
-
-    cfg = load_or_create_config(config_dir)
-    config_path = cfg.config_path if cfg else None
-    store_path = get_default_store_path(cfg) if actual_store is None else actual_store
-
-    # If a specific path is requested, return just that value
-    if path:
-        try:
-            value = _get_config_value(cfg, store_path, path)
-        except typer.BadParameter as e:
-            typer.echo(str(e), err=True)
-            raise typer.Exit(1)
-
-        if _get_json_output():
-            typer.echo(json.dumps({path: value}, indent=2))
-        else:
-            # Raw output for shell scripting
-            if isinstance(value, (list, dict)):
-                typer.echo(json.dumps(value))
-            else:
-                typer.echo(value)
-        return
-
-    # Full config output
-    if _get_json_output():
-
-        result = {
-            "file": str(config_path) if config_path else None,
-            "tool": str(get_tool_directory()),
-            "docs": str(get_tool_directory() / "docs"),
-            "store": str(store_path),
-            "openclaw-plugin": str(Path(str(importlib.resources.files("keep"))) / "data" / "openclaw-plugin"),
-            "providers": {
-                "embedding": cfg.embedding.name if cfg and cfg.embedding else None,
-                "summarization": cfg.summarization.name if cfg else None,
-                "document": cfg.document.name if cfg else None,
-            },
-        }
-        if cfg and cfg.default_tags:
-            result["tags"] = cfg.default_tags
-        typer.echo(json.dumps(result, indent=2))
-    else:
-        typer.echo(_format_config_with_defaults(cfg, store_path))
-
-
 def run_pending_daemon(kp) -> None:
     """Run the background processing daemon loop.
 
@@ -1927,6 +1504,7 @@ def run_pending_daemon(kp) -> None:
     ``pending --daemon`` path.
     """
     import logging
+
     from .model_lock import ModelLock
     from .tracing import init_tracing
     init_tracing(tree_log=True)
@@ -1972,17 +1550,18 @@ def run_pending_daemon(kp) -> None:
         kp._config.embedding.params.get("model", "") if kp._config.embedding else "",
     )
 
-    from .daemon_server import DaemonServer, DEFAULT_PORT
-    _daemon_port = int(os.environ.get("KEEP_DAEMON_PORT", "0")) or DEFAULT_PORT
+    from .daemon_server import DaemonServer
+    _daemon_port = int(os.environ.get("KEEP_DAEMON_PORT", "0")) or DAEMON_PORT
     _daemon_server = DaemonServer(kp, port=_daemon_port)
     _actual_port = _daemon_server.start()
-    _port_path = kp._store_path / ".daemon.port"
-    _token_path = kp._store_path / ".daemon.token"
+    _port_path = kp._store_path / DAEMON_PORT_FILE
+    _token_path = kp._store_path / DAEMON_TOKEN_FILE
     _port_path.write_text(str(_actual_port))
+    _token_path.touch(mode=0o600, exist_ok=True)
     _token_path.write_text(_daemon_server.auth_token)
     _daemon_logger.info("Query server on 127.0.0.1:%d", _actual_port)
 
-    from .shutdown import request_shutdown, is_shutting_down, wait_or_shutdown
+    from .shutdown import is_shutting_down, request_shutdown, wait_or_shutdown
 
     def handle_signal(signum, frame):
         nonlocal shutdown_requested
@@ -2094,7 +1673,8 @@ def run_pending_daemon(kp) -> None:
                 break
 
             _daemon_logger.debug("Tick: poll_watches")
-            from .watches import poll_watches as _poll_watches, has_active_watches, next_check_delay, load_watches
+            from .watches import has_active_watches, load_watches, next_check_delay
+            from .watches import poll_watches as _poll_watches
             watch_result = _poll_watches(kp)
             if watch_result["checked"] > 0:
                 _daemon_logger.info(
@@ -2208,11 +1788,11 @@ def print_pending_list_lightweight(store_path: "Path") -> None:
     from .pending_summaries import PendingSummaryQueue
     from .work_queue import WorkQueue
 
-    pq = PendingSummaryQueue(store_path / "pending_summaries.db")
+    pq = PendingSummaryQueue(store_path / PENDING_SUMMARIES_DB)
     items = pq.list_pending()
     failed = pq.list_failed()
     try:
-        wq = WorkQueue(store_path / "work_queue.db")
+        wq = WorkQueue(store_path / WORK_QUEUE_DB)
         flow_items = wq.list_pending(limit=-1)
     except Exception:
         wq = None
@@ -2259,7 +1839,7 @@ def print_pending_list_lightweight(store_path: "Path") -> None:
 
     # Timer events
     try:
-        from .timer_state import format_timer_events, KNOWN_TIMERS
+        from .timer_state import KNOWN_TIMERS, format_timer_events
     except Exception:
         format_timer_events = None
         KNOWN_TIMERS = {}
@@ -2276,111 +1856,6 @@ def print_pending_list_lightweight(store_path: "Path") -> None:
     pq.close()
     if wq:
         wq.close()
-
-
-def print_pending_list(kp) -> None:
-    """Print pending work items, failed items, watches, and timer events."""
-    items = kp._pending_queue.list_pending()
-    failed = kp._pending_queue.list_failed()
-    try:
-        wq = kp._get_work_queue()
-        flow_items = wq.list_pending(limit=-1)
-    except Exception:
-        flow_items = []
-    try:
-        from .watches import list_watches
-        watches = list_watches(kp)
-    except Exception:
-        watches = []
-
-    if not items and not failed and not flow_items and not watches:
-        typer.echo("Nothing pending.")
-    else:
-        if items:
-            for item in items:
-                retry_str = f" (retry after {item['retry_after']})" if item.get("retry_after") else ""
-                typer.echo(f"  {item['task_type']:15s} {item['supersede_key'] or item['work_id']}{retry_str}")
-        if flow_items:
-            if items:
-                typer.echo()
-            wq = kp._get_work_queue()
-            by_kind = wq.count_by_kind()
-            for kind, count in by_kind.items():
-                if kind != "flow":
-                    typer.echo(f"  {kind:20s} {count}")
-            flow_by_state: dict[str, list] = {}
-            for fi in flow_items:
-                if fi.get("kind") != "flow":
-                    continue
-                inp = fi.get("input") or {}
-                state = inp.get("state", "unknown")
-                flow_by_state.setdefault(state, []).append(fi)
-            for state, state_items in sorted(flow_by_state.items()):
-                if len(state_items) <= 3:
-                    for si in state_items:
-                        inp = si.get("input") or {}
-                        target = inp.get("item_id") or inp.get("params", {}).get("item_id", "")
-                        if target:
-                            typer.echo(f"  flow:{state:16s} {target}")
-                        else:
-                            typer.echo(f"  flow:{state}")
-                else:
-                    typer.echo(f"  flow:{state:16s} ({len(state_items)} items)")
-        if failed:
-            typer.echo(f"\nFailed ({len(failed)}):")
-            for item in failed[:10]:
-                error = item.get("last_error", "unknown")
-                typer.echo(f"  {item['task_type']:15s} {item['id']}: {error}")
-
-    # Timer events
-    try:
-        from .watches import list_watches
-        watches = list_watches(kp)
-    except Exception:
-        watches = []
-    try:
-        from .timer_state import format_timer_events, KNOWN_TIMERS
-    except Exception:
-        format_timer_events = None
-        KNOWN_TIMERS = {}
-    has_timer_info = watches or KNOWN_TIMERS
-    if has_timer_info:
-        typer.echo("\nTimer events:")
-        if watches:
-            from .timer_state import _format_ago, _format_until
-            from datetime import datetime, timezone
-            _now_ts = time.time()
-            for w in watches:
-                suffix = " [stale]" if w.stale else ""
-                name = f"watch:{w.kind}"
-                ago_str = "never"
-                next_str = ""
-                if w.last_checked:
-                    try:
-                        _lc = datetime.fromisoformat(w.last_checked)
-                        _lc_ts = _lc.replace(tzinfo=timezone.utc).timestamp()
-                        ago_str = _format_ago(_now_ts - _lc_ts)
-                        from .watches import parse_duration
-                        _dur = parse_duration(w.interval)
-                        _next_ts = _lc_ts + _dur.total_seconds() - _now_ts
-                        next_str = _format_until(_next_ts)
-                    except Exception:
-                        pass
-                source = w.source
-                if len(source) > 40:
-                    source = "..." + source[-37:]
-                parts_line = f"  {name:24s} last: {ago_str:>8s}"
-                if next_str:
-                    parts_line += f"  next: {next_str}"
-                parts_line += f"  {source}{suffix}"
-                typer.echo(parts_line)
-        if format_timer_events:
-            try:
-                lines = format_timer_events(kp._store_path)
-                for line in lines:
-                    typer.echo(line)
-            except Exception:
-                pass
 
 
 def print_pending_interactive(kp) -> None:
@@ -2435,7 +1910,7 @@ def print_pending_interactive(kp) -> None:
     else:
         typer.echo("Background processor already running.", err=True)
 
-    log_path = kp._store_path / "keep-ops.log"
+    log_path = kp._store_path / OPS_LOG_FILE
     _tail_ops_log(log_path, kp)
 
 
@@ -2528,92 +2003,6 @@ def _tail_ops_log(log_path: Path, kp) -> None:
 # Data Management
 # -----------------------------------------------------------------------------
 
-def data_export(
-    output: Annotated[str, typer.Argument(
-        help="Output file path (use '-' for stdout)"
-    )],
-    exclude_system: Annotated[bool, typer.Option(
-        "--exclude-system", help="Exclude system documents (dot-prefix IDs)"
-    )] = False,
-    store: StoreOption = None,
-):
-    """Export the store to JSON for backup or migration."""
-    kp = _get_keeper(store)
-    it = kp.export_iter(include_system=not exclude_system)
-    header = next(it)
-
-    dest = sys.stdout if output == "-" else open(output, "w", encoding="utf-8")
-    try:
-        # Write streaming JSON: header fields, then documents array
-        dest.write("{\n")
-        for key in ("format", "version", "exported_at", "store_info"):
-            dest.write(f"  {json.dumps(key)}: {json.dumps(header[key], ensure_ascii=False)},\n")
-        dest.write('  "documents": [\n')
-        first = True
-        for doc in it:
-            if not first:
-                dest.write(",\n")
-            dest.write("    " + json.dumps(doc, ensure_ascii=False))
-            first = False
-        dest.write("\n  ]\n}\n")
-    finally:
-        if dest is not sys.stdout:
-            dest.close()
-    kp.close()
-
-    if output != "-":
-        info = header["store_info"]
-        typer.echo(
-            f"Exported {info['document_count']} documents "
-            f"({info['version_count']} versions, {info['part_count']} parts) "
-            f"to {output}",
-            err=True,
-        )
-
-
-def data_import(
-    file: Annotated[str, typer.Argument(help="JSON export file to import")],
-    mode: Annotated[str, typer.Option(
-        "--mode", "-m", help="Import mode: merge (skip existing) or replace (clear first)"
-    )] = "merge",
-    store: StoreOption = None,
-):
-    """Import documents from a JSON export file."""
-    if mode not in ("merge", "replace"):
-        typer.echo(f"Error: --mode must be 'merge' or 'replace', got '{mode}'", err=True)
-        raise SystemExit(1)
-
-    if file == "-":
-        data = json.loads(sys.stdin.read())
-    else:
-        path = Path(file)
-        if not path.exists():
-            typer.echo(f"Error: file not found: {file}", err=True)
-            raise SystemExit(1)
-        data = json.loads(path.read_text(encoding="utf-8"))
-
-    if mode == "replace":
-        doc_count = len(data.get("documents", []))
-        if not typer.confirm(
-            f"This will delete all existing documents and import {doc_count} from {file}. Continue?"
-        ):
-            raise SystemExit(0)
-
-    kp = _get_keeper(store)
-    stats = kp.import_data(data, mode=mode)
-    kp.close()
-
-    typer.echo(
-        f"Imported {stats['imported']} documents "
-        f"({stats['versions']} versions, {stats['parts']} parts), "
-        f"skipped {stats['skipped']}. "
-        f"Queued {stats['queued']} for embedding.",
-        err=True,
-    )
-    if stats["queued"] > 0:
-        typer.echo("Run 'keep pending' to process embeddings.", err=True)
-
-
 # -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------
@@ -2630,13 +2019,13 @@ def doctor(
 ):
     """Diagnostic checks for debugging setup and crash issues."""
     if log:
-        from .paths import get_config_dir, get_default_store_path
         from .config import load_or_create_config
+        from .paths import get_config_dir, get_default_store_path
         actual_store = store if store is not None else _get_store_override()
         config_dir = Path(actual_store).resolve() if actual_store else get_config_dir()
         cfg = load_or_create_config(config_dir)
         sp = Path(get_default_store_path(cfg) if actual_store is None else actual_store)
-        log_path = sp / "keep-ops.log"
+        log_path = sp / OPS_LOG_FILE
         if not log_path.exists():
             typer.echo(f"No ops log at {log_path}", err=True)
             raise typer.Exit(1)
@@ -2705,7 +2094,7 @@ def doctor(
         store_path = None
 
     # 4. SQLite (DocumentStore)
-    db_path = store_path / "documents.db" if store_path else None
+    db_path = store_path / DOCUMENTS_DB if store_path else None
     if db_path and db_path.exists():
         try:
             from .document_store import DocumentStore
@@ -2766,9 +2155,13 @@ def doctor(
             fail(f"Media: {e}")
     elif cfg:
         from .config import (
-            _detect_ollama, _ollama_vision_models, ollama_pull,
-            OLLAMA_DEFAULT_VISION_MODEL, OLLAMA_DEFAULT_OCR_MODEL,
-            save_config, ProviderConfig,
+            OLLAMA_DEFAULT_OCR_MODEL,
+            OLLAMA_DEFAULT_VISION_MODEL,
+            ProviderConfig,
+            _detect_ollama,
+            _ollama_vision_models,
+            ollama_pull,
+            save_config,
         )
         ollama = _detect_ollama()
         if ollama:
@@ -2809,7 +2202,7 @@ def doctor(
     if cfg and cfg.content_extractor:
         # Verify the model is actually available if it's Ollama
         if cfg.content_extractor.name == "ollama":
-            from .config import _detect_ollama, _ollama_has_model, ollama_pull, OLLAMA_DEFAULT_OCR_MODEL, save_config
+            from .config import OLLAMA_DEFAULT_OCR_MODEL, _detect_ollama, _ollama_has_model, ollama_pull, save_config
             ce_model = cfg.content_extractor.params.get("model", OLLAMA_DEFAULT_OCR_MODEL)
             if _ollama_has_model(ce_model):
                 ok(f"Content extractor: {cfg.content_extractor.name} ({ce_model})")
@@ -2830,7 +2223,7 @@ def doctor(
         else:
             ok(f"Content extractor: {cfg.content_extractor.name}")
     elif cfg:
-        from .config import _detect_ollama, ollama_pull, OLLAMA_DEFAULT_OCR_MODEL, save_config, ProviderConfig
+        from .config import OLLAMA_DEFAULT_OCR_MODEL, ProviderConfig, _detect_ollama, ollama_pull, save_config
         ollama = _detect_ollama()
         if ollama:
             # Ollama running — pull OCR model and configure
@@ -2909,7 +2302,7 @@ def doctor(
         ok("Lock: skipped (no store path)")
 
     # 11. Round-trip (temp store, isolates stack from store data)
-    from .config import StoreConfig, ProviderConfig
+    from .config import ProviderConfig, StoreConfig
     tmp_dir = None
     try:
         tmp_dir = tempfile.mkdtemp(prefix="keep_doctor_")

@@ -1,5 +1,4 @@
-"""
-Tests for ChromaDb store wrapper.
+"""Tests for ChromaDb store wrapper.
 
 These tests use a temporary directory for each test to ensure isolation.
 """

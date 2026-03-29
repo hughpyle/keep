@@ -1,5 +1,4 @@
-"""
-Supernode review pipeline tests.
+"""Supernode review pipeline tests.
 
 Tests the find_supernodes action, generate with prompt resolution,
 scope-glob matching, edge timestamp queries, and the daemon

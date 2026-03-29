@@ -1,5 +1,4 @@
-"""
-Error recovery tests for DocumentStore.
+"""Error recovery tests for DocumentStore.
 
 Tests malformed database detection, iterdump recovery, runtime recovery,
 and the non-fatal touch() behavior added in v0.38.1.

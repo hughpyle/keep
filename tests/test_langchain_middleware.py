@@ -1,5 +1,4 @@
-"""
-Tests for KeepNotesMiddleware.
+"""Tests for KeepNotesMiddleware.
 
 Uses mock providers — no ML models or network.
 """
@@ -33,6 +32,7 @@ def scoped_middleware(keeper):
 
 
 class TestMiddlewareInject:
+    """Tests for middleware message injection."""
 
     def test_inject_adds_system_message(self, middleware, keeper):
         keeper.set_now("Working on tests")
@@ -84,6 +84,7 @@ class TestMiddlewareInject:
 
 
 class TestMiddlewareFailOpen:
+    """Tests for middleware fail-open behavior."""
 
     def test_fail_open_returns_original(self, keeper):
         """With fail_open=True, errors return original messages."""
@@ -105,6 +106,7 @@ class TestMiddlewareFailOpen:
 
 
 class TestMiddlewareRunnable:
+    """Tests for middleware as runnable."""
 
     def test_as_runnable(self, middleware, keeper):
         keeper.set_now("Active context")
@@ -116,6 +118,7 @@ class TestMiddlewareRunnable:
 
 
 class TestMiddlewareScoped:
+    """Tests for scoped middleware with user context."""
 
     def test_scoped_includes_user_context(self, scoped_middleware, keeper):
         keeper.set_now("Alice is debugging", scope="alice")

@@ -7,6 +7,8 @@ from . import action, item_to_result
 
 @action(id="resolve_meta")
 class ResolveMeta:
+    """Resolve meta-documents (prompts, schemas) attached to an item."""
+
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         raw_item_id = params.get("item_id")
         if raw_item_id is None:

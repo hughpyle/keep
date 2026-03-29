@@ -12,20 +12,27 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_PORT = 5337
-
+from .const import (
+    DAEMON_PORT,
+    DAEMON_PORT_FILE,
+    DAEMON_TOKEN_FILE,
+    OPS_LOG_FILE,
+)
 
 _auth_token: str = ""
+_auth_token_store: str = ""
 
 
 def _load_token(store_override: str | None = None, *, force: bool = False) -> str:
     """Read the daemon auth token from .daemon.token."""
-    global _auth_token
-    if _auth_token and not force:
+    global _auth_token, _auth_token_store
+    store = resolve_store_path(store_override)
+    store_key = str(store)
+    if _auth_token and not force and _auth_token_store == store_key:
         return _auth_token
     _auth_token = ""
-    store = resolve_store_path(store_override)
-    token_file = store / ".daemon.token"
+    _auth_token_store = store_key
+    token_file = store / DAEMON_TOKEN_FILE
     if token_file.exists():
         try:
             _auth_token = token_file.read_text().strip()
@@ -150,7 +157,7 @@ def check_health(port: int) -> bool:
 def start_daemon(store_path: Path) -> None:
     """Spawn daemon process."""
     cmd = [sys.executable, "-m", "keep.daemon", "--store", str(store_path)]
-    log_path = store_path / "keep-ops.log"
+    log_path = store_path / OPS_LOG_FILE
     store_path.mkdir(parents=True, exist_ok=True)
     with open(log_path, "a") as log_fd:
         kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": log_fd, "stdin": subprocess.DEVNULL}
@@ -164,7 +171,7 @@ def start_daemon(store_path: Path) -> None:
 def get_port(store_override: str | None = None) -> int:
     """Get daemon port, auto-starting if needed. Loads auth token."""
     store_path = resolve_store_path(store_override)
-    port_file = store_path / ".daemon.port"
+    port_file = store_path / DAEMON_PORT_FILE
 
     # Load auth token for subsequent HTTP requests
     _load_token(store_override)
@@ -179,10 +186,11 @@ def get_port(store_override: str | None = None) -> int:
             pass
 
     # Auto-start daemon (generates new token)
-    global _auth_token
+    global _auth_token, _auth_token_store
     _auth_token = ""  # clear stale token
+    _auth_token_store = ""
     # Remove stale token/port files so we don't poll with old credentials
-    (store_path / ".daemon.token").unlink(missing_ok=True)
+    (store_path / DAEMON_TOKEN_FILE).unlink(missing_ok=True)
     port_file.unlink(missing_ok=True)
     print("Starting daemon...", file=sys.stderr)
     start_daemon(store_path)

@@ -460,7 +460,7 @@ class TestPendingSummaryQueue:
             queue.close()
 
     def test_stale_claim_recovery_respects_task_type(self):
-        """analyze tasks should get a longer stale claim threshold than embed."""
+        """Analyze tasks should get a longer stale claim threshold than embed."""
         with tempfile.TemporaryDirectory() as tmpdir:
             queue = PendingSummaryQueue(Path(tmpdir) / "pending.db")
 

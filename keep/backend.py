@@ -19,8 +19,11 @@ from importlib.metadata import entry_points
 from typing import NamedTuple, Optional
 
 from .config import StoreConfig
+from .const import DOCUMENTS_DB, PENDING_SUMMARIES_DB
 from .protocol import (
-    DocumentStoreProtocol, PendingQueueProtocol, VectorStoreProtocol,
+    DocumentStoreProtocol,
+    PendingQueueProtocol,
+    VectorStoreProtocol,
     WorkQueueProtocol,
 )
 
@@ -129,8 +132,8 @@ def _create_local_stores(config: StoreConfig) -> StoreBundle:
     pending_queue = None
     doc_store = None
     try:
-        pending_queue = PendingSummaryQueue(store_path / "pending_summaries.db")
-        doc_store = DocumentStore(store_path / "documents.db")
+        pending_queue = PendingSummaryQueue(store_path / PENDING_SUMMARIES_DB)
+        doc_store = DocumentStore(store_path / DOCUMENTS_DB)
 
         embedding_dim: Optional[int] = None
         if config.embedding_identity:

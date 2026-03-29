@@ -13,6 +13,7 @@ from keep.providers.base import AnalysisChunk
 
 
 class TestEstimateTokens:
+    """Tests for token estimation."""
 
     def test_basic(self):
         assert _estimate_tokens("abcd") == 1
@@ -23,6 +24,7 @@ class TestEstimateTokens:
 
 
 class TestParseParts:
+    """Tests for parts parsing."""
 
     def test_clean_lines(self):
         text = "First significant observation about the code.\nSecond observation about the architecture."
@@ -68,6 +70,7 @@ class TestParseParts:
 
 
 class TestDefaultPrompt:
+    """Tests for default prompt generation."""
 
     def test_default_prompt_is_nonempty(self):
         assert isinstance(DEFAULT_ANALYSIS_PROMPT, str)
@@ -75,6 +78,7 @@ class TestDefaultPrompt:
 
 
 class TestSlidingWindowAnalyzer:
+    """Tests for sliding window analyzer."""
 
     def test_build_window_prompt_single_target(self):
         chunks = [

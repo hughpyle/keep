@@ -123,10 +123,14 @@ def decode_cursor(token: str) -> Optional[FlowCursor]:
 
 
 class StateDocLoader(Protocol):
+    """Callable that loads a compiled StateDoc by name."""
+
     def __call__(self, name: str) -> Optional[StateDoc]: ...
 
 
 class ActionRunner(Protocol):
+    """Callable that executes a named action and returns its output."""
+
     def __call__(self, name: str, params: dict[str, Any]) -> dict[str, Any]: ...
 
 
@@ -456,6 +460,8 @@ def make_action_runner(
         item_content: Full content text for the item (not stored in the
             document store, so must be passed explicitly for actions
             like summarize that need it).
+        context_cache: Optional action-result cache that deduplicates
+            repeated action calls within a single flow execution.
     """
     from .actions import get_action
 

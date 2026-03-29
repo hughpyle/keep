@@ -51,6 +51,7 @@ def mock_keeper():
 # ---------------------------------------------------------------------------
 
 class TestProcessWorkBatch:
+    """Tests for work batch processing."""
     def test_empty_queue_returns_zero_stats(self, mock_keeper, queue):
         stats = process_work_batch(mock_keeper, queue, limit=5)
         assert stats["claimed"] == 0
@@ -135,6 +136,7 @@ class TestProcessWorkBatch:
 # ---------------------------------------------------------------------------
 
 class TestExecuteWorkItem:
+    """Tests for work item execution."""
     def test_extracts_fields_from_input(self, mock_keeper):
         _execute_work_item(mock_keeper, "analyze", {
             "task_type": "analyze",
@@ -189,6 +191,7 @@ class TestExecuteWorkItem:
 # ---------------------------------------------------------------------------
 
 class TestRunLocalTask:
+    """Tests for local task execution."""
     def test_unsupported_task_type_raises(self):
         kp = MagicMock()
         req = TaskRequest(task_type="bogus", id="d1", collection="c", content="x")
@@ -234,6 +237,7 @@ class TestRunLocalTask:
 # ---------------------------------------------------------------------------
 
 class TestAnalyzeSkipConditions:
+    """Tests for analyze skip conditions."""
     def test_empty_content_raises(self):
         """Analyze raises when item has no content."""
         from keep.actions.analyze import Analyze
@@ -255,6 +259,7 @@ class TestAnalyzeSkipConditions:
 
 
 class TestAutoTagSkipConditions:
+    """Tests for auto-tag skip conditions."""
     def test_empty_content_raises(self):
         """AutoTag raises when item has no content."""
         from keep.actions.auto_tag import AutoTag
@@ -279,6 +284,7 @@ class TestAutoTagSkipConditions:
 # ---------------------------------------------------------------------------
 
 class TestApplyMutations:
+    """Tests for mutation application."""
     def test_set_summary_without_embed(self):
         kp = MagicMock()
         output = {"mutations": [{"op": "set_summary", "target": "d1", "summary": "hello"}]}

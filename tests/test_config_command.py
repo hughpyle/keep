@@ -1,5 +1,4 @@
-"""
-Tests for the enhanced `keep config` command.
+"""Tests for the enhanced `keep config` command.
 
 Tests verify:
 1. Path-based config access (file, tool, store, providers.*)

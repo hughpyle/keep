@@ -1,5 +1,4 @@
-"""
-Tests for KeepNotesRetriever.
+"""Tests for KeepNotesRetriever.
 
 Uses mock providers — no ML models or network.
 """
@@ -38,6 +37,7 @@ def scoped_retriever(keeper):
 
 
 class TestRetrieverBasic:
+    """Tests for basic retriever invocation."""
 
     def test_invoke_returns_documents(self, retriever, keeper):
         keeper.put("Python is great for scripting", id="note:1")
@@ -68,6 +68,7 @@ class TestRetrieverBasic:
 
 
 class TestRetrieverWithNow:
+    """Tests for retriever with now-timestamp prepending."""
 
     def test_now_prepended_when_set(self, retriever_with_now, keeper):
         keeper.set_now("Currently reviewing code")
@@ -87,6 +88,7 @@ class TestRetrieverWithNow:
 
 
 class TestRetrieverScoped:
+    """Tests for scoped retriever user filtering."""
 
     def test_scoped_retriever_filters_by_user(self, scoped_retriever, keeper):
         keeper.put("Alice's note", id="note:a", tags={"user": "alice"})

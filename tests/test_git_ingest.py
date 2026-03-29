@@ -59,6 +59,7 @@ def git_repo(tmp_path):
 
 
 class TestGitDetection:
+    """Tests for git repository detection."""
     def test_is_git_repo(self, git_repo):
         assert is_git_repo(git_repo) is True
 
@@ -84,6 +85,7 @@ class TestGitDetection:
 
 
 class TestGetCommits:
+    """Tests for commit retrieval."""
     def test_all_commits(self, git_repo):
         commits = get_commits_since(git_repo)
         assert len(commits) == 3
@@ -147,6 +149,7 @@ class TestGetCommits:
 
 
 class TestGetTags:
+    """Tests for git tag retrieval."""
     def test_tags(self, git_repo):
         tags = get_tags(git_repo)
         assert len(tags) >= 1
@@ -158,6 +161,7 @@ class TestGetTags:
 
 
 class TestIngest:
+    """Tests for git ingest pipeline."""
     @pytest.fixture
     def kp(self, mock_providers, git_repo):
         from keep.api import Keeper

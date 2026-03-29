@@ -1,6 +1,4 @@
-"""
-Tests for hybrid search (semantic + FTS5) and RRF fusion.
-"""
+"""Tests for hybrid search (semantic + FTS5) and RRF fusion."""
 
 import pytest
 

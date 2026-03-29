@@ -7,6 +7,8 @@ from . import action
 
 @action(id="get")
 class Get:
+    """Retrieve a single item by ID."""
+
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         raw_id = params.get("id")
         if raw_id is None:

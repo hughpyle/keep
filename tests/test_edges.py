@@ -1,5 +1,4 @@
-"""
-Tests for tag-driven edges (_inverse on tagdocs).
+"""Tests for tag-driven edges (_inverse on tagdocs).
 
 Edge lifecycle:
 - A tagdoc `.tag/KEY` with `_inverse: VERB` makes KEY an edge-tag

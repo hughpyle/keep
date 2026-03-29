@@ -1,4 +1,7 @@
 
+* "skill install" (skill.md and _all the docs_) -> docs index, etc
+    separate from "tool install"
+    
 * when get a system doc, don't get_context, just return it.
 
 * mcp "tried_queries" remove??

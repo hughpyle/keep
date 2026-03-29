@@ -1,5 +1,4 @@
-"""
-Tests for ChromaDB cross-process safety (write lock + epoch sentinel).
+"""Tests for ChromaDB cross-process safety (write lock + epoch sentinel).
 
 These tests verify that ChromaStore correctly serializes writes via file
 locks and detects stale in-memory indexes via the epoch sentinel file.

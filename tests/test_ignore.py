@@ -13,6 +13,7 @@ from keep.ignore import (
 
 
 class TestParseIgnorePatterns:
+    """Tests for ignore pattern parsing."""
     def test_empty_string(self):
         assert parse_ignore_patterns("") == []
 
@@ -41,6 +42,7 @@ __pycache__/*
 
 
 class TestMergeExcludes:
+    """Tests for exclude pattern merging."""
     def test_global_only(self):
         assert merge_excludes(["*.pyc"], None) == ["*.pyc"]
 
@@ -63,6 +65,7 @@ class TestMergeExcludes:
 
 
 class TestMatchFileUri:
+    """Tests for file URI matching."""
     def test_basename_match(self):
         assert match_file_uri("file:///a/b/c.pyc", ["*.pyc"]) is True
 
@@ -216,6 +219,7 @@ class TestMatchIgnore:
 
 
 class TestUriPatternPrefixes:
+    """Tests for URI pattern prefix handling."""
     def test_basic(self):
         assert uri_pattern_prefixes(["git://x-access-token/*"]) == ["git://x-access-token/"]
 
@@ -234,6 +238,7 @@ class TestUriPatternPrefixes:
 
 
 class TestIsUriPattern:
+    """Tests for URI pattern detection."""
     def test_git_uri(self):
         assert _is_uri_pattern("git://x-access-token/*") is True
 

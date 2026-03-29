@@ -19,6 +19,7 @@ def _make_doc(id, content_hash, content_hash_full="", tags=None):
 
 
 class FakeDocumentStore:
+    """Fake document store for testing."""
     def __init__(self, records):
         self._records = records
 
@@ -37,6 +38,7 @@ class FakeDocumentStore:
 
 
 class FakeEnv:
+    """Fake environment for testing."""
     def __init__(self, docs=None):
         docs = docs or []
         self._docs = {d.id: d for d in docs}

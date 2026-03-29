@@ -18,6 +18,7 @@ from keep._background_processing import _size_priority_bump
 # ---------------------------------------------------------------------------
 
 class TestCheckContentHash:
+    """Tests for content hash checking."""
     def _make_context(self, content_hash="abc123", tag_value="abc123"):
         doc = MagicMock()
         doc.content_hash = content_hash
@@ -80,6 +81,7 @@ def _make_action_context(content_hash="h1", hash_tag="_analyzed_hash", tag_value
 
 
 class TestAnalyzeSkip:
+    """Tests for analyze skip on hash match."""
     def test_skips_when_hash_matches(self):
         ctx = _make_action_context(content_hash="h1", hash_tag="_analyzed_hash", tag_value="h1")
         result = Analyze().run({"item_id": "d1"}, ctx)
@@ -99,6 +101,7 @@ class TestAnalyzeSkip:
 
 
 class TestTagSkip:
+    """Tests for tag skip on hash match."""
     def test_skips_when_hash_matches(self):
         ctx = _make_action_context(content_hash="h1", hash_tag="_tagged_hash", tag_value="h1")
         result = Tag().run({"item_id": "d1"}, ctx)
@@ -125,6 +128,7 @@ class TestTagSkip:
 
 
 class TestSummarizeSkip:
+    """Tests for summarize skip on hash match."""
     def test_skips_when_hash_matches(self):
         ctx = _make_action_context(content_hash="h1", hash_tag="_summarized_hash", tag_value="h1")
         result = Summarize().run({"item_id": "d1"}, ctx)
@@ -166,6 +170,7 @@ class TestSummarizeSkip:
 # ---------------------------------------------------------------------------
 
 class TestSizePriorityBump:
+    """Tests for size-based priority bumping."""
     def test_small_content_no_bump(self):
         assert _size_priority_bump(500) == 0
 

@@ -1,5 +1,4 @@
-"""
-Tests for find(scope=...) parameter — constrain results to IDs matching a glob.
+"""Tests for find(scope=...) parameter — constrain results to IDs matching a glob.
 
 Uses mock providers — no ML models or network.
 """

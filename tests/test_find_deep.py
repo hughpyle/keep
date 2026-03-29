@@ -51,6 +51,7 @@ def _all_deep_ids(results):
 
 
 class TestDeepTagFollow:
+    """Tests for deep tag follow traversal."""
     def test_deep_surfaces_tag_siblings(self, kp):
         """deep=True discovers bridge items via followed tags."""
         results = kp.find("OAuth2 auth token design", deep=True, limit=5)
@@ -90,13 +91,13 @@ class TestDeepTagFollow:
         assert not primary_ids & deep_ids, "Deep items should not duplicate primaries"
 
     def test_deep_works_with_keyword_query(self, kp):
-        """deep works with hybrid search (keyword queries get deep groups)."""
+        """Deep works with hybrid search (keyword queries get deep groups)."""
         results = kp.find("OAuth2", deep=True, limit=10)
         assert isinstance(results, list)
         assert len(results) > 0
 
     def test_deep_with_similar_to(self, kp):
-        """deep works with similar_to (find --id)."""
+        """Deep works with similar_to (find --id)."""
         results = kp.find(similar_to="a", deep=True, limit=10)
         assert isinstance(results, FindResults)
         # Should have results and possibly deep groups

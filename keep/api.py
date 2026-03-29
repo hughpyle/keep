@@ -212,6 +212,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._reconcile_lock = threading.Lock()
         self._reconcile_done = threading.Event()
         self._closing = threading.Event()  # signals reconcile to abort
+        self._closed = False
         self._provider_init_lock = threading.RLock()
         self._last_spawn_time: float = 0.0
         self._tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
@@ -530,6 +531,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             )
         finally:
             recon_ds.close()
+
+    def _ensure_sysdocs(self) -> None:
+        """Run deferred system-doc migration if needed (idempotent, best-effort)."""
+        if not self._needs_sysdoc_migration:
+            return
+        try:
+            self._migrate_system_documents()
+            self._needs_sysdoc_migration = False  # clear AFTER success only
+        except Exception as e:
+            logger.warning("System doc migration deferred: %s", e, exc_info=True)
 
     def _migrate_system_documents(self, progress=None) -> dict:
         """Migrate system documents to stable IDs and current version."""
@@ -1586,12 +1597,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         chroma_coll = self._resolve_chroma_collection()
 
         # Deferred init tasks (best-effort — don't block user writes)
-        if self._needs_sysdoc_migration:
-            self._needs_sysdoc_migration = False  # Clear before call (migration calls remember → _upsert)
-            try:
-                self._migrate_system_documents()
-            except Exception as e:
-                logger.warning("System doc migration deferred: %s", e, exc_info=True)
+        self._ensure_sysdocs()
 
         # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
         existing_tags = {}
@@ -1889,6 +1895,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             tags: Tag map to attach to the item.
             created_at: Override creation timestamp (ISO 8601).
             force: Re-process even if content is unchanged.
+            queue_background_tasks: Enqueue summarization/analysis after write.
+            capture_write_context: Attach write-time context as tags.
         """
         if content is not None and uri is not None:
             raise ValueError("Provide content or uri, not both")
@@ -2278,14 +2286,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # enqueued edge-backfill tasks, process them synchronously so
         # edges are available for this query.
         if deep and self._needs_sysdoc_migration:
-            try:
-                self._migrate_system_documents()
-                # Drain any edge-backfill tasks that migration enqueued
-                # so edges are ready for this search.
+            self._ensure_sysdocs()
+            if not self._needs_sysdoc_migration:
+                # Migration succeeded — drain edge-backfill tasks so
+                # edges are ready for this search.
                 self._flush_edge_backfill(doc_coll)
-                self._needs_sysdoc_migration = False
-            except Exception as e:
-                logger.warning("System doc migration deferred: %s", e, exc_info=True)
 
         embedding = None  # Set in semantic/similar_to branches
 
@@ -3490,12 +3495,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         chroma_coll = self._resolve_chroma_collection()
 
         # Deferred system doc migration (normally runs on first _upsert)
-        if self._needs_sysdoc_migration:
-            self._needs_sysdoc_migration = False
-            try:
-                self._migrate_system_documents()
-            except Exception as e:
-                logger.warning("System doc migration deferred: %s", e, exc_info=True)
+        self._ensure_sysdocs()
 
         # Validate inputs
         id = normalize_id(id)
@@ -4834,6 +4834,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         an atexit handler during interpreter shutdown, when C extension
         modules (sqlite3, chromadb) may already be partially finalized.
         """
+        if getattr(self, '_closed', False):
+            return
+        self._closed = True
+
         # Signal reconcile thread to stop and wait for it
         if hasattr(self, '_closing'):
             self._closing.set()
@@ -4889,7 +4893,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         # Close task delegation client
         if hasattr(self, '_task_client') and self._task_client is not None:
-            self._task_client.close()
+            try:
+                self._task_client.close()
+            except Exception:
+                pass
             self._task_client = None
 
         # Close work queue
@@ -4924,8 +4931,26 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         return False
 
     def __del__(self):
-        """Cleanup on deletion."""
-        try:
-            self.close()
-        except Exception:
-            pass  # Suppress errors during garbage collection
+        """Release file handles during GC — no logging, no I/O beyond close."""
+        if getattr(self, '_closed', False):
+            return
+        self._closed = True
+        # Release resources that hold OS file descriptors.
+        # Skip perf logging, model releases, reconcile waits — the
+        # filesystem may already be gone (temp stores, test teardown).
+        for attr in ('_document_store', '_store', '_pending_queue', '_work_queue'):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                try:
+                    obj.close()
+                except Exception:
+                    pass
+        # Remove log handler to avoid handler accumulation
+        handler = getattr(self, '_ops_log_handler', None)
+        if handler:
+            try:
+                import logging
+                logging.getLogger("keep").removeHandler(handler)
+                handler.close()
+            except Exception:
+                pass

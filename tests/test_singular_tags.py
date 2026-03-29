@@ -56,6 +56,7 @@ def kp(mock_providers, tmp_path):
 # --- tag() path ---
 
 class TestSingularOnTag:
+    """Tests for singular tag replacement on tag."""
 
     def test_singular_tag_replaces_on_tag(self, kp):
         """tag() with a singular key replaces existing value."""
@@ -100,6 +101,7 @@ class TestSingularOnTag:
 # --- put() / _upsert path ---
 
 class TestSingularOnPut:
+    """Tests for singular tag replacement on put."""
 
     def test_singular_tag_replaces_on_put(self, kp):
         """Second put() with a singular key replaces existing value."""
@@ -124,6 +126,7 @@ class TestSingularOnPut:
 # --- tag_part() path ---
 
 class TestSingularOnTagPart:
+    """Tests for singular tag on tag-part."""
 
     def test_singular_tag_on_tag_part(self, kp):
         """tag_part() with a singular key replaces existing value on part."""
@@ -148,6 +151,7 @@ class TestSingularOnTagPart:
 # --- Edge tag with singular ---
 
 class TestSingularEdgeTag:
+    """Tests for singular edge tag behavior."""
 
     def test_singular_edge_tag(self, kp):
         """Edge-tag with _singular replaces edge correctly."""
@@ -180,6 +184,7 @@ class TestSingularEdgeTag:
 # --- Singular + unconstrained (no _constrained flag) ---
 
 class TestSingularUnconstrained:
+    """Tests for unconstrained singular tags."""
 
     def test_singular_unconstrained(self, kp):
         """Unconstrained key with _singular still enforces cardinality."""
@@ -196,9 +201,10 @@ class TestSingularUnconstrained:
 # --- Singular + constrained ---
 
 class TestSingularConstrained:
+    """Tests for constrained singular tag replacement."""
 
     def test_singular_constrained_replaces(self, kp):
-        """status tag (constrained + singular) replaces on tag()."""
+        """Status tag (constrained + singular) replaces on tag()."""
         _create_tagdoc(kp, "lifecycle", singular=True, constrained=True)
         _create_value_doc(kp, "lifecycle", "open")
         _create_value_doc(kp, "lifecycle", "closed")

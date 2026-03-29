@@ -7,6 +7,8 @@ from . import action, item_to_result
 
 @action(id="list_parts")
 class ListParts:
+    """List the sub-parts of a chunked document."""
+
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         item_id = params.get("id") or params.get("item_id")
         if not item_id:

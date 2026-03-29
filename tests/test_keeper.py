@@ -39,8 +39,7 @@ pytestmark = [
 
 @pytest.fixture(scope="module")
 def keeper():
-    """
-    Create a single Keeper instance for all tests in module.
+    """Create a single Keeper instance for all tests in module.
 
     Uses module scope to load the model only once.
     """
@@ -153,9 +152,12 @@ class TestKeeperFind:
         assert len(results) <= 2
 
     def test_find_since_includes_versioned_items(self, keeper: Keeper) -> None:
-        """find() with since should not drop items whose ChromaDB entry
-        lacks _updated_date (e.g. version refs). Regression test for the
-        bug where _filter_by_date ran before SQLite enrichment."""
+        """find() with since keeps items missing _updated_date.
+
+        Regression test for the bug where _filter_by_date ran before
+        SQLite enrichment, dropping version refs whose ChromaDB entry
+        lacks _updated_date.
+        """
         keeper.put("Alpha content about dogs and cats.", id="test:alpha")
         # Update to create a version
         keeper.put("Beta content about dogs and cats.", id="test:alpha")

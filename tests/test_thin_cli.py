@@ -1,7 +1,11 @@
-"""Tests for the thin CLI renderers and HTTP round-trip."""
+"""Tests for the thin CLI renderers, HTTP round-trip, and put input handling."""
 
 import http.client
+import io
 import json
+import subprocess
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -198,3 +202,171 @@ def test_thin_cli_context_round_trip(daemon):
     output = _render_context(data)
     assert "id: rt-ctx" in output
     assert "round trip context test" in output
+
+
+# ---------------------------------------------------------------------------
+# Docstring formatting guard
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("cmd", [
+    "find", "put", "get", "list", "tag", "del", "now",
+    "prompt", "flow", "edit", "analyze", "help", "config",
+    "pending",
+])
+def test_thin_cli_help_no_literal_backslash_b(cmd):
+    """Thin CLI help renders backspace formatting, not literal backslash-b.
+
+    Typer/Click uses backspace (0x08) in docstrings to preserve line breaks.
+    Raw strings turn this into a literal two-char sequence that Click ignores.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "keep", cmd, "--help"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, f"{cmd} --help failed: {result.stderr}"
+    assert r"\b" not in result.stdout, (
+        f"thin_cli {cmd} --help contains literal '\\b' — "
+        f"docstring is likely a raw string instead of regular string"
+    )
+
+
+@pytest.mark.parametrize("cmd", ["get", "find", "put", "tag", "edit"])
+def test_thin_cli_help_examples_not_wrapped(cmd):
+    """CLI help examples are preserved on separate lines, not paragraph-wrapped.
+
+    Click's backspace directive (\\b) scopes to the paragraph it precedes.
+    A blank line between \\b content and the examples block breaks scoping,
+    causing Click to re-wrap the examples into a single paragraph.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "keep", cmd, "--help"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, f"{cmd} --help failed: {result.stderr}"
+    # If examples are wrapped, "keep {cmd}" appears multiple times on the
+    # same line (e.g. "keep get doc:1 # ... keep get doc:2 # ...").
+    # When properly formatted, each "keep " starts its own line.
+    lines = result.stdout.splitlines()
+    example_lines = [l.strip() for l in lines if l.strip().startswith(f"keep {cmd}")]
+    assert len(example_lines) >= 2, (
+        f"{cmd} --help should show multiple example lines starting with 'keep {cmd}', "
+        f"got {len(example_lines)}. Examples may be paragraph-wrapped."
+    )
+
+
+# ---------------------------------------------------------------------------
+# put() input handling
+# ---------------------------------------------------------------------------
+
+class TestPutStdinSafety:
+    """Tests for stdin detection and binary data handling in put."""
+
+    def test_stdin_uses_select_not_isatty(self):
+        """Stdin detection uses _has_stdin_data (select-based), not raw isatty check.
+
+        Socket-backed stdin (e.g. exec sandboxes) is not a TTY but has
+        no data — _has_stdin_data returns False via select(), preventing hangs.
+        """
+        from keep.thin_cli import _has_stdin_data
+
+        # A TTY is not stdin data
+        with patch("keep.thin_cli.sys") as mock_sys:
+            mock_sys.stdin.isatty.return_value = True
+            assert _has_stdin_data() is False
+
+    def test_binary_stdin_produces_helpful_error(self):
+        """Binary data on stdin gets a clear error, not an unhelpful traceback."""
+        result = subprocess.run(
+            [sys.executable, "-m", "keep", "put", "-"],
+            input=b"\x80\x81\x82\xff",
+            capture_output=True, timeout=15,
+        )
+        # Should fail with a helpful message, not a raw UnicodeDecodeError traceback
+        assert result.returncode != 0
+        stderr = result.stderr.decode(errors="replace")
+        assert "binary" in stderr.lower() or "utf-8" in stderr.lower() or "Error" in stderr
+
+
+class TestPutFrontmatter:
+    """Tests for YAML frontmatter extraction from stdin content."""
+
+    def test_frontmatter_tags_extracted_from_stdin(self, daemon):
+        """Piping markdown with frontmatter extracts tags and strips frontmatter."""
+        server, kp, port = daemon
+        auth = {"Authorization": f"Bearer {server.auth_token}"}
+
+        # Simulate what thin_cli put does: frontmatter extraction then POST
+        content_with_fm = "---\ntopic: testing\nstatus: draft\n---\nActual content here."
+
+        from keep.utils import _extract_markdown_frontmatter
+        body_text, fm_tags = _extract_markdown_frontmatter(content_with_fm)
+
+        assert fm_tags.get("topic") == "testing"
+        assert fm_tags.get("status") == "draft"
+        assert body_text == "Actual content here."
+        assert "---" not in body_text
+
+    def test_frontmatter_cli_tags_override(self):
+        """CLI -t tags override frontmatter tags with the same key."""
+        from keep.utils import _extract_markdown_frontmatter
+
+        content = "---\ntopic: from-frontmatter\n---\nbody"
+        body_text, fm_tags = _extract_markdown_frontmatter(content)
+        cli_tags = {"topic": "from-cli"}
+
+        # thin_cli merges as: {**fm_tags, **cli_tags}
+        merged = {**fm_tags, **cli_tags}
+        assert merged["topic"] == "from-cli"
+
+
+class TestPutMultiValueTags:
+    """Tests for multi-value tag parsing in put."""
+
+    def test_repeated_tag_key_produces_list(self):
+        """Using -t key=a -t key=b produces {"key": ["a", "b"]}."""
+        from keep.thin_cli import put
+
+        # We can't easily call put() directly (it needs a daemon),
+        # so test the parsing logic inline
+        tags_input = ["topic=auth", "topic=security", "status=draft"]
+        parsed: dict = {}
+        for t in tags_input:
+            k, v = t.split("=", 1)
+            key = k.casefold()
+            existing = parsed.get(key)
+            if existing is None:
+                parsed[key] = v
+            elif isinstance(existing, list):
+                if v not in existing:
+                    existing.append(v)
+            elif existing != v:
+                parsed[key] = [existing, v]
+
+        assert parsed == {"topic": ["auth", "security"], "status": "draft"}
+
+    def test_duplicate_value_not_repeated(self):
+        """Using -t key=a -t key=a doesn't duplicate."""
+        tags_input = ["topic=auth", "topic=auth"]
+        parsed: dict = {}
+        for t in tags_input:
+            k, v = t.split("=", 1)
+            key = k.casefold()
+            existing = parsed.get(key)
+            if existing is None:
+                parsed[key] = v
+            elif isinstance(existing, list):
+                if v not in existing:
+                    existing.append(v)
+            elif existing != v:
+                parsed[key] = [existing, v]
+
+        assert parsed == {"topic": "auth"}
+
+    def test_tag_format_error_with_colon_hint(self):
+        """Misformatted tag with colon gets a 'did you mean' hint."""
+        result = subprocess.run(
+            [sys.executable, "-m", "keep", "put", "test", "-t", "topic:auth"],
+            capture_output=True, text=True, timeout=15,
+        )
+        assert result.returncode != 0
+        assert "Did you mean" in result.stderr

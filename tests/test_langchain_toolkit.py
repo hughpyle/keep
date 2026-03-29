@@ -1,5 +1,4 @@
-"""
-Tests for KeepNotesToolkit.
+"""Tests for KeepNotesToolkit.
 
 Uses mock providers — no ML models or network.
 """
@@ -31,6 +30,7 @@ def scoped_toolkit(keeper):
 
 
 class TestToolkitBasic:
+    """Tests for toolkit tool discovery."""
 
     def test_get_tools_returns_four(self, toolkit):
         tools = toolkit.get_tools()
@@ -46,6 +46,7 @@ class TestToolkitBasic:
 
 
 class TestRemember:
+    """Tests for remember tool."""
 
     def test_remember_stores_content(self, toolkit, keeper):
         tools = {t.name: t for t in toolkit.get_tools()}
@@ -70,6 +71,7 @@ class TestRemember:
 
 
 class TestRecall:
+    """Tests for recall tool."""
 
     def test_recall_finds_stored(self, toolkit, keeper):
         keeper.put("User prefers dark mode", tags={"topic": "preferences"})
@@ -94,6 +96,7 @@ class TestRecall:
 
 
 class TestGetContext:
+    """Tests for get-context tool."""
 
     def test_get_context_default(self, toolkit):
         tools = {t.name: t for t in toolkit.get_tools()}
@@ -109,6 +112,7 @@ class TestGetContext:
 
 
 class TestUpdateContext:
+    """Tests for update-context tool."""
 
     def test_update_context(self, toolkit):
         tools = {t.name: t for t in toolkit.get_tools()}

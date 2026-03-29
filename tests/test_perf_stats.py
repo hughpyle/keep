@@ -7,6 +7,7 @@ from keep.perf_stats import PerfStats
 
 
 class TestPerfStats:
+    """Tests for performance statistics recording."""
 
     def test_record_and_summary(self):
         ps = PerfStats(auto_log_interval_secs=99999)

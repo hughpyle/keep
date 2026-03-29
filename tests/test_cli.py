@@ -1,5 +1,4 @@
-"""
-CLI tests for reflective memory.
+"""CLI tests for reflective memory.
 
 Tests verify:
 1. CLI commands map to equivalent Python API
@@ -94,11 +93,11 @@ class TestCliBasics:
 
     @pytest.mark.parametrize("cmd", ["find", "put", "get", "list", "tag", "del", "now", "config"])
     def test_help_examples_formatted(self, cli, cmd):
-        r"""Examples sections render with preserved line breaks (not wrapped).
+        """CLI help renders examples with preserved line breaks, not wrapped.
 
-        Click uses \b (backspace char) to mark sections that should not be
-        re-wrapped.  If docstrings use raw strings (r\"\"\"), \b becomes literal
-        backslash-b which Click ignores, collapsing examples into a paragraph.
+        Typer/Click uses backspace (0x08) in docstrings to mark sections that
+        should not be re-wrapped.  If docstrings are raw strings, the backspace
+        becomes a literal backslash-b which Click ignores, collapsing examples.
         """
         result = cli(cmd, "--help")
         assert result.returncode == 0, f"{cmd} --help failed"
@@ -542,7 +541,7 @@ class TestShellQuoteId:
         assert _shell_quote_id("test;cmd") == "'test;cmd'"
 
     def test_single_quote_escaped(self):
-        """IDs containing single quotes use '\\'' escaping."""
+        r"""IDs containing single quotes use '\\'' escaping."""
         from keep.cli import _shell_quote_id
         result = _shell_quote_id("it's a test")
         assert result == "'it'\\''s a test'"
@@ -842,4 +841,5 @@ class TestCommandAliases:
 # -----------------------------------------------------------------------------
 
 class TestStdinJsonTemplates:
+    """Tests for stdin JSON template expansion."""
     pass  # Template tests removed — functions moved out of cli.py

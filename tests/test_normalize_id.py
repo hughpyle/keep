@@ -20,6 +20,7 @@ from keep.types import (
 
 
 class TestDecodeUnreserved:
+    """Tests for unreserved character decoding."""
     def test_no_encoding(self):
         assert _decode_unreserved("hello-world") == "hello-world"
 
@@ -73,6 +74,7 @@ class TestDecodeUnreserved:
 
 
 class TestResolveDotSegments:
+    """Tests for dot-segment resolution."""
     def test_no_dots(self):
         assert _resolve_dot_segments("/a/b/c") == "/a/b/c"
 
@@ -101,6 +103,7 @@ class TestResolveDotSegments:
 
 
 class TestNormalizeHttpUri:
+    """Tests for HTTP URI normalization."""
     # Scheme lowercasing
     def test_scheme_lower(self):
         assert _normalize_http_uri("HTTPS://example.com/path") == "https://example.com/path"
@@ -195,6 +198,7 @@ class TestNormalizeHttpUri:
 
 
 class TestNormalizeId:
+    """Tests for document ID normalization."""
     # Non-URI IDs pass through unchanged
     def test_plain_id(self):
         assert normalize_id("my-note-123") == "my-note-123"
@@ -251,6 +255,7 @@ class TestNormalizeId:
 
 
 class TestValidateId:
+    """Tests for document ID validation."""
     def test_blocked_char_check_runs_on_nfc_form(self, monkeypatch):
         import re
         import keep.types as types

@@ -1,6 +1,4 @@
-"""
-Action registry and base contracts for state-doc style actions.
-"""
+"""Action registry and base contracts for state-doc style actions."""
 
 from __future__ import annotations
 
@@ -27,11 +25,15 @@ DEFAULT_ACTION_PRIORITY = 5
 
 @runtime_checkable
 class Action(Protocol):
+    """Protocol for a named action that transforms params into results."""
+
     def run(self, params: dict[str, Any], context: "ActionContext") -> dict[str, Any]: ...
 
 
 @runtime_checkable
 class ActionContext(Protocol):
+    """Protocol providing store operations available to actions during execution."""
+
     def get(self, id: str) -> Any | None: ...
 
     def find(

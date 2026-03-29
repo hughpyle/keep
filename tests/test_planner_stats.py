@@ -1,5 +1,4 @@
-"""
-Tests for planner stats precompute system.
+"""Tests for planner stats precompute system.
 
 Covers:
 - PlannerStatsStore lifecycle and CRUD
@@ -60,6 +59,7 @@ def stores(tmp_path):
 # ---------------------------------------------------------------------------
 
 class TestPlannerStatsStoreInit:
+    """Tests for planner stats store initialization."""
 
     def test_creates_db(self, tmp_path):
         db_path = tmp_path / "planner_stats.db"
@@ -82,6 +82,7 @@ class TestPlannerStatsStoreInit:
 # ---------------------------------------------------------------------------
 
 class TestScopeKey:
+    """Tests for scope key generation."""
 
     def test_deterministic(self):
         k1 = build_scope_key("local", "default", None)
@@ -110,6 +111,7 @@ class TestScopeKey:
 # ---------------------------------------------------------------------------
 
 class TestStatCRUD:
+    """Tests for stat CRUD operations."""
 
     def test_upsert_and_get(self, stats_store):
         scope = build_scope_key()
@@ -167,6 +169,7 @@ class TestStatCRUD:
 # ---------------------------------------------------------------------------
 
 class TestOutboxTriggers:
+    """Tests for outbox trigger firing."""
 
     def test_doc_insert_fires_trigger(self, doc_store):
         doc_store._execute(
@@ -269,6 +272,7 @@ class TestOutboxTriggers:
 # ---------------------------------------------------------------------------
 
 class TestOutboxDequeue:
+    """Tests for outbox item dequeuing."""
 
     def test_dequeue_returns_items(self, doc_store):
         doc_store._execute(
@@ -339,6 +343,7 @@ class TestOutboxDequeue:
 # ---------------------------------------------------------------------------
 
 class TestMetricComputation:
+    """Tests for metric computation."""
 
     def _insert_doc(self, doc_store, doc_id, tags=None):
         doc_store._execute(
@@ -423,6 +428,7 @@ class TestMetricComputation:
 # ---------------------------------------------------------------------------
 
 class TestDrain:
+    """Tests for outbox draining."""
 
     def _insert_doc(self, doc_store, doc_id, tags=None):
         doc_store._execute(
@@ -508,6 +514,7 @@ class TestDrain:
 # ---------------------------------------------------------------------------
 
 class TestRebuild:
+    """Tests for stats rebuilding."""
 
     def _insert_doc(self, doc_store, doc_id, tags=None):
         doc_store._execute(
@@ -575,6 +582,7 @@ class TestRebuild:
 # ---------------------------------------------------------------------------
 
 class TestStaleness:
+    """Tests for staleness detection."""
 
     def test_no_stats_is_fallback(self, stats_store):
         scope = build_scope_key()
@@ -597,6 +605,7 @@ class TestStaleness:
 # ---------------------------------------------------------------------------
 
 class TestPlannerPriorsShape:
+    """Tests for planner priors shape."""
 
     def test_priors_shape(self, stores):
         doc_store, stats_store = stores
@@ -629,6 +638,7 @@ class TestPlannerPriorsShape:
 
 
 class TestKeeperPlannerPriorsAPI:
+    """Tests for keeper planner priors API."""
 
     def test_keeper_returns_minimal_priors_shape(self, mock_providers, tmp_path):
         kp = Keeper(store_path=tmp_path)

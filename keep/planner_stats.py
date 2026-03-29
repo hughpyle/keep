@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .const import SQLITE_BUSY_TIMEOUT_MS
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -88,7 +90,7 @@ class PlannerStatsStore:
             isolation_level=None,
         )
         self._conn.execute("PRAGMA journal_mode = WAL")
-        self._conn.execute("PRAGMA busy_timeout = 5000")
+        self._conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         self._create_tables()
 
     def _execute(self, sql: str, params: tuple | list = ()) -> sqlite3.Cursor:

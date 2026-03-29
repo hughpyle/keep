@@ -1,5 +1,4 @@
-"""
-Tests for edge-following deep search (_deep_edge_follow).
+"""Tests for edge-following deep search (_deep_edge_follow).
 
 Edge-following replaces tag-following for stores with edges:
 1. Traverse inverse edges from primary results
@@ -90,6 +89,7 @@ class TestQueryFtsScoped:
 # ---------------------------------------------------------------------------
 
 class TestHasEdges:
+    """Tests for edge existence checks."""
 
     @pytest.fixture
     def store(self, tmp_path):
@@ -110,6 +110,7 @@ class TestHasEdges:
 
 
 class TestInverseVersionEdges:
+    """Tests for inverse version edge traversal."""
 
     @pytest.fixture
     def store(self, tmp_path):
@@ -741,6 +742,7 @@ class TestFindDeepDispatch:
 # ---------------------------------------------------------------------------
 
 class TestBuildFtsQuery:
+    """Tests for full-text search query building."""
 
     @pytest.fixture
     def store(self, tmp_path):
@@ -771,8 +773,10 @@ class TestEntityLimitOverflow:
     """find(deep=True) must not return more than limit items."""
 
     def test_entity_promotion_respects_limit(self, tmp_path, mock_providers):
-        """When all final items have deep groups, entity promotion should not
-        exceed limit by appending."""
+        """When all final items have deep groups, entity promotion should not exceed limit.
+
+        Entity promotion should not exceed limit by appending.
+        """
         kp = Keeper(store_path=str(tmp_path / "store"))
         doc_coll = kp._resolve_doc_collection()
         chroma_coll = kp._resolve_chroma_collection()

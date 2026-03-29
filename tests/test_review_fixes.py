@@ -1,6 +1,4 @@
-"""
-Tests for code review fixes: tag queries, SSRF protection, missing embedding provider.
-"""
+"""Tests for code review fixes: tag queries, SSRF protection, missing embedding provider."""
 
 import os
 import pytest
@@ -176,7 +174,7 @@ class TestIsPrivateUrl:
         assert provider._is_private_url("https://example.com/page") is False
 
     def test_localhost_name(self, provider) -> None:
-        """localhost resolves to 127.0.0.1, should be blocked."""
+        """Localhost resolves to 127.0.0.1, should be blocked."""
         assert provider._is_private_url("http://localhost/secret") is True
 
     def test_unspecified_address(self, provider) -> None:

@@ -9,6 +9,7 @@ from keep.actions.resolve_stubs import ResolveStubs, _file_stem
 
 
 class TestFileStem:
+    """Tests for file stem extraction."""
 
     def test_md_file(self):
         assert _file_stem("file:///vault/notes/Foo.md") == "Foo"
@@ -54,6 +55,7 @@ def _make_context(
 
 
 class TestResolveStubs:
+    """Tests for stub resolution."""
 
     def test_skips_non_file(self):
         ctx = _make_context({})

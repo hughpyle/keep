@@ -18,15 +18,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from .const import OPS_LOG_FILE, WORK_QUEUE_DB
 from .processors import _content_hash
 from .types import (
+    SYSTEM_TAG_PREFIX,
     casefold_tags,
     casefold_tags_for_index,
     filter_non_system_tags,
     normalize_id,
     tag_values,
     utc_now,
-    SYSTEM_TAG_PREFIX,
 )
 
 logger = logging.getLogger(__name__)
@@ -338,6 +339,7 @@ class BackgroundProcessingMixin:
 
         Args:
             limit: Maximum number of items to process in this batch
+            shutdown_check: Optional callable returning True to abort early
 
         Returns:
             Dict with: processed (int), failed (int), abandoned (int), errors (list)
@@ -1082,7 +1084,7 @@ class BackgroundProcessingMixin:
         with self._work_queue_lock:
             queue = self._work_queue
             if queue is None:
-                queue = WorkQueue(self._store_path / "continuation.db")
+                queue = WorkQueue(self._store_path / WORK_QUEUE_DB)
                 self._work_queue = queue
         return queue
 
@@ -1199,6 +1201,7 @@ class BackgroundProcessingMixin:
             return False  # Cloud mode: worker is external
 
         import time
+
         from .model_lock import ModelLock
 
         # Throttle: don't spawn more than once per 30 seconds
@@ -1231,7 +1234,7 @@ class BackgroundProcessingMixin:
 
             # Platform-specific detachment
             # Redirect daemon stderr to ops log for crash diagnostics
-            log_path = self._store_path / "keep-ops.log"
+            log_path = self._store_path / OPS_LOG_FILE
             try:
                 log_fd = open(log_path, "a")
             except OSError:

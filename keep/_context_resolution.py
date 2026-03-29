@@ -172,6 +172,7 @@ class ContextResolutionMixin:
             versions_limit: Max prev/next versions to include
             include_similar: Whether to resolve similar items
             include_meta: Whether to resolve meta-doc sections
+            edges_limit: Max edges per direction to include
             include_parts: Whether to include parts manifest
             include_versions: Whether to include version navigation
         """
@@ -180,12 +181,7 @@ class ContextResolutionMixin:
         _ctx_t0 = time.monotonic()
 
         # Ensure state docs are in the store for the read flow.
-        if self._needs_sysdoc_migration:
-            try:
-                self._migrate_system_documents()
-                self._needs_sysdoc_migration = False
-            except Exception as e:
-                logger.warning("System doc migration deferred: %s", e, exc_info=True)
+        self._ensure_sysdocs()
 
         # Parse @V{N} version ref from ID (explicit version= takes precedence)
         base_id, id_version = parse_version_ref(id)

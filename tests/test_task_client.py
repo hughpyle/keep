@@ -41,6 +41,7 @@ def mock_client():
 
 
 class TestHTTPSEnforcement:
+    """Tests for HTTPS enforcement."""
     def test_allows_https(self):
         with patch("keep.task_client.httpx.Client"):
             tc = TaskClient("https://api.example.com", "key")
@@ -62,6 +63,7 @@ class TestHTTPSEnforcement:
 
 
 class TestDiscoverProcessors:
+    """Tests for processor discovery."""
     def test_returns_task_types(self, mock_client):
         tc, http = mock_client
         http.get.return_value = FakeResponse(json_data={
@@ -86,6 +88,7 @@ class TestDiscoverProcessors:
 
 
 class TestSubmit:
+    """Tests for task submission."""
     def test_submit_returns_task_id(self, mock_client):
         tc, http = mock_client
         http.post.return_value = FakeResponse(
@@ -184,6 +187,7 @@ class TestSubmit:
 
 
 class TestPoll:
+    """Tests for task polling."""
     def test_poll_completed(self, mock_client):
         tc, http = mock_client
         http.get.return_value = FakeResponse(json_data={
@@ -240,6 +244,7 @@ class TestPoll:
 
 
 class TestAcknowledge:
+    """Tests for task acknowledgment."""
     def test_acknowledge_success(self, mock_client):
         tc, http = mock_client
         http.delete.return_value = FakeResponse(
@@ -266,6 +271,7 @@ class TestAcknowledge:
 
 
 class TestAvailable:
+    """Tests for processor availability check."""
     def test_available_when_processors_exist(self, mock_client):
         tc, http = mock_client
         http.get.return_value = FakeResponse(json_data={

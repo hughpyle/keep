@@ -40,6 +40,7 @@ def _make_runner(outputs: dict[str, dict] | None = None):
 # ---------------------------------------------------------------------------
 
 class TestBasicFlow:
+    """Tests for basic runtime flow."""
     def test_immediate_done(self):
         loader = _make_loader({
             "simple": "match: sequence\nrules:\n  - return: done",
@@ -86,6 +87,7 @@ rules:
 # ---------------------------------------------------------------------------
 
 class TestActionExecution:
+    """Tests for runtime action execution."""
     def test_action_runs(self):
         loader = _make_loader({
             "with-action": """\
@@ -143,6 +145,7 @@ rules:
 # ---------------------------------------------------------------------------
 
 class TestFindEnrichment:
+    """Tests for find output enrichment."""
     def test_find_output_gets_stats(self):
         loader = _make_loader({
             "enriched": """\
@@ -198,6 +201,7 @@ rules:
 # ---------------------------------------------------------------------------
 
 class TestTransitions:
+    """Tests for state transitions."""
     def test_simple_transition(self):
         loader = _make_loader({
             "first": "match: sequence\nrules:\n  - then: second",
@@ -260,6 +264,7 @@ rules:
 # ---------------------------------------------------------------------------
 
 class TestBudget:
+    """Tests for runtime budget limits."""
     def test_budget_1(self):
         loader = _make_loader({
             "step": "match: sequence\nrules:\n  - then: step",
@@ -295,6 +300,7 @@ class TestBudget:
 # ---------------------------------------------------------------------------
 
 class TestMatchAll:
+    """Tests for match-all parallel actions."""
     def test_parallel_actions_then_post(self):
         loader = _make_loader({
             "parallel": """\
@@ -331,6 +337,7 @@ post:
 # ---------------------------------------------------------------------------
 
 class TestParamsFlow:
+    """Tests for params persistence across transitions."""
     def test_params_persist_across_transitions(self):
         """Original params remain available after transition."""
         calls = []
@@ -377,6 +384,7 @@ rules:
 # ---------------------------------------------------------------------------
 
 class TestMakeStateDocLoader:
+    """Tests for state document loader creation."""
     def test_loads_from_env(self):
         from keep.state_doc_runtime import make_state_doc_loader
 
@@ -498,6 +506,7 @@ class TestMakeStateDocLoader:
 # ---------------------------------------------------------------------------
 
 class TestMakeActionRunner:
+    """Tests for action runner creation."""
     def test_runs_find_action(self):
         from keep.state_doc_runtime import make_action_runner
 
@@ -543,6 +552,7 @@ class TestMakeActionRunner:
 # ---------------------------------------------------------------------------
 
 class TestCELPredicates:
+    """Tests for CEL predicate evaluation."""
     def test_find_deep_skips_traverse_on_empty_search(self):
         """find-deep returns early when search.count == 0 (CEL predicate)."""
         from keep.builtin_state_docs import BUILTIN_STATE_DOCS

@@ -24,6 +24,7 @@ from keep.context_cache import (
 # ---------------------------------------------------------------------------
 
 class TestCacheKey:
+    """Tests for cache key generation."""
     def test_deterministic(self):
         k1 = _cache_key("find", {"similar_to": "abc", "limit": 3})
         k2 = _cache_key("find", {"similar_to": "abc", "limit": 3})
@@ -60,6 +61,7 @@ class TestCacheKey:
 # ---------------------------------------------------------------------------
 
 class TestExtraction:
+    """Tests for ID and score extraction."""
     def test_extract_ids_scores(self):
         result = {
             "results": [
@@ -114,6 +116,7 @@ class _FakeCtx:
 
 
 class TestHydration:
+    """Tests for find result hydration."""
     def test_hydrate_find_results(self):
         ctx = _FakeCtx({
             "a": _FakeItem("a", "summary a", {"tag": "1"}),
@@ -159,6 +162,7 @@ class TestHydration:
 # ---------------------------------------------------------------------------
 
 class TestSimilarCache:
+    """Tests for similar-results cache."""
     def test_put_and_get(self):
         c = SimilarCache()
         c.put("k1", [("a", 0.9)], item_id="x")
@@ -232,6 +236,7 @@ class TestSimilarCache:
 # ---------------------------------------------------------------------------
 
 class TestMetaCache:
+    """Tests for metadata cache."""
     def test_put_and_get(self):
         c = MetaCache()
         sections = {"todo": [("t1", 0.7)]}
@@ -281,6 +286,7 @@ class TestMetaCache:
 # ---------------------------------------------------------------------------
 
 class TestPartsCache:
+    """Tests for parts cache."""
     def test_put_and_get(self):
         c = PartsCache()
         result = {"results": [{"id": "x@p1"}], "count": 1}
@@ -329,6 +335,7 @@ class TestPartsCache:
 # ---------------------------------------------------------------------------
 
 class TestContextCache:
+    """Tests for context cache integration."""
     def _ctx(self, items=None):
         return _FakeCtx(items or {})
 

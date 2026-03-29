@@ -1,5 +1,4 @@
-"""
-Tests for document parts (structural decomposition).
+"""Tests for document parts (structural decomposition).
 
 Tests cover:
 - DocumentStore CRUD for parts

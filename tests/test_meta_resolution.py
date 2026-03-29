@@ -1,5 +1,4 @@
-"""
-Meta-doc resolution tests for Keeper.
+"""Meta-doc resolution tests for Keeper.
 
 Tests resolve_meta() (persistent .meta/* docs) and resolve_inline_meta()
 (ad-hoc tag queries). Uses mock providers — no ML models or network.

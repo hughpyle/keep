@@ -1,5 +1,4 @@
-"""
-Tests for scoped now (get_now/set_now with scope parameter).
+"""Tests for scoped now (get_now/set_now with scope parameter).
 
 Uses mock providers — no ML models or network.
 """

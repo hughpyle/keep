@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Compare summarizer performance and quality: truncate, first-paragraph, Ollama, MLX.
+"""Compare summarizer performance and quality: truncate, first-paragraph, Ollama, MLX.
 
 Usage:
     python tests/test_summarizers.py              # Run all available

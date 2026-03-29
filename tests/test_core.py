@@ -1,5 +1,4 @@
-"""
-Test harness for keep.
+"""Test harness for keep.
 
 Sample documents in docs/library/:
 - an5.57: Upajjhāyasutta (Five Remembrances) - English JSON

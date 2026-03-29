@@ -1,5 +1,4 @@
-"""
-Tests for the MCP stdio server tool functions.
+"""Tests for the MCP stdio server tool functions.
 
 Tests the tool layer in isolation by mocking HTTP calls to the daemon —
 verifies parameter mapping, return formatting, and edge cases for the
@@ -30,6 +29,7 @@ def mock_daemon():
 # ---------------------------------------------------------------------------
 
 class TestKeepFlow:
+    """Tests for MCP keep-flow endpoint."""
 
     @pytest.mark.asyncio
     async def test_flow_returns_json(self, mock_daemon):
@@ -103,6 +103,7 @@ class TestKeepFlow:
 # ---------------------------------------------------------------------------
 
 class TestKeepPrompt:
+    """Tests for MCP keep-prompt endpoint."""
 
     @pytest.mark.asyncio
     async def test_list_prompts(self, mock_daemon):
@@ -149,6 +150,7 @@ class TestKeepPrompt:
 # ---------------------------------------------------------------------------
 
 class TestKeepHelp:
+    """Tests for MCP keep-help endpoint."""
 
     @pytest.mark.asyncio
     async def test_help_index(self):

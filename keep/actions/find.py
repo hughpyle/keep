@@ -20,6 +20,8 @@ def _part_to_result(base_id: str, part) -> dict[str, Any]:
 
 @action(id="find")
 class Find:
+    """Search items by query, tags, prefix, or similarity."""
+
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         query = params.get("query")
         similar_to = params.get("similar_to")

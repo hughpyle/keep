@@ -1,5 +1,4 @@
-"""
-Schema migration tests for DocumentStore.
+"""Schema migration tests for DocumentStore.
 
 Verifies all migration paths: v0→v3, v1→v3, v2→v3, and the v3 no-op fast path.
 Each test constructs a database at a specific schema version using raw SQL,

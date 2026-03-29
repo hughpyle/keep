@@ -16,6 +16,7 @@ from keep.setup_wizard import (
 
 
 class TestNeedsWizard:
+    """Tests for wizard-needed detection."""
     def test_needs_wizard_no_config(self, tmp_path):
         assert needs_wizard(tmp_path) is True
 
@@ -25,6 +26,7 @@ class TestNeedsWizard:
 
 
 class TestDetectToolChoices:
+    """Tests for tool choice detection."""
     def test_detects_tools(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         (tmp_path / ".claude").mkdir()
@@ -44,6 +46,7 @@ class TestDetectToolChoices:
 
 
 class TestDetectEmbeddingChoices:
+    """Tests for embedding choice detection."""
     def test_ollama_available(self, monkeypatch):
         monkeypatch.setattr(
             "keep.setup_wizard._detect_ollama",
@@ -95,6 +98,7 @@ class TestDetectEmbeddingChoices:
 
 
 class TestDetectSummarizationChoices:
+    """Tests for summarization choice detection."""
     def test_always_has_truncate_fallback(self, monkeypatch):
         monkeypatch.setattr("keep.setup_wizard._detect_ollama", lambda: None)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -112,6 +116,7 @@ class TestDetectSummarizationChoices:
 
 
 class TestRunWizardNonInteractive:
+    """Tests for non-interactive wizard fallback."""
     def test_non_interactive_fallback(self, tmp_path, monkeypatch, mock_providers):
         """Non-interactive mode falls back to silent auto-detect."""
         monkeypatch.setattr("keep.setup_wizard._is_interactive", lambda: False)

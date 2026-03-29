@@ -7,6 +7,8 @@ from . import action
 
 @action(id="list_versions")
 class ListVersions:
+    """List historical versions of an item."""
+
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         item_id = params.get("id") or params.get("item_id")
         if not item_id:

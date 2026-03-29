@@ -21,6 +21,7 @@ from keep.types import parse_ref
 # ---------------------------------------------------------------------------
 
 class TestParseLinks:
+    """Tests for link parsing."""
 
     def test_wiki_link(self):
         links = _parse_links("See [[My Note]] for details.")
@@ -79,6 +80,7 @@ class TestParseLinks:
 # ---------------------------------------------------------------------------
 
 class TestResolveInternalLink:
+    """Tests for internal link resolution."""
 
     def _make_context(self, known_ids: set[str]):
         ctx = MagicMock()
@@ -153,6 +155,7 @@ def _make_context(items: dict[str, Any], item_id: str = "source.md"):
 
 
 class TestExtractLinksAction:
+    """Tests for extract-links action."""
 
     def test_basic_wiki_link_resolved(self):
         source = _make_item("file:///vault/a.md", "See [[b]] for more.")
@@ -264,6 +267,7 @@ class TestExtractLinksAction:
 # ---------------------------------------------------------------------------
 
 class TestParseRef:
+    """Tests for reference parsing."""
 
     def test_plain_id(self):
         assert parse_ref("file:///vault/Foo.md") == ("file:///vault/Foo.md", None)
@@ -290,6 +294,7 @@ class TestParseRef:
 # ---------------------------------------------------------------------------
 
 class TestVaultWideResolution:
+    """Tests for vault-wide link resolution."""
 
     def _make_context(self, known_ids: set[str], find_by_name_result=None):
         ctx = MagicMock()

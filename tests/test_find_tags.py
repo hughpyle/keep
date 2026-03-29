@@ -1,5 +1,4 @@
-"""
-Tests for find(tags=...) pre-filter parameter.
+"""Tests for find(tags=...) pre-filter parameter.
 
 Uses mock providers — no ML models or network.
 """
@@ -102,8 +101,11 @@ class TestFindTagsFilter:
 
 
 class TestFindSinceFilter:
-    """Regression tests: find() with since= must not drop items whose
-    ChromaDB metadata lacks _updated_date (version refs, legacy items)."""
+    """Regression tests for find() with since= filter.
+
+    find() with since= must not drop items whose ChromaDB metadata lacks
+    _updated_date (version refs, legacy items).
+    """
 
     def test_find_since_returns_recent_items(self, kp):
         """find(since='P1D') includes items stored today."""
@@ -111,8 +113,11 @@ class TestFindSinceFilter:
         assert any(r.id == "alice:pets" for r in results)
 
     def test_find_since_includes_versioned_items(self, mock_providers, tmp_path):
-        """find(since='P1D') includes items even when only version
-        embeddings are in ChromaDB (whose metadata lacks _updated_date)."""
+        """find(since='P1D') includes items without _updated_date.
+
+        Covers the case where only version embeddings are in ChromaDB
+        (whose metadata lacks _updated_date).
+        """
         kp = Keeper(store_path=tmp_path)
         kp._get_embedding_provider()
         kp.put("Alpha content about animals", id="test:ver")
@@ -173,8 +178,11 @@ class TestFindSinceFilter:
         assert not any(r.id == "test:ocean" for r in results)
 
     def test_find_mixed_items_with_and_without_updated_date(self, mock_providers, tmp_path):
-        """find(since=...) handles a mix of items where some have
-        _updated_date in ChromaDB and some don't (e.g. head vs version)."""
+        """find(since=...) handles mixed _updated_date presence.
+
+        Covers a mix of items where some have _updated_date in ChromaDB
+        and some don't (e.g. head vs version).
+        """
         kp = Keeper(store_path=tmp_path)
         kp._get_embedding_provider()
         # head item — ChromaDB will have _updated_date

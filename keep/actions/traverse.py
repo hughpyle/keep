@@ -14,6 +14,8 @@ def _updated_key(item: Any) -> str:
 
 @action(id="traverse")
 class Traverse:
+    """Follow edges from a set of items to discover related items."""
+
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         raw_items = params.get("items")
         if not isinstance(raw_items, list) or not raw_items:

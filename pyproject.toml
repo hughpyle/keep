@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "keep-skill"
-version = "0.115.5"
+version = "0.115.6"
 description = "Reflective memory - remember and search documents by meaning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -121,6 +121,8 @@ ignore = [
     "D104",  # Missing docstring in public package
     "D105",  # Missing docstring in magic method
     "D107",  # Missing docstring in __init__
+    "D301",  # Typer uses \b as a formatting directive, not a Python escape
+    "D411",  # Blank line before "Examples" breaks Click's \b paragraph scoping
 ]
 
 [tool.ruff.lint.pydocstyle]

@@ -7,6 +7,8 @@ import os
 import sys
 import warnings
 
+from .const import OPS_LOG_BACKUP_COUNT, OPS_LOG_FILE, OPS_LOG_MAX_BYTES
+
 # Set environment variables BEFORE any imports to suppress warnings early
 if not os.environ.get("KEEP_VERBOSE"):
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
@@ -86,11 +88,11 @@ def configure_ops_log(store_path):
     from logging.handlers import RotatingFileHandler
     from pathlib import Path
 
-    log_path = Path(store_path) / "keep-ops.log"
+    log_path = Path(store_path) / OPS_LOG_FILE
     handler = RotatingFileHandler(
         str(log_path),
-        maxBytes=1_000_000,
-        backupCount=3,
+        maxBytes=OPS_LOG_MAX_BYTES,
+        backupCount=OPS_LOG_BACKUP_COUNT,
     )
     handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter(

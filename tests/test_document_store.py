@@ -1,6 +1,4 @@
-"""
-Tests for the document store module.
-"""
+"""Tests for the document store module."""
 
 import json
 import sqlite3

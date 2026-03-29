@@ -68,6 +68,7 @@ class TestWritePathFlow:
 # ---------------------------------------------------------------------------
 
 class TestGetContextFlow:
+    """Tests for get-context flow invocation."""
     def test_get_context_invokes_read_flow(self, kp):
         """get_context() calls _run_read_flow('get-context')."""
         kp.put("Test note about architecture", id="arch1")
@@ -267,6 +268,7 @@ class TestGetContextFlow:
 # ---------------------------------------------------------------------------
 
 class TestFindDeepFlow:
+    """Tests for find-deep flow invocation."""
     def test_find_deep_invokes_flow_when_no_edges(self, kp):
         """find(deep=True) calls _deep_follow_via_flow when store has no edges."""
         kp.put("OAuth2 token design for project X", id="a",
@@ -324,6 +326,7 @@ class TestFindDeepFlow:
 # ---------------------------------------------------------------------------
 
 class TestFlowBudget:
+    """Tests for flow budget exhaustion."""
     def test_budget_exhaustion_returns_stopped(self):
         """Flow that transitions indefinitely stops at budget limit."""
         loader_docs = {
@@ -386,6 +389,7 @@ rules:
 # ---------------------------------------------------------------------------
 
 class TestTraversalFallback:
+    """Tests for traversal fallback to tag follow."""
     def test_no_edges_falls_to_tag_follow(self, kp):
         """When store has no edges, traverse_related uses tag-follow."""
         kp.put("Topic A note 1", id="a1", tags={"topic": "alpha"})
@@ -424,6 +428,7 @@ class TestTraversalFallback:
 # ---------------------------------------------------------------------------
 
 class TestAutoVivify:
+    """Tests for auto-vivify insert-if-absent."""
     def test_insert_if_absent_does_not_overwrite(self, kp):
         """Auto-vivify uses insert_if_absent — doesn't clobber existing docs."""
         doc_coll = kp._resolve_doc_collection()
@@ -452,6 +457,7 @@ class TestAutoVivify:
 # ---------------------------------------------------------------------------
 
 class TestFlowCursor:
+    """Tests for flow cursor round-trip."""
     def test_cursor_round_trip(self):
         """encode_cursor / decode_cursor are symmetric."""
         from keep.state_doc_runtime import encode_cursor, decode_cursor
@@ -610,6 +616,7 @@ rules:
 # ---------------------------------------------------------------------------
 
 class TestFlowCLI:
+    """Tests for flow CLI commands."""
     @pytest.fixture
     def cli(self, mock_providers, tmp_path):
         """CLI runner with in-process daemon (no subprocess needed)."""
@@ -688,6 +695,7 @@ rules:
 # ---------------------------------------------------------------------------
 
 class TestRunFlowCommand:
+    """Tests for run-flow command."""
     @pytest.fixture
     def kp(self, mock_providers, tmp_path):
         kp = Keeper(store_path=tmp_path)

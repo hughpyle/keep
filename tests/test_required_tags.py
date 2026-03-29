@@ -1,5 +1,4 @@
-"""
-Tests for required_tags config enforcement.
+"""Tests for required_tags config enforcement.
 
 Uses mock providers — no ML models or network.
 """

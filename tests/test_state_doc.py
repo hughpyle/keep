@@ -16,6 +16,7 @@ from keep.state_doc import (
 
 
 class TestParseStateDoc:
+    """Tests for state document parsing."""
     def test_minimal_sequence(self):
         body = """
 match: sequence
@@ -128,6 +129,7 @@ rules:
 
 
 class TestEvalSequence:
+    """Tests for state sequence evaluation."""
     def test_unconditional_action(self):
         body = """
 match: sequence
@@ -307,6 +309,7 @@ rules:
 
 
 class TestEvalAll:
+    """Tests for all-matching rule evaluation."""
     def test_all_matching_rules_fire(self):
         body = """
 match: all
@@ -385,6 +388,7 @@ post:
 
 
 class TestPredicates:
+    """Tests for state document predicates."""
     def test_boolean_operators(self):
         body = """
 match: sequence
@@ -577,6 +581,7 @@ post:
 
 
 class TestBugfixes:
+    """Tests for state document bug fixes."""
     def test_action_without_id_still_executes(self):
         """Bug #1: run_action was gated on rule.id, skipping id-less actions."""
         body = """

@@ -25,6 +25,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from .const import (
+    BACKOFF_BASE_SECONDS,
+    BACKOFF_MAX_SECONDS,
+    SQLITE_BUSY_TIMEOUT_MS,
+)
+
 logger = logging.getLogger(__name__)
 
 # Claims older than this are considered stale (processor crashed).
@@ -35,10 +41,6 @@ STALE_CLAIM_SECONDS_BY_TYPE = {
     "analyze": 3600,   # 1 hour — large docs via ollama are slow
     "ocr": 1800,       # 30 min — multi-page PDF OCR can be slow
 }
-
-# Retry backoff: min(BASE * 2^(attempts-1), MAX) seconds
-RETRY_BACKOFF_BASE = 30     # 30 seconds initial delay
-RETRY_BACKOFF_MAX = 3600    # 1 hour maximum delay
 
 
 @dataclass
@@ -87,7 +89,7 @@ class PendingSummaryQueue:
         # Enable WAL mode for better concurrent access across processes
         self._conn.execute("PRAGMA journal_mode=WAL")
         # Wait up to 5 seconds for locks instead of failing immediately
-        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
 
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS pending_summaries (
@@ -421,7 +423,7 @@ class PendingSummaryQueue:
             row = cursor.fetchone()
             attempts = row[0] if row else 1
 
-            delay = min(RETRY_BACKOFF_BASE * (2 ** (attempts - 1)), RETRY_BACKOFF_MAX)
+            delay = min(BACKOFF_BASE_SECONDS * (2 ** (attempts - 1)), BACKOFF_MAX_SECONDS)
             now = datetime.now(timezone.utc)
             retry_at = (now + timedelta(seconds=delay)).isoformat()
 

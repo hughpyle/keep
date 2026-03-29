@@ -18,6 +18,7 @@ from keep.state_doc import (
 # ---------------------------------------------------------------------------
 
 class TestParseFragment:
+    """Tests for state document fragment parsing."""
 
     def test_basic_fragment(self):
         body = """\
@@ -93,6 +94,7 @@ def _make_frag(name: str, rule_ids: list[str], order: str = "after") -> StateDoc
 
 
 class TestMergeFragments:
+    """Tests for fragment merging."""
 
     def test_empty_fragments(self):
         base = _make_base(["a", "b"])
@@ -169,6 +171,7 @@ class TestMergeFragments:
 # ---------------------------------------------------------------------------
 
 class TestParseAndMerge:
+    """Tests for parse-and-merge pipeline."""
 
     def test_parse_base_and_fragment_then_merge(self):
         base_body = """\
@@ -203,6 +206,7 @@ rules:
 # ---------------------------------------------------------------------------
 
 class TestLoaderIntegration:
+    """Tests for fragment loader integration."""
 
     def test_fragment_merged_into_builtin(self, mock_providers, tmp_path):
         """A child fragment at .state/after-write/X gets merged into the builtin."""
