@@ -87,6 +87,29 @@ class TestGetContextFlow:
         assert "get" in calls, \
             "get_context() should invoke the get-context state-doc flow"
 
+    def test_get_context_system_doc_skips_read_flow(self, kp):
+        """System docs return the document only, without read-flow context."""
+        calls = []
+        original = kp._run_read_flow
+
+        def tracking_flow(state, params, **kwargs):
+            calls.append(state)
+            return original(state, params, **kwargs)
+
+        kp._run_read_flow = tracking_flow
+        ctx = kp.get_context(".meta/todo")
+
+        assert ctx is not None
+        assert ctx.item.id == ".meta/todo"
+        assert ctx.similar == []
+        assert ctx.meta == {}
+        assert ctx.edges == {}
+        assert ctx.parts == []
+        assert ctx.prev == []
+        assert ctx.next == []
+        assert "get" not in calls, \
+            "system docs should not invoke the get-context state-doc flow"
+
     def test_get_context_returns_similar_items(self, kp):
         """get_context assembles similar items via the flow."""
         kp.put("Python async patterns", id="py1")

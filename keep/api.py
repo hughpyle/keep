@@ -60,6 +60,7 @@ from .types import (
     iter_tag_pairs, set_tag_values, tag_values, parse_ref,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
+    is_system_id,
     MAX_TAG_VALUE_LENGTH,
 )
 from .context_cache import ContextCache
@@ -1801,7 +1802,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # unfinished work.
         if content_unchanged and not tags_changed and summary is None and not force:
             logger.debug("Content and tags unchanged for %s", id)
-            if queue_summarize and not id.startswith("."):
+            if queue_summarize and not is_system_id(id):
                 self._dispatch_after_write_flow(
                     item_id=id,
                     content=content,
@@ -1811,7 +1812,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         # Determine summary
         max_len = self._config.max_summary_length
-        is_system_doc = id.startswith(".")
+        is_system_doc = is_system_id(id)
         if summary is not None:
             if not is_system_doc and len(summary) > max_len:
                 import warnings
@@ -2038,7 +2039,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             )
 
         # Enforce required tags (skip for system docs with dot-prefix IDs)
-        if self._config.required_tags and not effective_id.startswith("."):
+        if self._config.required_tags and not is_system_id(effective_id):
             user_tags = {k: v for k, v in (tags or {}).items()
                          if not k.startswith(SYSTEM_TAG_PREFIX)} if tags else {}
             missing = [t for t in self._config.required_tags if t not in user_tags]
@@ -2213,7 +2214,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             # Inline mode: store content directly
             # Enforce inline length limit at the API level so all paths
             # (CLI, MCP, direct API) are bounded identically.
-            is_system = id and id.startswith(".")
+            is_system = is_system_id(id)
             if not is_system and len(content) > self._config.max_inline_length:
                 raise ValueError(
                     f"Inline content too long ({len(content)} chars, "

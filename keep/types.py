@@ -129,6 +129,11 @@ def parse_version_ref(id: str) -> tuple[str, int | None]:
     return id[:m.start()], int(m.group(1))
 
 
+def is_system_id(id: str | None) -> bool:
+    """Return True when an item ID is a dot-prefixed system document ID."""
+    return bool(id and id.startswith("."))
+
+
 def validate_tag_key(key: str) -> None:
     """Validate a tag key is safe for JSON path queries."""
     if not key or len(key) > MAX_TAG_KEY_LENGTH:
