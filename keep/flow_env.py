@@ -32,8 +32,10 @@ class FlowRuntimeEnv(Protocol):
         limit: int = 10,
         since: str | None = None,
         until: str | None = None,
+        include_self: bool = False,
         include_hidden: bool = False,
         deep: bool = False,
+        scope: str | None = None,
     ) -> list[Any]: ...
 
     def list_items(
@@ -93,6 +95,17 @@ class FlowRuntimeEnv(Protocol):
         capture_write_context: bool = False,
     ) -> Any: ...
 
+    def tag(
+        self,
+        id: str,
+        tags: dict[str, Any] | None = None,
+        *,
+        remove: list[str] | None = None,
+        remove_values: dict[str, Any] | None = None,
+    ) -> Any: ...
+
+    def delete(self, id: str, *, delete_versions: bool = True) -> None: ...
+
     def enqueue_task(
         self,
         *,
@@ -143,6 +156,13 @@ class LocalFlowEnvironment:
         self._query_embedding: Any = None  # set by caller for deep-find flows
 
     def get(self, id: str) -> Any | None:
+        # Public Keeper methods are now thin flow wrappers, so the runtime must
+        # prefer the private direct helpers when present. Otherwise a flow action
+        # like `get` would call back into `Keeper.get()`, recurse through
+        # `run_flow()`, and never reach the storage operation it is trying to run.
+        getter = getattr(self._keeper, "_get_direct", None)
+        if callable(getter):
+            return getter(id)
         return self._keeper.get(id)
 
     def peek(self, id: str) -> Any | None:
@@ -158,17 +178,25 @@ class LocalFlowEnvironment:
         limit: int = 10,
         since: str | None = None,
         until: str | None = None,
+        include_self: bool = False,
         include_hidden: bool = False,
         deep: bool = False,
         scope: str | None = None,
     ) -> list[Any]:
-        return self._keeper.find(
+        # See `get()` above: the runtime uses `_find_direct` when available so
+        # flow execution reaches the underlying search implementation instead of
+        # recursing back through the public flow-backed wrapper.
+        finder = getattr(self._keeper, "_find_direct", None)
+        if finder is None:
+            finder = self._keeper.find
+        return finder(
             query=query,
             tags=tags,
             similar_to=similar_to,
             limit=limit,
             since=since,
             until=until,
+            include_self=include_self,
             include_hidden=include_hidden,
             deep=deep,
             scope=scope,
@@ -236,22 +264,56 @@ class LocalFlowEnvironment:
 
     def put(self, *, content: str | None = None, uri: str | None = None,
             id: str | None = None, tags: dict | None = None,
-            summary: str | None = None) -> Any:
+            summary: str | None = None, created_at: str | None = None,
+            force: bool = False) -> Any:
+        putter = getattr(self._keeper, "_put_direct", None)
+        if putter is None:
+            putter = self._keeper.put
         if uri is not None:
-            return self._keeper.put(uri=uri, id=id, tags=tags, summary=summary)
+            return putter(
+                uri=uri,
+                id=id,
+                tags=tags,
+                summary=summary,
+                created_at=created_at,
+                force=force,
+            )
         from .utils import _text_content_id
         doc_id = id or _text_content_id(content) if content else id
-        return self._keeper.put(content, id=doc_id, tags=tags, summary=summary)
+        return putter(
+            content,
+            id=doc_id,
+            tags=tags,
+            summary=summary,
+            created_at=created_at,
+            force=force,
+        )
 
-    def tag(self, id: str, tags: dict) -> Any:
-        return self._keeper.tag(id, tags)
+    def tag(
+        self,
+        id: str,
+        tags: dict | None = None,
+        *,
+        remove: list[str] | None = None,
+        remove_values: dict[str, Any] | None = None,
+    ) -> Any:
+        tagger = getattr(self._keeper, "_tag_direct", None)
+        if tagger is None:
+            tagger = self._keeper.tag
+        return tagger(id, tags, remove=remove, remove_values=remove_values)
 
     def move(self, name: str, *, source_id: str = "now",
              tags: dict | None = None, only_current: bool = False) -> Any:
-        return self._keeper.move(name, source_id=source_id, tags=tags, only_current=only_current)
+        mover = getattr(self._keeper, "_move_direct", None)
+        if mover is None:
+            mover = self._keeper.move
+        return mover(name, source_id=source_id, tags=tags, only_current=only_current)
 
-    def delete(self, id: str) -> None:
-        self._keeper.delete(id)
+    def delete(self, id: str, *, delete_versions: bool = True) -> None:
+        deleter = getattr(self._keeper, "_delete_direct", None)
+        if deleter is None:
+            deleter = self._keeper.delete
+        deleter(id, delete_versions=delete_versions)
 
     def resolve_meta(self, id: str, *, limit_per_doc: int = 3) -> dict[str, list[Any]]:
         return self._keeper.resolve_meta(id, limit_per_doc=limit_per_doc)

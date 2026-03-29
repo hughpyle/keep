@@ -1,7 +1,8 @@
-"""Protocol definitions for Keeper and its storage backends.
+"""Protocol definitions for keep's flow host and storage backends.
 
-Defines interface contracts at two levels:
-- KeeperProtocol: the public API (CLI, RemoteKeeper)
+Defines interface contracts at three levels:
+- FlowHostProtocol: the stable hosted/local execution boundary
+- KeeperProtocol: legacy richer object API used during migration
 - VectorStoreProtocol / DocumentStoreProtocol: internal storage backends
 """
 
@@ -14,7 +15,31 @@ from .types import Item, ItemContext, TagMap
 
 
 @runtime_checkable
-class KeeperProtocol(Protocol):
+class FlowHostProtocol(Protocol):
+    """Minimal backend-neutral flow execution interface.
+
+    This is the stable semantic boundary shared by local and hosted stores.
+    Higher-level helpers like get/put/find live above this interface.
+    """
+
+    def run_flow(
+        self,
+        state: str,
+        *,
+        params: dict[str, Any] | None = None,
+        budget: int | None = None,
+        cursor_token: str | None = None,
+        state_doc_yaml: str | None = None,
+        writable: bool = True,
+    ) -> Any:
+        """Run a flow and return a FlowResult-like object."""
+        ...
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class KeeperProtocol(FlowHostProtocol, Protocol):
     """The public interface for reflective memory operations.
 
     Implemented by:

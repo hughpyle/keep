@@ -30,6 +30,7 @@ from .api import Keeper, NOWDOC_ID
 from .backend import StoreBundle, NullPendingQueue
 from .protocol import (
     DocumentStoreProtocol,
+    FlowHostProtocol,
     KeeperProtocol,
     PendingQueueProtocol,
     VectorStoreProtocol,
@@ -55,6 +56,7 @@ __all__ = [
     "DocumentStoreProtocol",
     "VectorStoreProtocol",
     "PendingQueueProtocol",
+    "FlowHostProtocol",
     "KeeperProtocol",
     # Processing pipeline
     "ProcessorResult",

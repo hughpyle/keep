@@ -1,10 +1,8 @@
-"""Remote Keeper — HTTP client for keep's 7-endpoint API.
+"""Remote Keeper — HTTP client for a flow-hosted keep backend.
 
 Used by the CLI to talk to the local daemon, and by the hosted
-keepnotes.ai service.  Implements KeeperProtocol through 7 endpoints:
-health, get, put, delete, find, tag, flow.
-
-Everything beyond these core operations goes through the flow endpoint.
+keepnotes.ai service. The stable interface is ``run_flow()``; higher-
+level helpers delegate through the shared flow client layer.
 """
 
 import logging
@@ -16,6 +14,16 @@ from urllib.parse import quote
 import httpx
 
 from .config import StoreConfig
+from .flow_client import (
+    delete_item as flow_delete_item,
+    find_items as flow_find_items,
+    get_item as flow_get_item,
+    get_now_item as flow_get_now_item,
+    move_item as flow_move_item,
+    put_item as flow_put_item,
+    set_now_item as flow_set_now_item,
+    tag_item as flow_tag_item,
+)
 from .types import (
     Item, ItemContext, SimilarRef, MetaRef, EdgeRef, VersionRef, PartRef,
     TagMap, local_date,
@@ -29,19 +37,7 @@ _SLUG_RE = re.compile(r'^[a-z][a-z0-9-]{0,61}[a-z0-9]$')
 
 
 class RemoteKeeper:
-    """Keeper backend speaking the 7-endpoint API.
-
-    Core endpoints (direct HTTP):
-        GET    /v1/notes/{id}          get
-        POST   /v1/notes               put
-        DELETE /v1/notes/{id}          delete
-        POST   /v1/search              find
-        PATCH  /v1/notes/{id}/tags     tag
-        POST   /v1/flow                run_flow_command
-
-    Everything else (context, versions, parts, meta, prompts, etc.)
-    goes through run_flow_command().
-    """
+    """Flow-host client backed by the keep HTTP API."""
 
     def __init__(self, api_url: str, api_key: str, config: StoreConfig, *, project: Optional[str] = None):
         self.api_url = api_url.rstrip("/")
@@ -146,15 +142,8 @@ class RemoteKeeper:
             raise ValueError(f"Expected list, got {type(items).__name__}")
         return [RemoteKeeper._to_item(i) for i in items]
 
-    # ---- Core: 6 direct endpoints ----
-
     def get(self, id: str) -> Optional[Item]:
-        try:
-            return self._to_item(self._get(f"/v1/notes/{self._q(id)}"))
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return None
-            raise
+        return flow_get_item(self, id)
 
     def put(
         self,
@@ -167,14 +156,19 @@ class RemoteKeeper:
         created_at: Optional[str] = None,
         force: bool = False,
     ) -> Item:
-        return self._to_item(self._post("/v1/notes", json={
-            "content": content, "uri": uri, "id": id,
-            "tags": tags, "summary": summary, "created_at": created_at,
-            "force": force or None,
-        }))
+        return flow_put_item(
+            self,
+            content,
+            uri=uri,
+            id=id,
+            summary=summary,
+            tags=tags,
+            created_at=created_at,
+            force=force,
+        )
 
     def delete(self, id: str, *, delete_versions: bool = True) -> bool:
-        return self._delete(f"/v1/notes/{self._q(id)}").get("deleted", False)
+        return flow_delete_item(self, id, delete_versions=delete_versions)
 
     def find(
         self,
@@ -190,31 +184,24 @@ class RemoteKeeper:
         deep: bool = False,
         scope: Optional[str] = None,
     ) -> list[Item]:
-        from .api import FindResults
-        resp = self._post("/v1/search", json={
-            "query": query, "similar_to": similar_to, "tags": tags,
-            "limit": limit, "since": since, "until": until,
-            "include_self": include_self or None,
-            "include_hidden": include_hidden or None,
-            "deep": deep or None, "scope": scope,
-        })
-        items = self._to_items(resp)
-        deep_groups: dict[str, list[Item]] = {}
-        for g in resp.get("deep_groups", []):
-            pid = g.get("id", "")
-            if pid and "items" in g:
-                deep_groups[pid] = [self._to_item(i) for i in g["items"]]
-        return FindResults(items, deep_groups=deep_groups)
+        return flow_find_items(
+            self,
+            query,
+            tags=tags,
+            similar_to=similar_to,
+            limit=limit,
+            since=since,
+            until=until,
+            include_self=include_self,
+            include_hidden=include_hidden,
+            deep=deep,
+            scope=scope,
+        )
 
     def tag(self, id: str, tags: Optional[TagMap] = None) -> Optional[Item]:
-        if tags is None:
-            return self.get(id)
-        return self._to_item(self._patch(f"/v1/notes/{self._q(id)}/tags", json={
-            "set": {k: v for k, v in tags.items() if v},
-            "remove": [k for k, v in tags.items() if not v],
-        }))
+        return flow_tag_item(self, id, tags)
 
-    def run_flow_command(
+    def run_flow(
         self,
         state: str,
         *,
@@ -237,6 +224,25 @@ class RemoteKeeper:
             ticks=resp.get("ticks", 0),
             history=resp.get("history", []),
             cursor=resp.get("cursor"),
+        )
+
+    def run_flow_command(
+        self,
+        state: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        budget: Optional[int] = None,
+        cursor_token: Optional[str] = None,
+        state_doc_yaml: Optional[str] = None,
+        writable: bool = True,
+    ) -> Any:
+        return self.run_flow(
+            state,
+            params=params,
+            budget=budget,
+            cursor_token=cursor_token,
+            state_doc_yaml=state_doc_yaml,
+            writable=writable,
         )
 
     # ---- Flow-based convenience methods ----
@@ -277,15 +283,26 @@ class RemoteKeeper:
         return ItemContext.from_dict(resp.json())
 
     def get_now(self, *, scope: Optional[str] = None) -> Item:
-        doc_id = f"now:{scope}" if scope else "now"
-        return self.get(doc_id)
+        return flow_get_now_item(self, scope=scope)
 
     def set_now(self, content: str, *, scope: Optional[str] = None, tags: Optional[TagMap] = None) -> Item:
-        doc_id = f"now:{scope}" if scope else "now"
-        merged_tags = dict(tags or {})
-        if scope:
-            merged_tags.setdefault("user", scope)
-        return self.put(content, id=doc_id, tags=merged_tags or None)
+        return flow_set_now_item(self, content, scope=scope, tags=tags)
+
+    def move(
+        self,
+        name: str,
+        *,
+        source_id: str = "now",
+        tags: Optional[TagMap] = None,
+        only_current: bool = False,
+    ) -> Item:
+        return flow_move_item(
+            self,
+            name,
+            source_id=source_id,
+            tags=tags,
+            only_current=only_current,
+        )
 
     def exists(self, id: str) -> bool:
         return self.get(id) is not None

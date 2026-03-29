@@ -27,7 +27,7 @@ import base64
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from .result_stats import enrich_find_output
 from .state_doc import AsyncActionEncountered, StateDoc, evaluate_state_doc
@@ -143,6 +143,7 @@ def run_flow(
     run_action: ActionRunner,
     cursor: Optional[FlowCursor] = None,
     foreground: bool = True,
+    should_stop: Callable[[], bool] | None = None,
 ) -> FlowResult:
     """Run a state-doc flow synchronously to completion.
 
@@ -156,6 +157,8 @@ def run_flow(
         foreground: If True (default), async actions trigger delegation
             to the work queue via cursor.  If False (daemon context),
             all actions execute inline.
+        should_stop: Optional callback checked between flow ticks. When it
+            returns True, the flow stops with a resumable cursor.
 
     Returns:
         FlowResult with terminal status, accumulated bindings, and
@@ -187,6 +190,23 @@ def run_flow(
     def _record_flow() -> None:
         _perf.record("flow", initial_state, _time.monotonic() - _flow_t0)
 
+    def _stopped_flow(reason: str) -> FlowResult:
+        total_ticks = prior_ticks + ticks
+        cursor_token = encode_cursor(
+            current_state, total_ticks, accumulated_bindings, tried_queries,
+        )
+        logger.info("flow: %s -> stopped (%s, %d ticks)", current_state, reason, total_ticks)
+        _record_flow()
+        return FlowResult(
+            status="stopped",
+            bindings=accumulated_bindings,
+            data={"reason": reason},
+            ticks=total_ticks,
+            history=history,
+            cursor=cursor_token,
+            tried_queries=tried_queries,
+        )
+
     # Wrap run_action to enrich find output with statistics and track timing.
     # In foreground mode, async actions raise AsyncActionEncountered to
     # delegate the remainder of the flow to the work queue.
@@ -205,6 +225,8 @@ def run_flow(
         return output
 
     while ticks < budget:
+        if should_stop and should_stop():
+            return _stopped_flow("shutdown")
         doc = load_state_doc(current_state)
         if doc is None:
             logger.info("flow: %s -> error (state doc not found)", current_state)
@@ -522,7 +544,9 @@ class _EnvActionContext:
         limit: int = 10,
         since: str | None = None,
         until: str | None = None,
+        include_self: bool = False,
         include_hidden: bool = False,
+        deep: bool = False,
         scope: str | None = None,
     ) -> list[Any]:
         return self._env.find(
@@ -532,8 +556,9 @@ class _EnvActionContext:
             limit=limit,
             since=since,
             until=until,
+            include_self=include_self,
             include_hidden=include_hidden,
-            deep=False,
+            deep=deep,
             scope=scope,
         )
 
@@ -618,15 +643,36 @@ class _EnvActionContext:
 
     def put(self, *, content: str | None = None, uri: str | None = None,
             id: str | None = None, tags: dict | None = None,
-            summary: str | None = None) -> Any:
+            summary: str | None = None, created_at: str | None = None,
+            force: bool = False) -> Any:
         if not self._writable:
             raise NotImplementedError("put not available in read-only flow context")
-        return self._env.put(content=content, uri=uri, id=id, tags=tags, summary=summary)
+        return self._env.put(
+            content=content,
+            uri=uri,
+            id=id,
+            tags=tags,
+            summary=summary,
+            created_at=created_at,
+            force=force,
+        )
 
-    def tag(self, id: str, tags: dict) -> Any:
+    def tag(
+        self,
+        id: str,
+        tags: dict | None = None,
+        *,
+        remove: list[str] | None = None,
+        remove_values: dict[str, Any] | None = None,
+    ) -> Any:
         if not self._writable:
             raise NotImplementedError("tag not available in read-only flow context")
-        return self._env.tag(id, tags)
+        return self._env.tag(
+            id,
+            tags,
+            remove=remove,
+            remove_values=remove_values,
+        )
 
     def move(self, name: str, *, source_id: str = "now",
              tags: dict | None = None, only_current: bool = False) -> Any:
@@ -634,10 +680,10 @@ class _EnvActionContext:
             raise NotImplementedError("move not available in read-only flow context")
         return self._env.move(name, source_id=source_id, tags=tags, only_current=only_current)
 
-    def delete(self, id: str) -> None:
+    def delete(self, id: str, *, delete_versions: bool = True) -> None:
         if not self._writable:
             raise NotImplementedError("delete not available in read-only flow context")
-        self._env.delete(id)
+        self._env.delete(id, delete_versions=delete_versions)
 
     def resolve_prompt(
         self, prefix: str, doc_tags: dict[str, Any] | None = None, *, item_id: str | None = None,

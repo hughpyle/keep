@@ -28,6 +28,11 @@ def request_shutdown() -> None:
     _event.set()
 
 
+def clear_shutdown() -> None:
+    """Reset the shutdown flag before starting a fresh daemon lifecycle."""
+    _event.clear()
+
+
 def is_shutting_down() -> bool:
     """Check if shutdown has been requested."""
     return _event.is_set()

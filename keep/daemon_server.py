@@ -32,6 +32,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 from .const import DAEMON_PORT
+from .flow_client import (
+    delete_item as flow_delete_item,
+    find_items as flow_find_items,
+    get_item as flow_get_item,
+    put_item as flow_put_item,
+    tag_item as flow_tag_item,
+)
 
 
 def _item_to_dict(item) -> dict:
@@ -62,6 +69,7 @@ def _items_response(items) -> dict:
 # ---------------------------------------------------------------------------
 
 _ROUTES: list[tuple[str, str, str]] = [
+    ("GET",    r"^/v1/ready$",                        "_handle_ready"),
     ("GET",    r"^/v1/health$",                       "_handle_health"),
     ("POST",   r"^/v1/search$",                       "_handle_find"),
     ("POST",   r"^/v1/flow$",                         "_handle_flow"),
@@ -166,7 +174,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     _cached_version: str = ""
 
-    def _handle_health(self, groups: dict):
+    def _daemon_status(self, *, include_item_count: bool) -> dict[str, Any]:
         if not DaemonRequestHandler._cached_version:
             from importlib.metadata import version
             try:
@@ -200,20 +208,33 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         # Needs setup: no config file or no embedding provider
         needs_setup = config.embedding is None
 
-        self._json(200, {
+        data: dict[str, Any] = {
             "status": "ok",
             "pid": os.getpid(),
             "version": DaemonRequestHandler._cached_version,
             "store": str(kp._store_path),
             "embedding": embedding,
             "summarization": summarization,
-            "item_count": kp.count(),
             "needs_setup": needs_setup,
             "warnings": warnings,
-        })
+        }
+        if include_item_count:
+            try:
+                data["item_count"] = kp.count()
+            except Exception as exc:
+                logger.warning("Health diagnostics count failed: %s", exc, exc_info=True)
+                data["item_count"] = None
+                warnings.append("item count unavailable")
+        return data
+
+    def _handle_ready(self, groups: dict):
+        self._json(200, self._daemon_status(include_item_count=False))
+
+    def _handle_health(self, groups: dict):
+        self._json(200, self._daemon_status(include_item_count=True))
 
     def _handle_get(self, groups: dict):
-        item = self.keeper.get(groups["id"])
+        item = flow_get_item(self.keeper, groups["id"])
         if item is None:
             self._json(404, {"error": "not found"})
         else:
@@ -263,7 +284,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_put(self, groups: dict):
         body = self._read_body()
-        item = self.keeper.put(
+        item = flow_put_item(
+            self.keeper,
             content=body.get("content"),
             uri=body.get("uri"),
             id=body.get("id"),
@@ -298,12 +320,13 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         self._json(200, resp)
 
     def _handle_delete(self, groups: dict):
-        deleted = self.keeper.delete(groups["id"])
+        deleted = flow_delete_item(self.keeper, groups["id"])
         self._json(200, {"deleted": deleted})
 
     def _handle_find(self, groups: dict):
         body = self._read_body()
-        results = self.keeper.find(
+        results = flow_find_items(
+            self.keeper,
             query=body.get("query"),
             tags=body.get("tags"),
             similar_to=body.get("similar_to"),
@@ -328,12 +351,15 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         set_tags = body.get("set", {})
         remove_keys = body.get("remove", [])
         remove_values = body.get("remove_values", {})
-        item = self.keeper.tag(
-            groups["id"],
-            tags=set_tags or None,
-            remove=remove_keys or None,
-            remove_values=remove_values or None,
-        )
+        if remove_keys or remove_values:
+            item = self.keeper.tag(
+                groups["id"],
+                tags=set_tags or None,
+                remove=remove_keys or None,
+                remove_values=remove_values or None,
+            )
+        else:
+            item = flow_tag_item(self.keeper, groups["id"], set_tags or None)
         if item is None:
             self._json(404, {"error": "not found"})
         else:
@@ -341,12 +367,13 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_flow(self, groups: dict):
         body = self._read_body()
-        result = self.keeper.run_flow_command(
+        result = self.keeper.run_flow(
             state=body.get("state", ""),
             params=body.get("params", {}),
             budget=body.get("budget", 5),
             cursor_token=body.get("cursor_token") or body.get("cursor"),
             state_doc_yaml=body.get("state_doc_yaml"),
+            writable=body.get("writable", True),
         )
         resp: dict = {
             "status": result.status,

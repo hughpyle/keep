@@ -16,6 +16,7 @@ from keep.thin_cli import (
     _render_find,
     _render_item_line,
     _render_tags_block,
+    _get_one_item,
     _display_tags,
     _truncate,
     _date,
@@ -202,6 +203,44 @@ def test_thin_cli_context_round_trip(daemon):
     output = _render_context(data)
     assert "id: rt-ctx" in output
     assert "round trip context test" in output
+
+
+def test_get_one_item_retries_after_connection_refused():
+    """The thin CLI re-resolves daemon discovery if the first request loses the daemon."""
+    with (
+        patch("keep.thin_cli._http") as mock_http,
+        patch("keep.thin_cli._get_port", return_value=5338),
+    ):
+        mock_http.side_effect = [
+            ConnectionRefusedError(61, "refused"),
+            (200, {
+                "item": {"id": "now", "summary": "ok", "tags": {}},
+                "viewing_offset": 0,
+                "similar": [],
+                "meta": {},
+                "edges": {},
+                "parts": [],
+                "prev": [],
+                "next": [],
+            }),
+        ]
+
+        result = _get_one_item(
+            5337,
+            "now",
+            version=None,
+            limit=10,
+            similar=False,
+            meta=False,
+            parts=False,
+            history=False,
+            tag=None,
+            json_output=False,
+        )
+
+    assert "id: now" in result
+    assert mock_http.call_args_list[0].args[1] == 5337
+    assert mock_http.call_args_list[1].args[1] == 5338
 
 
 # ---------------------------------------------------------------------------

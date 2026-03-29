@@ -14,7 +14,7 @@ def main():
     args = parser.parse_args()
 
     from .api import Keeper
-    kp = Keeper(store_path=args.store)
+    kp = Keeper(store_path=args.store, defer_startup_maintenance=True)
     from .cli import run_pending_daemon
     run_pending_daemon(kp)
 

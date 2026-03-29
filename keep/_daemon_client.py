@@ -120,7 +120,7 @@ _warnings_shown: bool = False
 
 
 def check_health(port: int) -> bool:
-    """Check daemon health + setup in a single round-trip.
+    """Check daemon readiness + setup in a single round-trip.
 
     Returns True if healthy. Prints warnings to stderr (once).
     Calls sys.exit(1) if setup is needed.
@@ -131,7 +131,7 @@ def check_health(port: int) -> bool:
         headers = {}
         if _auth_token:
             headers["Authorization"] = f"Bearer {_auth_token}"
-        conn.request("GET", "/v1/health", headers=headers)
+        conn.request("GET", "/v1/ready", headers=headers)
         resp = conn.getresponse()
         raw = resp.read()
         conn.close()

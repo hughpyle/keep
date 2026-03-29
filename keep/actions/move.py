@@ -32,4 +32,5 @@ class Move:
         return {
             "id": getattr(item, "id", str(name)),
             "summary": getattr(item, "summary", ""),
+            "tags": dict(getattr(item, "tags", None) or {}),
         }

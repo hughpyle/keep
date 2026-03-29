@@ -21,10 +21,11 @@ from .types import (
     PromptResult,
     PromptInfo,
     TagMap,
+    is_system_id,
     local_date,
     normalize_id,
-    is_part_id,
     parse_version_ref,
+    is_part_id,
 )
 from .utils import _is_hidden, _parse_meta_doc
 
@@ -199,6 +200,24 @@ class ContextResolutionMixin:
             item = self.get(id)
         if item is None:
             return None
+
+        # System docs are authored reference/configuration content.
+        # Rendering them should show the document itself only; surrounding
+        # context assembly (similar/meta/parts/edges/version nav) adds noise
+        # and unnecessary work.
+        if is_system_id(item.id):
+            perf.record("get_context", "total", time.monotonic() - _ctx_t0,
+                        context_id=id)
+            return ItemContext(
+                item=item,
+                viewing_offset=offset,
+                similar=[],
+                meta={},
+                edges={},
+                parts=[],
+                prev=[],
+                next=[],
+            )
 
         # Version navigation
         prev_refs: list[VersionRef] = []

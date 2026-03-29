@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sys
+import http.client
 from pathlib import Path
 from typing import Annotated, Optional
 from urllib.parse import quote
@@ -121,7 +122,7 @@ def _expand_stdin_tag_list(tags: list[str] | None) -> list[str] | None:
 
 
 def _get(port: int, path: str) -> dict:
-    status, body = _http("GET", port, path)
+    status, body = _daemon_request("GET", port, path)
     if status == 404:
         typer.echo(f"Not found", err=True)
         raise typer.Exit(1)
@@ -132,7 +133,7 @@ def _get(port: int, path: str) -> dict:
 
 
 def _post(port: int, path: str, body: dict) -> dict:
-    status, result = _http("POST", port, path, body)
+    status, result = _daemon_request("POST", port, path, body)
     if status != 200:
         typer.echo(f"Error: {result.get('error', 'unknown')}", err=True)
         raise typer.Exit(1)
@@ -140,7 +141,7 @@ def _post(port: int, path: str, body: dict) -> dict:
 
 
 def _patch(port: int, path: str, body: dict) -> dict:
-    status, result = _http("PATCH", port, path, body)
+    status, result = _daemon_request("PATCH", port, path, body)
     if status != 200:
         typer.echo(f"Error: {result.get('error', 'unknown')}", err=True)
         raise typer.Exit(1)
@@ -148,11 +149,26 @@ def _patch(port: int, path: str, body: dict) -> dict:
 
 
 def _delete(port: int, path: str) -> dict:
-    status, result = _http("DELETE", port, path)
+    status, result = _daemon_request("DELETE", port, path)
     if status != 200:
         typer.echo(f"Error: {result.get('error', 'unknown')}", err=True)
         raise typer.Exit(1)
     return result
+
+
+def _daemon_request(method: str, port: int, path: str, body: dict | None = None) -> tuple[int, dict]:
+    """Make one daemon request, retrying via fresh discovery on connection loss.
+
+    The daemon can exit between `_get_port()` and the first real request, leaving
+    a previously healthy port momentarily unreachable. Re-resolve once so thin
+    CLI commands recover from daemon restarts instead of surfacing a raw socket
+    error to the user.
+    """
+    try:
+        return _http(method, port, path, body)
+    except (ConnectionError, TimeoutError, http.client.RemoteDisconnected, OSError):
+        retry_port = _get_port()
+        return _http(method, retry_port, path, body)
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +380,7 @@ def _render_find(data: dict, port: int = 0) -> str:
         parts = []
         for n in notes:
             nid = n.get("id", "")
-            status, ctx = _http("GET", port, f"/v1/notes/{_q(nid)}/context")
+            status, ctx = _daemon_request("GET", port, f"/v1/notes/{_q(nid)}/context")
             if status == 200:
                 parts.append(_render_context(ctx))
         return "\n\n".join(parts) if parts else "No results."
@@ -554,7 +570,7 @@ def _get_one_item(
             qs_parts.append(f"version={version}")
         qs = "?" + "&".join(qs_parts)
 
-    status, data = _http("GET", port, f"/v1/notes/{_q(item_id)}/context{qs}")
+    status, data = _daemon_request("GET", port, f"/v1/notes/{_q(item_id)}/context{qs}")
     if status == 404:
         typer.echo(f"Not found: {item_id}", err=True)
         return None
@@ -687,7 +703,7 @@ def _put_directory(
     # Get ignore patterns from the store's .ignore doc (if any)
     ignore_patterns: list[str] = []
     try:
-        status, data = _http("GET", port, f"/v1/notes/{_q('.ignore')}")
+        status, data = _daemon_request("GET", port, f"/v1/notes/{_q('.ignore')}")
         if status == 200 and data.get("summary"):
             from .ignore import parse_ignore_patterns
             ignore_patterns = parse_ignore_patterns(data["summary"])
@@ -720,7 +736,7 @@ def _put_directory(
         rel = str(fpath.relative_to(resolved_path) if recurse else fpath.name)
         body: dict = {"uri": file_uri, "tags": parsed_tags or None, "force": force or None}
         try:
-            status, data = _http("POST", port, "/v1/notes", body)
+            status, data = _daemon_request("POST", port, "/v1/notes", body)
             if status == 200:
                 indexed += 1
                 if is_tty:
@@ -758,7 +774,7 @@ def _put_directory(
         elif unwatch:
             watch_body["unwatch"] = True
         try:
-            _http("POST", port, "/v1/notes", watch_body)
+            _daemon_request("POST", port, "/v1/notes", watch_body)
         except Exception:
             pass
 
@@ -1408,6 +1424,8 @@ def pending(
         pid_file = store_path / "processor.pid"
         if not pid_file.exists():
             typer.echo("No daemon running.")
+            (store_path / DAEMON_PORT_FILE).unlink(missing_ok=True)
+            (store_path / DAEMON_TOKEN_FILE).unlink(missing_ok=True)
             return
         try:
             pid = int(pid_file.read_text().strip())

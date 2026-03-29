@@ -32,6 +32,8 @@ class Find:
         until = params.get("until")
         offset = int(params.get("offset") or 0)
         include_hidden = bool(params.get("include_hidden", False))
+        include_self = bool(params.get("include_self", False))
+        deep = bool(params.get("deep", False))
         order_by = str(params.get("order_by") or "updated")
         limit = int(params.get("limit", 10))
         if limit <= 0:
@@ -91,7 +93,9 @@ class Find:
                 limit=fetch_limit,
                 since=str(since) if since is not None else None,
                 until=str(until) if until is not None else None,
+                include_self=include_self,
                 include_hidden=include_hidden,
+                deep=deep,
                 scope=scope,
             )
         else:
@@ -117,8 +121,17 @@ class Find:
         if offset > 0:
             rows = rows[offset:]
 
+        deep_groups_raw = getattr(rows, "deep_groups", {}) if deep else {}
         rows = rows[:limit]
         results = [item_to_result(row) for row in rows]
+        deep_groups: dict[str, list[dict[str, Any]]] = {}
+        if isinstance(deep_groups_raw, dict):
+            for key, values in deep_groups_raw.items():
+                if not isinstance(values, list):
+                    continue
+                rendered = [item_to_result(value) for value in values]
+                if rendered:
+                    deep_groups[str(key)] = rendered
 
         # Apply bias score multipliers on result dicts (Items are frozen)
         if bias:
@@ -132,4 +145,5 @@ class Find:
         return {
             "results": results,
             "count": len(results),
+            "deep_groups": deep_groups,
         }

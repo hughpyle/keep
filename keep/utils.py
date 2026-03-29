@@ -18,6 +18,7 @@ from typing import Any, Optional
 from .types import (
     Item,
     SYSTEM_TAG_PREFIX,
+    is_system_id,
     iter_tag_pairs,
     set_tag_values,
     tag_values,
@@ -219,7 +220,7 @@ def _is_hidden(item) -> bool:
     base_id = item.tags.get("_base_id", item.id)
     if isinstance(base_id, list):
         base_id = base_id[0] if base_id else item.id
-    return base_id.startswith(".")
+    return is_system_id(base_id)
 
 
 # ---------------------------------------------------------------------------

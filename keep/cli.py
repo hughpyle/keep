@@ -42,6 +42,7 @@ _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 from .api import Keeper
 from .config import get_tool_directory
 from .logging_config import configure_quiet_mode, enable_debug_mode
+from .projections import plan_find_context_render, render_find_context_plan
 from .types import (
     SYSTEM_TAG_PREFIX,
     EdgeRef,
@@ -383,388 +384,26 @@ def render_find_context(
 
     Three-pass rendering:
       Pass 1: Lay down summary lines for all items (breadth-first).
-      Pass 2: If enough summaries (>=2) and remaining budget, backfill
-              detail (parts, versions) starting from the top-scoring item.
-      Pass 3: Deep sub-items ranked by score from leftover budget.
+      Pass 2: Render deep sub-items and local windows from remaining budget.
+      Pass 3: Backfill detail (parts, versions, tags) with what is left.
 
     When *deep_primary_cap* is set and deep groups exist, only the top N
-    primaries are rendered (preferring those with deep groups) and pass 2
+    primaries are rendered (preferring those with deep groups) and pass 3
     is skipped — this gives maximum budget to deep-discovered evidence,
     useful for multi-hop queries.
 
     Used by expand_prompt() for {find} expansion and MCP keep_flow.
     """
-    from .types import SYSTEM_TAG_PREFIX
-
-    _MIN_ITEMS_FOR_DETAIL = 2
-
-    def _tok(text: str) -> int:
-        return len(text) // 4
-
-    if not items or token_budget <= 0:
+    plan = plan_find_context_render(
+        items,
+        keeper=keeper,
+        token_budget=token_budget,
+        show_tags=show_tags,
+        deep_primary_cap=deep_primary_cap,
+    )
+    if not plan.blocks:
         return "No results."
-
-    deep_groups = getattr(items, "deep_groups", {})
-    compact_mode = bool(deep_groups) and token_budget <= 300
-    candidate_items = list(items)
-
-    # With deep mode + primary cap, pick primaries before spending budget.
-    # This avoids low budgets being exhausted by unrelated top-ranked primaries
-    # before entity/deep-group anchors are even considered.
-    if deep_primary_cap is not None and deep_groups and len(candidate_items) > deep_primary_cap:
-        def _base_id(it: "Item") -> str:
-            return it.id.split("@")[0] if "@" in it.id else it.id
-
-        def _has_deep_group(it: "Item") -> bool:
-            bid = _base_id(it)
-            return bid in deep_groups or it.id in deep_groups
-
-        # Stable sort preserves original rank order within buckets.
-        candidate_items.sort(key=lambda it: (
-            not bool(it.tags.get("_entity")),  # query-mentioned entities first
-            not _has_deep_group(it),           # then items with deep groups
-        ))
-        candidate_items = candidate_items[:deep_primary_cap]
-
-    remaining = token_budget
-
-    # Pass 1: summary lines for every item that fits
-    # Each entry: (item, [lines_so_far])
-    rendered: list[tuple["Item", list[str]]] = []
-
-    for item in candidate_items:
-        if remaining <= 0:
-            break
-
-        focus = item.tags.get("_focus_summary")
-        display_summary = focus if focus else item.summary
-        line = f"- {item.id}"
-        if item.score is not None:
-            line += f" ({item.score:.2f})"
-        date = (item.tags.get("_created") or
-                item.tags.get("_updated", ""))[:10]
-        if date:
-            line += f"  [{date}]"
-        line += f"  {display_summary}"
-        remaining -= _tok(line)
-        rendered.append((item, [line]))
-
-    # Pass 2: deep sub-items, ranked by score across all groups.
-    # Runs before detail backfill so deep evidence gets budget priority.
-    if deep_groups and remaining > 0:
-        def _append_line(block_lines: list[str], line: str) -> bool:
-            nonlocal remaining
-            cost = _tok(line)
-            if remaining - cost < 0:
-                return False
-            block_lines.append(line)
-            remaining -= cost
-            return True
-
-        def _append_section(
-            block_lines: list[str],
-            header: str,
-            lines: list[str],
-        ) -> bool:
-            """Append header + as many section lines as fit, or nothing."""
-            nonlocal remaining
-            if not lines:
-                return False
-
-            header_cost = _tok(header)
-            if remaining - header_cost < 0:
-                return False
-
-            budget_after_header = remaining - header_cost
-            take = 0
-            for line in lines:
-                c = _tok(line)
-                if budget_after_header - c < 0:
-                    break
-                budget_after_header -= c
-                take += 1
-
-            # Never emit empty headers.
-            if take == 0:
-                return False
-
-            block_lines.append(header)
-            remaining -= header_cost
-            for line in lines[:take]:
-                block_lines.append(line)
-                remaining -= _tok(line)
-            return True
-
-        def _thread_radius() -> int:
-            """Adapt version-thread window width as budget tightens."""
-            budget_hint = min(token_budget, remaining)
-            if budget_hint <= 450:
-                return 0  # focus version only
-            if budget_hint <= 900:
-                return 1  # local neighborhood (3 versions)
-            return 2      # full neighborhood (5 versions)
-
-        def _base_id(id_value: str) -> str:
-            return id_value.split("@")[0] if "@" in id_value else id_value
-
-        def _deep_key(deep_item: "Item") -> str:
-            return (
-                deep_item.tags.get("_anchor_id")
-                or f"{deep_item.id}|{deep_item.tags.get('_focus_version', '')}|"
-                   f"{deep_item.tags.get('_focus_part', '')}|"
-                   f"{deep_item.tags.get('_focus_summary', '')}"
-            )
-
-        def _add_deep_window(
-            parent_id: str,
-            deep_items: list["Item"],
-            block_lines: list[str],
-        ) -> None:
-            """Attach a compact narrative window around one parent thread."""
-            if compact_mode:
-                return
-            if keeper is None or remaining <= 0:
-                return
-
-            focus_versions = sorted({
-                int(v)
-                for v in (di.tags.get("_focus_version") for di in deep_items)
-                if v and str(v).isdigit()
-            })
-            focus_parts = sorted({
-                int(p)
-                for p in (di.tags.get("_focus_part") for di in deep_items)
-                if p and str(p).isdigit()
-            })
-
-            # Version-thread window: merge local neighborhoods around all focused versions.
-            if focus_versions:
-                radius = _thread_radius()
-                around_map = {}
-                for fv in focus_versions:
-                    try:
-                        around = keeper.list_versions_around(
-                            parent_id, int(fv), radius=radius,
-                        )
-                    except Exception:
-                        around = []
-                    for v in around:
-                        around_map[v.version] = v
-                around = [around_map[k] for k in sorted(around_map)]
-
-                # Skip degenerate compact thread windows that only restate
-                # the already-rendered deep line (focused version duplicate).
-                if around and radius == 0 and len(around) == 1 and len(focus_versions) == 1:
-                    v0 = around[0]
-                    focus_v = str(focus_versions[0])
-                    anchor_item = next(
-                        (di for di in deep_items if di.tags.get("_focus_version") == focus_v),
-                        None,
-                    )
-                    deep_summary = (
-                        anchor_item.tags.get("_focus_summary", anchor_item.summary)
-                        if anchor_item else ""
-                    )
-                    if (
-                        str(v0.version) == focus_v
-                        and (v0.summary or "").strip() == (deep_summary or "").strip()
-                    ):
-                        around = []
-
-                thread_lines = []
-                for v in around:
-                    prefix = "*" if int(v.version) in focus_versions else "-"
-                    thread_lines.append(f"      {prefix} @V{{{v.version}}} {v.summary}")
-                _append_section(block_lines, "      Thread:", thread_lines)
-
-            # Parts window: include overview + local part neighbors.
-            if remaining <= 0:
-                return
-            try:
-                parts = keeper.list_parts(parent_id)
-            except Exception:
-                parts = []
-            if not parts:
-                return
-
-            selected = []
-            if focus_parts:
-                part_map = {p.part_num: p for p in parts}
-                if 0 in part_map:
-                    selected.append(part_map[0])  # @P{0} coherence prior
-                for fp in focus_parts:
-                    for pn in (fp - 1, fp, fp + 1):
-                        if pn in part_map and part_map[pn] not in selected:
-                            selected.append(part_map[pn])
-            else:
-                # No focused part: include overview if present.
-                part0 = next((p for p in parts if p.part_num == 0), None)
-                if part0:
-                    selected.append(part0)
-
-            story_lines = [f"      - @P{{{p.part_num}}} {p.summary}" for p in selected]
-            _append_section(block_lines, "      Story:", story_lines)
-
-        # Build per-parent deep bundles so evidence stays coherent:
-        # render anchor lines and local window together before moving on.
-        rendered_map = {}
-        block_order: list[int] = []
-        for item, block_lines in rendered:
-            parent_id = _base_id(item.id)
-            rendered_map[parent_id] = block_lines
-            rendered_map[item.id] = block_lines
-            bid = id(block_lines)
-            if bid not in block_order:
-                block_order.append(bid)
-
-        bundles: dict[tuple[int, str], dict[str, object]] = {}
-        for group_key, group in deep_groups.items():
-            block_lines = rendered_map.get(group_key)
-            if not block_lines:
-                continue
-            bid = id(block_lines)
-            for deep_item in group:
-                parent_id = _base_id(deep_item.id)
-                bkey = (bid, parent_id)
-                bucket = bundles.setdefault(
-                    bkey,
-                    {"block_lines": block_lines, "parent_id": parent_id, "items": []},
-                )
-                bucket["items"].append(deep_item)
-
-        for bucket in bundles.values():
-            items_for_parent = bucket["items"]
-            # Dedup within a parent-thread bundle by anchor identity.
-            deduped: list["Item"] = []
-            seen_local: set[str] = set()
-            for deep_item in sorted(items_for_parent, key=lambda di: di.score or 0, reverse=True):
-                dkey = _deep_key(deep_item)
-                if dkey in seen_local:
-                    continue
-                seen_local.add(dkey)
-                deduped.append(deep_item)
-            bucket["items"] = deduped
-            bucket["score"] = max((di.score or 0.0) for di in deduped) if deduped else 0.0
-
-        bundles_by_block: dict[int, list[dict[str, object]]] = {}
-        for (bid, _parent_id), bucket in bundles.items():
-            bundles_by_block.setdefault(bid, []).append(bucket)
-        for group_list in bundles_by_block.values():
-            group_list.sort(key=lambda b: float(b.get("score", 0.0)), reverse=True)
-
-        ordered_bundles: list[dict[str, object]] = []
-        used_bundle_keys: set[tuple[int, str]] = set()
-
-        # Coverage first: seed one thread bundle per rendered block.
-        for bid in block_order:
-            group_list = bundles_by_block.get(bid, [])
-            if not group_list:
-                continue
-            first = group_list[0]
-            bkey = (bid, str(first["parent_id"]))
-            if bkey not in used_bundle_keys:
-                used_bundle_keys.add(bkey)
-                ordered_bundles.append(first)
-
-        # Density second: add remaining bundles globally by score.
-        tail: list[dict[str, object]] = []
-        for bid, group_list in bundles_by_block.items():
-            for bucket in group_list:
-                bkey = (bid, str(bucket["parent_id"]))
-                if bkey in used_bundle_keys:
-                    continue
-                tail.append(bucket)
-        tail.sort(key=lambda b: float(b.get("score", 0.0)), reverse=True)
-        ordered_bundles.extend(tail)
-
-        max_anchors_per_bundle = 1 if token_budget <= 900 else 2
-        seen_deep: set[str] = set()
-        for bucket in ordered_bundles:
-            if remaining <= 0:
-                break
-            block_lines = bucket["block_lines"]
-            parent_id = str(bucket["parent_id"])
-            deep_items = bucket["items"]
-
-            emitted: list["Item"] = []
-            for deep_item in deep_items[:max_anchors_per_bundle]:
-                dkey = _deep_key(deep_item)
-                if dkey in seen_deep:
-                    continue
-                ddate = (deep_item.tags.get("_created") or
-                         deep_item.tags.get("_updated", ""))[:10]
-                ddate_part = f"  [{ddate}]" if ddate else ""
-                deep_summary = deep_item.tags.get("_focus_summary", deep_item.summary)
-                dl = f"    - {deep_item.id}{ddate_part}  {deep_summary}"
-                if not _append_line(block_lines, dl):
-                    break
-                seen_deep.add(dkey)
-                emitted.append(deep_item)
-
-            if emitted:
-                _add_deep_window(parent_id, emitted, block_lines)
-
-    # Pass 3: backfill parts + versions on remaining budget.
-    # For deep mode this runs after deep items; otherwise after summaries.
-    if len(rendered) >= _MIN_ITEMS_FOR_DETAIL and keeper and remaining > 0 and not compact_mode:
-        for item, block_lines in rendered:
-            if remaining <= 0:
-                break
-
-            # User tags
-            if show_tags and remaining > 0:
-                user_tags = {k: v for k, v in item.tags.items()
-                             if not k.startswith(SYSTEM_TAG_PREFIX)}
-                if user_tags:
-                    pairs = ", ".join(
-                        f"{k}: {_tag_display_value(v)}" for k, v in sorted(user_tags.items()))
-                    tl = f"  {{{pairs}}}"
-                    block_lines.append(tl)
-                    remaining -= _tok(tl)
-
-            # Part summaries (skip the focused part — already shown above)
-            if remaining > 30:
-                focus_part = item.tags.get("_focus_part")
-                parts = keeper.list_parts(item.id)
-                other_parts = [
-                    p for p in parts
-                    if not focus_part
-                    or str(p.part_num) != str(focus_part)
-                ]
-                if other_parts:
-                    block_lines.append("  Key topics:")
-                    remaining -= 4
-                    for p in other_parts:
-                        if remaining <= 0:
-                            break
-                        pl = f"  - {p.summary}"
-                        block_lines.append(pl)
-                        remaining -= _tok(pl)
-
-            # Version summaries (surrounding hit or recent)
-            if remaining > 30:
-                focus_version = item.tags.get("_focus_version")
-                if focus_version and focus_version.isdigit():
-                    versions = keeper.list_versions_around(
-                        item.id, int(focus_version), radius=2,
-                    )
-                else:
-                    versions = keeper.list_versions(item.id, limit=5)
-                    versions = list(reversed(versions))
-                if versions:
-                    block_lines.append("  Context:")
-                    remaining -= 4
-                    for v in versions:
-                        if remaining <= 0:
-                            break
-                        vdate = (v.tags.get("_created") or
-                                v.tags.get("_updated", ""))[:10]
-                        date_part = f"  [{vdate}]" if vdate else ""
-                        vl = f"  - @V{{{v.version}}}{date_part}  {v.summary}"
-                        block_lines.append(vl)
-                        remaining -= _tok(vl)
-
-    return "\n".join("\n".join(lines) for _, lines in rendered)
+    return render_find_context_plan(plan)
 
 
 def _render_frontmatter(ctx: ItemContext) -> str:
@@ -1503,11 +1142,11 @@ def run_pending_daemon(kp) -> None:
     timer events, and version-aware restart.  Called from the CLI
     ``pending --daemon`` path.
     """
-    import logging
-
     from .model_lock import ModelLock
+    from .shutdown import clear_shutdown
     from .tracing import init_tracing
     init_tracing(tree_log=True)
+    clear_shutdown()
 
     _daemon_logger = logging.getLogger("keep.cli.daemon")
     pid_path = kp._processor_pid_path
@@ -1520,11 +1159,7 @@ def run_pending_daemon(kp) -> None:
         kp.close()
         return
 
-    try:
-        from importlib.metadata import version as _pkg_version
-        _ver = _pkg_version("keep-skill")
-    except Exception:
-        _ver = "unknown"
+    _ver = _daemon_version()
     _daemon_logger.info(
         "Daemon started (pid=%d) keep-skill=%s python=%s store=%s",
         os.getpid(), _ver, sys.executable, kp._store_path,
@@ -1533,147 +1168,51 @@ def run_pending_daemon(kp) -> None:
         (kp._store_path / ".processor.version").write_text(_ver)
     except Exception:
         pass
-    wq = kp._get_work_queue()
-    released = wq.release_stale_leases(flow_worker_id)
-    if released:
-        _daemon_logger.info("Released %d stale leases from previous daemon", released)
+    _daemon_server, _port_path, _token_path = _start_daemon_query_server(kp, _daemon_logger)
 
-    _daemon_logger.info(
-        "Queue: %d pending, %d flow, %d failed",
-        kp._pending_queue.count(),
-        kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0,
-        0,
-    )
-    _daemon_logger.info(
-        "Embedding: %s/%s",
-        kp._config.embedding.name if kp._config.embedding else "none",
-        kp._config.embedding.params.get("model", "") if kp._config.embedding else "",
+    from .shutdown import wait_or_shutdown
+
+    shutdown_state = _install_daemon_signal_handlers(
+        logger=_daemon_logger,
+        port_path=_port_path,
+        token_path=_token_path,
     )
 
-    from .daemon_server import DaemonServer
-    _daemon_port = int(os.environ.get("KEEP_DAEMON_PORT", "0")) or DAEMON_PORT
-    _daemon_server = DaemonServer(kp, port=_daemon_port)
-    _actual_port = _daemon_server.start()
-    _port_path = kp._store_path / DAEMON_PORT_FILE
-    _token_path = kp._store_path / DAEMON_TOKEN_FILE
-    _port_path.write_text(str(_actual_port))
-    _token_path.touch(mode=0o600, exist_ok=True)
-    _token_path.write_text(_daemon_server.auth_token)
-    _daemon_logger.info("Query server on 127.0.0.1:%d", _actual_port)
+    if kp.start_deferred_startup_maintenance():
+        _daemon_logger.info("Deferred startup maintenance running in background")
 
-    from .shutdown import is_shutting_down, request_shutdown, wait_or_shutdown
-
-    def handle_signal(signum, frame):
-        nonlocal shutdown_requested
-        shutdown_requested = True
-        request_shutdown()
-        # Close the shared HTTP session to unblock any in-flight
-        # requests (ollama generate, embedding, etc.)
-        from .providers.http import close_http_session
-        close_http_session()
-        _daemon_logger.info("Received signal %d, shutting down", signum)
-
-    def _is_shutdown():
-        return shutdown_requested
-
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
+    _release_stale_daemon_leases(kp, flow_worker_id, _daemon_logger)
+    _log_daemon_startup_state(kp, _daemon_logger)
 
     _last_cleanup_ts = 0.0
     _CLEANUP_INTERVAL = 86400
     _CLEANUP_MAX_AGE = 86400
     _REPLENISH_INTERVAL = 1800
-
-    try:
-        from .timer_state import read_timer_state
-        _saved_timers = read_timer_state(kp._store_path)
-        _last_replenish_ts = _saved_timers.get("supernode-replenish", {}).get("last_run", 0.0)
-    except Exception:
-        _last_replenish_ts = 0.0
-
-    def _replenish_supernodes():
-        nonlocal _last_replenish_ts
-        now = time.time()
-        if now - _last_replenish_ts < _REPLENISH_INTERVAL:
-            return
-        _last_replenish_ts = now
-        try:
-            enqueued = kp.replenish_supernode_queue()
-            detail = f"{enqueued} enqueued" if enqueued else "no candidates"
-            if enqueued > 0:
-                _daemon_logger.info("Replenished %d supernode review(s)", enqueued)
-        except Exception as exc:
-            detail = f"error: {exc}"
-            _daemon_logger.debug("Supernode replenishment error: %s", exc)
-        try:
-            from .timer_state import write_timer_event
-            write_timer_event(
-                kp._store_path, "supernode-replenish",
-                interval=_REPLENISH_INTERVAL, detail=detail,
-            )
-        except Exception as _te:
-            _daemon_logger.warning("Failed to write timer state: %s", _te)
-
-    def _cleanup_temp_files():
-        nonlocal _last_cleanup_ts
-        now = time.time()
-        if now - _last_cleanup_ts < _CLEANUP_INTERVAL:
-            return
-        _last_cleanup_ts = now
-        cache_dirs = [Path.home() / ".cache" / "keep" / "email-att"]
-        total_removed = 0
-        for cache_dir in cache_dirs:
-            if not cache_dir.is_dir():
-                continue
-            for entry in cache_dir.iterdir():
-                if not entry.is_dir():
-                    continue
-                try:
-                    age = now - entry.stat().st_mtime
-                    if age > _CLEANUP_MAX_AGE:
-                        shutil.rmtree(entry)
-                        total_removed += 1
-                except OSError:
-                    pass
-        if total_removed:
-            _daemon_logger.info("Cleaned up %d temp directories", total_removed)
+    _last_replenish_ts = _load_daemon_replenish_timestamp(kp._store_path)
 
     _version_file = kp._store_path / ".processor.version"
 
-    def _check_version_restart():
-        try:
-            if not _version_file.exists():
-                return
-            requested = _version_file.read_text().strip()
-            if requested and requested != _ver:
-                _daemon_logger.info("Version changed (%s → %s), restarting daemon", _ver, requested)
-                try:
-                    kp.close()
-                except Exception:
-                    pass
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-        except Exception as e:
-            _daemon_logger.debug("Version check failed: %s", e)
-
     try:
         pid_path.write_text(str(os.getpid()))
-        while not shutdown_requested:
-            _check_version_restart()
+        while not shutdown_state["requested"]:
+            _check_daemon_version_restart(_version_file, _ver, kp, _daemon_logger)
             _daemon_logger.debug("Tick: process_pending_work")
             flow_result = kp.process_pending_work(
                 limit=1, worker_id=flow_worker_id,
-                lease_seconds=180, shutdown_check=_is_shutdown,
+                lease_seconds=180, shutdown_check=lambda: bool(shutdown_state["requested"]),
             )
-            if shutdown_requested:
+            if shutdown_state["requested"]:
                 break
             _daemon_logger.debug("Tick: process_pending")
-            result = kp.process_pending(limit=1, shutdown_check=_is_shutdown)
+            result = kp.process_pending(
+                limit=1,
+                shutdown_check=lambda: bool(shutdown_state["requested"]),
+            )
             delegated = result.get("delegated", 0)
-            if shutdown_requested:
+            if shutdown_state["requested"]:
                 break
 
             _daemon_logger.debug("Tick: poll_watches")
-            from .watches import has_active_watches, load_watches, next_check_delay
             from .watches import poll_watches as _poll_watches
             watch_result = _poll_watches(kp)
             if watch_result["checked"] > 0:
@@ -1683,74 +1222,52 @@ def run_pending_daemon(kp) -> None:
                     watch_result["stale"], watch_result["errors"],
                 )
 
-            if shutdown_requested:
+            if shutdown_state["requested"]:
                 break
-            _cleanup_temp_files()
-            _replenish_supernodes()
-            if shutdown_requested:
+            _last_cleanup_ts = _cleanup_temp_files_if_due(
+                logger=_daemon_logger,
+                last_cleanup_ts=_last_cleanup_ts,
+                cleanup_interval=_CLEANUP_INTERVAL,
+                cleanup_max_age=_CLEANUP_MAX_AGE,
+            )
+            _last_replenish_ts = _replenish_supernodes_if_due(
+                kp,
+                logger=_daemon_logger,
+                last_replenish_ts=_last_replenish_ts,
+                replenish_interval=_REPLENISH_INTERVAL,
+            )
+            if shutdown_state["requested"]:
                 break
 
-            _daemon_logger.info(
-                "Daemon batch: processed=%d failed=%d delegated=%d flow_processed=%d flow_failed=%d",
-                result["processed"], result["failed"], delegated,
-                int(flow_result.get("processed", 0)),
-                int(flow_result.get("failed", 0)) + int(flow_result.get("dead_lettered", 0)),
+            _log_daemon_batch_result(
+                logger=_daemon_logger,
+                result=result,
+                delegated=delegated,
+                flow_result=flow_result,
             )
-            flow_activity = (
-                int(flow_result.get("claimed", 0)) > 0
-                or int(flow_result.get("processed", 0)) > 0
-                or int(flow_result.get("failed", 0)) > 0
-                or int(flow_result.get("dead_lettered", 0)) > 0
-            )
+            flow_activity = _daemon_has_flow_activity(flow_result)
             if result["processed"] == 0 and result["failed"] == 0 and delegated == 0 and not flow_activity:
-                delegated_remaining = kp._pending_queue.count_delegated() if hasattr(kp._pending_queue, "count_delegated") else 0
-                flow_remaining = kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0
-                pending_remaining = kp._pending_queue.count()
-                if delegated_remaining > 0:
-                    _daemon_logger.info("Waiting for %d delegated tasks", delegated_remaining)
-                    wait_or_shutdown(5)
-                    continue
-                if flow_remaining > 0:
-                    _daemon_logger.info("Waiting for %d flow work items", flow_remaining)
-                    wait_or_shutdown(1)
-                    continue
-                if pending_remaining > 0:
-                    _daemon_logger.info("Waiting for %d pending items (retry backoff)", pending_remaining)
-                    wait_or_shutdown(5)
-                    continue
-
-                _has_timers = has_active_watches(kp)
-                if not _has_timers:
-                    _has_timers = (
-                        _last_replenish_ts == 0
-                        or (time.time() - _last_replenish_ts) < _REPLENISH_INTERVAL
-                    )
-
-                if _has_timers:
-                    if has_active_watches(kp):
-                        delay = next_check_delay(load_watches(kp))
-                    else:
-                        _time_to_replenish = max(0, _REPLENISH_INTERVAL - (time.time() - _last_replenish_ts))
-                        delay = min(_time_to_replenish, 60.0)
-                    delay = max(1.0, min(delay, 60.0))
-                    _daemon_logger.debug("Sleeping %.1fs (timer events pending)", delay)
-                    wait_or_shutdown(delay)
+                if _maybe_wait_for_daemon_idle(
+                    kp,
+                    logger=_daemon_logger,
+                    last_replenish_ts=_last_replenish_ts,
+                    replenish_interval=_REPLENISH_INTERVAL,
+                    wait_or_shutdown=wait_or_shutdown,
+                ):
                     continue
 
                 wait_or_shutdown(1)
-                if shutdown_requested:
+                if shutdown_state["requested"]:
                     break
                 flow_result = kp.process_pending_work(
                     limit=1, worker_id=flow_worker_id,
-                    lease_seconds=180, shutdown_check=_is_shutdown,
+                    lease_seconds=180, shutdown_check=lambda: bool(shutdown_state["requested"]),
                 )
-                result = kp.process_pending(limit=1, shutdown_check=_is_shutdown)
-                flow_activity = (
-                    int(flow_result.get("claimed", 0)) > 0
-                    or int(flow_result.get("processed", 0)) > 0
-                    or int(flow_result.get("failed", 0)) > 0
-                    or int(flow_result.get("dead_lettered", 0)) > 0
+                result = kp.process_pending(
+                    limit=1,
+                    shutdown_check=lambda: bool(shutdown_state["requested"]),
                 )
+                flow_activity = _daemon_has_flow_activity(flow_result)
                 if (
                     result["processed"] == 0
                     and result["failed"] == 0
@@ -1758,11 +1275,12 @@ def run_pending_daemon(kp) -> None:
                     and not flow_activity
                 ):
                     break
-                _daemon_logger.info(
-                    "Daemon batch (drain): processed=%d failed=%d flow_processed=%d flow_failed=%d",
-                    result["processed"], result["failed"],
-                    int(flow_result.get("processed", 0)),
-                    int(flow_result.get("failed", 0)) + int(flow_result.get("dead_lettered", 0)),
+                _log_daemon_batch_result(
+                    logger=_daemon_logger,
+                    result=result,
+                    delegated=result.get("delegated", 0),
+                    flow_result=flow_result,
+                    drain=True,
                 )
     finally:
         _daemon_logger.info("Daemon shutting down")
@@ -1777,6 +1295,254 @@ def run_pending_daemon(kp) -> None:
                 pass
         kp.close()
         processor_lock.release()
+
+
+def _daemon_version() -> str:
+    """Best-effort package version for daemon lifecycle logging."""
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return _pkg_version("keep-skill")
+    except Exception:
+        return "unknown"
+
+
+def _start_daemon_query_server(kp, daemon_logger):
+    """Start the daemon HTTP server and publish discovery files."""
+    from .daemon_server import DaemonServer
+
+    daemon_port = int(os.environ.get("KEEP_DAEMON_PORT", "0")) or DAEMON_PORT
+    daemon_server = DaemonServer(kp, port=daemon_port)
+    actual_port = daemon_server.start()
+    port_path = kp._store_path / DAEMON_PORT_FILE
+    token_path = kp._store_path / DAEMON_TOKEN_FILE
+    port_path.write_text(str(actual_port))
+    token_path.touch(mode=0o600, exist_ok=True)
+    token_path.write_text(daemon_server.auth_token)
+    daemon_logger.info("Query server on 127.0.0.1:%d", actual_port)
+    return daemon_server, port_path, token_path
+
+
+def _install_daemon_signal_handlers(*, logger, port_path: Path, token_path: Path) -> dict[str, bool]:
+    """Install signal handlers that hide the daemon immediately on shutdown."""
+    from .shutdown import request_shutdown
+
+    state = {"requested": False}
+
+    def handle_signal(signum, frame):
+        state["requested"] = True
+        request_shutdown()
+        for path in (port_path, token_path):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        from .providers.http import close_http_session
+
+        close_http_session()
+        logger.info("Received signal %d, shutting down", signum)
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+    return state
+
+
+def _release_stale_daemon_leases(kp, flow_worker_id: str, daemon_logger) -> None:
+    """Release work leases left behind by a prior daemon instance."""
+    wq = kp._get_work_queue()
+    released = wq.release_stale_leases(flow_worker_id) if wq is not None else 0
+    if released:
+        daemon_logger.info("Released %d stale leases from previous daemon", released)
+
+
+def _log_daemon_startup_state(kp, daemon_logger) -> None:
+    """Log initial queue and provider state once the daemon is reachable."""
+    daemon_logger.info(
+        "Queue: %d pending, %d flow, %d failed",
+        kp._pending_queue.count(),
+        kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0,
+        0,
+    )
+    daemon_logger.info(
+        "Embedding: %s/%s",
+        kp._config.embedding.name if kp._config.embedding else "none",
+        kp._config.embedding.params.get("model", "") if kp._config.embedding else "",
+    )
+
+
+def _load_daemon_replenish_timestamp(store_path: Path) -> float:
+    """Restore the last supernode replenishment timestamp from timer state."""
+    try:
+        from .timer_state import read_timer_state
+
+        saved_timers = read_timer_state(store_path)
+        return saved_timers.get("supernode-replenish", {}).get("last_run", 0.0)
+    except Exception:
+        return 0.0
+
+
+def _replenish_supernodes_if_due(
+    kp,
+    *,
+    logger,
+    last_replenish_ts: float,
+    replenish_interval: float,
+) -> float:
+    """Run periodic supernode queue replenishment when its timer is due."""
+    now = time.time()
+    if now - last_replenish_ts < replenish_interval:
+        return last_replenish_ts
+
+    try:
+        enqueued = kp.replenish_supernode_queue()
+        detail = f"{enqueued} enqueued" if enqueued else "no candidates"
+        if enqueued > 0:
+            logger.info("Replenished %d supernode review(s)", enqueued)
+    except Exception as exc:
+        detail = f"error: {exc}"
+        logger.debug("Supernode replenishment error: %s", exc)
+
+    try:
+        from .timer_state import write_timer_event
+
+        write_timer_event(
+            kp._store_path,
+            "supernode-replenish",
+            interval=replenish_interval,
+            detail=detail,
+        )
+    except Exception as timer_exc:
+        logger.warning("Failed to write timer state: %s", timer_exc)
+
+    return now
+
+
+def _cleanup_temp_files_if_due(
+    *,
+    logger,
+    last_cleanup_ts: float,
+    cleanup_interval: float,
+    cleanup_max_age: float,
+) -> float:
+    """Run periodic temp-file cleanup for cache directories."""
+    now = time.time()
+    if now - last_cleanup_ts < cleanup_interval:
+        return last_cleanup_ts
+
+    cache_dirs = [Path.home() / ".cache" / "keep" / "email-att"]
+    total_removed = 0
+    for cache_dir in cache_dirs:
+        if not cache_dir.is_dir():
+            continue
+        for entry in cache_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                age = now - entry.stat().st_mtime
+                if age > cleanup_max_age:
+                    shutil.rmtree(entry)
+                    total_removed += 1
+            except OSError:
+                pass
+    if total_removed:
+        logger.info("Cleaned up %d temp directories", total_removed)
+    return now
+
+
+def _check_daemon_version_restart(version_file: Path, running_version: str, kp, daemon_logger) -> None:
+    """Exec-restart the daemon when the requested package version changes."""
+    try:
+        if not version_file.exists():
+            return
+        requested = version_file.read_text().strip()
+        if requested and requested != running_version:
+            daemon_logger.info(
+                "Version changed (%s → %s), restarting daemon",
+                running_version,
+                requested,
+            )
+            try:
+                kp.close()
+            except Exception:
+                pass
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as exc:
+        daemon_logger.debug("Version check failed: %s", exc)
+
+
+def _daemon_has_flow_activity(flow_result: dict[str, Any]) -> bool:
+    """Return True if a flow work batch claimed or changed any items."""
+    return (
+        int(flow_result.get("claimed", 0)) > 0
+        or int(flow_result.get("processed", 0)) > 0
+        or int(flow_result.get("failed", 0)) > 0
+        or int(flow_result.get("dead_lettered", 0)) > 0
+    )
+
+
+def _log_daemon_batch_result(*, logger, result: dict[str, Any], delegated: int, flow_result: dict[str, Any], drain: bool = False) -> None:
+    """Emit a consistent batch-progress log line for daemon work ticks."""
+    label = "Daemon batch (drain)" if drain else "Daemon batch"
+    logger.info(
+        "%s: processed=%d failed=%d delegated=%d flow_processed=%d flow_failed=%d",
+        label,
+        result["processed"],
+        result["failed"],
+        delegated,
+        int(flow_result.get("processed", 0)),
+        int(flow_result.get("failed", 0)) + int(flow_result.get("dead_lettered", 0)),
+    )
+
+
+def _maybe_wait_for_daemon_idle(
+    kp,
+    *,
+    logger,
+    last_replenish_ts: float,
+    replenish_interval: float,
+    wait_or_shutdown,
+) -> bool:
+    """Sleep when the daemon is idle but has background timers or queued retries."""
+    from .watches import has_active_watches, load_watches, next_check_delay
+
+    delegated_remaining = (
+        kp._pending_queue.count_delegated()
+        if hasattr(kp._pending_queue, "count_delegated")
+        else 0
+    )
+    flow_remaining = kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0
+    pending_remaining = kp._pending_queue.count()
+    if delegated_remaining > 0:
+        logger.info("Waiting for %d delegated tasks", delegated_remaining)
+        wait_or_shutdown(5)
+        return True
+    if flow_remaining > 0:
+        logger.info("Waiting for %d flow work items", flow_remaining)
+        wait_or_shutdown(1)
+        return True
+    if pending_remaining > 0:
+        logger.info("Waiting for %d pending items (retry backoff)", pending_remaining)
+        wait_or_shutdown(5)
+        return True
+
+    has_timers = has_active_watches(kp)
+    if not has_timers:
+        has_timers = (
+            last_replenish_ts == 0
+            or (time.time() - last_replenish_ts) < replenish_interval
+        )
+    if not has_timers:
+        return False
+
+    if has_active_watches(kp):
+        delay = next_check_delay(load_watches(kp))
+    else:
+        time_to_replenish = max(0, replenish_interval - (time.time() - last_replenish_ts))
+        delay = min(time_to_replenish, 60.0)
+    delay = max(1.0, min(delay, 60.0))
+    logger.debug("Sleeping %.1fs (timer events pending)", delay)
+    wait_or_shutdown(delay)
+    return True
 
 
 def print_pending_list_lightweight(store_path: "Path") -> None:
@@ -2369,5 +2135,3 @@ def doctor(
         ok("System docs: skipped (no store path)")
 
     typer.echo()
-
-

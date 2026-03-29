@@ -40,6 +40,19 @@ def http(daemon):
 
 # --- Health ---
 
+def test_ready(http):
+    r = http.get("/v1/ready")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert "pid" in body
+    assert "version" in body
+    assert "store" in body
+    assert "needs_setup" in body
+    assert "warnings" in body
+    assert "item_count" not in body
+
+
 def test_health(http):
     r = http.get("/v1/health")
     assert r.status_code == 200
@@ -54,9 +67,51 @@ def test_health(http):
     assert isinstance(body["warnings"], list)
 
 
+def test_ready_avoids_expensive_count(daemon):
+    server, kp, port = daemon
+    original = kp.count
+
+    def fail_count():
+        raise RuntimeError("count should not run on readiness probe")
+
+    kp.count = fail_count  # type: ignore[method-assign]
+    try:
+        r = httpx.get(
+            f"http://127.0.0.1:{port}/v1/ready",
+            headers={"Authorization": f"Bearer {server.auth_token}"},
+            timeout=5,
+        )
+        assert r.status_code == 200
+        assert "item_count" not in r.json()
+    finally:
+        kp.count = original  # type: ignore[method-assign]
+
+
+def test_health_tolerates_count_failure(daemon):
+    server, kp, port = daemon
+    original = kp.count
+
+    def fail_count():
+        raise RuntimeError("count failed")
+
+    kp.count = fail_count  # type: ignore[method-assign]
+    try:
+        r = httpx.get(
+            f"http://127.0.0.1:{port}/v1/health",
+            headers={"Authorization": f"Bearer {server.auth_token}"},
+            timeout=5,
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["item_count"] is None
+        assert "item count unavailable" in body["warnings"]
+    finally:
+        kp.count = original  # type: ignore[method-assign]
+
+
 def test_401_without_token(daemon):
     _, _, port = daemon
-    r = httpx.get(f"http://127.0.0.1:{port}/v1/health", timeout=5)
+    r = httpx.get(f"http://127.0.0.1:{port}/v1/ready", timeout=5)
     assert r.status_code == 401
 
 
@@ -110,6 +165,50 @@ def test_find(http):
     assert "notes" in r.json()
 
 
+def test_http_compat_routes_delegate_to_run_flow(daemon):
+    server, kp, port = daemon
+    kp._ensure_sysdocs()
+    client = httpx.Client(
+        base_url=f"http://127.0.0.1:{port}",
+        headers={"Authorization": f"Bearer {server.auth_token}"},
+        timeout=5,
+    )
+    calls: list[tuple[str, bool]] = []
+    original = kp.run_flow
+
+    def tracking(state, **kwargs):
+        calls.append((state, kwargs.get("state_doc_yaml") is not None))
+        return original(state, **kwargs)
+
+    kp.run_flow = tracking  # type: ignore[method-assign]
+    try:
+        r = client.post("/v1/notes", json={"content": "route test", "id": "rt-compat"})
+        assert r.status_code == 200
+        assert calls == [("put", False)]
+
+        calls.clear()
+        r = client.get("/v1/notes/rt-compat")
+        assert r.status_code == 200
+        assert calls == [("compat-get-item", True)]
+
+        calls.clear()
+        r = client.post("/v1/search", json={"query": "route"})
+        assert r.status_code == 200
+        assert calls == [("compat-find", True)]
+
+        calls.clear()
+        r = client.patch("/v1/notes/rt-compat/tags", json={"set": {"color": "blue"}})
+        assert r.status_code == 200
+        assert calls == [("tag", False), ("compat-get-item", True)]
+
+        calls.clear()
+        r = client.delete("/v1/notes/rt-compat")
+        assert r.status_code == 200
+        assert calls == [("delete", False)]
+    finally:
+        client.close()
+
+
 # --- Flow ---
 
 def test_flow(http):
@@ -138,7 +237,7 @@ def test_port_fallback(mock_providers, tmp_path):
         actual_port = server.start()
         assert actual_port != occupied_port
         r = httpx.get(
-            f"http://127.0.0.1:{actual_port}/v1/health",
+            f"http://127.0.0.1:{actual_port}/v1/ready",
             headers={"Authorization": f"Bearer {server.auth_token}"},
             timeout=5,
         )
