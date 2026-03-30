@@ -6,6 +6,7 @@ Uses mock providers — no ML models or network.
 import pytest
 
 from keep.api import Keeper
+from keep.types import Item
 
 
 @pytest.fixture
@@ -98,6 +99,22 @@ class TestFindTagsFilter:
         """find() rejects tag keys that fail the shared key validator."""
         with pytest.raises(ValueError, match="invalid characters"):
             kp.find("pets", tags={"bad!key": "alice"})
+
+    def test_gather_context_flattens_multivalue_related_tags(self, kp):
+        """Gathered summarize context must handle list-valued related tags."""
+        kp.find = lambda similar_to, limit=20: [  # type: ignore[method-assign]
+            Item(id="alice:pets", summary="seed", tags={"topic": "pets"}, score=1.0),
+            Item(
+                id="related:1",
+                summary="related",
+                tags={"topic": ["animals", "pets"], "project": "alpha"},
+                score=0.9,
+            ),
+        ]
+
+        context = kp._gather_context("alice:pets", {"topic": "pets"})
+
+        assert context == "Related topics: alpha, animals, pets"
 
 
 class TestFindSinceFilter:

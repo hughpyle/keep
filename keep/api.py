@@ -874,10 +874,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # Format context as topic keywords only (not summaries).
         # Including raw summary text causes small models to parrot
         # phrases from context into the new summary (contamination).
-        topic_values = set()
+        topic_values: set[str] = set()
         for _, _, item in top:
-            for k, v in filter_non_system_tags(item.tags).items():
-                topic_values.add(v)
+            for key in filter_non_system_tags(item.tags):
+                for value in tag_values(item.tags, key):
+                    topic_values.add(value)
 
         if not topic_values:
             return None
