@@ -1705,6 +1705,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
     # Write Operations
     # -------------------------------------------------------------------------
 
+    def _restored_processing_tags(
+        self,
+        restored_tags: dict[str, Any],
+    ) -> dict[str, Any]:
+        tags: dict[str, Any] = {}
+        for key in ("_summarized_hash", "_tagged_hash", "_tagged_summary_hash"):
+            if key in restored_tags:
+                tags[key] = restored_tags[key]
+        return tags
+
     # -- Task dispatch methods are in BackgroundProcessingMixin --
     # (_task_idempotency_key, _enqueue_*_background, _dispatch_after_write_flow,
     #  _load_after_write_state_doc, _store_write_context, _consume_write_context)
@@ -1768,14 +1778,35 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # Preserve analysis watermark across puts (incremental analysis needs
         # the version baseline even when content changes).
         _prev_analyzed_version = None
+        _prev_analyzed_hash = None
         if existing_doc:
             _prev_analyzed_version = existing_doc.tags.get("_analyzed_version")
+            _prev_analyzed_hash = existing_doc.tags.get("_analyzed_hash")
 
         # Compute content hash for change detection
         new_hash = _content_hash(content)
+        new_hash_full = _content_hash_full(content)
+
+        restored_version = None
+        restored_embedding = None
+        if existing_doc is not None and existing_doc.content_hash != new_hash:
+            restored_version = self._document_store.get_latest_version_info_by_content_hash(
+                doc_coll, id, new_hash,
+            )
+            if restored_version is not None:
+                if self._config.embedding is not None and not is_system_id(id):
+                    restored_embedding = self._store.get_embedding(
+                        chroma_coll,
+                        f"{id}@v{restored_version.version}",
+                    )
 
         # Build tags: existing + config + env + user, then replace system tags.
-        merged_tags = {**existing_tags}
+        if restored_version is not None:
+            merged_tags = {
+                **filter_non_system_tags(restored_version.tags),
+            }
+        else:
+            merged_tags = {**existing_tags}
 
         if self._default_tags:
             _merge_tags_additive(merged_tags, self._default_tags)
@@ -1805,8 +1836,23 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         _merge_tags_additive(merged_tags, system_tags, replace_system=True)
 
+        if restored_version is not None:
+            merged_tags.update(
+                self._restored_processing_tags(restored_version.tags)
+            )
+            merged_tags["_restored_hash"] = new_hash
+            merged_tags["_restored_from_version"] = str(restored_version.version)
+            if _prev_analyzed_hash:
+                merged_tags["_analyzed_hash"] = _prev_analyzed_hash
+            if _prev_analyzed_version:
+                merged_tags["_analyzed_version"] = _prev_analyzed_version
+
         # Restore analysis version watermark (dropped by filter_non_system_tags)
-        if _prev_analyzed_version and "_analyzed_version" not in merged_tags:
+        if (
+            restored_version is None
+            and _prev_analyzed_version
+            and "_analyzed_version" not in merged_tags
+        ):
             merged_tags["_analyzed_version"] = _prev_analyzed_version
 
         # Change detection (before embedding to allow early return)
@@ -1859,6 +1905,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             # System docs (.prompt/*, .tag/*, .meta/*) store full content
             # as the summary — they are authored content, not items to summarize.
             final_summary = content
+        elif restored_version is not None:
+            final_summary = restored_version.summary
         elif content_unchanged and tags_changed:
             logger.debug("Tags changed for %s", id)
             final_summary = existing_doc.summary
@@ -1885,7 +1933,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 summary=final_summary,
                 tags=merged_tags,
                 content_hash=new_hash,
-                content_hash_full=_content_hash_full(content),
+                content_hash_full=new_hash_full,
                 created_at=created_at,
             )
             if is_system_doc:
@@ -1893,6 +1941,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 return _record_to_item(result, changed=not content_unchanged)
             # Try embedding dedup before enqueueing (saves network round-trip)
             if should_index and not content_unchanged:
+                if restored_embedding is not None:
+                    self._store.upsert(
+                        collection=chroma_coll, id=id,
+                        embedding=restored_embedding,
+                        summary=final_summary,
+                        tags=casefold_tags_for_index(merged_tags),
+                    )
+                    return _record_to_item(result, changed=True)
                 donor_embedding = self._try_dedup_embedding(
                     doc_coll, chroma_coll, new_hash, id, content,
                 )
@@ -1938,9 +1994,13 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     if embedding is None:
                         embedding = self._get_embedding_provider().embed(final_summary)
                 else:
-                    embedding = self._try_dedup_embedding(doc_coll, chroma_coll, new_hash, id, content)
-                    if embedding is not None:
-                        _embed_source = "dedup"
+                    if restored_embedding is not None:
+                        embedding = restored_embedding
+                        _embed_source = "restored_version"
+                    else:
+                        embedding = self._try_dedup_embedding(doc_coll, chroma_coll, new_hash, id, content)
+                        if embedding is not None:
+                            _embed_source = "dedup"
                     if embedding is None:
                         embedding = self._get_embedding_provider().embed(final_summary)
                 _embed_span.set_attribute("source", _embed_source)
@@ -1965,7 +2025,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 summary=final_summary,
                 tags=merged_tags,
                 content_hash=new_hash,
-                content_hash_full=_content_hash_full(content),
+                content_hash_full=new_hash_full,
                 created_at=created_at,
             )
 

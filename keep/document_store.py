@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 @dataclass
@@ -1327,6 +1327,31 @@ class DocumentStore:
         """, (id, collection, content_hash))
         row = cursor.fetchone()
         return row["version"] if row else None
+
+    def get_latest_version_info_by_content_hash(
+        self,
+        collection: str,
+        id: str,
+        content_hash: str,
+    ) -> Optional[VersionInfo]:
+        """Return the newest archived version matching *content_hash*."""
+        cursor = self._execute("""
+            SELECT version, summary, tags_json, content_hash, created_at
+            FROM document_versions
+            WHERE id = ? AND collection = ? AND content_hash = ?
+            ORDER BY version DESC
+            LIMIT 1
+        """, (id, collection, content_hash))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return VersionInfo(
+            version=row["version"],
+            summary=row["summary"],
+            tags=json.loads(row["tags_json"]) if row["tags_json"] else {},
+            created_at=row["created_at"],
+            content_hash=row["content_hash"],
+        )
 
     def delete_all_versions(self, collection: str, id: str) -> int:
         """Delete all archived versions for a document.

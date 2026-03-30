@@ -1,5 +1,7 @@
 """Tests for the watches module (daemon-driven source monitoring)."""
 
+import os
+import subprocess
 from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -21,7 +23,24 @@ from keep.watches import (
     poll_watches,
     next_check_delay,
     _compute_walk_hash,
+    _resolve_git_watch_state,
 )
+
+
+def _run_git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "t@t.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "t@t.com",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +276,51 @@ class TestCheckDirectory:
         d.rmdir()
         assert check_directory(entry) is False
         assert entry.stale is True
+
+    def test_changed_git_head_without_worktree_change(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _run_git(repo, "init", "-b", "main")
+        _run_git(repo, "config", "user.name", "Test")
+        _run_git(repo, "config", "user.email", "t@t.com")
+        (repo / "note.txt").write_text("stable\n")
+        _run_git(repo, "add", ".")
+        _run_git(repo, "commit", "-m", "Initial")
+
+        walk_hash = _compute_walk_hash(repo, recurse=True, exclude=None)
+        git_repo_root, git_dir, git_head = _resolve_git_watch_state(repo)
+        entry = WatchEntry(
+            source=str(repo),
+            kind="directory",
+            walk_hash=walk_hash,
+            recurse=True,
+            git_repo_root=git_repo_root,
+            git_dir=git_dir,
+            git_head=git_head,
+        )
+
+        _run_git(repo, "commit", "--allow-empty", "-m", "Empty commit")
+
+        assert check_directory(entry) is True
+        assert entry.git_head != git_head
+
+    def test_resolves_gitdir_file_and_packed_refs(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        git_meta = tmp_path / "repo-meta"
+        (git_meta / "refs").mkdir(parents=True)
+        (repo / ".git").write_text(f"gitdir: {git_meta}\n")
+        (git_meta / "HEAD").write_text("ref: refs/heads/main\n")
+        (git_meta / "packed-refs").write_text(
+            "# pack-refs with: peeled fully-peeled\n"
+            "0123456789abcdef0123456789abcdef01234567 refs/heads/main\n"
+        )
+
+        git_repo_root, git_dir, git_head = _resolve_git_watch_state(repo)
+
+        assert git_repo_root == str(repo.resolve())
+        assert git_dir == str(git_meta.resolve())
+        assert git_head == "0123456789abcdef0123456789abcdef01234567"
 
 
 # ---------------------------------------------------------------------------

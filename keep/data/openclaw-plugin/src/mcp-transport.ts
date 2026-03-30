@@ -144,7 +144,7 @@ export class KeepMcpTransport {
     });
 
     this.client = new Client(
-      { name: "keep-openclaw-plugin", version: "0.116.7" },
+      { name: "keep-openclaw-plugin", version: "0.117.0" },
       { capabilities: {} },
     );
 

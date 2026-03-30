@@ -1,6 +1,6 @@
-# Document Versioning
+# Note Versioning
 
-All documents retain history on update. Previous versions are archived automatically.
+All notes retain history on update. Previous versions are archived automatically.
 
 ## Strings
 
@@ -82,6 +82,22 @@ keep put "different note"       # Different ID (new document)
 ```
 
 Same content = same ID = enables versioning via tag changes.
+
+## Restoring known content
+
+If a note returns to content that already exists in its archived history, keep does not create a branch. It still appends a new head state to the same linear version string:
+
+- `A -> B -> A` archives `A`, then `B`, then makes `A` current again
+- the later `B` is still present in history
+- the restored `A` is treated as known content for that same note
+
+When this happens, keep restores previously-known derived outputs for that content when available, including:
+
+- summary
+- auto-tagging results
+- embeddings
+
+This avoids unnecessary re-summarization during checkouts and branch switches. Analysis parts are not version-restored. If parts from a later state are still attached to the note, they remain until `keep analyze` runs again. The tradeoff is that restored derived outputs may still be slightly stale if prompt selection or surrounding context changed while the content stayed the same.
 
 ## Deleting and reverting
 

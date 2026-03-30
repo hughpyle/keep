@@ -312,6 +312,7 @@ class MockDocumentStore:
 
     def __init__(self, db_path: Path):
         self._data: dict[str, dict] = {}  # collection -> {id -> record}
+        self._versions: dict[tuple[str, str], list[dict]] = {}
         self._parts: dict[str, list] = {}  # _parts:{collection}:{id} -> [PartInfo]
 
     def _make_record(self, collection: str, id: str, rec: dict) -> "DocumentRecord":
@@ -343,8 +344,23 @@ class MockDocumentStore:
         )
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
-        existing_created = self._data[collection].get(id, {}).get("created_at")
+        existing = self._data[collection].get(id)
+        existing_created = existing.get("created_at") if existing else None
         created_at = existing_created or created_at or now
+        if existed and archive and existing is not None:
+            versions = self._versions.setdefault((collection, id), [])
+            version_tags = dict(existing["tags"])
+            if existing.get("created_at"):
+                version_tags.setdefault("_created", existing["created_at"])
+            if existing.get("updated_at"):
+                version_tags["_updated"] = existing["updated_at"]
+            versions.append({
+                "version": len(versions) + 1,
+                "summary": existing["summary"],
+                "tags": version_tags,
+                "content_hash": existing.get("content_hash"),
+                "created_at": existing.get("updated_at", now),
+            })
         self._data[collection][id] = {
             "summary": summary,
             "tags": tags,
@@ -391,6 +407,21 @@ class MockDocumentStore:
                 return self._make_record(collection, doc_id, rec)
         return None
 
+    def get_latest_version_info_by_content_hash(self, collection: str, id: str, content_hash: str):
+        from keep.document_store import VersionInfo
+
+        versions = self._versions.get((collection, id), [])
+        for rec in reversed(versions):
+            if rec.get("content_hash") == content_hash:
+                return VersionInfo(
+                    version=rec["version"],
+                    summary=rec["summary"],
+                    tags=dict(rec["tags"]),
+                    created_at=rec["created_at"],
+                    content_hash=rec.get("content_hash"),
+                )
+        return None
+
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         if collection in self._data and id in self._data[collection]:
             del self._data[collection][id]
@@ -407,7 +438,7 @@ class MockDocumentStore:
         return sum(len(c) for c in self._data.values())
 
     def version_count(self, collection: str, id: str) -> int:
-        return 0
+        return len(self._versions.get((collection, id), []))
 
     def update_tags(self, collection: str, id: str, tags: dict) -> bool:
         if collection in self._data and id in self._data[collection]:

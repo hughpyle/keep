@@ -1,6 +1,6 @@
 # keep put
 
-Add or update a document in the store.
+Add or update a note in the store.
 
 ## Usage
 
@@ -55,6 +55,8 @@ keep put https://example.com/doc --watch   # Watch a URL for changes
 
 Watches persist across sessions — the daemon polls for changes in the background. Use `keep pending` to see active watches. Excludes are captured at watch-creation time.
 
+For git repositories, directory watches also track the resolved `HEAD` commit. That means commit-only events such as empty commits, checkouts, branch switches, resets, and rebases can trigger reprocessing even when no watched file changed. Tag-only git changes are still not watched.
+
 ## Global ignore patterns
 
 The `.ignore` system doc contains glob patterns that are automatically excluded from all directory walks and watches — in addition to `.gitignore` and per-watch `--exclude` patterns.
@@ -88,10 +90,14 @@ The LLM prompt used for summarization is configurable. Create a `.prompt/summari
 
 ## Update behavior
 
-When updating an existing document (same ID):
+When updating an existing note (same ID):
 - **Summary**: replaced with new summary
 - **Tags**: merged — existing tags preserved, new tags override on key collision
 - **Version**: previous version archived automatically
+
+If the new content matches an archived version of the same note, keep treats it as a restore of known content. The current head is still archived, but keep restores the prior summary, auto-tags, and head embedding for that content instead of recomputing them.
+
+Analysis parts are not restored per version. If the current note already has parts from a later state, those parts stay attached until you run `keep analyze` again.
 
 ## Contextual summarization
 
@@ -120,7 +126,7 @@ keep put ./myproject/ -r
 
 Each commit becomes a searchable item (ID: git://repo#sha) with the commit message as its summary. Files get a git\_commit edge tag linking to their last commit. Git tags and releases are indexed as separate items (ID: git://repo@tag).
 
-**Incremental:** On re-scan (or via a watch), only new commits since the last ingest are processed. A `git_watermark` tag on the directory tracks the last ingested SHA.
+**Incremental:** On re-scan (or via a watch), only new commits since the last ingest are processed. A `git_watermark` tag on the directory tracks the last ingested SHA. For watched repositories, keep also notices `HEAD` movement even if the working tree is unchanged, so commit messages are picked up promptly after commits and checkouts.
 
 **Querying git history:**
 

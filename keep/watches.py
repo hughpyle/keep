@@ -83,6 +83,9 @@ class WatchEntry:
     last_modified: str = ""
     # Directory-specific
     walk_hash: str = ""
+    git_repo_root: str = ""
+    git_dir: str = ""
+    git_head: str = ""
     # File-specific
     mtime_ns: str = ""
     file_size: str = ""
@@ -400,9 +403,122 @@ def _update_directory_fingerprint(
             directory, entry.recurse, entry.exclude or None,
             extra_exclude=extra_exclude,
         )
+        entry.git_repo_root, entry.git_dir, entry.git_head = _resolve_git_watch_state(
+            directory,
+            cached_repo_root=entry.git_repo_root,
+            cached_git_dir=entry.git_dir,
+        )
         entry.stale = False
     except OSError:
         entry.stale = True
+
+
+_GIT_OID_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
+
+
+def _is_git_oid(value: str) -> bool:
+    return bool(_GIT_OID_RE.fullmatch(value.strip()))
+
+
+def _read_gitdir_pointer(dotgit: Path) -> Path | None:
+    """Resolve a .git entry to the real gitdir."""
+    if dotgit.is_dir():
+        return dotgit
+    if not dotgit.is_file():
+        return None
+    try:
+        first_line = dotgit.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+    except (IndexError, OSError):
+        return None
+    if not first_line.startswith("gitdir:"):
+        return None
+    target = first_line[len("gitdir:"):].strip()
+    if not target:
+        return None
+    gitdir = Path(target)
+    if not gitdir.is_absolute():
+        gitdir = (dotgit.parent / gitdir).resolve()
+    return gitdir if gitdir.is_dir() else None
+
+
+def _discover_git_watch_root(directory: Path) -> tuple[str, str]:
+    """Return (repo_root, git_dir) by walking parent directories."""
+    current = directory.resolve()
+    while True:
+        git_dir = _read_gitdir_pointer(current / ".git")
+        if git_dir is not None:
+            return str(current), str(git_dir)
+        if current == current.parent:
+            return "", ""
+        current = current.parent
+
+
+def _read_packed_ref(git_dir: Path, ref_name: str) -> str:
+    """Read one ref from packed-refs if present."""
+    packed_refs = git_dir / "packed-refs"
+    if not packed_refs.is_file():
+        return ""
+    try:
+        for raw_line in packed_refs.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or line.startswith("^"):
+                continue
+            try:
+                oid, name = line.split(" ", 1)
+            except ValueError:
+                continue
+            if name == ref_name and _is_git_oid(oid):
+                return oid
+    except OSError:
+        return ""
+    return ""
+
+
+def _read_git_head(git_dir: Path) -> str:
+    """Resolve HEAD from git metadata files without spawning git."""
+    head_path = git_dir / "HEAD"
+    if not head_path.is_file():
+        return ""
+    try:
+        head = head_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not head:
+        return ""
+    if head.startswith("ref:"):
+        ref_name = head[4:].strip()
+        if not ref_name:
+            return ""
+        ref_path = git_dir / Path(ref_name)
+        try:
+            if ref_path.is_file():
+                ref_value = ref_path.read_text(encoding="utf-8", errors="replace").strip()
+                if _is_git_oid(ref_value):
+                    return ref_value
+        except OSError:
+            pass
+        return _read_packed_ref(git_dir, ref_name)
+    return head if _is_git_oid(head) else ""
+
+
+def _resolve_git_watch_state(
+    directory: Path,
+    *,
+    cached_repo_root: str = "",
+    cached_git_dir: str = "",
+) -> tuple[str, str, str]:
+    """Return (repo_root, git_dir, resolved_head_sha) for a watched directory."""
+    if cached_git_dir and cached_repo_root:
+        git_dir = Path(cached_git_dir)
+        if git_dir.is_dir():
+            head = _read_git_head(git_dir)
+            if head:
+                return cached_repo_root, cached_git_dir, head
+
+    repo_root, git_dir = _discover_git_watch_root(directory)
+    if not git_dir:
+        return "", "", ""
+    return repo_root, git_dir, _read_git_head(Path(git_dir))
 
 
 def check_directory(
@@ -419,8 +535,22 @@ def check_directory(
         directory, entry.recurse, entry.exclude or None,
         extra_exclude=extra_exclude,
     )
-    if new_hash != entry.walk_hash:
+    new_git_root, new_git_dir, new_git_head = _resolve_git_watch_state(
+        directory,
+        cached_repo_root=entry.git_repo_root,
+        cached_git_dir=entry.git_dir,
+    )
+    changed = (
+        new_hash != entry.walk_hash
+        or new_git_root != entry.git_repo_root
+        or new_git_dir != entry.git_dir
+        or new_git_head != entry.git_head
+    )
+    if changed:
         entry.walk_hash = new_hash
+        entry.git_repo_root = new_git_root
+        entry.git_dir = new_git_dir
+        entry.git_head = new_git_head
         entry.stale = False
         return True
     return False
