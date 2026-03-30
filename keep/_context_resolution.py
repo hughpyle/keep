@@ -10,6 +10,7 @@ import logging
 import math
 from typing import TYPE_CHECKING, Any, Optional
 
+from .tracing import get_tracer
 from .types import (
     Item,
     ItemContext,
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer("flow")
 
 
 class ContextResolutionMixin:
@@ -706,7 +708,11 @@ class ContextResolutionMixin:
         from .state_doc_runtime import run_flow
 
         try:
-            doc = parse_state_doc(name, body)
+            with tracer.start_as_current_span(
+                "resolve_meta.parse_doc",
+                attributes={"meta_doc": name, "body_chars": len(body)},
+            ):
+                doc = parse_state_doc(name, body)
         except (ValueError, RuntimeError):
             return None  # Not a state doc — legacy fallback
 
@@ -728,14 +734,18 @@ class ContextResolutionMixin:
                 return doc
             return base_loader(doc_name)
 
-        flow_result = run_flow(
-            name,
-            params,
-            budget=1,
-            load_state_doc=_meta_loader,
-            run_action=runner,
-            foreground=True,
-        )
+        with tracer.start_as_current_span(
+            "resolve_meta.run_flow",
+            attributes={"meta_doc": name},
+        ):
+            flow_result = run_flow(
+                name,
+                params,
+                budget=1,
+                load_state_doc=_meta_loader,
+                run_action=runner,
+                foreground=True,
+            )
 
         # If the flow hit an async action, enqueue cursor for daemon
         if flow_result.status == "async" and flow_result.cursor:

@@ -24,12 +24,35 @@ def mock_daemon():
         yield mock_http
 
 
+async def _keep_flow_schema(server):
+    for tool in await server.list_tools():
+        if tool.name == "keep_flow":
+            return tool.inputSchema
+    raise AssertionError("keep_flow schema not found")
+
+
 # ---------------------------------------------------------------------------
 # keep_flow
 # ---------------------------------------------------------------------------
 
 class TestKeepFlow:
     """Tests for MCP keep-flow endpoint."""
+
+    def test_flow_schema_exposes_common_param_keys(self):
+        from keep.mcp import mcp
+
+        schema = asyncio.run(_keep_flow_schema(mcp))
+        params_ref = schema["properties"]["params"]["anyOf"][0]["$ref"]
+        params_schema = schema
+        for part in params_ref.removeprefix("#/").split("/"):
+            params_schema = params_schema[part]
+
+        assert "properties" in params_schema
+        assert "item_id" in params_schema["properties"]
+        assert "query" in params_schema["properties"]
+        assert "content" in params_schema["properties"]
+        assert params_schema["additionalProperties"] is True
+        assert schema["properties"]["params"]["examples"][0] == {"item_id": "now"}
 
     @pytest.mark.asyncio
     async def test_flow_returns_json(self, mock_daemon):

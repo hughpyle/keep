@@ -302,6 +302,26 @@ class TestGatherAnalyzeChunksIncremental:
         # Targets: versions 16-20 + current = 6
         assert len(result["targets"]) == 6
 
+    def test_uri_note_with_custom_id_refetches_source_uri(self, mock_providers, tmp_path):
+        """URI-backed notes with custom IDs should re-fetch via _source_uri."""
+        kp = Keeper(store_path=tmp_path)
+        doc_coll = kp._resolve_doc_collection()
+        kp._document_store.upsert(
+            doc_coll,
+            "doc-custom",
+            summary="truncated summary",
+            tags={"_source": "uri", "_source_uri": "file:///tmp/original.md"},
+            content_hash="hash1",
+        )
+        doc = kp._document_store.get(doc_coll, "doc-custom")
+
+        with patch.object(kp._document_provider, "fetch") as mock_fetch:
+            mock_fetch.return_value.content = "full source content"
+            result = kp._gather_analyze_chunks("doc-custom", doc)
+
+        mock_fetch.assert_called_once_with("file:///tmp/original.md")
+        assert result == [{"content": "full source content", "tags": {}, "index": 0}]
+
 
 class TestMaxPartNum:
     """Test DocumentStore.max_part_num."""

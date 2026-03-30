@@ -14,8 +14,10 @@ import re
 from collections.abc import Iterable
 
 from .providers.base import AnalysisChunk, AnalyzerProvider, get_registry, strip_summary_preamble
+from .tracing import get_tracer
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer("flow")
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +476,11 @@ class SlidingWindowAnalyzer:
 
         system_prompt = self._resolve_prompt(prompt_override)
 
-        total_tokens = sum(_estimate_tokens(c.content) for c in chunk_list)
+        with tracer.start_as_current_span(
+            "analyze.token_estimate",
+            attributes={"chunk_count": len(chunk_list)},
+        ):
+            total_tokens = sum(_estimate_tokens(c.content) for c in chunk_list)
 
         # Fits in one window — single-pass
         if total_tokens <= self._context_budget:
@@ -522,17 +528,31 @@ class SlidingWindowAnalyzer:
             target_start_in_window = pos - ctx_before
             target_end_in_window = target_end - ctx_before
 
-            raw = self._analyze_window(
-                window, target_start_in_window, target_end_in_window,
-                guide_context, system_prompt,
-            )
+            with tracer.start_as_current_span(
+                "analyze.window",
+                attributes={
+                    "window_chunks": len(window),
+                    "target_chunks": target_end - pos,
+                    "target_tokens": target_tokens,
+                    "context_before_tokens": ctx_before_tokens,
+                    "context_after_tokens": ctx_after_tokens,
+                },
+            ):
+                raw = self._analyze_window(
+                    window, target_start_in_window, target_end_in_window,
+                    guide_context, system_prompt,
+                )
 
             # Dedup across windows by summary hash
-            for part in raw:
-                h = hashlib.md5(part["summary"].encode()).hexdigest()
-                if h not in seen_hashes:
-                    seen_hashes.add(h)
-                    all_parts.append(part)
+            with tracer.start_as_current_span(
+                "analyze.window.dedup",
+                attributes={"candidate_parts": len(raw)},
+            ):
+                for part in raw:
+                    h = hashlib.md5(part["summary"].encode()).hexdigest()
+                    if h not in seen_hashes:
+                        seen_hashes.add(h)
+                        all_parts.append(part)
 
             pos = target_end
 
@@ -548,17 +568,29 @@ class SlidingWindowAnalyzer:
         if hasattr(provider, '_provider') and provider._provider is not None:
             provider = provider._provider
 
-        content = "\n\n---\n\n".join(c.content for c in chunks)
-        truncated = content[:80000] if len(content) > 80000 else content
+        with tracer.start_as_current_span(
+            "analyze.single_pass.prompt",
+            attributes={"chunk_count": len(chunks)},
+        ):
+            content = "\n\n---\n\n".join(c.content for c in chunks)
+            truncated = content[:80000] if len(content) > 80000 else content
 
-        user_prompt = f"<content>\n<analyze>\n{truncated}\n</analyze>\n</content>"
-        if guide_context:
-            user_prompt = f"{guide_context}\n\n---\n\n{user_prompt}"
+            user_prompt = f"<content>\n<analyze>\n{truncated}\n</analyze>\n</content>"
+            if guide_context:
+                user_prompt = f"{guide_context}\n\n---\n\n{user_prompt}"
 
         try:
-            result = provider.generate(system_prompt, user_prompt, max_tokens=4096)
+            with tracer.start_as_current_span(
+                "analyze.single_pass.provider",
+                attributes={"prompt_chars": len(user_prompt)},
+            ):
+                result = provider.generate(system_prompt, user_prompt, max_tokens=4096)
             if result:
-                return _parse_parts(result)
+                with tracer.start_as_current_span(
+                    "analyze.single_pass.parse",
+                    attributes={"result_chars": len(result)},
+                ):
+                    return _parse_parts(result)
             logger.warning("Provider returned no result for analysis")
         except Exception as e:
             logger.warning("Analysis failed: %s", e)
@@ -580,15 +612,27 @@ class SlidingWindowAnalyzer:
         if hasattr(provider, '_provider') and provider._provider is not None:
             provider = provider._provider
 
-        prompt = self._build_window_prompt(window, target_start, target_end)
+        with tracer.start_as_current_span(
+            "analyze.window.prompt",
+            attributes={"window_chunks": len(window)},
+        ):
+            prompt = self._build_window_prompt(window, target_start, target_end)
 
-        if guide_context:
-            prompt = f"{guide_context}\n\n---\n\n{prompt}"
+            if guide_context:
+                prompt = f"{guide_context}\n\n---\n\n{prompt}"
 
         try:
-            result = provider.generate(system_prompt, prompt, max_tokens=4096)
+            with tracer.start_as_current_span(
+                "analyze.window.provider",
+                attributes={"prompt_chars": len(prompt)},
+            ):
+                result = provider.generate(system_prompt, prompt, max_tokens=4096)
             if result:
-                return _parse_parts(result)
+                with tracer.start_as_current_span(
+                    "analyze.window.parse",
+                    attributes={"result_chars": len(result)},
+                ):
+                    return _parse_parts(result)
             logger.warning("Sliding window: provider returned no result")
             return []
         except Exception as e:
@@ -1024,16 +1068,24 @@ class TagClassifier:
         if hasattr(provider, '_provider') and provider._provider is not None:
             provider = provider._provider
 
-        system_prompt = self.build_prompt(specs, template=prompt_template)
+        with tracer.start_as_current_span(
+            "analyze.classify.prompt",
+            attributes={"part_count": len(parts), "spec_count": len(specs)},
+        ):
+            system_prompt = self.build_prompt(specs, template=prompt_template)
         if not system_prompt:
             return parts
 
         # Build user message: numbered fragments
-        fragment_lines = []
-        for i, part in enumerate(parts, 1):
-            summary = part.get("summary", "").strip()
-            if summary:
-                fragment_lines.append(f"{i}: {summary}")
+        with tracer.start_as_current_span(
+            "analyze.classify.fragments",
+            attributes={"part_count": len(parts)},
+        ):
+            fragment_lines = []
+            for i, part in enumerate(parts, 1):
+                summary = part.get("summary", "").strip()
+                if summary:
+                    fragment_lines.append(f"{i}: {summary}")
 
         if not fragment_lines:
             return parts
@@ -1041,9 +1093,17 @@ class TagClassifier:
         user_prompt = "Classify these fragments:\n\n" + "\n".join(fragment_lines)
 
         try:
-            result = provider.generate(system_prompt, user_prompt, max_tokens=2048)
+            with tracer.start_as_current_span(
+                "analyze.classify.provider",
+                attributes={"prompt_chars": len(user_prompt)},
+            ):
+                result = provider.generate(system_prompt, user_prompt, max_tokens=2048)
             if result:
-                self._apply_classifications(parts, result, specs)
+                with tracer.start_as_current_span(
+                    "analyze.classify.apply",
+                    attributes={"result_chars": len(result)},
+                ):
+                    self._apply_classifications(parts, result, specs)
         except Exception as e:
             logger.warning("Tag classification failed: %s", e)
 

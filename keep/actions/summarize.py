@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..tracing import get_tracer
 from ..types import filter_non_system_tags
 from . import action
 from ._item_scope import check_content_hash, resolve_item, resolve_item_content
+
+tracer = get_tracer("flow")
 
 
 def _enrich_content_type(item_id: str, tags: dict) -> dict:
@@ -49,7 +52,11 @@ class Summarize:
             user_tags = filter_non_system_tags(item_tags)
             gather = getattr(context, "gather_context", None)
             if user_tags and callable(gather):
-                context_text = gather(item_id, user_tags)
+                with tracer.start_as_current_span(
+                    "summarize.prepare.context",
+                    attributes={"item_id": item_id, "tag_count": len(user_tags)},
+                ):
+                    context_text = gather(item_id, user_tags)
                 if context_text:
                     prepared["context"] = context_text
 
@@ -59,7 +66,11 @@ class Summarize:
                 prompt_tags = _enrich_content_type(item_id, prompt_tags)
             resolve_prompt = getattr(context, "resolve_prompt", None)
             if resolve_prompt is not None:
-                prompt_text = resolve_prompt("summarize", prompt_tags)
+                with tracer.start_as_current_span(
+                    "summarize.prepare.prompt",
+                    attributes={"item_id": item_id, "tag_count": len(prompt_tags)},
+                ):
+                    prompt_text = resolve_prompt("summarize", prompt_tags)
                 if prompt_text is not None:
                     prepared["system_prompt"] = prompt_text
 
@@ -84,7 +95,11 @@ class Summarize:
         if check_content_hash(params, context, item_id, "_summarized_hash"):
             return {"skipped": True, "reason": "content unchanged"}
 
-        provider = context.resolve_provider("summarization")
+        with tracer.start_as_current_span(
+            "summarize.resolve_provider",
+            attributes={"item_id": item_id},
+        ):
+            provider = context.resolve_provider("summarization")
         summarize = getattr(provider, "summarize", None)
         if not callable(summarize):
             raise ValueError("summarization provider does not expose summarize(content, ...)")
@@ -95,46 +110,71 @@ class Summarize:
         # Resolve prompt doc (.prompt/summarize/*) matching item tags
         prompt_text = params.get("system_prompt")
         if prompt_text is None:
-            prepared = self.prepare(params, context)
-            prompt_text = prepared.get("system_prompt")
-            context_text = prepared.get("context", context_text)
+            with tracer.start_as_current_span(
+                "summarize.prepare",
+                attributes={"item_id": item_id},
+            ):
+                prepared = self.prepare(params, context)
+                prompt_text = prepared.get("system_prompt")
+                context_text = prepared.get("context", context_text)
         if prompt_text is None:
             raise ValueError("missing prompt doc for summarize")
 
         try:
-            summary = summarize(
-                str(content),
-                max_length=max(max_length, 1),
-                context=str(context_text) if context_text is not None else None,
-                system_prompt=prompt_text,
-            )
-        except TypeError:
-            try:
+            with tracer.start_as_current_span(
+                "summarize.provider",
+                attributes={
+                    "item_id": item_id,
+                    "content_chars": len(str(content)),
+                    "has_context": context_text is not None,
+                    "has_prompt": bool(prompt_text),
+                },
+            ):
                 summary = summarize(
                     str(content),
+                    max_length=max(max_length, 1),
                     context=str(context_text) if context_text is not None else None,
+                    system_prompt=prompt_text,
                 )
+        except TypeError:
+            try:
+                with tracer.start_as_current_span(
+                    "summarize.provider_compat",
+                    attributes={"item_id": item_id, "signature": "context_only"},
+                ):
+                    summary = summarize(
+                        str(content),
+                        context=str(context_text) if context_text is not None else None,
+                    )
             except TypeError:
-                summary = summarize(str(content))
+                with tracer.start_as_current_span(
+                    "summarize.provider_compat",
+                    attributes={"item_id": item_id, "signature": "content_only"},
+                ):
+                    summary = summarize(str(content))
         out_summary = "" if summary is None else str(summary)
-        mutations: list[dict[str, Any]] = [
-            {
-                "op": "set_summary",
-                "target": item_id,
-                "summary": out_summary,
-            }
-        ]
-        # Record _summarized_hash so we skip unchanged content next time
-        doc = context.get_document(item_id) if hasattr(context, "get_document") else None
-        content_hash = getattr(doc, "content_hash", None) if doc else None
-        if content_hash:
-            mutations.append(
+        with tracer.start_as_current_span(
+            "summarize.mutations",
+            attributes={"item_id": item_id, "summary_chars": len(out_summary)},
+        ):
+            mutations: list[dict[str, Any]] = [
                 {
-                    "op": "set_tags",
+                    "op": "set_summary",
                     "target": item_id,
-                    "tags": {"_summarized_hash": content_hash},
+                    "summary": out_summary,
                 }
-            )
+            ]
+            # Record _summarized_hash so we skip unchanged content next time
+            doc = context.get_document(item_id) if hasattr(context, "get_document") else None
+            content_hash = getattr(doc, "content_hash", None) if doc else None
+            if content_hash:
+                mutations.append(
+                    {
+                        "op": "set_tags",
+                        "target": item_id,
+                        "tags": {"_summarized_hash": content_hash},
+                    }
+                )
         return {
             "summary": out_summary,
             "mutations": mutations,

@@ -76,6 +76,7 @@ from .flow_client import (
 )
 from .flow_env import LocalFlowEnvironment
 from .tracing import get_tracer as _get_tracer
+from .tracing import init_tracing as _init_tracing
 from ._background_processing import BackgroundProcessingMixin
 from ._provider_lifecycle import ProviderLifecycleMixin
 from ._search_augmentation import SearchAugmentationMixin
@@ -153,6 +154,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 ready to serve requests.
         """
         self._decay_half_life_days = decay_half_life_days
+        _init_tracing()
 
         # --- Config resolution ---
         if config is not None:
@@ -1868,6 +1870,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             final_summary = content[:max_len] + "..."
             # Full LLM summary is handled by the after-write flow.
 
+        _has_embeddings = self._config.embedding is not None
+        should_index = _has_embeddings and not is_system_doc
+
         # Cloud mode: defer embedding to background worker for faster response.
         # The doc store write happens immediately; the note is findable by
         # tags/FTS/ID right away. Similarity search works once the
@@ -1882,8 +1887,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 content_hash_full=_content_hash_full(content),
                 created_at=created_at,
             )
+            if is_system_doc:
+                self._store.delete(chroma_coll, id, delete_versions=True)
+                return _record_to_item(result, changed=not content_unchanged)
             # Try embedding dedup before enqueueing (saves network round-trip)
-            if not content_unchanged:
+            if should_index and not content_unchanged:
                 donor_embedding = self._try_dedup_embedding(
                     doc_coll, chroma_coll, new_hash, id, content,
                 )
@@ -1895,6 +1903,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                         tags=casefold_tags_for_index(merged_tags),
                     )
                     return _record_to_item(result, changed=True)
+            if not should_index:
+                return _record_to_item(result, changed=not content_unchanged)
             # Enqueue embedding task (content needed for embedding computation)
             embed_meta = {}
             if existing_doc is not None and not content_unchanged:
@@ -1910,9 +1920,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # If no embedding provider, write to document store only (data is safe;
         # embeddings are filled in by reconciliation when a provider appears).
         _tracer = _get_tracer("keeper")
-        _has_embeddings = self._config.embedding is not None
         embedding = None
-        if _has_embeddings:
+        if should_index:
             with _tracer.start_as_current_span("embed", attributes={"item_id": id}) as _embed_span:
                 _embed_source = "compute"
                 if content_unchanged:
@@ -1944,7 +1953,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         # Save old embedding before ChromaDB upsert overwrites it (for version archival)
         old_embedding = None
-        if _has_embeddings and existing_doc is not None and not content_unchanged:
+        if should_index and existing_doc is not None and not content_unchanged:
             old_embedding = self._store.get_embedding(chroma_coll, id)
 
         # Dual-write: document store (canonical) + ChromaDB (embedding index)
@@ -1959,7 +1968,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 created_at=created_at,
             )
 
-        if _has_embeddings:
+        if should_index:
             # If content changed and we have a version to archive, batch both
             # ChromaDB writes into a single call (one lock, one epoch bump).
             max_ver = (
@@ -1991,6 +2000,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                         summary=final_summary,
                         tags=casefold_tags_for_index(merged_tags),
                     )
+        elif is_system_doc:
+            self._store.delete(chroma_coll, id, delete_versions=True)
 
         with _tracer.start_as_current_span("edge_tags"):
             self._process_edge_tags(id, merged_tags, existing_tags, doc_coll)
@@ -2060,6 +2071,41 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if content is None and uri is None:
             raise ValueError("Either content or uri is required")
 
+        with _get_tracer("keeper").start_as_current_span(
+            "put.request",
+            attributes={
+                "has_content": bool(content is not None),
+                "has_uri": bool(uri is not None),
+                "requested_id": id or "",
+                "queue_background_tasks": bool(queue_background_tasks),
+                "capture_write_context": bool(capture_write_context),
+            },
+        ):
+            return self.__put_direct_impl(
+                content=content,
+                uri=uri,
+                id=id,
+                summary=summary,
+                tags=tags,
+                created_at=created_at,
+                force=force,
+                queue_background_tasks=queue_background_tasks,
+                capture_write_context=capture_write_context,
+            )
+
+    def __put_direct_impl(
+        self,
+        content: Optional[str] = None,
+        *,
+        uri: Optional[str] = None,
+        id: Optional[str] = None,
+        summary: Optional[str] = None,
+        tags: Optional[TagMap] = None,
+        created_at: Optional[str] = None,
+        force: bool = False,
+        queue_background_tasks: bool = True,
+        capture_write_context: bool = False,
+    ) -> Item:
         if tags:
             tags = self._validate_write_tags(tags)
 
@@ -3925,11 +3971,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         chunks: list[dict] = []
 
         if source == "uri":
+            source_uri = doc_record.tags.get("_source_uri") or id
+            if isinstance(source_uri, list):
+                source_uri = source_uri[0] if source_uri else id
             try:
-                doc = self._document_provider.fetch(id)
+                doc = self._document_provider.fetch(str(source_uri))
                 chunks = [{"content": doc.content, "tags": parent_user_tags, "index": 0}]
             except Exception as e:
-                logger.warning("Could not re-fetch %s: %s, using summary", id, e)
+                logger.warning("Could not re-fetch %s: %s, using summary", source_uri, e)
             if chunks:
                 return chunks  # URI sources don't support incremental
 
@@ -5051,23 +5100,37 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         doc_coll = self._resolve_doc_collection()
         chroma_coll = self._resolve_chroma_collection()
 
-        # Find mismatches between stores (exclude empty-summary items
-        # that can't produce embeddings, e.g. bare .tag/* stubs)
+        # Find mismatches between stores. Dot-prefixed system notes are not
+        # indexed in Chroma, so they are excluded from "missing" checks.
         doc_ids = ds.list_ids(doc_coll)
-        missing_from_chroma_raw = self._store.find_missing_ids(chroma_coll, doc_ids)
+        indexed_doc_ids = [doc_id for doc_id in doc_ids if not is_system_id(doc_id)]
+        missing_from_chroma_raw = self._store.find_missing_ids(chroma_coll, indexed_doc_ids)
         missing_records: dict[str, Any] = {}
         for doc_id in missing_from_chroma_raw:
             rec = ds.get(doc_coll, doc_id)
             if rec and rec.summary:
                 missing_records[doc_id] = rec
 
-        # Skip versioned (@v{N}) and part (@p{N}) IDs — tracked in separate tables
+        def _vector_base_id(chroma_id: str) -> str:
+            for marker in ("@v", "@V", "@p", "@P"):
+                if marker in chroma_id:
+                    return chroma_id.rsplit(marker, 1)[0]
+            return chroma_id
+
+        # Indexed system-note rows are stale by definition and should be
+        # removed during reconcile. For non-system notes, skip versioned and
+        # part IDs here because they are tracked with their base document.
         chroma_ids = self._store.list_ids(chroma_coll)
-        doc_id_set = set(doc_ids)
+        doc_id_set = set(indexed_doc_ids)
+        stale_system_ids = {
+            cid for cid in chroma_ids
+            if is_system_id(_vector_base_id(cid))
+        }
         orphaned_in_chroma = {
             cid for cid in chroma_ids
             if cid not in doc_id_set and "@v" not in cid and "@p" not in cid
         }
+        orphaned_in_chroma.update(stale_system_ids)
 
         fixed = 0
         removed = 0

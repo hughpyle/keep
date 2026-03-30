@@ -204,6 +204,50 @@ class TestDualWriteRecovery:
         assert kp._store.get(chroma_coll, "doc1") is not None
         kp.close()
 
+    def test_system_note_put_skips_vector_index(self, mock_providers, tmp_path):
+        """Dot-prefixed system notes should not create searchable vector rows."""
+        kp = Keeper(store_path=tmp_path)
+        chroma_coll = kp._resolve_chroma_collection()
+
+        item = kp.put("cursor payload", id=".cursor/test")
+
+        assert item.id == ".cursor/test"
+        assert kp._document_store.get("default", ".cursor/test") is not None
+        assert kp._store.get(chroma_coll, ".cursor/test") is None
+        kp.close()
+
+    def test_reconcile_ignores_system_notes_missing_from_index(self, mock_providers, tmp_path):
+        """System notes absent from Chroma should not be treated as drift."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("cursor payload", id=".cursor/test")
+
+        stats = kp.reconcile(fix=False)
+
+        assert ".cursor/test" not in stats.get("missing_ids", [])
+        assert stats["missing_from_index"] == 0
+        kp.close()
+
+    def test_reconcile_removes_stale_system_note_rows(self, mock_providers, tmp_path):
+        """Reconcile should delete old system-note rows that still exist in Chroma."""
+        kp = Keeper(store_path=tmp_path)
+        chroma_coll = kp._resolve_chroma_collection()
+
+        kp.put("cursor payload", id=".cursor/test")
+        kp._store.upsert(
+            collection=chroma_coll,
+            id=".cursor/test",
+            embedding=[0.1] * 384,
+            summary="cursor payload",
+            tags={"_source": "inline"},
+        )
+
+        stats = kp.reconcile(fix=True)
+
+        assert ".cursor/test" in stats.get("orphaned_ids", [])
+        assert stats["removed"] > 0
+        assert kp._store.get(chroma_coll, ".cursor/test") is None
+        kp.close()
+
 
 # ---------------------------------------------------------------------------
 # process_pending retry and abandon flow
@@ -505,4 +549,3 @@ class TestConcurrentWriters:
         assert total == 10, f"Expected 10 total, got {total}: {results}"
 
         kp.close()
-

@@ -8,16 +8,30 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from .protocol import WorkQueueProtocol
+from .tracing import get_tracer
 
 if TYPE_CHECKING:
     from .api import Keeper
 
 logger = logging.getLogger(__name__)
+
+
+def _queue_wait_ms(created_at: str | None) -> float | None:
+    if not created_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(created_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max((datetime.now(timezone.utc) - dt).total_seconds() * 1000.0, 0.0)
+    except Exception:
+        return None
 
 
 def process_work_batch(
@@ -56,13 +70,25 @@ def process_work_batch(
 
         target = item.input.get("item_id") or item.input.get("id") or "?"
         try:
+            wait_ms = _queue_wait_ms(item.created_at)
             logger.info("Processing %s %s", item.kind, target)
-            outcome = _execute_work_item(
-                keeper,
-                item.kind,
-                item.input,
-                shutdown_check=shutdown_check,
-            )
+            with get_tracer("work_queue").start_as_current_span(
+                "work_item.execute",
+                attributes={
+                    "work_id": item.work_id,
+                    "kind": item.kind,
+                    "item_id": str(target),
+                    "queue.priority": item.priority,
+                },
+            ) as span:
+                if wait_ms is not None:
+                    span.set_attribute("queue.wait_ms", round(wait_ms, 3))
+                outcome = _execute_work_item(
+                    keeper,
+                    item.kind,
+                    item.input,
+                    shutdown_check=shutdown_check,
+                )
             status = outcome.get("status", "applied")
             details = outcome.get("details")
             if item.kind == "flow" and status == "stopped" and outcome.get("cursor"):

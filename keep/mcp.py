@@ -19,7 +19,7 @@ from typing import Annotated, Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .daemon_client import get_port, http_request
 
@@ -75,6 +75,92 @@ _IDEMPOTENT = ToolAnnotations(idempotentHint=True, destructiveHint=False)
 # ---------------------------------------------------------------------------
 
 
+class FlowParams(BaseModel):
+    """Common flow parameters exposed explicitly in the MCP schema.
+
+    Extra keys remain allowed so custom state docs and less-common built-ins
+    still work without schema churn.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    id: Annotated[Optional[str], Field(
+        description="Generic target note ID. Used by operations like put, tag, delete, and move.",
+    )] = None
+    item_id: Annotated[Optional[str], Field(
+        description='Note ID for read flows like get. Use "now" for current working context.',
+    )] = None
+    name: Annotated[Optional[str], Field(
+        description="Target name/ID for move-like flows.",
+    )] = None
+    source_id: Annotated[Optional[str], Field(
+        description='Source note ID for move-like flows. Defaults to "now" when omitted.',
+    )] = None
+    content: Annotated[Optional[str], Field(
+        description="Inline text content to store or update.",
+    )] = None
+    uri: Annotated[Optional[str], Field(
+        description="URI to ingest, such as file://, https://, or http://.",
+    )] = None
+    summary: Annotated[Optional[str], Field(
+        description="Optional summary override for put-like flows.",
+    )] = None
+    tags: Annotated[Optional[dict[str, str | list[str]]], Field(
+        description="Tag filter or tag updates, depending on the flow.",
+    )] = None
+    query: Annotated[Optional[str], Field(
+        description="Natural-language search query.",
+    )] = None
+    similar_to: Annotated[Optional[str], Field(
+        description="Find items similar to this note ID.",
+    )] = None
+    prefix: Annotated[Optional[str], Field(
+        description='ID prefix or glob, for example ".tag/*".',
+    )] = None
+    scope: Annotated[Optional[str], Field(
+        description='ID glob to constrain search results, for example "file:///path/to/dir*".',
+    )] = None
+    since: Annotated[Optional[str], Field(
+        description="Only include notes updated since this date/duration.",
+    )] = None
+    until: Annotated[Optional[str], Field(
+        description="Only include notes updated before this date/duration.",
+    )] = None
+    limit: Annotated[Optional[int], Field(
+        description="Maximum number of results to return.",
+    )] = None
+    token_budget: Annotated[Optional[int], Field(
+        description="Token budget for rendered text output.",
+    )] = None
+    deep: Annotated[Optional[bool], Field(
+        description="Follow tags/edges to discover related notes.",
+    )] = None
+    include_hidden: Annotated[Optional[bool], Field(
+        description="Include system notes in results.",
+    )] = None
+    include_meta: Annotated[Optional[bool], Field(
+        description="Include meta sections during context assembly.",
+    )] = None
+    include_parts: Annotated[Optional[bool], Field(
+        description="Include structural parts during context assembly.",
+    )] = None
+    include_similar: Annotated[Optional[bool], Field(
+        description="Include similar notes during context assembly.",
+    )] = None
+    include_versions: Annotated[Optional[bool], Field(
+        description="Include version navigation during context assembly.",
+    )] = None
+    only_current: Annotated[Optional[bool], Field(
+        description="Move or operate on only the current version when supported.",
+    )] = None
+    analyze: Annotated[Optional[bool], Field(
+        description="Analyze the note into structural parts when supported.",
+    )] = None
+    bias: Annotated[Optional[dict[str, float]], Field(
+        description='Per-item score weighting, for example {"now": 0}.',
+    )] = None
+
+
 @mcp.tool(
     description=(
         "Execute a keep operation via state-doc flow. "
@@ -95,10 +181,19 @@ _IDEMPOTENT = ToolAnnotations(idempotentHint=True, destructiveHint=False)
 )
 async def keep_flow(
     state: Annotated[str, Field(
-        description="State doc name (e.g. 'query-resolve', 'get-context', 'put', 'tag', 'delete', 'move', 'stats').",
+        description="State doc name (e.g. 'query-resolve', 'get', 'put', 'tag', 'delete', 'move', 'stats').",
     )],
-    params: Annotated[Optional[dict[str, Any]], Field(
-        description="Flow parameters. Use 'id' key to target a specific note.",
+    params: Annotated[Optional[FlowParams], Field(
+        description=(
+            "Flow parameters as a JSON object. Do not pass YAML or a plain string. "
+            'Examples: {"item_id": "now"}, {"query": "auth patterns"}, '
+            '{"content": "decision: use JWT", "tags": {"project": "auth"}}.'
+        ),
+        examples=[
+            {"item_id": "now"},
+            {"query": "auth patterns", "tags": {"project": "myapp"}},
+            {"content": "decision: use JWT", "tags": {"project": "auth"}},
+        ],
     )] = None,
     budget: Annotated[Optional[int], Field(
         description="Max ticks for this invocation (default: from config).",
@@ -114,9 +209,13 @@ async def keep_flow(
     )] = None,
 ) -> str:
     """Run a state-doc flow."""
+    if isinstance(params, BaseModel):
+        params_body = params.model_dump(exclude_none=True)
+    else:
+        params_body = params
     body: dict = {
         "state": state,
-        "params": params,
+        "params": params_body,
         "budget": budget,
         "cursor": cursor,
         "state_doc_yaml": state_doc_yaml,

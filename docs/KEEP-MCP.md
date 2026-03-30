@@ -8,7 +8,7 @@ Provides MCP access to keep's reflective memory, using a local interface (stdio)
 
 ```bash
 keep mcp                    # Start stdio server
-keep mcp --store ~/mystore  # Custom store path
+keep --store ~/mystore mcp  # Custom store path
 ```
 
 ### Claude Desktop

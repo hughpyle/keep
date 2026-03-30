@@ -25,10 +25,12 @@ from .types import (
     casefold_tags,
     casefold_tags_for_index,
     filter_non_system_tags,
+    is_system_id,
     normalize_id,
     tag_values,
     utc_now,
 )
+from .tracing import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -250,17 +252,28 @@ class BackgroundProcessingMixin:
             "metadata": item_metadata,
         }
 
-        wq.enqueue(
-            "flow",
-            {
-                "state": "after-write",
-                "params": flow_params,
+        with get_tracer("background").start_as_current_span(
+            "after_write.enqueue",
+            attributes={
                 "item_id": item_id,
-                "content": content,
+                "content_length": len(content),
+                "has_uri": bool(uri),
+                "content_type": content_type or "",
             },
-            supersede_key=f"flow:after-write:{item_id}",
-            priority=3,
-        )
+        ) as span:
+            work_id = wq.enqueue(
+                "flow",
+                {
+                    "state": "after-write",
+                    "params": flow_params,
+                    "item_id": item_id,
+                    "content": content,
+                },
+                supersede_key=f"flow:after-write:{item_id}",
+                priority=3,
+            )
+            span.set_attribute("work_id", work_id)
+            span.set_attribute("queue.priority", 3)
 
         # Write version file so the daemon can detect upgrades
         try:
@@ -864,6 +877,10 @@ class BackgroundProcessingMixin:
         doc_coll = item.collection
         chroma_coll = self._resolve_chroma_collection()
 
+        if is_system_id(item.id):
+            self._store.delete(chroma_coll, item.id, delete_versions=True)
+            return
+
         # Get current doc record (may have been deleted before we got here)
         doc = self._document_store.get(doc_coll, item.id)
         if doc is None:
@@ -912,11 +929,14 @@ class BackgroundProcessingMixin:
         Handles both main docs and versioned entries.
         The item.content contains the summary text to embed.
         """
+        chroma_coll = self._resolve_chroma_collection()
+        if is_system_id(item.id):
+            self._store.delete(chroma_coll, item.id, delete_versions=True)
+            return
         if not item.content or not item.content.strip():
             logger.info("Skipping reindex for %s: no summary to embed", item.id)
             return
 
-        chroma_coll = self._resolve_chroma_collection()
         meta = item.metadata or {}
         version = meta.get("version")
         base_id = meta.get("base_id")

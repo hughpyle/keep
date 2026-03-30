@@ -398,12 +398,11 @@ def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
     keeper._config.system_docs_hash = current_hash
     save_config(keeper._config)
 
-    n_enqueued = stats["created"] + stats["migrated"]
-    if n_enqueued > 0:
+    n_changed = stats["created"] + stats["migrated"]
+    if n_changed > 0:
         logger.info(
-            "System docs migration: %d created, %d updated, %d skipped. "
-            "Enqueued %d for background embedding.",
-            stats["created"], stats["migrated"], stats["skipped"], n_enqueued,
+            "System docs migration: %d created, %d updated, %d skipped, %d cleaned.",
+            stats["created"], stats["migrated"], stats["skipped"], stats["cleaned"],
         )
 
     return stats

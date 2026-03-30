@@ -21,6 +21,8 @@ from opentelemetry import trace
 logger = logging.getLogger(__name__)
 
 _tracers: dict[str, trace.Tracer] = {}
+_initialized = False
+_init_lock = threading.Lock()
 
 
 def get_tracer(name: str) -> trace.Tracer:
@@ -41,32 +43,38 @@ def init_tracing(*, tree_log: bool = False) -> None:
     if not (os.environ.get("KEEP_TRACE") or os.environ.get("OTEL_TRACES_EXPORTER")):
         return
 
-    try:
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.resources import Resource
-    except ImportError:
-        logger.warning("opentelemetry-sdk not installed — tracing disabled")
-        return
+    global _initialized
+    with _init_lock:
+        if _initialized:
+            return
 
-    provider = TracerProvider(resource=Resource.create({"service.name": "keep"}))
-
-    if tree_log or os.environ.get("KEEP_TRACE"):
-        provider.add_span_processor(TimingTreeProcessor())
-
-    if os.environ.get("OTEL_TRACES_EXPORTER"):
         try:
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-                OTLPSpanExporter,
-            )
-            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.resources import Resource
         except ImportError:
-            logger.warning("OTLP exporter not available")
+            logger.warning("opentelemetry-sdk not installed — tracing disabled")
+            return
 
-    trace.set_tracer_provider(provider)
-    # Clear cached tracers so they pick up the new provider
-    _tracers.clear()
-    logger.info("Tracing enabled")
+        provider = TracerProvider(resource=Resource.create({"service.name": "keep"}))
+
+        if tree_log or os.environ.get("KEEP_TRACE"):
+            provider.add_span_processor(TimingTreeProcessor())
+
+        if os.environ.get("OTEL_TRACES_EXPORTER"):
+            try:
+                from opentelemetry.sdk.trace.export import BatchSpanProcessor
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                    OTLPSpanExporter,
+                )
+                provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            except ImportError:
+                logger.warning("OTLP exporter not available")
+
+        trace.set_tracer_provider(provider)
+        # Clear cached tracers so they pick up the new provider
+        _tracers.clear()
+        _initialized = True
+        logger.info("Tracing enabled")
 
 
 # ---------------------------------------------------------------------------
@@ -130,11 +138,16 @@ class TimingTreeProcessor:
                     "source",
                     "count",
                     "item_id",
+                    "requested_id",
                     "meta_doc",
                     "result_count",
                     "state",
                     "query",
                     "similar_to",
+                    "work_id",
+                    "queue.wait_ms",
+                    "queue.priority",
+                    "queue_background_tasks",
                     "http.method",
                     "http.path",
                 ):

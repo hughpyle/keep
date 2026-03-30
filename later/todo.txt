@@ -1,20 +1,13 @@
 
-* more perf, cache
-
 * reranking (including a local provider)
 
 * "skill install" (skill.md and _all the docs_) -> docs index, etc
     separate from "tool install"
+    (better because native read, not MCP, to read the docs)
 
 * mcp "tried_queries" remove??
 
-* mcp API shape is not clear enough:
-    keep.keep_flow({"state":"get","params":"item_id: now","token_budget":"1200"})
-    └ Error executing tool keep_flow: 1 validation error for keep_flowArguments
-        params
-        Input should be a valid dictionary [type=dict_type, input_value='item_id: now', input_type=str]
-
-* mcp prompts
+* mcp prompts (and prompt parameterization!)
 
 * context-focused results (get *only* the parts, similar, etc)
 
@@ -336,3 +329,5 @@ x acp
 . "keep now" versus "keep get now" / "keep put now"
 . _daemon_client filename
 . review actions & hardcoded processing, available factoring
+. mcp API shape is not clear enough
+. more perf
