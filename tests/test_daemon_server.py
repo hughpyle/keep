@@ -136,7 +136,6 @@ def test_put_and_get(http):
     r = http.get("/v1/notes/nonexistent")
     assert r.status_code == 404
 
-
 def test_delete(http):
     http.post("/v1/notes", json={"content": "to delete", "id": "del-1"})
     r = http.delete("/v1/notes/del-1")

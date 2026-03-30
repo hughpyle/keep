@@ -23,7 +23,7 @@ from typing import Any, Optional
 from .const import SQLITE_BUSY_TIMEOUT_MS
 from .recovery import is_malformed_db_error
 from .tracing import get_tracer
-from .types import normalize_tag_map, tag_values, utc_now
+from .types import normalize_tag_map, repair_surrogate_text, tag_values, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -996,6 +996,7 @@ class DocumentStore:
             False if only tags/summary changed or if new document.
         """
         now = self._now()
+        summary = repair_surrogate_text(summary)
         tags = normalize_tag_map(tags)
         tags_json = json.dumps(tags, ensure_ascii=False)
 
@@ -1260,6 +1261,7 @@ class DocumentStore:
             True if document was found and updated, False otherwise
         """
         now = self._now()
+        summary = repair_surrogate_text(summary)
 
         with self._lock:
             cursor = self._execute("""
@@ -1469,6 +1471,7 @@ class DocumentStore:
         Returns:
             True if the version existed and was updated.
         """
+        summary = repair_surrogate_text(summary)
         tags = normalize_tag_map(tags)
         tags_json = json.dumps(tags, ensure_ascii=False)
         with self._lock:

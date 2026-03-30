@@ -10,6 +10,8 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional, Protocol
 
 from .actions import coerce_item_id
+from .types import repair_surrogate_text
+from .utils import _text_content_id
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +284,7 @@ class LocalFlowEnvironment:
                 created_at=created_at,
                 force=force,
             )
-        from .utils import _text_content_id
+        content = repair_surrogate_text(content) if content is not None else None
         doc_id = id or _text_content_id(content) if content else id
         return putter(
             content,

@@ -2,6 +2,7 @@
 
 from keep.api import Keeper
 from keep.flow_env import LocalFlowEnvironment
+from keep.state_doc_runtime import FlowResult
 from keep.state_doc_runtime import make_action_runner
 
 
@@ -49,6 +50,47 @@ def test_query_prompt_without_text_renders_without_running_query_resolution(
     text = result.data.get("text", "")
     assert "Question:" in text
     assert "Context:" in text
+
+
+def test_query_prompt_uses_find_deep_state(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    prompt_doc = kp.get(".prompt/agent/query")
+
+    assert prompt_doc is not None
+    assert prompt_doc.tags.get("state") == "find-deep"
+
+
+def test_prompt_render_tolerates_ambiguous_stopped_flow(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    original = kp.run_flow_command
+
+    def _patched(state, params=None, **kwargs):
+        if state == "find-deep":
+            return FlowResult(
+                status="stopped",
+                bindings={
+                    "search": {
+                        "results": [{"id": "doc1", "summary": "Daemon code edited yesterday", "tags": {}}],
+                        "count": 1,
+                    }
+                },
+                data={"reason": "ambiguous"},
+                ticks=3,
+                history=["find-deep"],
+            )
+        return original(state, params=params, **kwargs)
+
+    kp.run_flow_command = _patched
+
+    result = kp.render_prompt(name="query", text="when was the daemon code edited?")
+
+    assert result is not None
+    assert result.flow_bindings is not None
+    assert result.flow_bindings["search"]["count"] == 1
 
 
 def test_summarize_action_errors_when_default_prompt_is_broken(mock_providers, tmp_path):

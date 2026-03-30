@@ -1,5 +1,4 @@
 """Data types for reflective memory."""
-
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -275,6 +274,14 @@ def normalize_id(id: str) -> str:
     return id
 
 
+def repair_surrogate_text(value: str) -> str:
+    """Normalize surrogate code points to safe Unicode text."""
+    if not any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+        return unicodedata.normalize("NFC", value)
+    repaired = value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+    return unicodedata.normalize("NFC", repaired)
+
+
 def _normalize_tag_value(value: Any) -> list[str]:
     """Normalize a tag value to a deduplicated list of strings."""
     if value is None:
@@ -289,7 +296,7 @@ def _normalize_tag_value(value: Any) -> list[str]:
         if v is None:
             continue
         # Normalize surrounding whitespace while preserving internal whitespace.
-        sv = unicodedata.normalize("NFC", str(v).strip())
+        sv = repair_surrogate_text(str(v).strip())
         if sv[:8].lower().startswith(("http://", "https://")):
             # Apply the same URI folding strategy used by normalize_id(),
             # but do not reject non-ID-safe strings here.

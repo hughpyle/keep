@@ -63,6 +63,7 @@ from .types import (
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     is_system_id,
     MAX_TAG_VALUE_LENGTH,
+    repair_surrogate_text,
 )
 from .context_cache import ContextCache
 from .flow_client import (
@@ -1752,6 +1753,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         force: bool = False,
         queue_summarize: bool = True,
     ) -> Item:
+        content = repair_surrogate_text(content)
+        if summary is not None:
+            summary = repair_surrogate_text(summary)
+
         # Wait for background reconciliation to finish before writing.
         # The reconcile thread and main thread both access the embedding
         # provider, ChromaDB, and SQLite — concurrent access causes hangs

@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from keep.api import Keeper
 from keep.document_store import DocumentStore
 
 
@@ -279,3 +280,17 @@ class TestRuntimeRecovery:
         with patch.object(store, "_recover_malformed"):
             result = store._try_runtime_recover()
             assert result is True
+
+
+class TestUnicodeRepair:
+    """Malformed surrogate text should not crash note writes."""
+
+    def test_put_repairs_surrogate_content(self, tmp_path, mock_providers):
+        kp = Keeper(store_path=tmp_path)
+        try:
+            item = kp.put(content="\ud83d\udcdd note")
+            stored = kp.get(item.id)
+            assert stored is not None
+            assert stored.summary.startswith("📝 note")
+        finally:
+            kp.close()

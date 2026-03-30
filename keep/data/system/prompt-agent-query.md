@@ -2,7 +2,7 @@
 tags:
   category: system
   context: prompt
-  state: query-resolve
+  state: find-deep
 ---
 # .prompt/agent/query
 

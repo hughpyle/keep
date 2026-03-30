@@ -478,7 +478,13 @@ class ContextResolutionMixin:
             budget=10,
             writable=False,
         )
-        if flow_result.status != "done":
+        if flow_result.status == "stopped":
+            reason = str((flow_result.data or {}).get("reason") or "")
+            if reason not in {"ambiguous", "budget"}:
+                raise ValueError(
+                    f"prompt state flow {state_doc!r} failed: {flow_result.status}: {flow_result.data}"
+                )
+        elif flow_result.status != "done":
             raise ValueError(
                 f"prompt state flow {state_doc!r} failed: {flow_result.status}: {flow_result.data}"
             )
@@ -491,7 +497,7 @@ class ContextResolutionMixin:
             since=since,
             until=until,
             token_budget=token_budget,
-            flow_bindings=flow_result.bindings if flow_result.status == "done" else None,
+            flow_bindings=flow_result.bindings,
         )
 
     def list_prompts(self) -> list[PromptInfo]:
