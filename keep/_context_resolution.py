@@ -179,141 +179,146 @@ class ContextResolutionMixin:
             include_parts: Whether to include parts manifest
             include_versions: Whether to include version navigation
         """
-        from .perf_stats import perf
-        import time
-        _ctx_t0 = time.monotonic()
+        with get_tracer("keeper").start_as_current_span(
+            "get_context",
+            attributes={"item_id": id},
+        ) as span:
+            # Ensure state docs are in the store for the read flow.
+            self._ensure_sysdocs()
 
-        # Ensure state docs are in the store for the read flow.
-        self._ensure_sysdocs()
+            # Parse @V{N} version ref from ID (explicit version= takes precedence)
+            base_id, id_version = parse_version_ref(id)
+            if id_version is not None and version is None:
+                version = id_version
+                id = base_id
+            id = normalize_id(id)
+            resolved = self.resolve_version_offset(id, version)
+            if resolved is None:
+                span.set_attribute("found", False)
+                return None
+            offset = resolved
+            span.set_attribute("viewing_offset", offset)
+            if offset > 0:
+                item = self.get_version(id, offset)
+            else:
+                item = self.get(id)
+            if item is None:
+                span.set_attribute("found", False)
+                return None
 
-        # Parse @V{N} version ref from ID (explicit version= takes precedence)
-        base_id, id_version = parse_version_ref(id)
-        if id_version is not None and version is None:
-            version = id_version
-            id = base_id
-        id = normalize_id(id)
-        resolved = self.resolve_version_offset(id, version)
-        if resolved is None:
-            return None
-        offset = resolved
-        if offset > 0:
-            item = self.get_version(id, offset)
-        else:
-            item = self.get(id)
-        if item is None:
-            return None
+            # System docs are authored reference/configuration content.
+            # Rendering them should show the document itself only; surrounding
+            # context assembly (similar/meta/parts/edges/version nav) adds noise
+            # and unnecessary work.
+            if is_system_id(item.id):
+                span.set_attribute("system_id", True)
+                return ItemContext(
+                    item=item,
+                    viewing_offset=offset,
+                    similar=[],
+                    meta={},
+                    edges={},
+                    parts=[],
+                    prev=[],
+                    next=[],
+                )
 
-        # System docs are authored reference/configuration content.
-        # Rendering them should show the document itself only; surrounding
-        # context assembly (similar/meta/parts/edges/version nav) adds noise
-        # and unnecessary work.
-        if is_system_id(item.id):
-            perf.record("get_context", "total", time.monotonic() - _ctx_t0,
-                        context_id=id)
+            # Version navigation
+            prev_refs: list[VersionRef] = []
+            next_refs: list[VersionRef] = []
+            if include_versions:
+                if offset == 0:
+                    nav = self.get_version_nav(id, None, limit=versions_limit)
+                    for i, v in enumerate(nav.get("prev", [])[:versions_limit]):
+                        prev_refs.append(VersionRef(
+                            offset=i + 1,
+                            date=local_date(v.tags.get("_created") or v.created_at or ""),
+                            summary=v.summary,
+                        ))
+                else:
+                    # Keep navigation in user-visible offset space.
+                    # This avoids mixing offset (V{N}) with internal version numbers.
+                    older = self.get_version(id, offset + 1)
+                    if older is not None:
+                        prev_refs.append(VersionRef(
+                            offset=offset + 1,
+                            date=local_date(older.tags.get("_created", "")),
+                            summary=older.summary,
+                        ))
+                    if offset > 1:
+                        newer = self.get_version(id, offset - 1)
+                        if newer is not None:
+                            next_refs.append(VersionRef(
+                                offset=offset - 1,
+                                date=local_date(newer.tags.get("_created", "")),
+                                summary=newer.summary,
+                            ))
+
+            # Data gathering via state-doc flow (similar, parts, meta).
+            # Edge resolution stays inline — it requires direct database
+            # queries (inverse edges, explicit edge-tag lookup) that the
+            # generic traverse action doesn't support.
+            similar_refs: list[SimilarRef] = []
+            meta_refs: dict[str, list[MetaRef]] = {}
+            part_refs: list[PartRef] = []
+            edge_refs: dict[str, list[EdgeRef]] = {}
+
+            if offset == 0:
+                if include_similar or include_meta or include_parts:
+                    with get_tracer("keeper").start_as_current_span(
+                        "get_context.read_flow",
+                        attributes={"item_id": id},
+                    ):
+                        flow_result = self._run_read_flow(
+                            "get",
+                            {
+                                "item_id": id,
+                                "similar_limit": similar_limit if include_similar else 0,
+                                "meta_limit": meta_limit if include_meta else 0,
+                                "parts_limit": parts_limit if include_parts else 0,
+                                "edges_limit": edges_limit,
+                                "versions_limit": versions_limit if include_versions else 0,
+                            },
+                        )
+                    if flow_result.status == "done":
+                        bindings = flow_result.bindings
+                        if include_similar:
+                            similar_refs = self._map_flow_similar(bindings.get("similar", {}))
+                            similar_refs = similar_refs[:similar_limit]
+                        if include_meta:
+                            meta_refs = self._map_flow_meta(bindings.get("meta", {}))
+                            # Cap each meta section to meta_limit
+                            for key in list(meta_refs.keys()):
+                                meta_refs[key] = meta_refs[key][:meta_limit]
+                        if include_parts:
+                            part_refs = self._map_flow_parts(bindings.get("parts", {}))
+                            part_refs = part_refs[:parts_limit]
+                        edge_refs = self._map_flow_edges(bindings.get("edges", {}))
+                        # Cap each edge predicate to edges_limit
+                        for key in list(edge_refs.keys()):
+                            edge_refs[key] = edge_refs[key][:edges_limit]
+                    else:
+                        logger.warning(
+                            "get-context flow returned %s for %r: %s",
+                            flow_result.status, id, flow_result.data,
+                        )
+                        # Fallback: inline edge resolution when flow fails
+                        edge_refs = self._resolve_edge_refs(item, id)
+
+            span.set_attribute("similar_count", len(similar_refs))
+            span.set_attribute("meta_count", sum(len(v) for v in meta_refs.values()))
+            span.set_attribute("edge_count", sum(len(v) for v in edge_refs.values()))
+            span.set_attribute("part_count", len(part_refs))
             return ItemContext(
                 item=item,
                 viewing_offset=offset,
-                similar=[],
-                meta={},
-                edges={},
-                parts=[],
-                prev=[],
-                next=[],
+                similar=similar_refs,
+                meta=meta_refs,
+                edges=edge_refs,
+                parts=part_refs,
+                prev=prev_refs,
+                next=next_refs,
             )
-
-        # Version navigation
-        prev_refs: list[VersionRef] = []
-        next_refs: list[VersionRef] = []
-        if include_versions:
-            if offset == 0:
-                nav = self.get_version_nav(id, None, limit=versions_limit)
-                for i, v in enumerate(nav.get("prev", [])[:versions_limit]):
-                    prev_refs.append(VersionRef(
-                        offset=i + 1,
-                        date=local_date(v.tags.get("_created") or v.created_at or ""),
-                        summary=v.summary,
-                    ))
-            else:
-                # Keep navigation in user-visible offset space.
-                # This avoids mixing offset (V{N}) with internal version numbers.
-                older = self.get_version(id, offset + 1)
-                if older is not None:
-                    prev_refs.append(VersionRef(
-                        offset=offset + 1,
-                        date=local_date(older.tags.get("_created", "")),
-                        summary=older.summary,
-                    ))
-                if offset > 1:
-                    newer = self.get_version(id, offset - 1)
-                    if newer is not None:
-                        next_refs.append(VersionRef(
-                            offset=offset - 1,
-                            date=local_date(newer.tags.get("_created", "")),
-                            summary=newer.summary,
-                        ))
-
-        # Data gathering via state-doc flow (similar, parts, meta).
-        # Edge resolution stays inline — it requires direct database
-        # queries (inverse edges, explicit edge-tag lookup) that the
-        # generic traverse action doesn't support.
-        similar_refs: list[SimilarRef] = []
-        meta_refs: dict[str, list[MetaRef]] = {}
-        part_refs: list[PartRef] = []
-        edge_refs: dict[str, list[EdgeRef]] = {}
-
-        if offset == 0:
-            if include_similar or include_meta or include_parts:
-                from .tracing import get_tracer as _get_tracer
-                with perf.timer("get_context", "read_flow", context_id=id), \
-                     _get_tracer("keeper").start_as_current_span("get_context", attributes={"item_id": id}):
-                    flow_result = self._run_read_flow(
-                        "get",
-                        {
-                            "item_id": id,
-                            "similar_limit": similar_limit if include_similar else 0,
-                            "meta_limit": meta_limit if include_meta else 0,
-                            "parts_limit": parts_limit if include_parts else 0,
-                            "edges_limit": edges_limit,
-                            "versions_limit": versions_limit if include_versions else 0,
-                        },
-                    )
-                if flow_result.status == "done":
-                    bindings = flow_result.bindings
-                    if include_similar:
-                        similar_refs = self._map_flow_similar(bindings.get("similar", {}))
-                        similar_refs = similar_refs[:similar_limit]
-                    if include_meta:
-                        meta_refs = self._map_flow_meta(bindings.get("meta", {}))
-                        # Cap each meta section to meta_limit
-                        for key in list(meta_refs.keys()):
-                            meta_refs[key] = meta_refs[key][:meta_limit]
-                    if include_parts:
-                        part_refs = self._map_flow_parts(bindings.get("parts", {}))
-                        part_refs = part_refs[:parts_limit]
-                    edge_refs = self._map_flow_edges(bindings.get("edges", {}))
-                    # Cap each edge predicate to edges_limit
-                    for key in list(edge_refs.keys()):
-                        edge_refs[key] = edge_refs[key][:edges_limit]
-                else:
-                    logger.warning(
-                        "get-context flow returned %s for %r: %s",
-                        flow_result.status, id, flow_result.data,
-                    )
-                    # Fallback: inline edge resolution when flow fails
-                    edge_refs = self._resolve_edge_refs(item, id)
-
-        perf.record("get_context", "total", time.monotonic() - _ctx_t0,
-                    context_id=id)
-        return ItemContext(
-            item=item,
-            viewing_offset=offset,
-            similar=similar_refs,
-            meta=meta_refs,
-            edges=edge_refs,
-            parts=part_refs,
-            prev=prev_refs,
-            next=next_refs,
-        )
 
     def resolve_version_offset(self, id: str, selector: int | None) -> Optional[int]:
         """Resolve a public version selector to a concrete offset.

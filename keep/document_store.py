@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .const import SQLITE_BUSY_TIMEOUT_MS
+from .tracing import get_tracer
 from .types import normalize_tag_map, tag_values, utc_now
 
 logger = logging.getLogger(__name__)
@@ -2322,90 +2323,95 @@ class DocumentStore:
             bm25_rank is negative (more negative = better match).
             Returns empty list if FTS5 is not available.
         """
-        from .perf_stats import perf
-
         if not self._fts_available:
             return []
         fts_query = self._build_fts_query(query)
         if fts_query is None:
             return []
 
-        import time
-        _fts_t0 = time.monotonic()
+        with get_tracer("doc_store").start_as_current_span(
+            "doc_store.query_fts",
+            attributes={
+                "collection": collection,
+                "limit": limit,
+                "query": query,
+                "tag_count": len(tags or {}),
+            },
+        ) as span:
+            # --- Search documents ---
+            doc_sql = """
+                SELECT d.id, d.summary, f.rank
+                FROM documents_fts f
+                JOIN documents d ON d.rowid = f.rowid
+                WHERE documents_fts MATCH ?
+                AND d.collection = ?
+            """
+            doc_params: list[Any] = [fts_query, collection]
+            if tags:
+                for k in tags:
+                    for v in tag_values(tags, k):
+                        doc_sql += (
+                            " AND EXISTS ("
+                            "SELECT 1 FROM json_each(d.tags_json, ?) jv "
+                            "WHERE CAST(jv.value AS TEXT) = ?)"
+                        )
+                        doc_params.extend([f"$.{k}", v])
+            doc_sql += " ORDER BY f.rank LIMIT ?"
+            doc_params.append(limit)
+            doc_rows = self._execute(doc_sql, doc_params).fetchall()
 
-        # --- Search documents ---
-        doc_sql = """
-            SELECT d.id, d.summary, f.rank
-            FROM documents_fts f
-            JOIN documents d ON d.rowid = f.rowid
-            WHERE documents_fts MATCH ?
-            AND d.collection = ?
-        """
-        doc_params: list[Any] = [fts_query, collection]
-        if tags:
-            for k in tags:
-                for v in tag_values(tags, k):
-                    doc_sql += (
-                        " AND EXISTS ("
-                        "SELECT 1 FROM json_each(d.tags_json, ?) jv "
-                        "WHERE CAST(jv.value AS TEXT) = ?)"
-                    )
-                    doc_params.extend([f"$.{k}", v])
-        doc_sql += " ORDER BY f.rank LIMIT ?"
-        doc_params.append(limit)
-        doc_rows = self._execute(doc_sql, doc_params).fetchall()
+            # --- Search parts (summary + content) ---
+            part_sql = """
+                SELECT p.id || '@p' || p.part_num, p.summary, f.rank
+                FROM parts_fts f
+                JOIN document_parts p ON p.rowid = f.rowid
+                WHERE parts_fts MATCH ?
+                AND p.collection = ?
+            """
+            part_params: list[Any] = [fts_query, collection]
+            if tags:
+                for k in tags:
+                    for v in tag_values(tags, k):
+                        part_sql += (
+                            " AND EXISTS ("
+                            "SELECT 1 FROM json_each(p.tags_json, ?) jv "
+                            "WHERE CAST(jv.value AS TEXT) = ?)"
+                        )
+                        part_params.extend([f"$.{k}", v])
+            part_sql += " ORDER BY f.rank LIMIT ?"
+            part_params.append(limit)
+            part_rows = self._execute(part_sql, part_params).fetchall()
 
-        # --- Search parts (summary + content) ---
-        part_sql = """
-            SELECT p.id || '@p' || p.part_num, p.summary, f.rank
-            FROM parts_fts f
-            JOIN document_parts p ON p.rowid = f.rowid
-            WHERE parts_fts MATCH ?
-            AND p.collection = ?
-        """
-        part_params: list[Any] = [fts_query, collection]
-        if tags:
-            for k in tags:
-                for v in tag_values(tags, k):
-                    part_sql += (
-                        " AND EXISTS ("
-                        "SELECT 1 FROM json_each(p.tags_json, ?) jv "
-                        "WHERE CAST(jv.value AS TEXT) = ?)"
-                    )
-                    part_params.extend([f"$.{k}", v])
-        part_sql += " ORDER BY f.rank LIMIT ?"
-        part_params.append(limit)
-        part_rows = self._execute(part_sql, part_params).fetchall()
+            # --- Search versions ---
+            ver_sql = """
+                SELECT v.id || '@v' || v.version, v.summary, f.rank
+                FROM versions_fts f
+                JOIN document_versions v ON v.rowid = f.rowid
+                WHERE versions_fts MATCH ?
+                AND v.collection = ?
+            """
+            ver_params: list[Any] = [fts_query, collection]
+            if tags:
+                for k in tags:
+                    for v in tag_values(tags, k):
+                        ver_sql += (
+                            " AND EXISTS ("
+                            "SELECT 1 FROM json_each(v.tags_json, ?) jv "
+                            "WHERE CAST(jv.value AS TEXT) = ?)"
+                        )
+                        ver_params.extend([f"$.{k}", v])
+            ver_sql += " ORDER BY f.rank LIMIT ?"
+            ver_params.append(limit)
+            ver_rows = self._execute(ver_sql, ver_params).fetchall()
 
-        # --- Search versions ---
-        ver_sql = """
-            SELECT v.id || '@v' || v.version, v.summary, f.rank
-            FROM versions_fts f
-            JOIN document_versions v ON v.rowid = f.rowid
-            WHERE versions_fts MATCH ?
-            AND v.collection = ?
-        """
-        ver_params: list[Any] = [fts_query, collection]
-        if tags:
-            for k in tags:
-                for v in tag_values(tags, k):
-                    ver_sql += (
-                        " AND EXISTS ("
-                        "SELECT 1 FROM json_each(v.tags_json, ?) jv "
-                        "WHERE CAST(jv.value AS TEXT) = ?)"
-                    )
-                    ver_params.extend([f"$.{k}", v])
-        ver_sql += " ORDER BY f.rank LIMIT ?"
-        ver_params.append(limit)
-        ver_rows = self._execute(ver_sql, ver_params).fetchall()
-
-        # Merge by BM25 rank (more negative = better), take top `limit`
-        combined = [(row[0], row[1], row[2]) for row in doc_rows]
-        combined.extend((row[0], row[1], row[2]) for row in part_rows)
-        combined.extend((row[0], row[1], row[2]) for row in ver_rows)
-        combined.sort(key=lambda r: r[2])  # sort by rank ascending (best first)
-        perf.record("fts", "query", time.monotonic() - _fts_t0)
-        return combined[:limit]
+            # Merge by BM25 rank (more negative = better), take top `limit`
+            combined = [(row[0], row[1], row[2]) for row in doc_rows]
+            combined.extend((row[0], row[1], row[2]) for row in part_rows)
+            combined.extend((row[0], row[1], row[2]) for row in ver_rows)
+            combined.sort(key=lambda r: r[2])  # sort by rank ascending (best first)
+            limited = combined[:limit]
+            span.set_attribute("result_count", len(limited))
+            return limited
 
     def query_fts_scoped(
         self,
@@ -2427,82 +2433,94 @@ class DocumentStore:
         if fts_query is None:
             return []
 
-        placeholders = ",".join("?" * len(ids))
+        with get_tracer("doc_store").start_as_current_span(
+            "doc_store.query_fts_scoped",
+            attributes={
+                "collection": collection,
+                "limit": limit,
+                "query": query,
+                "scope_size": len(ids),
+                "tag_count": len(tags or {}),
+            },
+        ) as span:
+            placeholders = ",".join("?" * len(ids))
 
-        # --- Search documents ---
-        doc_sql = f"""
-            SELECT d.id, d.summary, f.rank
-            FROM documents_fts f
-            JOIN documents d ON d.rowid = f.rowid
-            WHERE documents_fts MATCH ?
-            AND d.collection = ?
-            AND d.id IN ({placeholders})
-        """
-        doc_params: list[Any] = [fts_query, collection, *ids]
-        if tags:
-            for k in tags:
-                for v in tag_values(tags, k):
-                    doc_sql += (
-                        " AND EXISTS ("
-                        "SELECT 1 FROM json_each(d.tags_json, ?) jv "
-                        "WHERE CAST(jv.value AS TEXT) = ?)"
-                    )
-                    doc_params.extend([f"$.{k}", v])
-        doc_sql += " ORDER BY f.rank LIMIT ?"
-        doc_params.append(limit)
-        doc_rows = self._execute(doc_sql, doc_params).fetchall()
+            # --- Search documents ---
+            doc_sql = f"""
+                SELECT d.id, d.summary, f.rank
+                FROM documents_fts f
+                JOIN documents d ON d.rowid = f.rowid
+                WHERE documents_fts MATCH ?
+                AND d.collection = ?
+                AND d.id IN ({placeholders})
+            """
+            doc_params: list[Any] = [fts_query, collection, *ids]
+            if tags:
+                for k in tags:
+                    for v in tag_values(tags, k):
+                        doc_sql += (
+                            " AND EXISTS ("
+                            "SELECT 1 FROM json_each(d.tags_json, ?) jv "
+                            "WHERE CAST(jv.value AS TEXT) = ?)"
+                        )
+                        doc_params.extend([f"$.{k}", v])
+            doc_sql += " ORDER BY f.rank LIMIT ?"
+            doc_params.append(limit)
+            doc_rows = self._execute(doc_sql, doc_params).fetchall()
 
-        # --- Search parts ---
-        part_sql = f"""
-            SELECT p.id || '@p' || p.part_num, p.summary, f.rank
-            FROM parts_fts f
-            JOIN document_parts p ON p.rowid = f.rowid
-            WHERE parts_fts MATCH ?
-            AND p.collection = ?
-            AND p.id IN ({placeholders})
-        """
-        part_params: list[Any] = [fts_query, collection, *ids]
-        if tags:
-            for k in tags:
-                for v in tag_values(tags, k):
-                    part_sql += (
-                        " AND EXISTS ("
-                        "SELECT 1 FROM json_each(p.tags_json, ?) jv "
-                        "WHERE CAST(jv.value AS TEXT) = ?)"
-                    )
-                    part_params.extend([f"$.{k}", v])
-        part_sql += " ORDER BY f.rank LIMIT ?"
-        part_params.append(limit)
-        part_rows = self._execute(part_sql, part_params).fetchall()
+            # --- Search parts ---
+            part_sql = f"""
+                SELECT p.id || '@p' || p.part_num, p.summary, f.rank
+                FROM parts_fts f
+                JOIN document_parts p ON p.rowid = f.rowid
+                WHERE parts_fts MATCH ?
+                AND p.collection = ?
+                AND p.id IN ({placeholders})
+            """
+            part_params: list[Any] = [fts_query, collection, *ids]
+            if tags:
+                for k in tags:
+                    for v in tag_values(tags, k):
+                        part_sql += (
+                            " AND EXISTS ("
+                            "SELECT 1 FROM json_each(p.tags_json, ?) jv "
+                            "WHERE CAST(jv.value AS TEXT) = ?)"
+                        )
+                        part_params.extend([f"$.{k}", v])
+            part_sql += " ORDER BY f.rank LIMIT ?"
+            part_params.append(limit)
+            part_rows = self._execute(part_sql, part_params).fetchall()
 
-        # --- Search versions ---
-        ver_sql = f"""
-            SELECT v.id || '@v' || v.version, v.summary, f.rank
-            FROM versions_fts f
-            JOIN document_versions v ON v.rowid = f.rowid
-            WHERE versions_fts MATCH ?
-            AND v.collection = ?
-            AND v.id IN ({placeholders})
-        """
-        ver_params: list[Any] = [fts_query, collection, *ids]
-        if tags:
-            for k in tags:
-                for v in tag_values(tags, k):
-                    ver_sql += (
-                        " AND EXISTS ("
-                        "SELECT 1 FROM json_each(v.tags_json, ?) jv "
-                        "WHERE CAST(jv.value AS TEXT) = ?)"
-                    )
-                    ver_params.extend([f"$.{k}", v])
-        ver_sql += " ORDER BY f.rank LIMIT ?"
-        ver_params.append(limit)
-        ver_rows = self._execute(ver_sql, ver_params).fetchall()
+            # --- Search versions ---
+            ver_sql = f"""
+                SELECT v.id || '@v' || v.version, v.summary, f.rank
+                FROM versions_fts f
+                JOIN document_versions v ON v.rowid = f.rowid
+                WHERE versions_fts MATCH ?
+                AND v.collection = ?
+                AND v.id IN ({placeholders})
+            """
+            ver_params: list[Any] = [fts_query, collection, *ids]
+            if tags:
+                for k in tags:
+                    for v in tag_values(tags, k):
+                        ver_sql += (
+                            " AND EXISTS ("
+                            "SELECT 1 FROM json_each(v.tags_json, ?) jv "
+                            "WHERE CAST(jv.value AS TEXT) = ?)"
+                        )
+                        ver_params.extend([f"$.{k}", v])
+            ver_sql += " ORDER BY f.rank LIMIT ?"
+            ver_params.append(limit)
+            ver_rows = self._execute(ver_sql, ver_params).fetchall()
 
-        combined = [(row[0], row[1], row[2]) for row in doc_rows]
-        combined.extend((row[0], row[1], row[2]) for row in part_rows)
-        combined.extend((row[0], row[1], row[2]) for row in ver_rows)
-        combined.sort(key=lambda r: r[2])
-        return combined[:limit]
+            combined = [(row[0], row[1], row[2]) for row in doc_rows]
+            combined.extend((row[0], row[1], row[2]) for row in part_rows)
+            combined.extend((row[0], row[1], row[2]) for row in ver_rows)
+            combined.sort(key=lambda r: r[2])
+            limited = combined[:limit]
+            span.set_attribute("result_count", len(limited))
+            return limited
 
     def query_by_id_glob(
         self,

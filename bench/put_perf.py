@@ -229,15 +229,6 @@ def main():
     print(f"{'TOTAL':<25} {total_put:7.1f}ms {total_proc:9.1f}ms {total_all:9.1f}ms  ({n} items)", file=sys.stderr)
     print(f"{'PER ITEM (avg)':<25} {total_put/n:7.1f}ms {total_proc/n:9.1f}ms {total_all/n:9.1f}ms", file=sys.stderr)
 
-    # Per-action perf stats
-    try:
-        from keep.perf_stats import perf
-        lines = perf.format_summary()
-        if lines:
-            print(f"\nPerf stats:\n{lines}", file=sys.stderr)
-    except Exception:
-        pass
-
     # Output JSON for programmatic comparison
     import json
     print(json.dumps(results, indent=2))

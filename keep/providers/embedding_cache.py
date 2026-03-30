@@ -280,7 +280,6 @@ class CachingEmbeddingProvider:
 
         Cache failures are non-fatal — falls through to the real provider.
         """
-        from ..perf_stats import perf
         from ..tracing import get_tracer
         _tracer = get_tracer("embed")
 
@@ -299,8 +298,10 @@ class CachingEmbeddingProvider:
         # Cache miss - compute embedding
         with self._stats_lock:
             self._misses += 1
-        with perf.timer("embed", "compute"), \
-             _tracer.start_as_current_span("embed.compute", attributes={"model": self.model_name}):
+        with _tracer.start_as_current_span(
+            "embed.compute",
+            attributes={"model": self.model_name},
+        ):
             embedding = self._provider.embed(text)
 
         # Store in cache (fail-safe)

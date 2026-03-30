@@ -166,7 +166,6 @@ def run_flow(
         the cursor field contains a resumable token.
     """
     import time as _time
-    from .perf_stats import perf as _perf
     from .tracing import get_tracer as _get_tracer
     _flow_t0 = _time.monotonic()
     _flow_tracer = _get_tracer("flow")
@@ -174,231 +173,249 @@ def run_flow(
     def _elapsed_ms() -> float:
         return (_time.monotonic() - _flow_t0) * 1000.0
 
-    # Resume from cursor or start fresh
-    if cursor is not None:
-        current_state = cursor.state
-        prior_ticks = cursor.ticks
-        accumulated_bindings: dict[str, dict[str, Any]] = dict(cursor.bindings)
-        tried_queries: list[str] = list(cursor.tried_queries)
-        logger.info("flow: resume %s (prior ticks: %d)", current_state, prior_ticks)
-    else:
-        current_state = initial_state
-        prior_ticks = 0
-        accumulated_bindings = {}
-        tried_queries = []
-        logger.info("flow: start %s", initial_state)
+    with _flow_tracer.start_as_current_span(
+        "flow.run",
+        attributes={
+            "state": initial_state,
+            "budget": budget,
+            "foreground": foreground,
+            "resumed": cursor is not None,
+        },
+    ) as _flow_span:
+        def _set_flow_attr(key: str, value: Any) -> None:
+            setter = getattr(_flow_span, "set_attribute", None)
+            if callable(setter):
+                setter(key, value)
 
-    current_params = dict(params)
-    ticks = 0
-    history: list[str] = []
+        # Resume from cursor or start fresh
+        if cursor is not None:
+            current_state = cursor.state
+            prior_ticks = cursor.ticks
+            accumulated_bindings: dict[str, dict[str, Any]] = dict(cursor.bindings)
+            tried_queries: list[str] = list(cursor.tried_queries)
+            logger.info("flow: resume %s (prior ticks: %d)", current_state, prior_ticks)
+        else:
+            current_state = initial_state
+            prior_ticks = 0
+            accumulated_bindings = {}
+            tried_queries = []
+            logger.info("flow: start %s", initial_state)
 
-    def _record_flow() -> None:
-        _perf.record("flow", initial_state, _time.monotonic() - _flow_t0)
+        current_params = dict(params)
+        ticks = 0
+        history: list[str] = []
 
-    def _stopped_flow(reason: str) -> FlowResult:
-        total_ticks = prior_ticks + ticks
-        cursor_token = encode_cursor(
-            current_state, total_ticks, accumulated_bindings, tried_queries,
-        )
-        logger.info(
-            "flow: %s -> stopped (%s, %d ticks, %.1fms)",
-            current_state,
-            reason,
-            total_ticks,
-            _elapsed_ms(),
-        )
-        _record_flow()
-        return FlowResult(
-            status="stopped",
-            bindings=accumulated_bindings,
-            data={"reason": reason},
-            ticks=total_ticks,
-            history=history,
-            cursor=cursor_token,
-            tried_queries=tried_queries,
-        )
-
-    # Wrap run_action to enrich find output with statistics and track timing.
-    # In foreground mode, async actions raise AsyncActionEncountered to
-    # delegate the remainder of the flow to the work queue.
-    def _action_callback(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
-        if foreground:
-            from .actions import is_async_action
-            if is_async_action(action_name):
-                raise AsyncActionEncountered(action_name, action_params)
-        with _perf.timer("action", action_name):
-            output = run_action(action_name, action_params)
-        if action_name == "find" and isinstance(output, dict):
-            output = enrich_find_output(output)
-            q = action_params.get("query")
-            if isinstance(q, str) and q and q not in tried_queries:
-                tried_queries.append(q)
-        return output
-
-    while ticks < budget:
-        if should_stop and should_stop():
-            return _stopped_flow("shutdown")
-        with _flow_tracer.start_as_current_span(
-            "state_doc.load",
-            attributes={"state": current_state},
-        ):
-            doc = load_state_doc(current_state)
-        if doc is None:
-            logger.info(
-                "flow: %s -> error (state doc not found, %.1fms)",
-                current_state,
-                _elapsed_ms(),
-            )
-            _record_flow()
-            return FlowResult(
-                status="error",
-                data={"reason": f"state doc not found: {current_state}"},
-                ticks=prior_ticks + ticks,
-                history=history,
-            )
-
-        history.append(current_state)
-        ticks += 1
-
-        # Build evaluation context
-        eval_ctx = _build_eval_context(current_params, budget=budget, tick=ticks)
-
-        # Evaluate state doc
-        try:
-            with _flow_tracer.start_as_current_span(
-                "state_doc.evaluate",
-                attributes={"state": current_state},
-            ):
-                result = evaluate_state_doc(doc, eval_ctx, run_action=_action_callback)
-        except AsyncActionEncountered as aa:
-            # Foreground flow hit an async action — produce cursor for
-            # the work queue to resume from.  The cursor points at the
-            # current state doc; on resume the daemon re-evaluates from
-            # the top (sync actions re-execute — they are idempotent
-            # queries) and this time executes the async action inline.
+        def _stopped_flow(reason: str) -> FlowResult:
             total_ticks = prior_ticks + ticks
             cursor_token = encode_cursor(
                 current_state, total_ticks, accumulated_bindings, tried_queries,
             )
             logger.info(
-                "flow: %s -> async (%s, %d ticks, %.1fms)",
-                current_state, aa.action_name, total_ticks, _elapsed_ms(),
+                "flow: %s -> stopped (%s, %d ticks, %.1fms)",
+                current_state,
+                reason,
+                total_ticks,
+                _elapsed_ms(),
             )
-            _record_flow()
+            _set_flow_attr("status", "stopped")
+            _set_flow_attr("ticks", total_ticks)
             return FlowResult(
-                status="async",
+                status="stopped",
                 bindings=accumulated_bindings,
-                data={"reason": "async_action", "action": aa.action_name},
+                data={"reason": reason},
                 ticks=total_ticks,
                 history=history,
                 cursor=cursor_token,
                 tried_queries=tried_queries,
             )
-        except Exception as exc:
-            logger.warning(
-                "State doc %r evaluation failed after %.1fms: %s",
-                current_state,
-                _elapsed_ms(),
-                exc,
-            )
-            _record_flow()
-            return FlowResult(
-                status="error",
-                data={"reason": f"evaluation failed: {exc}"},
-                ticks=prior_ticks + ticks,
-                history=history,
-            )
 
-        # Collect bindings (merge with accumulated from cursor)
-        accumulated_bindings.update(result.bindings)
+        # Wrap run_action to enrich find output with statistics.
+        # In foreground mode, async actions raise AsyncActionEncountered to
+        # delegate the remainder of the flow to the work queue.
+        def _action_callback(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
+            if foreground:
+                from .actions import is_async_action
+                if is_async_action(action_name):
+                    raise AsyncActionEncountered(action_name, action_params)
+            output = run_action(action_name, action_params)
+            if action_name == "find" and isinstance(output, dict):
+                output = enrich_find_output(output)
+                q = action_params.get("query")
+                if isinstance(q, str) and q and q not in tried_queries:
+                    tried_queries.append(q)
+            return output
 
-        # Terminal
-        if result.terminal is not None:
+        while ticks < budget:
+            if should_stop and should_stop():
+                return _stopped_flow("shutdown")
+            with _flow_tracer.start_as_current_span(
+                "state_doc.load",
+                attributes={"state": current_state},
+            ):
+                doc = load_state_doc(current_state)
+            if doc is None:
+                logger.info(
+                    "flow: %s -> error (state doc not found, %.1fms)",
+                    current_state,
+                    _elapsed_ms(),
+                )
+                _set_flow_attr("status", "error")
+                _set_flow_attr("ticks", prior_ticks + ticks)
+                return FlowResult(
+                    status="error",
+                    data={"reason": f"state doc not found: {current_state}"},
+                    ticks=prior_ticks + ticks,
+                    history=history,
+                )
+
+            history.append(current_state)
+            ticks += 1
+
+            # Build evaluation context
+            eval_ctx = _build_eval_context(current_params, budget=budget, tick=ticks)
+
+            # Evaluate state doc
+            try:
+                with _flow_tracer.start_as_current_span(
+                    "state_doc.evaluate",
+                    attributes={"state": current_state},
+                ):
+                    result = evaluate_state_doc(doc, eval_ctx, run_action=_action_callback)
+            except AsyncActionEncountered as aa:
+                # Foreground flow hit an async action — produce cursor for
+                # the work queue to resume from.  The cursor points at the
+                # current state doc; on resume the daemon re-evaluates from
+                # the top (sync actions re-execute — they are idempotent
+                # queries) and this time executes the async action inline.
+                total_ticks = prior_ticks + ticks
+                cursor_token = encode_cursor(
+                    current_state, total_ticks, accumulated_bindings, tried_queries,
+                )
+                logger.info(
+                    "flow: %s -> async (%s, %d ticks, %.1fms)",
+                    current_state, aa.action_name, total_ticks, _elapsed_ms(),
+                )
+                _set_flow_attr("status", "async")
+                _set_flow_attr("ticks", total_ticks)
+                return FlowResult(
+                    status="async",
+                    bindings=accumulated_bindings,
+                    data={"reason": "async_action", "action": aa.action_name},
+                    ticks=total_ticks,
+                    history=history,
+                    cursor=cursor_token,
+                    tried_queries=tried_queries,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "State doc %r evaluation failed after %.1fms: %s",
+                    current_state,
+                    _elapsed_ms(),
+                    exc,
+                )
+                _set_flow_attr("status", "error")
+                _set_flow_attr("ticks", prior_ticks + ticks)
+                return FlowResult(
+                    status="error",
+                    data={"reason": f"evaluation failed: {exc}"},
+                    ticks=prior_ticks + ticks,
+                    history=history,
+                )
+
+            # Collect bindings (merge with accumulated from cursor)
+            accumulated_bindings.update(result.bindings)
+
+            # Terminal
+            if result.terminal is not None:
+                logger.info(
+                    "flow: %s -> %s (%d ticks, %.1fms)",
+                    current_state,
+                    result.terminal,
+                    ticks,
+                    _elapsed_ms(),
+                )
+                _set_flow_attr("status", result.terminal)
+                _set_flow_attr("ticks", prior_ticks + ticks)
+                return FlowResult(
+                    status=result.terminal,
+                    bindings=accumulated_bindings,
+                    data=result.terminal_data,
+                    ticks=prior_ticks + ticks,
+                    history=history,
+                    tried_queries=tried_queries,
+                )
+
+            # Transition
+            if result.transition is not None:
+                next_state, transition_params = _parse_transition(result.transition)
+                if next_state is None:
+                    logger.info(
+                        "flow: %s -> error (invalid transition, %.1fms)",
+                        current_state,
+                        _elapsed_ms(),
+                    )
+                    _set_flow_attr("status", "error")
+                    _set_flow_attr("ticks", prior_ticks + ticks)
+                    return FlowResult(
+                        status="error",
+                        data={"reason": f"invalid transition: {result.transition}"},
+                        ticks=prior_ticks + ticks,
+                        history=history,
+                    )
+                logger.info("flow: %s -> %s (%.1fms)", current_state, next_state, _elapsed_ms())
+                # Transition params merge into (override) current params
+                current_params = dict(current_params)
+                current_params.update(transition_params)
+                current_state = next_state
+                continue
+
+            # No terminal, no transition — shouldn't happen (evaluator defaults to done)
             logger.info(
-                "flow: %s -> %s (%d ticks, %.1fms)",
+                "flow: %s -> done (implicit, %d ticks, %.1fms)",
                 current_state,
-                result.terminal,
                 ticks,
                 _elapsed_ms(),
             )
-            _record_flow()
+            _set_flow_attr("status", "done")
+            _set_flow_attr("ticks", prior_ticks + ticks)
             return FlowResult(
-                status=result.terminal,
+                status="done",
                 bindings=accumulated_bindings,
-                data=result.terminal_data,
                 ticks=prior_ticks + ticks,
                 history=history,
                 tried_queries=tried_queries,
             )
 
-        # Transition
-        if result.transition is not None:
-            next_state, transition_params = _parse_transition(result.transition)
-            if next_state is None:
-                logger.info(
-                    "flow: %s -> error (invalid transition, %.1fms)",
-                    current_state,
-                    _elapsed_ms(),
-                )
-                _record_flow()
-                return FlowResult(
-                    status="error",
-                    data={"reason": f"invalid transition: {result.transition}"},
-                    ticks=prior_ticks + ticks,
-                    history=history,
-                )
-            logger.info("flow: %s -> %s (%.1fms)", current_state, next_state, _elapsed_ms())
-            # Transition params merge into (override) current params
-            current_params = dict(current_params)
-            current_params.update(transition_params)
-            current_state = next_state
-            continue
-
-        # No terminal, no transition — shouldn't happen (evaluator defaults to done)
+        # Budget exhausted — return cursor for resumption
+        total_ticks = prior_ticks + ticks
+        cursor_token = encode_cursor(current_state, total_ticks, accumulated_bindings, tried_queries)
         logger.info(
-            "flow: %s -> done (implicit, %d ticks, %.1fms)",
+            "flow: %s -> stopped (budget, %d ticks, %.1fms)",
             current_state,
-            ticks,
+            total_ticks,
             _elapsed_ms(),
         )
-        _record_flow()
+        _set_flow_attr("status", "stopped")
+        _set_flow_attr("ticks", total_ticks)
+        # Surface latest search results and signals in stopped data
+        stopped_data: dict[str, Any] = {"reason": "budget"}
+        for key in ("search", "pivot1", "bridge"):
+            binding = accumulated_bindings.get(key)
+            if isinstance(binding, dict) and "results" in binding:
+                stopped_data["results"] = binding["results"]
+                for sig in ("margin", "entropy"):
+                    if sig in binding:
+                        stopped_data[sig] = binding[sig]
+                break  # use the first available search binding
         return FlowResult(
-            status="done",
+            status="stopped",
             bindings=accumulated_bindings,
-            ticks=prior_ticks + ticks,
+            data=stopped_data,
+            ticks=total_ticks,
             history=history,
+            cursor=cursor_token,
             tried_queries=tried_queries,
         )
-
-    # Budget exhausted — return cursor for resumption
-    total_ticks = prior_ticks + ticks
-    cursor_token = encode_cursor(current_state, total_ticks, accumulated_bindings, tried_queries)
-    logger.info(
-        "flow: %s -> stopped (budget, %d ticks, %.1fms)",
-        current_state,
-        total_ticks,
-        _elapsed_ms(),
-    )
-    _record_flow()
-    # Surface latest search results and signals in stopped data
-    stopped_data: dict[str, Any] = {"reason": "budget"}
-    for key in ("search", "pivot1", "bridge"):
-        binding = accumulated_bindings.get(key)
-        if isinstance(binding, dict) and "results" in binding:
-            stopped_data["results"] = binding["results"]
-            for sig in ("margin", "entropy"):
-                if sig in binding:
-                    stopped_data[sig] = binding[sig]
-            break  # use the first available search binding
-    return FlowResult(
-        status="stopped",
-        bindings=accumulated_bindings,
-        data=stopped_data,
-        ticks=total_ticks,
-        history=history,
-        cursor=cursor_token,
-        tried_queries=tried_queries,
-    )
 
 
 def _build_eval_context(

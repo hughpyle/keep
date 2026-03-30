@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .model_lock import ModelLock
+from .tracing import get_tracer
 from .types import Item, SYSTEM_TAG_PREFIX, tag_values, utc_now
 
 logger = logging.getLogger(__name__)
@@ -782,35 +783,41 @@ class ChromaStore:
         Returns:
             List of results ordered by similarity (most similar first)
         """
-        from .perf_stats import perf
+        with get_tracer("store").start_as_current_span(
+            "store.query_embedding",
+            attributes={
+                "collection": collection,
+                "limit": limit,
+                "where": bool(where),
+            },
+        ) as span:
+            with self._state_lock:
+                self._check_freshness()
+                coll = self._get_collection(collection)
 
-        with self._state_lock:
-            self._check_freshness()
-            coll = self._get_collection(collection)
+                query_params = {
+                    "query_embeddings": [embedding],
+                    "n_results": limit,
+                    "include": ["documents", "metadatas", "distances"],
+                }
+                if where:
+                    normalized_where = self._normalize_where(where)
+                    if normalized_where:
+                        query_params["where"] = normalized_where
 
-            query_params = {
-                "query_embeddings": [embedding],
-                "n_results": limit,
-                "include": ["documents", "metadatas", "distances"],
-            }
-            if where:
-                normalized_where = self._normalize_where(where)
-                if normalized_where:
-                    query_params["where"] = normalized_where
-
-            with perf.timer("chroma", "query"):
                 result = coll.query(**query_params)
 
-            results = []
-            for i, id in enumerate(result["ids"][0]):
-                results.append(StoreResult(
-                    id=id,
-                    summary=result["documents"][0][i] or "",
-                    tags=self._metadata_to_tags(result["metadatas"][0][i]),
-                    distance=result["distances"][0][i] if result["distances"] else None,
-                ))
+                results = []
+                for i, id in enumerate(result["ids"][0]):
+                    results.append(StoreResult(
+                        id=id,
+                        summary=result["documents"][0][i] or "",
+                        tags=self._metadata_to_tags(result["metadatas"][0][i]),
+                        distance=result["distances"][0][i] if result["distances"] else None,
+                    ))
 
-            return results
+                span.set_attribute("result_count", len(results))
+                return results
     
     def query_metadata(
         self,

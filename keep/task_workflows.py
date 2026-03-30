@@ -13,6 +13,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .tracing import get_tracer
+
 if TYPE_CHECKING:
     from .api import Keeper
 
@@ -402,7 +404,6 @@ def _apply_mutations(
 def run_local_task(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
     """Run a background task by calling the action's ``run()`` method."""
     from .actions import prepare_action_params
-    from .perf_stats import perf
 
     task_type = str(req.task_type or "").strip()
 
@@ -417,7 +418,14 @@ def run_local_task(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
     params.update(req.metadata)
     action, params = prepare_action_params(task_type, params, ctx)
 
-    with perf.timer("action", task_type, context_id=req.id):
+    with get_tracer("work_queue").start_as_current_span(
+        "task.run",
+        attributes={
+            "item_id": req.id,
+            "collection": req.collection,
+            "task_type": task_type,
+        },
+    ):
         output = action.run(params, ctx)
 
     if not isinstance(output, dict):
