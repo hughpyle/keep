@@ -1,5 +1,6 @@
 """Tests for the synchronous state-doc flow runtime."""
 
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -649,6 +650,61 @@ class TestMakeActionRunner:
         mock_prepare.assert_called_once()
         action.run.assert_called_once()
         assert action.run.call_args.args[0] == {"query": "prepared"}
+
+    def test_runner_recovers_and_retries_on_malformed_db(self, caplog):
+        from keep.state_doc_runtime import make_action_runner
+
+        class FakeStore:
+            def __init__(self):
+                self.recovery_calls = 0
+
+            def _try_runtime_recover(self):
+                self.recovery_calls += 1
+                return True
+
+        class FakeEnv:
+            def __init__(self):
+                self.store = FakeStore()
+
+            def get_document_store(self):
+                return self.store
+
+            def get(self, id):
+                return None
+
+            def find(self, query=None, **kw):
+                return []
+
+            def list_items(self, **kw):
+                return []
+
+            def get_document(self, id):
+                return None
+
+            def resolve_meta(self, id, **kw):
+                return {}
+
+            def traverse_related(self, source_ids, **kw):
+                return {}
+
+        action = MagicMock()
+        action.run.side_effect = [
+            sqlite3.DatabaseError("database disk image is malformed"),
+            {"results": [], "count": 0},
+        ]
+
+        env = FakeEnv()
+        with patch(
+            "keep.actions.prepare_action_params",
+            return_value=(action, {"query": "prepared"}),
+        ):
+            runner = make_action_runner(env)
+            result = runner("find", {"query": "raw"})
+
+        assert result["count"] == 0
+        assert action.run.call_count == 2
+        assert env.store.recovery_calls == 1
+        assert "Action find hit malformed note database; triggering runtime recovery" in caplog.text
 
 
 # ---------------------------------------------------------------------------

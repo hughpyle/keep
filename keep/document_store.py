@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .const import SQLITE_BUSY_TIMEOUT_MS
+from .recovery import is_malformed_db_error
 from .tracing import get_tracer
 from .types import normalize_tag_map, tag_values, utc_now
 
@@ -99,7 +100,7 @@ class DocumentStore:
         try:
             self._init_db()
         except sqlite3.DatabaseError as e:
-            if "malformed" in str(e):
+            if is_malformed_db_error(e):
                 logger.warning("Database malformed, attempting recovery: %s", self._db_path)
                 self._recover_malformed()
             else:
@@ -147,22 +148,173 @@ class DocumentStore:
 
         # Run schema migrations (serialized across processes)
         self._migrate_schema()
-
-        # Detect FTS5 availability (tables may already exist from prior migration).
-        # All three FTS tables must exist for full hybrid search.
-        if not self._fts_available:
-            try:
-                self._execute("SELECT 1 FROM documents_fts LIMIT 0")
-                self._execute("SELECT 1 FROM parts_fts LIMIT 0")
-                self._execute("SELECT 1 FROM versions_fts LIMIT 0")
-                self._fts_available = True
-            except sqlite3.OperationalError:
-                pass  # Tables don't exist or FTS5 not available
+        self._ensure_fts_schema()
 
         # Quick integrity check for existing databases
         result = self._execute("PRAGMA quick_check").fetchone()
         if result[0] != "ok":
             raise sqlite3.DatabaseError("database disk image is malformed")
+
+    def _fts_tables_present(self) -> bool:
+        """Return whether all FTS tables are available."""
+        try:
+            self._execute("SELECT 1 FROM documents_fts LIMIT 0")
+            self._execute("SELECT 1 FROM parts_fts LIMIT 0")
+            self._execute("SELECT 1 FROM versions_fts LIMIT 0")
+            return True
+        except sqlite3.OperationalError:
+            return False
+
+    def _fts_object_exists(self, name: str) -> bool:
+        """Return whether a SQLite object exists."""
+        row = self._execute(
+            "SELECT 1 FROM sqlite_master WHERE name = ? LIMIT 1",
+            (name,),
+        ).fetchone()
+        return row is not None
+
+    def _drop_orphaned_fts_schema(self, prefix: str) -> None:
+        """Drop orphaned FTS triggers and shadow tables when the virtual table is missing."""
+        if self._fts_object_exists(prefix):
+            return
+
+        shadow_names = (
+            f"{prefix}_data",
+            f"{prefix}_idx",
+            f"{prefix}_docsize",
+            f"{prefix}_config",
+        )
+        trigger_names = (
+            f"{prefix}_ai",
+            f"{prefix}_ad",
+            f"{prefix}_au",
+        )
+
+        if not any(self._fts_object_exists(name) for name in (*shadow_names, *trigger_names)):
+            return
+
+        for name in trigger_names:
+            self._execute(f"DROP TRIGGER IF EXISTS {name}")
+        for name in shadow_names:
+            self._execute(f"DROP TABLE IF EXISTS {name}")
+
+        logger.warning("Dropped orphaned FTS schema for %s", prefix)
+
+    def _ensure_fts_schema(self) -> None:
+        """Ensure the FTS schema exists even on already-migrated stores."""
+        if self._fts_tables_present():
+            self._fts_available = True
+            return
+
+        try:
+            for prefix in ("documents_fts", "parts_fts", "versions_fts"):
+                self._drop_orphaned_fts_schema(prefix)
+
+            self._execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
+                USING fts5(
+                    summary,
+                    content='documents',
+                    content_rowid='rowid',
+                    tokenize='porter unicode61'
+                )
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS documents_fts_ai
+                AFTER INSERT ON documents BEGIN
+                    INSERT INTO documents_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS documents_fts_ad
+                AFTER DELETE ON documents BEGIN
+                    INSERT INTO documents_fts(documents_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS documents_fts_au
+                AFTER UPDATE OF summary ON documents BEGIN
+                    INSERT INTO documents_fts(documents_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                    INSERT INTO documents_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts
+                USING fts5(
+                    summary, content,
+                    content='document_parts',
+                    content_rowid='rowid',
+                    tokenize='porter unicode61'
+                )
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS parts_fts_ai
+                AFTER INSERT ON document_parts BEGIN
+                    INSERT INTO parts_fts(rowid, summary, content)
+                    VALUES (new.rowid, new.summary, new.content);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS parts_fts_ad
+                AFTER DELETE ON document_parts BEGIN
+                    INSERT INTO parts_fts(parts_fts, rowid, summary, content)
+                    VALUES('delete', old.rowid, old.summary, old.content);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS parts_fts_au
+                AFTER UPDATE OF summary, content ON document_parts BEGIN
+                    INSERT INTO parts_fts(parts_fts, rowid, summary, content)
+                    VALUES('delete', old.rowid, old.summary, old.content);
+                    INSERT INTO parts_fts(rowid, summary, content)
+                    VALUES (new.rowid, new.summary, new.content);
+                END
+            """)
+            self._execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS versions_fts
+                USING fts5(
+                    summary,
+                    content='document_versions',
+                    content_rowid='rowid',
+                    tokenize='porter unicode61'
+                )
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS versions_fts_ai
+                AFTER INSERT ON document_versions BEGIN
+                    INSERT INTO versions_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS versions_fts_ad
+                AFTER DELETE ON document_versions BEGIN
+                    INSERT INTO versions_fts(versions_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS versions_fts_au
+                AFTER UPDATE OF summary ON document_versions BEGIN
+                    INSERT INTO versions_fts(versions_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                    INSERT INTO versions_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute("INSERT INTO documents_fts(documents_fts) VALUES('rebuild')")
+            self._execute("INSERT INTO parts_fts(parts_fts) VALUES('rebuild')")
+            self._execute("INSERT INTO versions_fts(versions_fts) VALUES('rebuild')")
+        except sqlite3.OperationalError:
+            logger.info("FTS5 not available, full-text search disabled")
+            self._fts_available = False
+            return
+
+        self._fts_available = self._fts_tables_present()
 
     def _migrate_schema(self) -> None:
         """Run schema migrations using PRAGMA user_version.
@@ -744,14 +896,32 @@ class DocumentStore:
 
         Returns True if recovery succeeded, False otherwise.
         """
-        try:
-            logger.warning("Runtime database malformation detected, attempting recovery: %s", self._db_path)
-            self._recover_malformed()
-            logger.warning("Runtime recovery succeeded")
-            return True
-        except Exception as e:
-            logger.error("Runtime recovery failed: %s", e)
-            return False
+        with self._lock:
+            try:
+                if self._conn is not None:
+                    try:
+                        result = self._conn.execute("PRAGMA quick_check").fetchone()
+                    except sqlite3.DatabaseError as quick_check_err:
+                        if not is_malformed_db_error(quick_check_err):
+                            raise
+                    else:
+                        if result and result[0] == "ok":
+                            logger.info(
+                                "Runtime recovery skipped; database already healthy: %s",
+                                self._db_path,
+                            )
+                            return True
+
+                logger.warning(
+                    "Runtime database malformation detected, attempting recovery: %s",
+                    self._db_path,
+                )
+                self._recover_malformed()
+                logger.warning("Runtime recovery succeeded")
+                return True
+            except Exception as e:
+                logger.error("Runtime recovery failed: %s", e)
+                return False
 
     @staticmethod
     def _now() -> str:
@@ -1169,7 +1339,7 @@ class DocumentStore:
                 self._conn.commit()
         except sqlite3.DatabaseError as e:
             logger.warning("touch(%s) failed (non-fatal): %s", id, e)
-            if "malformed" in str(e):
+            if is_malformed_db_error(e):
                 self._try_runtime_recover()
 
     def touch_many(self, collection: str, ids: list[str]) -> None:

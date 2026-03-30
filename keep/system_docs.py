@@ -7,6 +7,7 @@ on first use and upgraded when the bundled content changes.
 
 import hashlib
 import importlib.resources
+import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -142,6 +143,43 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[-10:]
 
 
+_RUNTIME_SYSTEM_TAGS = {
+    "bundled_hash",
+    "bundled_doc_hash",
+    "_created",
+    "_updated",
+    "_updated_date",
+    "_source",
+}
+
+
+def _canonical_bundled_tags(tags: dict[str, str]) -> dict[str, str | list[str]]:
+    """Return the stable bundled-definition tags for hashing/comparison."""
+    from .types import normalize_tag_map
+
+    stable = {
+        str(k): v
+        for k, v in tags.items()
+        if str(k) not in _RUNTIME_SYSTEM_TAGS
+    }
+    return normalize_tag_map(stable)
+
+
+def _bundled_doc_hash(content: str, tags: dict[str, str]) -> str:
+    """Short SHA256 hash of canonical bundled content plus stable tags."""
+    payload = {
+        "content": content,
+        "tags": _canonical_bundled_tags(tags),
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[-10:]
+
+
 def _bundled_docs_hash() -> str:
     """Composite hash of all bundled system doc files.
 
@@ -158,6 +196,46 @@ def _bundled_docs_hash() -> str:
             h.update(rel_path.encode("utf-8"))
             h.update(path.read_bytes())
     return h.hexdigest()[-10:]
+
+
+def system_doc_migration_needed(keeper: "Keeper") -> bool:
+    """Return True if bundled system docs should be migrated or repaired."""
+    current_hash = _bundled_docs_hash()
+    if keeper._config.system_docs_hash != current_hash:
+        return True
+
+    doc_coll = keeper._resolve_doc_collection()
+
+    for old_id in _OLD_ID_RENAMES:
+        if keeper._document_store.get(doc_coll, old_id):
+            return True
+
+    for old_id in (".meta/decisions",):
+        if keeper._document_store.get(doc_coll, old_id):
+            return True
+
+    for rel_path, new_id in sorted(_all_system_doc_ids().items()):
+        path = SYSTEM_DOC_DIR / rel_path
+        if not path.exists():
+            continue
+        content, tags = _load_frontmatter(path)
+        tags["category"] = "system"
+        bundled_hash = _content_hash(content)
+        bundled_doc_hash = _bundled_doc_hash(content, tags)
+        existing_doc = keeper._document_store.get(doc_coll, new_id)
+        if existing_doc is None:
+            return True
+        actual_hash = _content_hash(existing_doc.summary)
+        actual_doc_hash = _bundled_doc_hash(existing_doc.summary, dict(existing_doc.tags))
+        prev_doc_hash = existing_doc.tags.get("bundled_doc_hash")
+        if isinstance(prev_doc_hash, list):
+            prev_doc_hash = prev_doc_hash[0] if prev_doc_hash else None
+        if actual_hash == bundled_hash and (
+            actual_doc_hash != bundled_doc_hash or prev_doc_hash != bundled_doc_hash
+        ):
+            return True
+
+    return False
 
 
 def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
@@ -186,7 +264,7 @@ def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
     stats = {"created": 0, "migrated": 0, "skipped": 0, "cleaned": 0}
 
     current_hash = _bundled_docs_hash()
-    if keeper._config.system_docs_hash == current_hash:
+    if not system_doc_migration_needed(keeper):
         return stats
 
     filename_to_id = _all_system_doc_ids()
@@ -300,20 +378,38 @@ def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
             content, tags = _load_frontmatter(path)
             bundled_hash = _content_hash(content)
             tags["category"] = "system"
+            bundled_doc_hash = _bundled_doc_hash(content, tags)
             tags["bundled_hash"] = bundled_hash
+            tags["bundled_doc_hash"] = bundled_doc_hash
 
             # Check existing doc: skip if unchanged, update base if user edited
             existing_doc = keeper._document_store.get(doc_coll, new_id)
+            had_existing = existing_doc is not None
             if existing_doc:
                 prev_hash = existing_doc.tags.get("bundled_hash")
                 if isinstance(prev_hash, list):
                     prev_hash = prev_hash[0] if prev_hash else None
+                prev_doc_hash = existing_doc.tags.get("bundled_doc_hash")
+                if isinstance(prev_doc_hash, list):
+                    prev_doc_hash = prev_doc_hash[0] if prev_doc_hash else None
                 # Verify actual content matches — guard against stale hash
                 # tags from prior tag-wipe bugs
                 actual_hash = _content_hash(existing_doc.summary)
-                if prev_hash == bundled_hash and actual_hash == bundled_hash:
-                    # Content truly matches bundled file — skip
+                actual_doc_hash = _bundled_doc_hash(
+                    existing_doc.summary,
+                    dict(existing_doc.tags),
+                )
+                if (
+                    prev_hash == bundled_hash
+                    and prev_doc_hash == bundled_doc_hash
+                    and actual_doc_hash == bundled_doc_hash
+                ):
+                    # Content and bundled-managed tags truly match the bundled file.
                     continue
+                if actual_hash == bundled_hash:
+                    # Head body matches the bundled file. Repair or refresh the
+                    # bundled-managed tags and bundled_doc_hash in-place.
+                    existing_doc = None
                 if prev_hash and prev_hash != bundled_hash and actual_hash != prev_hash:
                     # User has modified the doc — update the archived base
                     # version so reverting restores the latest bundled content.
@@ -328,7 +424,12 @@ def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
                         )
                     # Update bundled_hash on head so next upgrade knows current base
                     keeper._document_store.patch_head_tags(
-                        doc_coll, new_id, {"bundled_hash": bundled_hash},
+                        doc_coll,
+                        new_id,
+                        {
+                            "bundled_hash": bundled_hash,
+                            "bundled_doc_hash": bundled_doc_hash,
+                        },
                     )
                     stats["migrated"] += 1
                     logger.info("Updated base version of user-edited system doc: %s", new_id)
@@ -373,7 +474,7 @@ def migrate_system_documents(keeper: "Keeper", progress=None) -> dict:
                     keeper._document_store.delete_edges_for_predicate(doc_coll, new_id[5:])
                     keeper._document_store.delete_backfill(doc_coll, new_id[5:])
 
-            if existing_doc:
+            if had_existing:
                 stats["migrated"] += 1
                 logger.info("Updated system doc: %s", new_id)
             else:
@@ -434,6 +535,7 @@ def reset_system_documents(keeper: "Keeper") -> dict:
             content, tags = _load_frontmatter(path)
             bundled_hash = _content_hash(content)
             tags["category"] = "system"
+            tags["bundled_doc_hash"] = _bundled_doc_hash(content, tags)
             tags["bundled_hash"] = bundled_hash
 
             now_ts = _utc_now()

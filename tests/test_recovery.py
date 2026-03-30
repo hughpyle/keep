@@ -154,6 +154,61 @@ class TestRecoveryFromMalformed:
         # Old WAL/SHM should be gone (new ones may exist from reopening)
         # The key is that the recovery explicitly removes them
 
+    def test_reopen_restores_missing_fts_tables(self, tmp_path):
+        """Opening a current store should repair missing FTS tables."""
+        db_path = tmp_path / "test.db"
+        store = DocumentStore(db_path)
+        store.upsert("default", "doc1", "Alpha summary", {"topic": "test"})
+        store.upsert("default", "doc1", "Beta summary", {"topic": "test"})
+        store._conn.close()
+
+        conn = sqlite3.connect(str(db_path))
+        for name in (
+            "documents_fts_ai", "documents_fts_ad", "documents_fts_au",
+            "parts_fts_ai", "parts_fts_ad", "parts_fts_au",
+            "versions_fts_ai", "versions_fts_ad", "versions_fts_au",
+        ):
+            conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+        for table in ("documents_fts", "parts_fts", "versions_fts"):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.commit()
+        conn.close()
+
+        repaired = DocumentStore(db_path)
+        assert repaired._fts_available is True
+        current_hits = repaired.query_fts("default", "Beta", limit=10)
+        version_hits = repaired.query_fts("default", "Alpha", limit=10)
+        assert any(doc_id == "doc1" for doc_id, _, _ in current_hits)
+        assert any(doc_id == "doc1@v1" for doc_id, _, _ in version_hits)
+
+    def test_reopen_repairs_orphaned_fts_shadow_tables(self, tmp_path):
+        """Opening should rebuild FTS when only orphaned shadow tables remain."""
+        db_path = tmp_path / "test.db"
+        store = DocumentStore(db_path)
+        store.upsert("default", "doc1", "Alpha summary", {"topic": "test"})
+        store.upsert("default", "doc1", "Beta summary", {"topic": "test"})
+        store._conn.close()
+
+        conn = sqlite3.connect(str(db_path))
+        for prefix in ("documents_fts", "parts_fts", "versions_fts"):
+            conn.execute(f"DROP TABLE IF EXISTS {prefix}")
+            for name in (f"{prefix}_data", f"{prefix}_idx", f"{prefix}_docsize", f"{prefix}_config"):
+                conn.execute(f"CREATE TABLE IF NOT EXISTS {name} (x INTEGER)")
+            for suffix in ("ai", "ad", "au"):
+                conn.execute(
+                    f"CREATE TRIGGER IF NOT EXISTS {prefix}_{suffix} "
+                    "AFTER INSERT ON documents BEGIN SELECT 1; END"
+                )
+        conn.commit()
+        conn.close()
+
+        repaired = DocumentStore(db_path)
+        assert repaired._fts_available is True
+        current_hits = repaired.query_fts("default", "Beta", limit=10)
+        version_hits = repaired.query_fts("default", "Alpha", limit=10)
+        assert any(doc_id == "doc1" for doc_id, _, _ in current_hits)
+        assert any(doc_id == "doc1@v1" for doc_id, _, _ in version_hits)
+
     def test_unrecoverable_raises(self, tmp_path):
         """A truly unreadable file should propagate the error."""
         db_path = tmp_path / "test.db"
@@ -197,9 +252,23 @@ class TestRuntimeRecovery:
         db_path = tmp_path / "test.db"
         store = DocumentStore(db_path)
 
+        original_conn = store._conn
+        original_execute = original_conn.execute
+
+        class FailingConn:
+            def __getattr__(self, name):
+                return getattr(original_conn, name)
+
+            def execute(self, sql, *args, **kwargs):
+                if "PRAGMA quick_check" in str(sql):
+                    raise sqlite3.DatabaseError("database disk image is malformed")
+                return original_execute(sql, *args, **kwargs)
+
+        store._conn = FailingConn()
         with patch.object(store, "_recover_malformed", side_effect=Exception("boom")):
             result = store._try_runtime_recover()
             assert result is False
+        store._conn = original_conn
 
     def test_try_runtime_recover_returns_true_on_success(self, tmp_path):
         """_try_runtime_recover returns True when recovery succeeds."""

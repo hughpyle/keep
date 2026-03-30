@@ -37,6 +37,20 @@ def test_prompt_list_bootstraps_on_fresh_store(mock_providers, tmp_path):
     assert any(prompt.get("name") == "reflect" for prompt in prompts)
 
 
+def test_query_prompt_without_text_renders_without_running_query_resolution(
+    mock_providers, tmp_path
+):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    result = kp.run_flow_command("prompt", params={"name": "query"})
+
+    assert result.status == "done"
+    text = result.data.get("text", "")
+    assert "Question:" in text
+    assert "Context:" in text
+
+
 def test_summarize_action_errors_when_default_prompt_is_broken(mock_providers, tmp_path):
     kp = Keeper(store_path=tmp_path)
     _ensure_system_docs(kp)

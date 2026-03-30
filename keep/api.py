@@ -53,6 +53,7 @@ from .providers.base import (
     SummarizationProvider,
 )
 from .providers.embedding_cache import CachingEmbeddingProvider
+from .recovery import is_malformed_db_error
 from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, EdgeRef, TagMap,
@@ -325,10 +326,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 logger.warning("Failed to initialize PlannerStatsStore: %s", e)
 
         # System doc migration deferred to first write (needs embeddings)
-        from .system_docs import _bundled_docs_hash
-        self._needs_sysdoc_migration = (
-            self._config.system_docs_hash != _bundled_docs_hash()
-        )
+        from .system_docs import system_doc_migration_needed
+        self._needs_sysdoc_migration = system_doc_migration_needed(self)
 
         # Direct work queue (replaces FlowEngine for background tasks).
         self._work_queue = None
@@ -3216,7 +3215,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     doc_record = self._document_store.get(doc_coll, id)
             except Exception as e:
                 logger.warning("DocumentStore.get(%s) failed: %s", id, e)
-                if self._is_local and "malformed" in str(e):
+                if self._is_local and is_malformed_db_error(e):
                     span.set_attribute("recovered", True)
                     # SQLite-specific recovery — only for local backends
                     if hasattr(self._document_store, '_try_runtime_recover'):

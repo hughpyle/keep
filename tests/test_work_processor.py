@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -316,6 +317,30 @@ class TestRunLocalTask:
         result = run_local_task(kp, req)
         # No tag specs → no mutations → skipped
         assert result.status == "skipped"
+
+    def test_run_local_task_recovers_and_retries_on_malformed_db(self, caplog):
+        kp = MagicMock()
+        kp.get.return_value = MagicMock(content="hello", summary="", tags={})
+        kp._document_store.get.return_value = None
+        kp._document_store._try_runtime_recover.return_value = True
+
+        action = MagicMock()
+        action.run.side_effect = [
+            sqlite3.DatabaseError("database disk image is malformed"),
+            {"skipped": True, "reason": "recovered"},
+        ]
+
+        with patch(
+            "keep.actions.prepare_action_params",
+            return_value=(action, {"item_id": "d1"}),
+        ):
+            req = TaskRequest(task_type="summarize", id="d1", collection="c", content="x")
+            result = run_local_task(kp, req)
+
+        assert result.status == "skipped"
+        assert action.run.call_count == 2
+        kp._document_store._try_runtime_recover.assert_called_once_with()
+        assert "Background task summarize for d1 hit malformed note database; triggering runtime recovery" in caplog.text
 
 
 # ---------------------------------------------------------------------------

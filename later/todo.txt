@@ -5,8 +5,6 @@
     separate from "tool install"
     (better because native read, not MCP, to read the docs)
 
-* mcp "tried_queries" remove??
-
 * mcp prompts (and prompt parameterization!)
 
 * context-focused results (get *only* the parts, similar, etc)

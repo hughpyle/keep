@@ -1,6 +1,7 @@
 """Tests for daemon startup sequencing and deferred maintenance."""
 
 import sys
+from runpy import run_path
 from unittest.mock import patch
 
 from keep.api import Keeper
@@ -60,6 +61,26 @@ def test_daemon_entrypoint_uses_deferred_startup_maintenance(tmp_path):
         from keep import daemon
 
         daemon.main()
+
+    kwargs = captured["kwargs"]
+    assert kwargs["store_path"] == str(tmp_path)
+    assert kwargs["defer_startup_maintenance"] is True
+
+
+def test_daemon_script_entrypoint_supports_direct_python_execution(tmp_path):
+    captured: dict[str, object] = {}
+
+    class DummyKeeper:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+    with (
+        patch("keep.api.Keeper", DummyKeeper),
+        patch("keep.cli.run_pending_daemon"),
+        patch.object(sys, "argv", ["python", "--store", str(tmp_path)]),
+    ):
+        run_path("keep/daemon.py", run_name="__main__")
 
     kwargs = captured["kwargs"]
     assert kwargs["store_path"] == str(tmp_path)

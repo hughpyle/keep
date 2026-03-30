@@ -29,6 +29,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Protocol
 
+from .recovery import run_with_document_store_recovery
 from .result_stats import enrich_find_output
 from .state_doc import AsyncActionEncountered, StateDoc, evaluate_state_doc
 
@@ -552,21 +553,28 @@ def make_action_runner(
     )
 
     def _run(action_name: str, params: dict[str, Any]) -> dict[str, Any]:
-        from .tracing import get_tracer
-        _tracer = get_tracer("flow")
-        with _tracer.start_as_current_span(f"action:{action_name}") as _span:
-            act, prepared = prepare_action_params(action_name, params, ctx)
-            if context_cache is not None:
-                cached = context_cache.check(action_name, prepared, ctx)
-                if cached is not None:
-                    _span.set_attribute("cache", "hit")
-                    return cached
-                _span.set_attribute("cache", "miss")
-            output = act.run(prepared, ctx)
-            result = dict(output) if isinstance(output, dict) else {}
-            if context_cache is not None:
-                context_cache.store(action_name, prepared, result)
-            return result
+        def _execute_once() -> dict[str, Any]:
+            from .tracing import get_tracer
+            _tracer = get_tracer("flow")
+            with _tracer.start_as_current_span(f"action:{action_name}") as _span:
+                act, prepared = prepare_action_params(action_name, params, ctx)
+                if context_cache is not None:
+                    cached = context_cache.check(action_name, prepared, ctx)
+                    if cached is not None:
+                        _span.set_attribute("cache", "hit")
+                        return cached
+                    _span.set_attribute("cache", "miss")
+                output = act.run(prepared, ctx)
+                result = dict(output) if isinstance(output, dict) else {}
+                if context_cache is not None:
+                    context_cache.store(action_name, prepared, result)
+                return result
+
+        return run_with_document_store_recovery(
+            _execute_once,
+            get_document_store=ctx.get_document_store,
+            operation=f"Action {action_name}",
+        )
 
     return _run
 
