@@ -10,33 +10,47 @@ Usage:
     claude --mcp-server keep="keep mcp"   # Claude Code integration
 """
 
+import http.client
 import json
+import logging
 import os
 import signal
 import sys
-import http.client
 from typing import Annotated, Any, Optional
+from urllib.parse import quote, unquote
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from mcp.shared.exceptions import McpError
+from mcp.types import (
+    CallToolResult,
+    ErrorData,
+    GetPromptResult,
+    INTERNAL_ERROR,
+    Prompt as MCPPrompt,
+    PromptArgument as MCPPromptArgument,
+    PromptMessage,
+    TextContent,
+    ToolAnnotations,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
+from ._context_resolution import _SUPPORTED_MCP_PROMPT_ARGS
 from .daemon_client import get_port, http_request
-
-# ---------------------------------------------------------------------------
-# Server setup
-# ---------------------------------------------------------------------------
-
-mcp = FastMCP(
-    "keep",
-    instructions=(
-        "Reflective memory with semantic search. "
-        "Store facts, preferences, decisions, and documents. "
-        "Search by meaning. Persist context across sessions."
-    ),
-)
+from .help import get_help_topic
 
 _port: Optional[int] = None
+logger = logging.getLogger(__name__)
+
+_MCP_PROMPT_ARG_DESCRIPTIONS: dict[str, str] = {
+    "text": "Optional text or query used for prompt context.",
+    "id": 'Optional note ID for context (default: "now").',
+    "since": "Optional lower time bound for contextual search.",
+    "token_budget": "Optional token budget for prompt-context rendering.",
+}
+assert set(_MCP_PROMPT_ARG_DESCRIPTIONS) == set(_SUPPORTED_MCP_PROMPT_ARGS), (
+    f"MCP prompt arg descriptions {set(_MCP_PROMPT_ARG_DESCRIPTIONS)} != "
+    f"supported args {set(_SUPPORTED_MCP_PROMPT_ARGS)}"
+)
 
 
 def _ensure_daemon() -> int:
@@ -60,6 +74,195 @@ def _post(path: str, body: dict) -> tuple[int, dict]:
         _port = None
         status, result = http_request("POST", _ensure_daemon(), path, body)
     return status, result
+
+
+def _get(path: str) -> tuple[int, dict]:
+    """GET from the daemon. Returns (status, json_body)."""
+    global _port
+    try:
+        status, result = http_request("GET", _ensure_daemon(), path)
+    except (ConnectionError, TimeoutError, http.client.RemoteDisconnected, OSError):
+        _port = None
+        status, result = http_request("GET", _ensure_daemon(), path)
+    if status == 401:
+        _port = None
+        status, result = http_request("GET", _ensure_daemon(), path)
+    return status, result
+
+
+def _list_agent_prompt_metadata(*, suppress_errors: bool = False) -> list[dict[str, Any]]:
+    """Return agent prompt metadata from the daemon's prompt flow."""
+    try:
+        status, resp = _post("/v1/flow", {"state": "prompt", "params": {"list": True}})
+    except Exception as exc:
+        if suppress_errors:
+            logger.warning("MCP prompt discovery unavailable: %s", exc)
+            return []
+        raise McpError(
+            ErrorData(code=INTERNAL_ERROR, message=f"keep daemon unavailable: {exc}", data=None)
+        ) from exc
+    if status != 200:
+        error = str(resp.get("error", "unknown"))
+        if suppress_errors:
+            logger.warning("MCP prompt discovery failed: %s", error)
+            return []
+        raise McpError(
+            ErrorData(code=INTERNAL_ERROR, message=f"keep daemon unavailable: {error}", data=None)
+        )
+    prompts = (resp.get("data") or {}).get("prompts", [])
+    if not isinstance(prompts, list):
+        return []
+    return [prompt for prompt in prompts if isinstance(prompt, dict)]
+
+
+def _normalize_optional_arg(value: Any) -> Any:
+    """Treat blank-string optional MCP arguments as absent."""
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
+def _describe_keep_prompt_tool() -> str:
+    """Build a tool description that lists currently available prompts."""
+    prompts = _list_agent_prompt_metadata(suppress_errors=True)
+    if not prompts:
+        return (
+            "Render an agent prompt with context injected from memory. "
+            "Call with no name to list available prompts."
+        )
+
+    prompt_names = [str(prompt.get("name", "")).strip() for prompt in prompts]
+    prompt_names = [name for name in prompt_names if name]
+    names_text = ", ".join(prompt_names) if prompt_names else "none"
+    return (
+        "Render an agent prompt with context injected from memory. "
+        f"Available prompts: {names_text}. "
+        "Call with no name to return the full list."
+    )
+
+
+class KeepFastMCP(FastMCP):
+    """FastMCP server with prompt exposure sourced dynamically from keep."""
+
+    async def list_tools(self):
+        tools = await super().list_tools()
+        updated = []
+        for tool in tools:
+            if tool.name == "keep_prompt":
+                updated.append(tool.model_copy(update={"description": _describe_keep_prompt_tool()}))
+            else:
+                updated.append(tool)
+        return updated
+
+    async def list_prompts(self) -> list[MCPPrompt]:
+        prompts = _list_agent_prompt_metadata(suppress_errors=True)
+        result: list[MCPPrompt] = []
+        for prompt in prompts:
+            args = prompt.get("mcp_arguments") or []
+            if not isinstance(args, list) or not args:
+                continue
+            result.append(
+                MCPPrompt(
+                    name=str(prompt.get("name", "")),
+                    description=str(prompt.get("summary", "") or ""),
+                    arguments=[
+                        MCPPromptArgument(
+                            name=arg,
+                            description=_MCP_PROMPT_ARG_DESCRIPTIONS.get(arg),
+                            required=False,
+                        )
+                        for arg in args
+                        if isinstance(arg, str)
+                    ],
+                )
+            )
+        return result
+
+    async def get_prompt(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> GetPromptResult:
+        flow_params: dict[str, Any] = {"name": name}
+        for arg in _SUPPORTED_MCP_PROMPT_ARGS:
+            value = _normalize_optional_arg((arguments or {}).get(arg))
+            if value is not None:
+                # MCP prompt arguments are always strings; coerce numerics early.
+                if arg == "token_budget":
+                    try:
+                        value = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                flow_params[arg] = value
+
+        status, resp = _post("/v1/flow", {"state": "prompt", "params": flow_params})
+        if status != 200:
+            raise ValueError(resp.get("error", "unknown"))
+
+        if resp.get("status") == "error":
+            error = (resp.get("data") or {}).get("error", f"prompt not found: {name}")
+            raise ValueError(str(error))
+
+        text = str((resp.get("data") or {}).get("text", ""))
+        return GetPromptResult(
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(type="text", text=text),
+                )
+            ],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Server setup
+# ---------------------------------------------------------------------------
+
+mcp = KeepFastMCP(
+    "keep",
+    instructions=(
+        "Reflective memory with semantic search. "
+        "Store facts, preferences, decisions, and documents. "
+        "Search by meaning. Persist context across sessions."
+    ),
+)
+
+
+def _read_note_resource(note_id: str) -> dict[str, Any]:
+    """Read a note as the canonical note JSON payload."""
+    status, resp = _get(f"/v1/notes/{quote(note_id, safe='')}")
+    if status == 404:
+        raise ValueError(f"note not found: {note_id}")
+    if status != 200:
+        raise ValueError(str(resp.get("error", "unknown")))
+    return resp
+
+
+@mcp.resource(
+    "keep://now",
+    name="now",
+    title="Current Note",
+    description="Current working note as JSON.",
+    mime_type="application/json",
+)
+def keep_now_resource() -> dict[str, Any]:
+    return _read_note_resource("now")
+
+
+@mcp.resource(
+    "keep://{id}",
+    name="note",
+    title="Keep Note",
+    description=(
+        "Read a keep note as JSON. Examples: keep://now, "
+        "keep://meeting-notes, "
+        "keep://file%3A%2F%2F%2FUsers%2Fhugh%2Fnotes.md, "
+        "keep://https%3A%2F%2Fexample.com%2Fdoc"
+    ),
+    mime_type="application/json",
+)
+def keep_note_resource(id: str) -> dict[str, Any]:
+    return _read_note_resource(unquote(id))
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +362,23 @@ class FlowParams(BaseModel):
     bias: Annotated[Optional[dict[str, float]], Field(
         description='Per-item score weighting, for example {"now": 0}.',
     )] = None
+
+
+class PromptSummary(BaseModel):
+    """Structured summary for one exposed agent prompt."""
+
+    name: str
+    summary: str = ""
+
+
+class KeepPromptStructured(BaseModel):
+    """Structured output for the keep_prompt tool."""
+
+    mode: str
+    prompts: list[PromptSummary] | None = None
+    name: str | None = None
+    text: str | None = None
+    error: str | None = None
 
 
 @mcp.tool(
@@ -287,33 +507,35 @@ async def keep_prompt(
     token_budget: Annotated[Optional[int], Field(
         description="Token budget for search results context (template default if not set).",
     )] = None,
-) -> str:
+) -> Annotated[CallToolResult, KeepPromptStructured]:
     """Render an agent prompt with injected context."""
     flow_params: dict[str, Any] = {}
-    if not name:
+    if not _normalize_optional_arg(name):
         flow_params["list"] = True
     else:
         flow_params["name"] = name
-        if text:
-            flow_params["text"] = text
-        if id:
-            flow_params["id"] = id
+        for key, val in [
+            ("text", text), ("id", id), ("since", since),
+            ("until", until), ("scope", scope),
+        ]:
+            normalized = _normalize_optional_arg(val)
+            if normalized is not None:
+                flow_params[key] = normalized
         if tags:
             flow_params["tags"] = tags
-        if since:
-            flow_params["since"] = since
-        if until:
-            flow_params["until"] = until
         if deep:
             flow_params["deep"] = deep
-        if scope:
-            flow_params["scope"] = scope
         if token_budget:
             flow_params["token_budget"] = token_budget
 
     status, resp = _post("/v1/flow", {"state": "prompt", "params": flow_params})
     if status != 200:
-        return f"Error: {resp.get('error', 'unknown')}"
+        error = f"Error: {resp.get('error', 'unknown')}"
+        return CallToolResult(
+            content=[TextContent(type="text", text=error)],
+            structuredContent={"mode": "error", "error": error},
+            isError=True,
+        )
 
     flow_data = resp.get("data", {})
     flow_status = resp.get("status")
@@ -322,16 +544,43 @@ async def keep_prompt(
     if not name:
         prompts = flow_data.get("prompts", [])
         if not prompts:
-            return "No agent prompts available."
-        lines = [f"- {p['name']:20s} {p.get('summary', '')}" for p in prompts]
-        return "\n".join(lines)
+            return CallToolResult(
+                content=[TextContent(type="text", text="No agent prompts available.")],
+                structuredContent={"mode": "list", "prompts": []},
+            )
+        prompt_rows = [
+            {
+                "name": str(p.get("name", "")),
+                "summary": str(p.get("summary", "") or ""),
+            }
+            for p in prompts
+            if isinstance(p, dict)
+        ]
+        lines = [f"Available prompts ({len(prompt_rows)}):"]
+        lines.extend(
+            f"- {row['name']}: {row['summary']}".rstrip()
+            for row in prompt_rows
+        )
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent={"mode": "list", "prompts": prompt_rows},
+        )
 
     # Error
     if flow_status == "error":
-        return f"Prompt not found: {name}"
+        error = str(flow_data.get("error", f"prompt not found: {name}"))
+        return CallToolResult(
+            content=[TextContent(type="text", text=error)],
+            structuredContent={"mode": "render", "name": name, "error": error},
+            isError=True,
+        )
 
     # Render mode — daemon already expanded the prompt
-    return flow_data.get("text", f"Prompt not found: {name}")
+    text_out = str(flow_data.get("text", ""))
+    return CallToolResult(
+        content=[TextContent(type="text", text=text_out)],
+        structuredContent={"mode": "render", "name": name, "text": text_out},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +601,6 @@ async def keep_help(
                     'Use "index" to see all available topics.',
     )] = "index",
 ) -> str:
-    from .help import get_help_topic
     return get_help_topic(topic, link_style="mcp")
 
 

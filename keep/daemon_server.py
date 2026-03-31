@@ -367,10 +367,14 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_flow(self, groups: dict):
         body = self._read_body()
+        try:
+            budget = int(body["budget"]) if body.get("budget") not in (None, "") else 5
+        except (ValueError, TypeError):
+            budget = 5
         result = self.keeper.run_flow(
             state=body.get("state", ""),
             params=body.get("params", {}),
-            budget=body.get("budget", 5),
+            budget=budget,
             cursor_token=body.get("cursor_token") or body.get("cursor"),
             state_doc_yaml=body.get("state_doc_yaml"),
             writable=body.get("writable", True),

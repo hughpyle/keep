@@ -36,6 +36,60 @@ def test_prompt_list_bootstraps_on_fresh_store(mock_providers, tmp_path):
     assert result.status == "done"
     prompts = result.data.get("prompts", [])
     assert any(prompt.get("name") == "reflect" for prompt in prompts)
+    reflect = next(prompt for prompt in prompts if prompt.get("name") == "reflect")
+    assert reflect.get("mcp_arguments") == ["text", "id", "since", "token_budget"]
+
+
+def test_prompt_list_normalizes_mcp_prompt_tag_variants(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    kp.put(
+        "# Test\n\n## Prompt\nContext: {text}",
+        id=".prompt/agent/test-mcp-string",
+        tags={
+            "category": "system",
+            "context": "prompt",
+            "mcp_prompt": " text , since , unsupported , text ",
+        },
+    )
+    kp.put(
+        "# Test\n\n## Prompt\nContext: {text}",
+        id=".prompt/agent/test-mcp-list",
+        tags={
+            "category": "system",
+            "context": "prompt",
+            "mcp_prompt": ["id", "token_budget", "bogus", "id"],
+        },
+    )
+
+    result = kp.run_flow_command("prompt", params={"list": True})
+
+    assert result.status == "done"
+    prompts = {prompt["name"]: prompt for prompt in result.data.get("prompts", [])}
+    assert prompts["test-mcp-string"]["mcp_arguments"] == ["text", "since"]
+    assert prompts["test-mcp-list"]["mcp_arguments"] == ["id", "token_budget"]
+
+
+def test_prompt_list_normalizes_json_encoded_mcp_prompt_tag(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    kp.put(
+        "# Test\n\n## Prompt\nContext: {text}",
+        id=".prompt/agent/test-mcp-json",
+        tags={
+            "category": "system",
+            "context": "prompt",
+            "mcp_prompt": '["text", "since", "token_budget"]',
+        },
+    )
+
+    result = kp.run_flow_command("prompt", params={"list": True})
+
+    assert result.status == "done"
+    prompts = {prompt["name"]: prompt for prompt in result.data.get("prompts", [])}
+    assert prompts["test-mcp-json"]["mcp_arguments"] == ["text", "since", "token_budget"]
 
 
 def test_query_prompt_without_text_renders_without_running_query_resolution(
@@ -91,6 +145,25 @@ def test_prompt_render_tolerates_ambiguous_stopped_flow(mock_providers, tmp_path
     assert result is not None
     assert result.flow_bindings is not None
     assert result.flow_bindings["search"]["count"] == 1
+
+
+def test_render_prompt_coerces_string_token_budget(mock_providers, tmp_path):
+    from keep.cli import expand_prompt
+
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+    kp.put("Daemon code edited yesterday", id="doc1")
+
+    result = kp.render_prompt(
+        name="query",
+        text="when was the daemon code edited?",
+        token_budget="50",
+    )
+
+    assert result is not None
+    assert result.token_budget == 50
+    expanded = expand_prompt(result, kp)
+    assert "Question:" in expanded
 
 
 def test_summarize_action_errors_when_default_prompt_is_broken(mock_providers, tmp_path):

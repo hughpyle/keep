@@ -594,6 +594,7 @@ class PromptInfo:
     """Summary info for an available agent prompt."""
     name: str            # e.g. "reflect"
     summary: str         # first line of doc body
+    mcp_arguments: tuple[str, ...] = ()  # ordered MCP prompt args when exposed
 
 
 # ---------------------------------------------------------------------------

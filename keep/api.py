@@ -5005,7 +5005,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if not name or p.get("list"):
                 prompts = self.list_prompts()
                 return FlowResult(status="done", data={
-                    "prompts": [{"name": pr.name, "summary": pr.summary} for pr in prompts],
+                    "prompts": [
+                        {
+                            "name": pr.name,
+                            "summary": pr.summary,
+                            **({"mcp_arguments": list(pr.mcp_arguments)} if pr.mcp_arguments else {}),
+                        }
+                        for pr in prompts
+                    ],
                 }, ticks=1)
             # render mode
             try:

@@ -28,6 +28,13 @@ The original document content is **not stored** — only the summary and embeddi
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
+│  MCP Layer (mcp.py)                                         │
+│  - KeepFastMCP: tools, prompts, resources via stdio         │
+│  - Thin HTTP proxy to daemon                                │
+└──────────────────┬──────────────────────────────────────────┘
+                   │ HTTP
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
 │  API Layer (api.py)                                         │
 │  - Keeper class                                             │
 │  - High-level operations: put(), find(), get()              │
@@ -105,7 +112,21 @@ The original document content is **not stored** — only the summary and embeddi
 
 **[types.py](keep/types.py)** — Data model
 - `Item`: Immutable result type
+- `PromptInfo`: Agent prompt metadata including `mcp_arguments` for MCP exposure
 - System tag protection (prefix: `_`)
+
+**[mcp.py](keep/mcp.py)** — MCP stdio server
+- `KeepFastMCP` subclass of `FastMCP` — three tools (`keep_flow`, `keep_prompt`, `keep_help`)
+- Dynamic prompt exposure: prompt docs tagged with `mcp_prompt` become native MCP prompts (protocol-level `list_prompts` / `get_prompt`)
+- MCP resources: `keep://now` (current note) and `keep://{id}` (any note by ID)
+- Thin HTTP layer — all operations delegate to the daemon via `_post` / `_get`
+- Structured output: `keep_prompt` returns `CallToolResult` with `structuredContent`
+
+**[_context_resolution.py](keep/_context_resolution.py)** — Context assembly mixin
+- Prompt rendering, similar-for-display, meta-doc resolution
+- `_normalize_mcp_prompt_args()`: parses `mcp_prompt` tag values (comma-separated, JSON array, or list) into validated arg tuples
+- `_coerce_token_budget()`: string-to-int coercion at MCP/HTTP boundaries
+- `_SUPPORTED_MCP_PROMPT_ARGS`: canonical set of allowed MCP prompt argument names
 
 ---
 

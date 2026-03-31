@@ -3,6 +3,7 @@ tags:
   category: system
   context: prompt
   state: find-deep
+  mcp_prompt: text,since,token_budget
 ---
 # .prompt/agent/query
 

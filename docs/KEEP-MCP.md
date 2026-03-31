@@ -66,6 +66,27 @@ Three tools:
 
 All operations (search, put, get, tag, delete, move, stats) go through `keep_flow` with named state docs. See [FLOW-ACTIONS.md](use keep_help with topic="flow-actions") for the full action reference.
 
+## Resources
+
+The MCP server also exposes read-only note resources.
+
+Concrete resource:
+
+- `keep://now` — the current note as JSON
+
+Resource template:
+
+- `keep://{id}` — any keep note ID, percent-encoded when needed
+
+Examples:
+
+- `keep://now`
+- `keep://meeting-notes`
+- `keep://file%3A%2F%2F%2FUsers%2Fhugh%2Fnotes.md`
+- `keep://https%3A%2F%2Fexample.com%2Fdoc`
+
+Resource contents use the same JSON shape returned by `GET /v1/notes/{id}`.
+
 ### keep_flow
 
 ```
@@ -102,6 +123,28 @@ scope:  "file:///path/to/dir*"     # constrain results to ID glob
 ```
 
 Returns the rendered prompt with placeholders expanded. Supports `{get}`, `{find}`, `{text}`, and `{binding_name}` placeholders (when the prompt doc has a `state` tag referencing a state doc flow). See [KEEP-PROMPT.md](use keep_help with topic="keep-prompt") for prompt details.
+
+## MCP Prompts
+
+The MCP server also exposes selected `.prompt/agent/*` notes as MCP Prompts. Exposure is store-driven: a prompt doc appears in MCP prompt listings only when it has an `mcp_prompt` tag.
+
+Example prompt-doc tag:
+
+```yaml
+tags:
+  context: prompt
+  state: get
+  mcp_prompt: text,id,since,token_budget
+```
+
+Supported MCP Prompt arguments are intentionally narrow and all optional:
+
+- `text`
+- `id`
+- `since`
+- `token_budget`
+
+These MCP Prompts are thin wrappers over the same backend render path used by the `keep_prompt` tool. The tool remains the broader surface when you need `until`, `tags`, `deep`, or `scope`.
 
 ### keep_help
 

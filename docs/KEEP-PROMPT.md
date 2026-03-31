@@ -97,6 +97,26 @@ keep get .prompt/agent/reflect            # View the prompt doc
 
 Prompt docs are editable — they version like any other store document. User edits are preserved across upgrades (content-hash detection).
 
+### MCP Prompt exposure
+
+Selected agent prompt docs can also be exposed as MCP Prompts. This is opt-in via the prompt doc's `mcp_prompt` tag, which lists the advertised optional argument names in order:
+
+```yaml
+tags:
+  context: prompt
+  state: get
+  mcp_prompt: text,id,since,token_budget
+```
+
+Supported MCP Prompt argument names are:
+
+- `text`
+- `id`
+- `since`
+- `token_budget`
+
+The broader [`keep_prompt` tool](KEEP-MCP.md) remains available for the full option set, including `until`, `tags`, `deep`, and `scope`.
+
 ## keep reflect
 
 `keep reflect` is an alias for `keep prompt reflect`. It accepts the same text argument and `--id` option:

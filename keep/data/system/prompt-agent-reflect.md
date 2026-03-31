@@ -3,6 +3,7 @@ tags:
   category: system
   context: prompt
   state: get
+  mcp_prompt: text,id,since,token_budget
 ---
 # .prompt/agent/reflect
 

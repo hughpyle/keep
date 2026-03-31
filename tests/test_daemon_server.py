@@ -120,6 +120,18 @@ def test_404_unknown_path(http):
     assert r.status_code == 404
 
 
+def test_flow_blank_budget_uses_default(http):
+    r = http.post("/v1/flow", json={
+        "state": "prompt",
+        "params": {"list": True},
+        "budget": "",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "done"
+    assert "prompts" in body["data"]
+
+
 # --- Put / Get / Delete ---
 
 def test_put_and_get(http):
