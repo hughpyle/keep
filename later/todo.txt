@@ -1,4 +1,8 @@
 
+* sysdoc: enforce context= matching the id, otherwise we'll get confused
+
+* sysdoc: query by context tag, not by id?
+
 * reranking (including a local provider)
 
 * "skill install" (skill.md and _all the docs_) -> docs index, etc

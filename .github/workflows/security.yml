@@ -14,6 +14,39 @@ on:
     - cron: '0 8 * * 1'
 
 jobs:
+  license-check:
+    name: Check dependency licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --no-dev
+      - name: Check licenses
+        run: |
+          uv run pip-licenses --fail-on="GNU General Public License v2 (GPLv2);\
+          GNU General Public License v3 (GPLv3);\
+          GNU General Public License v2 or later (GPLv2+);\
+          GNU General Public License v3 or later (GPLv3+);\
+          GNU Affero General Public License v3 (AGPLv3);\
+          GNU Affero General Public License v3 or later (AGPLv3+);\
+          GNU Lesser General Public License v2 (LGPLv2);\
+          GNU Lesser General Public License v2 or later (LGPLv2+);\
+          GNU Lesser General Public License v3 (LGPLv3);\
+          GNU Lesser General Public License v3 or later (LGPLv3+)" \
+            --format=plain --order=license
+      - name: Flag UNKNOWN licenses
+        run: |
+          UNKNOWN=$(uv run pip-licenses --format=csv | grep 'UNKNOWN' || true)
+          if [ -n "$UNKNOWN" ]; then
+            echo "::warning::Packages with UNKNOWN license metadata:"
+            echo "$UNKNOWN"
+          fi
+
   pip-audit:
     name: Audit Python dependencies
     runs-on: ubuntu-latest
