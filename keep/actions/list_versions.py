@@ -20,8 +20,8 @@ class ListVersions:
                 {
                     "offset": i + 1,
                     "summary": str(getattr(v, "summary", "")),
-                    "date": (getattr(v, "tags", {}) or {}).get("_created")
-                            or getattr(v, "created_at", ""),
+                    "date": getattr(v, "created_at", "")
+                            or (getattr(v, "tags", {}) or {}).get("_updated", ""),
                 }
                 for i, v in enumerate(versions)
             ],

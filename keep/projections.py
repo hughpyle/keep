@@ -632,7 +632,7 @@ def plan_find_context_render(
                     version_lines = []
                     for version in versions:
                         stamp = (
-                            version.tags.get("_created")
+                            version.created_at
                             or version.tags.get("_updated", "")
                         )[:10]
                         stamp_part = f"  [{stamp}]" if stamp else ""

@@ -238,7 +238,7 @@ class ContextResolutionMixin:
                     for i, v in enumerate(nav.get("prev", [])[:versions_limit]):
                         prev_refs.append(VersionRef(
                             offset=i + 1,
-                            date=local_date(v.tags.get("_created") or v.created_at or ""),
+                            date=local_date(v.created_at or v.tags.get("_updated") or ""),
                             summary=v.summary,
                         ))
                 else:
@@ -248,7 +248,7 @@ class ContextResolutionMixin:
                     if older is not None:
                         prev_refs.append(VersionRef(
                             offset=offset + 1,
-                            date=local_date(older.tags.get("_created", "")),
+                            date=local_date(older.tags.get("_updated") or older.tags.get("_created", "")),
                             summary=older.summary,
                         ))
                     if offset > 1:
@@ -256,7 +256,7 @@ class ContextResolutionMixin:
                         if newer is not None:
                             next_refs.append(VersionRef(
                                 offset=offset - 1,
-                                date=local_date(newer.tags.get("_created", "")),
+                                date=local_date(newer.tags.get("_updated") or newer.tags.get("_created", "")),
                                 summary=newer.summary,
                             ))
 
