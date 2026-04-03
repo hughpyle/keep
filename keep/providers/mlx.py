@@ -9,6 +9,7 @@ Requires: pip install mlx-lm mlx
 import platform
 
 from .base import (
+    EmbedTask,
     get_registry,
     build_summarization_prompt,
     strip_summary_preamble,
@@ -70,14 +71,30 @@ class MLXEmbedding:
             self._dimension = self._model.get_sentence_embedding_dimension()
         return self._dimension
     
-    def embed(self, text: str) -> list[float]:
+    def _prompt_name(self, task: EmbedTask) -> str | None:
+        """Map task to prompt_name for models that support it (e.g. nomic)."""
+        prompts = getattr(self._model, "prompts", None) or {}
+        if not prompts:
+            return None
+        name = "search_query" if task == EmbedTask.QUERY else "search_document"
+        return name if name in prompts else None
+
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Generate embedding for a single text."""
-        embedding = self._model.encode(text, convert_to_numpy=True)
+        kwargs: dict = {"convert_to_numpy": True}
+        prompt_name = self._prompt_name(task)
+        if prompt_name is not None:
+            kwargs["prompt_name"] = prompt_name
+        embedding = self._model.encode(text, **kwargs)
         return embedding.tolist()
-    
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
-        embeddings = self._model.encode(texts, convert_to_numpy=True)
+        kwargs: dict = {"convert_to_numpy": True}
+        prompt_name = self._prompt_name(task)
+        if prompt_name is not None:
+            kwargs["prompt_name"] = prompt_name
+        embeddings = self._model.encode(texts, **kwargs)
         return embeddings.tolist()
 
 

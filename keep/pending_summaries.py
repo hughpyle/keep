@@ -319,6 +319,37 @@ class PendingSummaryQueue:
             """, (id, collection, content, now, task_type, meta_json))
             self._conn.commit()
 
+    def enqueue_batch(
+        self,
+        items: list[tuple[str, str, str, str, Optional[dict]]],
+    ) -> int:
+        """Add multiple items to the pending queue in a single transaction.
+
+        Each item is a tuple of (id, collection, content, task_type, metadata).
+        Returns the number of items enqueued.
+        """
+        if not items:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        rows = [
+            (id, collection, content, now, task_type, json.dumps(metadata) if metadata else "{}")
+            for id, collection, content, task_type, metadata in items
+        ]
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                self._conn.executemany("""
+                    INSERT OR REPLACE INTO pending_summaries
+                    (id, collection, content, queued_at, attempts, task_type, metadata,
+                     status, claimed_by, claimed_at)
+                    VALUES (?, ?, ?, ?, 0, ?, ?, 'pending', NULL, NULL)
+                """, rows)
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return len(rows)
+
     def dequeue(self, limit: int = 10) -> list[PendingSummary]:
         """Atomically claim the oldest pending items for processing.
 

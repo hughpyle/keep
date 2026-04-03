@@ -50,13 +50,13 @@ class TimeoutEmbeddingProvider:
         self.embed_calls = 0
         self.fail_until = fail_until
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, **kwargs) -> list[float]:
         self.embed_calls += 1
         if self.embed_calls <= self.fail_until:
             raise TimeoutError(f"Connection timed out (call {self.embed_calls})")
         return [0.1] * self.dimension
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], **kwargs) -> list[list[float]]:
         return [self.embed(t) for t in texts]
 
 

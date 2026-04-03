@@ -19,12 +19,12 @@ class MockEmbeddingProvider:
     def dimension(self) -> int:
         return self._dimension
     
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, **kwargs) -> list[float]:
         self.embed_calls += 1
         # Simple deterministic "embedding" based on text length
         return [float(len(text) % (i + 1)) for i in range(self._dimension)]
-    
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+
+    def embed_batch(self, texts: list[str], **kwargs) -> list[list[float]]:
         self.batch_calls += 1
         return [self.embed(t) for t in texts]
 

@@ -171,15 +171,15 @@ class LockedEmbeddingProvider:
             with self._lock:
                 return self._provider.dimension
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, **kwargs) -> list[float]:
         with self._thread_lock:
             with self._lock:
-                return self._provider.embed(text)
+                return self._provider.embed(text, **kwargs)
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], **kwargs) -> list[list[float]]:
         with self._thread_lock:
             with self._lock:
-                return self._provider.embed_batch(texts)
+                return self._provider.embed_batch(texts, **kwargs)
 
     def release(self) -> None:
         """Free the model."""

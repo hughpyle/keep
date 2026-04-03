@@ -926,7 +926,7 @@ class BackgroundProcessingMixin:
     def _process_pending_reindex(self, item) -> None:
         """Process a reindex task: embed summary and write to vector store.
 
-        Handles both main docs and versioned entries.
+        Handles main docs, versioned entries, and parts.
         The item.content contains the summary text to embed.
         """
         chroma_coll = self._resolve_chroma_collection()
@@ -939,11 +939,22 @@ class BackgroundProcessingMixin:
 
         meta = item.metadata or {}
         version = meta.get("version")
+        part_num = meta.get("part_num")
         base_id = meta.get("base_id")
 
         embedding = self._get_embedding_provider().embed(item.content)
 
-        if version is not None and base_id is not None:
+        if part_num is not None and base_id is not None:
+            # Part entry
+            self._store.upsert_part(
+                collection=chroma_coll,
+                id=base_id,
+                part_num=part_num,
+                embedding=embedding,
+                summary=item.content,
+                tags=casefold_tags_for_index(meta.get("tags", {})),
+            )
+        elif version is not None and base_id is not None:
             # Versioned entry
             self._store.upsert_version(
                 collection=chroma_coll,

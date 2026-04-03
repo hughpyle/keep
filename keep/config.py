@@ -150,6 +150,10 @@ class StoreConfig:
     # Avoids re-running an O(N) startup check on every process invocation.
     chroma_tag_markers_verified: bool = False
 
+    # True once all embeddings have been re-computed with task-type prefixes
+    # (e.g. nomic search_document:/search_query:, Voyage input_type, Gemini task_type).
+    embed_task_reindex_done: bool = False
+
     # Tool integrations tracking (presence of key = handled, value = installed or skipped)
     integrations: dict[str, Any] = field(default_factory=dict)
 
@@ -670,6 +674,9 @@ def load_config(config_dir: Path) -> StoreConfig:
     chroma_tag_markers_verified = bool(
         data.get("store", {}).get("chroma_tag_markers_verified", False)
     )
+    embed_task_reindex_done = bool(
+        data.get("store", {}).get("embed_task_reindex_done", False)
+    )
 
     # Parse integrations section (presence = handled)
     integrations = data.get("integrations", {})
@@ -763,6 +770,7 @@ def load_config(config_dir: Path) -> StoreConfig:
         max_file_size=max_file_size,
         system_docs_hash=system_docs_hash,
         chroma_tag_markers_verified=chroma_tag_markers_verified,
+        embed_task_reindex_done=embed_task_reindex_done,
         integrations=integrations,
         remote=remote,
         backend=backend,
@@ -823,6 +831,8 @@ def save_config(config: StoreConfig) -> None:
         store_section["system_docs_hash"] = config.system_docs_hash
     if config.chroma_tag_markers_verified:
         store_section["chroma_tag_markers_verified"] = True
+    if config.embed_task_reindex_done:
+        store_section["embed_task_reindex_done"] = True
     # Only write backend if not default
     if config.backend != "local":
         store_section["backend"] = config.backend

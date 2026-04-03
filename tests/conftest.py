@@ -25,7 +25,7 @@ class MockEmbeddingProvider:
         self.embed_calls = 0
         self.batch_calls = 0
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, **kwargs) -> list[float]:
         """Generate deterministic embedding from text hash."""
         self.embed_calls += 1
         h = hashlib.md5(text.encode()).hexdigest()
@@ -38,7 +38,7 @@ class MockEmbeddingProvider:
         embedding = (embedding * 24)[:self.dimension]
         return embedding
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], **kwargs) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
         self.batch_calls += 1
         return [self.embed(t) for t in texts]

@@ -2,7 +2,7 @@
 
 import os
 
-from .base import get_registry
+from .base import EmbedTask, get_registry
 
 
 class SentenceTransformerEmbedding:
@@ -58,14 +58,30 @@ class SentenceTransformerEmbedding:
         """Get embedding dimension from the model."""
         return self._model.get_sentence_embedding_dimension()
     
-    def embed(self, text: str) -> list[float]:
+    def _prompt_name(self, task: EmbedTask) -> str | None:
+        """Map task to prompt_name for models that support it (e.g. nomic)."""
+        prompts = getattr(self._model, "prompts", None) or {}
+        if not prompts:
+            return None
+        name = "search_query" if task == EmbedTask.QUERY else "search_document"
+        return name if name in prompts else None
+
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Generate embedding for a single text."""
-        embedding = self._model.encode(text, convert_to_numpy=True)
+        kwargs: dict = {"convert_to_numpy": True}
+        prompt_name = self._prompt_name(task)
+        if prompt_name is not None:
+            kwargs["prompt_name"] = prompt_name
+        embedding = self._model.encode(text, **kwargs)
         return embedding.tolist()
-    
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
-        embeddings = self._model.encode(texts, convert_to_numpy=True)
+        kwargs: dict = {"convert_to_numpy": True}
+        prompt_name = self._prompt_name(task)
+        if prompt_name is not None:
+            kwargs["prompt_name"] = prompt_name
+        embeddings = self._model.encode(texts, **kwargs)
         return embeddings.tolist()
 
 
@@ -124,7 +140,7 @@ class OpenAIEmbedding:
             self._dimension = len(test_embedding)
         return self._dimension
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Generate embedding for a single text."""
         response = self._client.embeddings.create(
             model=self.model_name,
@@ -135,8 +151,8 @@ class OpenAIEmbedding:
         if self._dimension is None:
             self._dimension = len(embedding)
         return embedding
-    
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
         response = self._client.embeddings.create(
             model=self.model_name,
@@ -204,11 +220,29 @@ class GeminiEmbedding:
             self._dimension = len(test_embedding)
         return self._dimension
 
-    def embed(self, text: str) -> list[float]:
-        """Generate embedding for a single text."""
-        kwargs: dict = dict(model=self.model_name, contents=text)
+    _TASK_TYPES = {
+        EmbedTask.DOCUMENT: "RETRIEVAL_DOCUMENT",
+        EmbedTask.QUERY: "RETRIEVAL_QUERY",
+    }
+
+    def _embed_config_for(self, task: EmbedTask):
+        """Build EmbedContentConfig with task_type merged in."""
+        from google.genai import types
+
+        task_type = self._TASK_TYPES.get(task)
         if self._embed_config is not None:
-            kwargs["config"] = self._embed_config
+            return types.EmbedContentConfig(
+                output_dimensionality=self._embed_config.output_dimensionality,
+                task_type=task_type,
+            )
+        return types.EmbedContentConfig(task_type=task_type)
+
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
+        """Generate embedding for a single text."""
+        kwargs: dict = dict(
+            model=self.model_name, contents=text,
+            config=self._embed_config_for(task),
+        )
         result = self._client.models.embed_content(**kwargs)
         embedding = list(result.embeddings[0].values)
         # Cache dimension if not yet known
@@ -216,11 +250,12 @@ class GeminiEmbedding:
             self._dimension = len(embedding)
         return embedding
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
-        kwargs: dict = dict(model=self.model_name, contents=texts)
-        if self._embed_config is not None:
-            kwargs["config"] = self._embed_config
+        kwargs: dict = dict(
+            model=self.model_name, contents=texts,
+            config=self._embed_config_for(task),
+        )
         result = self._client.models.embed_content(**kwargs)
         return [list(e.values) for e in result.embeddings]
 
@@ -269,7 +304,18 @@ class OllamaEmbedding:
             return truncated[:last_space]
         return truncated
 
-    def embed(self, text: str) -> list[float]:
+    # Prefix-based task instructions for nomic-embed-text models.
+    # Other Ollama models don't use prefixes and get the text as-is.
+    _NOMIC_PREFIXES = {
+        EmbedTask.DOCUMENT: "search_document: ",
+        EmbedTask.QUERY: "search_query: ",
+    }
+
+    def _uses_task_prefix(self) -> bool:
+        """Whether this model uses nomic-style task prefixes."""
+        return "nomic-embed" in self.model_name
+
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Generate embedding, auto-truncating if the model rejects the input.
 
         Tries the full text first. If the model returns a context-length
@@ -278,7 +324,11 @@ class OllamaEmbedding:
         """
         from .ollama_utils import ollama_session
 
-        attempt = text
+        prompt = text
+        if self._uses_task_prefix():
+            prompt = self._NOMIC_PREFIXES[task] + text
+
+        attempt = prompt
         for _ in range(30):  # 0.9^30 ≈ 4% — covers even extreme cases
             response = ollama_session().post(
                 f"{self.base_url}/api/embeddings",
@@ -296,7 +346,7 @@ class OllamaEmbedding:
                 new_len = int(len(attempt) * 0.9)
                 if new_len < 50:
                     break
-                attempt = self._truncate_at_word(text, new_len)
+                attempt = self._truncate_at_word(prompt, new_len)
                 continue
 
             # Non-retryable error — break immediately
@@ -308,9 +358,9 @@ class OllamaEmbedding:
             f"HTTP {response.status_code} from {self.base_url}. {detail}"
         )
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Generate embeddings for multiple texts (sequential for Ollama)."""
-        return [self.embed(text) for text in texts]
+        return [self.embed(text, task=task) for text in texts]
 
 
 class VoyageEmbedding:
@@ -376,6 +426,8 @@ class VoyageEmbedding:
     def _request_with_retry(self, payload: dict, timeout: int) -> dict:
         """Make API request with exponential backoff retry for rate limits."""
         import time
+
+        import requests
         from keep.providers.http import http_session
 
         backoff = self.INITIAL_BACKOFF
@@ -445,13 +497,18 @@ class VoyageEmbedding:
             "Please wait and try again."
         ) from last_exception
 
-    def embed(self, text: str) -> list[float]:
+    _INPUT_TYPES = {
+        EmbedTask.DOCUMENT: "document",
+        EmbedTask.QUERY: "query",
+    }
+
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Generate embedding for a single text."""
         data = self._request_with_retry(
             payload={
                 "input": [text],
                 "model": self.model_name,
-                "input_type": "document",
+                "input_type": self._INPUT_TYPES[task],
             },
             timeout=60,
         )
@@ -463,7 +520,7 @@ class VoyageEmbedding:
             self._dimension = len(embedding)
         return embedding
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
         if not texts:
             return []
@@ -472,7 +529,7 @@ class VoyageEmbedding:
             payload={
                 "input": texts,
                 "model": self.model_name,
-                "input_type": "document",
+                "input_type": self._INPUT_TYPES[task],
             },
             timeout=120,
         )
@@ -525,7 +582,7 @@ class MistralEmbedding:
             self._dimension = len(test_embedding)
         return self._dimension
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         response = self._client.embeddings.create(
             model=self.model_name,
             inputs=[text],
@@ -535,7 +592,7 @@ class MistralEmbedding:
             self._dimension = len(embedding)
         return embedding
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         if not texts:
             return []
         response = self._client.embeddings.create(

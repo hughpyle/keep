@@ -8,7 +8,27 @@ import json
 import re
 from dataclasses import dataclass
 from collections.abc import Iterable
+from enum import Enum
 from typing import Any, Protocol, runtime_checkable
+
+
+# -----------------------------------------------------------------------------
+# Embedding Task Types
+# -----------------------------------------------------------------------------
+
+class EmbedTask(str, Enum):
+    """Task context for embedding generation.
+
+    Asymmetric embedding models (nomic-embed-text, Voyage, Gemini) produce
+    better vectors when told whether the input is a document being stored
+    or a query being searched.  Symmetric models ignore this.
+
+    Values:
+        DOCUMENT: Content being indexed/stored (notes, parts, summaries).
+        QUERY:    Search input or similarity reference.
+    """
+    DOCUMENT = "document"
+    QUERY = "query"
 
 
 # -----------------------------------------------------------------------------
@@ -115,25 +135,28 @@ class EmbeddingProvider(Protocol):
         """
         ...
     
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Generate an embedding vector for the given text.
-        
+
         Args:
             text: The text to embed
-            
+            task: Whether this is a document or query embedding.
+                  Asymmetric models use this to improve retrieval accuracy.
+
         Returns:
             A list of floats representing the embedding vector
         """
         ...
-    
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Generate embeddings for multiple texts.
-        
+
         Batch processing is often more efficient than individual calls.
-        
+
         Args:
             texts: List of texts to embed
-            
+            task: Whether these are document or query embeddings.
+
         Returns:
             List of embedding vectors, one per input text
         """

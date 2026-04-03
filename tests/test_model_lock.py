@@ -18,7 +18,7 @@ class SlowEmbeddingProvider:
         self.max_active = 0
         self._lock = threading.Lock()
 
-    def embed(self, _text: str) -> list[float]:
+    def embed(self, _text: str, **kwargs) -> list[float]:
         with self._lock:
             self._active += 1
             if self._active > self.max_active:
@@ -30,7 +30,7 @@ class SlowEmbeddingProvider:
             with self._lock:
                 self._active -= 1
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], **kwargs) -> list[list[float]]:
         return [self.embed(t) for t in texts]
 
 

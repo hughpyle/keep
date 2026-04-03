@@ -48,6 +48,7 @@ from .providers import get_registry
 from .providers.base import (
     Document,
     DocumentProvider,
+    EmbedTask,
     EmbeddingProvider,
     MediaDescriber,
     SummarizationProvider,
@@ -285,6 +286,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if not self._startup_maintenance_deferred:
             self._run_tag_marker_startup_check(chroma_coll, doc_coll)
 
+        # Embed-task-type migration: re-embed all items with correct
+        # document/query task prefixes (nomic search_document:, Voyage
+        # input_type, Gemini task_type).  Runs once, low-priority background.
+        if (
+            not self._startup_maintenance_deferred
+            and self._config.embedding is not None
+            and not self._config.embed_task_reindex_done
+        ):
+            self._enqueue_embed_task_reindex()
+
         if needs_reconcile:
             self._reconcile_thread = threading.Thread(
                 target=self._auto_reconcile_safe, args=(chroma_coll, doc_coll), daemon=True,
@@ -379,6 +390,83 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             save_config(self._config)
         except Exception as e:
             logger.debug("Failed to persist chroma_tag_markers_verified: %s", e)
+
+    # Provider+model combinations known to be symmetric (task param is a no-op).
+    # Key: provider name, Value: set of model prefixes that are symmetric,
+    # or None meaning the entire provider family is symmetric.
+    _SYMMETRIC_PROVIDERS: dict[str, set[str] | None] = {
+        "openai": None,         # all OpenAI models are symmetric
+        "mistral": None,        # all Mistral models are symmetric
+    }
+    # Providers where only specific models are asymmetric.
+    _ASYMMETRIC_MODEL_PREFIXES: dict[str, list[str]] = {
+        "ollama": ["nomic-embed"],
+        "sentence-transformers": ["nomic"],
+        "mlx": ["nomic"],
+    }
+
+    def _config_uses_embed_task(self) -> bool:
+        """Check from config whether the embedding provider uses task types.
+
+        Avoids instantiating the provider (which loads the model).
+        Uses provider name and model params to decide statically.
+        """
+        if self._config.embedding is None:
+            return False
+        name = self._config.embedding.name
+        params = self._config.embedding.params
+
+        # Entirely symmetric provider families
+        if name in self._SYMMETRIC_PROVIDERS:
+            return False
+
+        # Always asymmetric (Voyage, Gemini)
+        if name in ("voyage", "gemini"):
+            return True
+
+        # Model-specific: check if model name matches known asymmetric prefixes
+        prefixes = self._ASYMMETRIC_MODEL_PREFIXES.get(name)
+        if prefixes is not None:
+            model = str(params.get("model", ""))
+            return any(model.startswith(p) for p in prefixes)
+
+        # Unknown provider — conservatively skip reindex
+        return False
+
+    def _enqueue_embed_task_reindex(self) -> None:
+        """One-time migration: re-embed all items with task-type prefixes.
+
+        Only runs for providers whose embed() actually changes behavior
+        based on the task parameter.  Symmetric providers and models
+        without task-prompt support are skipped.
+        """
+        import sys
+
+        if not self._config_uses_embed_task():
+            logger.debug("Skipping embed-task reindex: provider is symmetric")
+            self._config.embed_task_reindex_done = True
+            try:
+                save_config(self._config)
+            except Exception:
+                pass
+            return
+
+        stats = self.enqueue_reindex()
+        enqueued = stats.get("enqueued", 0)
+        versions = stats.get("versions", 0)
+        parts = stats.get("parts", 0)
+        if enqueued:
+            print(
+                f"Queued embedding task-type migration for "
+                f"{enqueued} items + {versions} versions + {parts} parts "
+                f"(background)...",
+                file=sys.stderr,
+            )
+        self._config.embed_task_reindex_done = True
+        try:
+            save_config(self._config)
+        except Exception as e:
+            logger.debug("Failed to persist embed_task_reindex_done: %s", e)
 
     def _detect_chroma_tag_marker_migration_need(
         self,
@@ -571,6 +659,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             self._run_tag_marker_startup_check(
                 chroma_coll, doc_coll, _doc_store=startup_doc_store,
             )
+
+            if self._closing.is_set():
+                return
+
+            # Embed-task-type migration (deferred path)
+            if (
+                self._config.embedding is not None
+                and not self._config.embed_task_reindex_done
+            ):
+                self._enqueue_embed_task_reindex()
 
             if self._closing.is_set():
                 return
@@ -973,43 +1071,57 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 )
 
     def enqueue_reindex(self) -> dict:
-        """Enqueue embed tasks for all docs (and their versions) into the pending queue.
+        """Enqueue embed tasks for all docs, versions, and parts.
 
         Returns:
-            Dict with stats: enqueued (int), versions (int)
+            Dict with stats: enqueued (int), versions (int), parts (int)
         """
         doc_coll = self._resolve_doc_collection()
         doc_ids = self._document_store.list_ids(doc_coll)
         enqueued = 0
         versions = 0
+        parts = 0
+        batch: list[tuple[str, str, str, str, dict | None]] = []
+        BATCH_SIZE = 200
 
         for doc_id in doc_ids:
             record = self._document_store.get(doc_coll, doc_id)
             if record is None:
                 continue
-            self._pending_queue.enqueue(
-                doc_id, doc_coll, record.summary,
-                task_type="reindex",
-                metadata={"tags": dict(record.tags)},
-            )
+            batch.append((doc_id, doc_coll, record.summary, "reindex",
+                          {"tags": dict(record.tags)}))
             enqueued += 1
 
             # Enqueue version reindex
             for vi in self._document_store.list_versions(doc_coll, doc_id, limit=100):
                 version_id = f"{doc_id}@v{vi.version}"
-                self._pending_queue.enqueue(
-                    version_id, doc_coll, vi.summary,
-                    task_type="reindex",
-                    metadata={
-                        "version": vi.version,
-                        "base_id": doc_id,
-                        "tags": dict(vi.tags),
-                    },
-                )
+                batch.append((version_id, doc_coll, vi.summary, "reindex",
+                              {"version": vi.version, "base_id": doc_id,
+                               "tags": dict(vi.tags)}))
                 versions += 1
 
-        logger.info("Enqueue reindex: %d items + %d versions", enqueued, versions)
-        return {"enqueued": enqueued, "versions": versions}
+            # Enqueue part reindex
+            for pi in self._document_store.list_parts(doc_coll, doc_id):
+                if not pi.summary:
+                    continue
+                part_id = f"{doc_id}@p{pi.part_num}"
+                batch.append((part_id, doc_coll, pi.summary, "reindex",
+                              {"part_num": pi.part_num, "base_id": doc_id,
+                               "tags": dict(pi.tags)}))
+                parts += 1
+
+            if len(batch) >= BATCH_SIZE:
+                self._pending_queue.enqueue_batch(batch)
+                batch.clear()
+
+        if batch:
+            self._pending_queue.enqueue_batch(batch)
+
+        logger.info(
+            "Enqueue reindex: %d items + %d versions + %d parts",
+            enqueued, versions, parts,
+        )
+        return {"enqueued": enqueued, "versions": versions, "parts": parts}
 
     # -------------------------------------------------------------------------
     # Data Export / Import
@@ -2580,7 +2692,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             embedding = self._store.get_embedding(chroma_coll, similar_to)
             if embedding is None:
                 with _get_tracer("keeper").start_as_current_span("embed"):
-                    embedding = self._get_embedding_provider().embed(item.summary)
+                    embedding = self._get_embedding_provider().embed(item.summary, task=EmbedTask.QUERY)
             actual_limit = (limit + 1 if not include_self else limit) * 3
             if deep:
                 actual_limit = max(actual_limit, 30)
@@ -2600,7 +2712,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             # Each list over-fetches independently so RRF can discover
             # items that rank well in one signal but poorly in the other.
             with _get_tracer("keeper").start_as_current_span("embed"):
-                embedding = self._get_embedding_provider().embed(query)
+                embedding = self._get_embedding_provider().embed(query, task=EmbedTask.QUERY)
             sem_fetch = max(limit * 10, 200)
             fts_fetch = max(limit * 10, 100)
             if deep:

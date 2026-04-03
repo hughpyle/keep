@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..const import SQLITE_BUSY_TIMEOUT_MS
-from .base import EmbeddingProvider
+from .base import EmbedTask, EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ class EmbeddingCache:
         self._max_entries = max_entries
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = threading.RLock()
+        self._pending_touches: set[str] = set()
         self._init_db()
     
     def _init_db(self) -> None:
@@ -88,7 +89,8 @@ class EmbeddingCache:
     def get(self, model_name: str, content: str) -> Optional[list[float]]:
         """Get cached embedding if it exists.
 
-        Updates last_accessed timestamp on hit.
+        Defers last_accessed update to the next write (put/flush) to avoid
+        a SQLite write transaction on every cache hit.
         """
         content_hash = self._hash_key(model_name, content)
 
@@ -102,18 +104,28 @@ class EmbeddingCache:
             row = cursor.fetchone()
 
             if row is not None:
-                # Update last_accessed
-                now = datetime.now(timezone.utc).isoformat()
-                self._conn.execute(
-                    "UPDATE embedding_cache SET last_accessed = ? WHERE content_hash = ?",
-                    (now, content_hash)
-                )
-                self._conn.commit()
-
+                self._pending_touches.add(content_hash)
                 return self._deserialize_embedding(row[0])
 
         return None
     
+    def _flush_touches(self) -> None:
+        """Batch-update last_accessed for recently read entries.
+
+        Must be called with self._lock held.
+        """
+        if not self._pending_touches or self._conn is None:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        hashes = list(self._pending_touches)
+        self._pending_touches.clear()
+        placeholders = ",".join("?" for _ in hashes)
+        self._conn.execute(
+            f"UPDATE embedding_cache SET last_accessed = ? "
+            f"WHERE content_hash IN ({placeholders})",
+            [now, *hashes],
+        )
+
     def put(
         self,
         model_name: str,
@@ -122,6 +134,7 @@ class EmbeddingCache:
     ) -> None:
         """Cache an embedding.
 
+        Also flushes deferred last_accessed updates from get() hits.
         Evicts oldest entries if cache exceeds max_entries.
         """
         content_hash = self._hash_key(model_name, content)
@@ -131,6 +144,7 @@ class EmbeddingCache:
         with self._lock:
             if self._conn is None:
                 return
+            self._flush_touches()
             self._conn.execute("""
                 INSERT OR REPLACE INTO embedding_cache
                 (content_hash, model_name, embedding, dimension, created_at, last_accessed)
@@ -225,9 +239,14 @@ class EmbeddingCache:
         return migrated
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connection, flushing pending touches."""
         with self._lock:
             if self._conn is not None:
+                try:
+                    self._flush_touches()
+                    self._conn.commit()
+                except Exception:
+                    pass
                 self._conn.close()
                 self._conn = None
 
@@ -275,7 +294,11 @@ class CachingEmbeddingProvider:
         """Get embedding dimension from the wrapped provider."""
         return self._provider.dimension
     
-    def embed(self, text: str) -> list[float]:
+    def _cache_key_model(self, task: EmbedTask) -> str:
+        """Cache key model name, scoped by task so document/query don't collide."""
+        return f"{self.model_name}:{task.value}"
+
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Get embedding, using cache when available.
 
         Cache failures are non-fatal — falls through to the real provider.
@@ -283,9 +306,11 @@ class CachingEmbeddingProvider:
         from ..tracing import get_tracer
         _tracer = get_tracer("embed")
 
+        cache_model = self._cache_key_model(task)
+
         # Check cache (fail-safe)
         try:
-            cached = self._cache.get(self.model_name, text)
+            cached = self._cache.get(cache_model, text)
             if cached is not None:
                 with self._stats_lock:
                     self._hits += 1
@@ -300,19 +325,19 @@ class CachingEmbeddingProvider:
             self._misses += 1
         with _tracer.start_as_current_span(
             "embed.compute",
-            attributes={"model": self.model_name},
+            attributes={"model": self.model_name, "task": task.value},
         ):
-            embedding = self._provider.embed(text)
+            embedding = self._provider.embed(text, task=task)
 
         # Store in cache (fail-safe)
         try:
-            self._cache.put(self.model_name, text, embedding)
+            self._cache.put(cache_model, text, embedding)
         except Exception as e:
             logger.debug("Embedding cache write failed: %s", e)
 
         return embedding
-    
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Get embeddings for batch, using cache where available.
 
         Only computes embeddings for cache misses. Cache failures
@@ -321,10 +346,12 @@ class CachingEmbeddingProvider:
         results: list[Optional[list[float]]] = [None] * len(texts)
         to_embed: list[tuple[int, str]] = []
 
+        cache_model = self._cache_key_model(task)
+
         # Check cache for each text (fail-safe)
         for i, text in enumerate(texts):
             try:
-                cached = self._cache.get(self.model_name, text)
+                cached = self._cache.get(cache_model, text)
                 if cached is not None:
                     with self._stats_lock:
                         self._hits += 1
@@ -339,12 +366,12 @@ class CachingEmbeddingProvider:
         # Batch embed cache misses
         if to_embed:
             indices, texts_to_embed = zip(*to_embed)
-            embeddings = self._provider.embed_batch(list(texts_to_embed))
+            embeddings = self._provider.embed_batch(list(texts_to_embed), task=task)
 
             for idx, text, embedding in zip(indices, texts_to_embed, embeddings):
                 results[idx] = embedding
                 try:
-                    self._cache.put(self.model_name, text, embedding)
+                    self._cache.put(cache_model, text, embedding)
                 except Exception as e:
                     logger.debug("Embedding cache write failed: %s", e)
 
