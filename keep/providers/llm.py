@@ -43,7 +43,7 @@ class AnthropicSummarization:
     ):
         from anthropic import Anthropic  # noqa: PLC0415
 
-        self.model = model
+        self.model_name = model
         self.max_tokens = max_tokens
 
         # Try multiple auth sources in priority order:
@@ -62,7 +62,7 @@ class AnthropicSummarization:
                 "  CLAUDE_CODE_OAUTH_TOKEN (OAuth token from 'claude setup-token')"
             )
 
-        self.client = Anthropic(api_key=key)
+        self._client = Anthropic(api_key=key)
     
     def summarize(
         self,
@@ -88,8 +88,8 @@ class AnthropicSummarization:
         max_tokens: int = 4096,
     ) -> str | None:
         """Send a raw prompt to Anthropic and return generated text."""
-        response = self.client.messages.create(
-            model=self.model,
+        response = self._client.messages.create(
+            model=self.model_name,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": user}],
@@ -116,7 +116,7 @@ class OpenAISummarization:
         base_url: str | None = None,
         max_tokens: int = 200,
     ):
-        self.model = model
+        self.model_name = model
         self.max_tokens = max_tokens
         self._client = create_openai_client(api_key=api_key, base_url=base_url)
 
@@ -125,7 +125,7 @@ class OpenAISummarization:
         # - temperature must be omitted (only default=1 supported)
         # Only applies to actual OpenAI models, not local compatible servers.
         self._new_api = (
-            not base_url and self.model.startswith(("gpt-5", "o3", "o4"))
+            not base_url and self.model_name.startswith(("gpt-5", "o3", "o4"))
         )
 
     def _completion_kwargs(self, max_tokens: int) -> dict:
@@ -159,7 +159,7 @@ class OpenAISummarization:
     ) -> str | None:
         """Send a raw prompt to OpenAI and return generated text."""
         response = self._client.chat.completions.create(
-            model=self.model,
+            model=self.model_name,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -192,10 +192,10 @@ class OllamaSummarization:
     ):
         from .ollama_utils import ollama_base_url, ollama_ensure_model  # noqa: PLC0415
 
-        self.model = model
+        self.model_name = model
         self.context_length = context_length
         self.base_url = ollama_base_url(base_url)
-        ollama_ensure_model(self.base_url, self.model)
+        ollama_ensure_model(self.base_url, self.model_name)
 
     def summarize(
         self,
@@ -227,7 +227,7 @@ class OllamaSummarization:
         response = ollama_session().post(
             f"{self.base_url}/api/chat",
             json={
-                "model": self.model,
+                "model": self.model_name,
                 "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
@@ -241,7 +241,7 @@ class OllamaSummarization:
         if not response.ok:
             detail = response.text[:200] if response.text else ""
             raise RuntimeError(
-                f"Ollama generate failed (model={self.model}): "
+                f"Ollama generate failed (model={self.model_name}): "
                 f"HTTP {response.status_code} from {self.base_url}. {detail}"
             )
         return response.json()["message"]["content"].strip()
@@ -264,7 +264,7 @@ class GeminiSummarization:
         api_key: str | None = None,
         max_tokens: int = 150,
     ):
-        self.model = model
+        self.model_name = model
         from .gemini_client import create_gemini_client  # noqa: PLC0415
 
         self.max_tokens = max_tokens
@@ -296,7 +296,7 @@ class GeminiSummarization:
         """Send a raw prompt to Gemini and return generated text."""
         full_prompt = f"{system}\n\n{user}"
         response = self._client.models.generate_content(
-            model=self.model,
+            model=self.model_name,
             contents=full_prompt,
         )
         return response.text
@@ -363,10 +363,10 @@ class OllamaMediaDescriber:
     ):
         from .ollama_utils import ollama_base_url, ollama_ensure_model  # noqa: PLC0415
 
-        self.model = model
+        self.model_name = model
         self.context_length = context_length
         self.base_url = ollama_base_url(base_url)
-        ollama_ensure_model(self.base_url, self.model)
+        ollama_ensure_model(self.base_url, self.model_name)
 
     def describe(self, path: str, content_type: str) -> str | None:
         """Describe an image using Ollama vision model."""
@@ -380,7 +380,7 @@ class OllamaMediaDescriber:
         response = ollama_session().post(
             f"{self.base_url}/api/chat",
             json={
-                "model": self.model,
+                "model": self.model_name,
                 "messages": [
                     {
                         "role": "user",
@@ -397,7 +397,7 @@ class OllamaMediaDescriber:
         if not response.ok:
             detail = response.text[:200] if response.text else ""
             raise RuntimeError(
-                f"Ollama vision failed (model={self.model}): "
+                f"Ollama vision failed (model={self.model_name}): "
                 f"HTTP {response.status_code} from {self.base_url}. {detail}"
             )
 
@@ -424,10 +424,10 @@ class OllamaContentExtractor:
     ):
         from .ollama_utils import ollama_base_url, ollama_ensure_model  # noqa: PLC0415
 
-        self.model = model
+        self.model_name = model
         self.context_length = context_length
         self.base_url = ollama_base_url(base_url)
-        ollama_ensure_model(self.base_url, self.model)
+        ollama_ensure_model(self.base_url, self.model_name)
 
     def extract(self, path: str, content_type: str) -> str | None:
         """Extract text from an image using Ollama OCR model."""
@@ -441,7 +441,7 @@ class OllamaContentExtractor:
         response = ollama_session().post(
             f"{self.base_url}/api/generate",
             json={
-                "model": self.model,
+                "model": self.model_name,
                 "prompt": self.OCR_PROMPT,
                 "images": [image_data],
                 "stream": False,
@@ -453,7 +453,7 @@ class OllamaContentExtractor:
         if not response.ok:
             detail = response.text[:200] if response.text else ""
             raise RuntimeError(
-                f"Ollama OCR failed (model={self.model}): "
+                f"Ollama OCR failed (model={self.model_name}): "
                 f"HTTP {response.status_code} from {self.base_url}. {detail}"
             )
 
@@ -477,7 +477,7 @@ class MistralSummarization:
     ):
         from mistralai import Mistral  # noqa: PLC0415
 
-        self.model = model
+        self.model_name = model
         self.max_tokens = max_tokens
 
         key = api_key or os.environ.get("MISTRAL_API_KEY")
@@ -512,7 +512,7 @@ class MistralSummarization:
         max_tokens: int = 4096,
     ) -> str | None:
         response = self._client.chat.complete(
-            model=self.model,
+            model=self.model_name,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -540,7 +540,7 @@ class MistralContentExtractor:
     ):
         from mistralai import Mistral  # noqa: PLC0415
 
-        self.model = model
+        self.model_name = model
 
         key = api_key or os.environ.get("MISTRAL_API_KEY")
         if not key:
@@ -568,7 +568,7 @@ class MistralContentExtractor:
             document = DocumentURLChunk(document_url=data_url)
 
         response = self._client.ocr.process(
-            model=self.model,
+            model=self.model_name,
             document=document,
         )
 

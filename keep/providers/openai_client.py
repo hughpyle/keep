@@ -42,7 +42,8 @@ def create_openai_client(
     )
     if not key and not base_url:
         raise ValueError(
-            "OpenAI API key required. Set KEEP_OPENAI_API_KEY or OPENAI_API_KEY"
+            "OpenAI API key required. Set KEEP_OPENAI_API_KEY or OPENAI_API_KEY.\n"
+            "Get your API key at: https://platform.openai.com/"
         )
 
     # The SDK requires a non-empty api_key; local servers ignore it.

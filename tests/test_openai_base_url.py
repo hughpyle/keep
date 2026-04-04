@@ -58,7 +58,7 @@ class TestOpenAISummarizationBaseUrl:
             model="llama-3.2-3b",
             base_url="http://localhost:8802/v1",
         )
-        assert provider.model == "llama-3.2-3b"
+        assert provider.model_name == "llama-3.2-3b"
         assert provider._client.base_url.host == "localhost"
 
     def test_no_base_url_no_key_raises(self):
