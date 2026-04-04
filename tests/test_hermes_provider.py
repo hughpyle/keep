@@ -338,28 +338,26 @@ class TestSessionItemId:
         item_id = p._build_session_item_id(
             "random-uuid-123", platform="cli", agent_identity="coder"
         )
-        assert item_id == "hermes:coder:cli"
+        assert item_id == "coder:cli"
         # Same key regardless of session_id
         item_id2 = p._build_session_item_id(
             "different-uuid-456", platform="cli", agent_identity="coder"
         )
         assert item_id == item_id2
 
-    def test_gateway_uses_session_id(self):
+    def test_gateway_includes_platform_and_session(self):
         p = KeepMemoryProvider()
-        session_key = "agent:main:telegram:dm:12345"
         item_id = p._build_session_item_id(
-            session_key, platform="telegram", agent_identity="default"
+            "agent:main:telegram:dm:12345", platform="telegram", agent_identity="default"
         )
-        assert item_id == session_key
+        assert item_id == "default:telegram:agent:main:telegram:dm:12345"
 
     def test_gateway_discord_thread(self):
         p = KeepMemoryProvider()
-        session_key = "agent:main:discord:group:chan123:thread456:user789"
         item_id = p._build_session_item_id(
-            session_key, platform="discord", agent_identity="default"
+            "20260404_174301_4de0b03a", platform="discord", agent_identity="default"
         )
-        assert item_id == session_key
+        assert item_id == "default:discord:20260404_174301_4de0b03a"
 
 
 class TestSessionTags:

@@ -213,8 +213,11 @@ class KeepMemoryProvider:
             logger.debug("Keep skipped: cron/flush context")
             return
 
-        # Ensure the daemon is running for background processing
+        # Ensure the daemon is running for background processing.
+        # If setup is required, skip Keeper creation — the store isn't ready.
         self._ensure_daemon()
+        if self._setup_required:
+            return
 
         # Create in-process Keeper
         try:
@@ -560,11 +563,11 @@ class KeepMemoryProvider:
         For CLI sessions the session_id is a random UUID — we use a
         stable key instead so CLI turns accumulate as versions.
         """
+        identity = kwargs.get("agent_identity") or "default"
         platform = kwargs.get("platform") or "cli"
         if platform == "cli":
-            return "cli"
-        # Gateway: include platform for readability
-        return f"{platform}:{session_id}" if session_id else platform
+            return f"{identity}:cli"
+        return f"{identity}:{platform}:{session_id}" if session_id else f"{identity}:{platform}"
 
     def _build_session_tags(self, session_id: str, **kwargs) -> Dict[str, str]:
         tags = {"source": "hermes"}
