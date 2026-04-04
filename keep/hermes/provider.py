@@ -143,10 +143,9 @@ class KeepMemoryProvider:
         """
         from keep.config import ProviderConfig, create_default_config, save_config
 
-        store_path = Path(
-            os.environ.get("KEEP_STORE_PATH")
-            or (Path(hermes_home) / "keep")
-        ).resolve()
+        # Always use profile-scoped path for setup — ignore inherited
+        # KEEP_STORE_PATH to prevent cross-profile store binding.
+        store_path = Path(hermes_home, "keep").resolve()
         config = create_default_config(store_path)
 
         embedding = self._provider_config_from_choice(
@@ -247,9 +246,16 @@ class KeepMemoryProvider:
         try:
             now = self._keeper.get_now()
             if now and now.summary and now.summary.strip():
+                body = now.summary
+                # Respect the configured token budget to prevent prompt bloat
+                max_chars = int(self._system_prompt_token_budget * _MEMORY_CHARS_PER_TOKEN)
+                header_chars = len(SYSTEM_PROMPT_HEADER) + 2  # + "\n\n"
+                remaining = max(200, max_chars - header_chars)
+                if len(body) > remaining:
+                    body = body[:remaining].rsplit("\n", 1)[0] + "\n…"
                 return (
                     f"{SYSTEM_PROMPT_HEADER}\n\n"
-                    f"{now.summary}"
+                    f"{body}"
                 )
         except Exception as e:
             logger.debug("Keep system_prompt_block failed: %s", e)
@@ -359,21 +365,21 @@ class KeepMemoryProvider:
         if self._keeper is None or not messages:
             return ""
 
-        msg_texts = []
-        for msg in messages[-10:]:
+        role_map = {"user": ROLE_USER, "assistant": ROLE_ASSISTANT}
+        parts = []
+        for msg in messages:
             role = msg.get("role", "")
             content = msg.get("content", "")
             if isinstance(content, str) and content.strip():
-                msg_texts.append(f"{role}: {content}")
+                label = role_map.get(role, role)
+                parts.append(f"{label} {content}")
 
-        if not msg_texts:
+        if not parts:
             return ""
 
         try:
-            combined = "\n".join(msg_texts)
             self._keeper.put(
-                combined,
-                summary=f"Context compression snapshot (session {self._session_id})",
+                "\n\n".join(parts),
                 tags={**self._session_tags, "kind": "compression-snapshot"},
             )
         except Exception as e:
