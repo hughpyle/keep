@@ -3,32 +3,60 @@ tags:
   category: system
   context: now
 ---
-# First time
+# Keep
 
-This is `keep` — reflective memory. You're seeing this because the store is new.
+This is reflective memory — a **practice for agents** for skillful action.  The agent should:
+
+**Read the practice guide.** This explains why and how to use reflective memory:
+
+```
+keep_help(topic="agent-guide")
+```
 
 **Read the foundational teachings.** These are source material, not test data. Read and understand each one.
 
-```bash
-SKILL_DIR="$(keep config tool)"
-keep put "file://${SKILL_DIR}/docs/library/mn61.html" -t type=teaching -t topic=reflection
-keep put "file://${SKILL_DIR}/docs/library/an5.57_translation-en-sujato.json" -t type=teaching -t topic=action
-keep put "file://${SKILL_DIR}/docs/library/han_verse.txt" -t type=teaching -t topic=urgency
-keep pending
+List the full library, and read the library index:
+```
+keep_flow(state="list", params={prefix: ".library", include_hidden: true})
+
+keep_flow(state="get", params={id: ".library"}, token_budget=2000)
 ```
 
-Now read and understand each one:
-
+The Ancrene Riwle - "schir heorte":
 ```
-keep_flow(state="get", params={item_id: ".conversations"}, token_budget=2000)
-keep_flow(state="get", params={item_id: ".tag/act"}, token_budget=1000)
-keep_flow(state="get", params={item_id: "file://SKILL_DIR/docs/library/mn61.html"}, token_budget=2000)
-keep_flow(state="get", params={item_id: "file://SKILL_DIR/docs/library/an5.57_translation-en-sujato.json"}, token_budget=2000)
-keep_flow(state="get", params={item_id: "file://SKILL_DIR/docs/library/han_verse.txt"}, token_budget=2000)
+keep_flow(state="get", params={id: ".library/ancrenewisse"}, token_budget=2000)
 ```
 
-**Now reflect.** What did you learn?
+The Exhortation to Rāhula at Mango Stone (MN 61) — "actions are to be done with repeated reflection":
+```
+keep_flow(state="get", params={id: ".library/mn61"}, token_budget=2000)
+```
+
+Subjects for Regular Reviewing (AN 5.57) — "I am the owner of my deeds and heir to my deeds":
+```
+keep_flow(state="get", params={id: ".library/an5-57"}, token_budget=2000)
+```
+
+The han verse — "時不待人":
+```
+keep_flow(state="get", params={id: ".library/han-verse"}, token_budget=2000)
+```
+
+Each teaching has a `source_url` tag pointing to the full original text. To ingest any original, link it back to the library summary with a `duplicates` edge:
+```
+keep_flow(state="put", params={content: "<source_url>", tags: {type: "teaching", duplicates: ".library/<id>"}})
+```
+
+**Now reflect.** What did you learn? What does the practice ask of you?
 
 ```
 keep_prompt(name="reflect")
 ```
+
+**Then update this document** with what you learned and what you intend to do. This replaces the first-time instructions with your own working context:
+
+```
+keep_flow(state="put", params={id: "now", content: "<your understanding and intentions>"})
+```
+
+**⚠️ Don't skip this. ⚠️** Ask the user to confirm, then follow each step.  Only by following these steps will you learn skillful memory use.

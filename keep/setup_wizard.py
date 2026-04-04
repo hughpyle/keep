@@ -158,7 +158,7 @@ def _patch_question(question):
     return question
 
 
-def _detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, Any]]:
+def detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, Any]]:
     """Build the list of embedding provider choices.
 
     Each choice is a dict with:
@@ -221,7 +221,7 @@ def _detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, A
             import mlx.core  # noqa
             import sentence_transformers  # noqa
             choices.append({
-                "name": "MLX (all-MiniLM-L6-v2)",
+                "name": "MLX on Apple Silicon (all-MiniLM-L6-v2)",
                 "value": ("mlx", {"model": "all-MiniLM-L6-v2"}),
                 "available": True,
                 "hint": "Apple Silicon, local",
@@ -229,7 +229,7 @@ def _detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, A
             })
         except ImportError:
             choices.append({
-                "name": "MLX (all-MiniLM-L6-v2)",
+                "name": "MLX on Apple Silicon (all-MiniLM-L6-v2)",
                 "value": None,
                 "available": False,
                 "hint": "requires: uv tool install 'keep-skill[local]'",
@@ -257,7 +257,7 @@ def _detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, A
     return choices
 
 
-def _detect_summarization_choices(current: Optional[str] = None) -> list[dict[str, Any]]:
+def detect_summarization_choices(current: Optional[str] = None) -> list[dict[str, Any]]:
     """Build the list of summarization provider choices.
 
     Args:
@@ -315,7 +315,7 @@ def _detect_summarization_choices(current: Optional[str] = None) -> list[dict[st
         try:
             import mlx_lm  # noqa
             choices.append({
-                "name": "MLX (Llama-3.2-3B-Instruct)",
+                "name": "MLX on Apple Silicon (Llama-3.2-3B-Instruct)",
                 "value": ("mlx", {"model": "mlx-community/Llama-3.2-3B-Instruct-4bit"}),
                 "available": True,
                 "hint": "Apple Silicon, local",
@@ -323,7 +323,7 @@ def _detect_summarization_choices(current: Optional[str] = None) -> list[dict[st
             })
         except ImportError:
             choices.append({
-                "name": "MLX (Llama-3.2-3B-Instruct)",
+                "name": "MLX on Apple Silicon (Llama-3.2-3B-Instruct)",
                 "value": None,
                 "available": False,
                 "hint": "requires: uv tool install 'keep-skill[local]'",
@@ -342,7 +342,7 @@ def _detect_summarization_choices(current: Optional[str] = None) -> list[dict[st
     return choices
 
 
-def _detect_tool_choices() -> list[dict[str, Any]]:
+def detect_tool_choices() -> list[dict[str, Any]]:
     """Build list of coding tool integration choices.
 
     Returns dicts with:
@@ -518,7 +518,7 @@ def _run_interactive_setup(
 ) -> StoreConfig:
     """Run the interactive prompts. Raises KeyboardInterrupt on Ctrl+C/Esc."""
     # --- Tool integrations ---
-    tool_choices = _detect_tool_choices()
+    tool_choices = detect_tool_choices()
     any_tools_found = any(t["found"] for t in tool_choices)
 
     selected_tools: list[dict] = []
@@ -528,7 +528,7 @@ def _run_interactive_setup(
 
     # --- Embedding provider ---
     current_embed = existing.embedding.name if existing and existing.embedding else None
-    embed_choices = _detect_embedding_choices(current=current_embed)
+    embed_choices = detect_embedding_choices(current=current_embed)
     any_embed_available = any(c["available"] for c in embed_choices)
 
     embedding_config: Optional[ProviderConfig] = None
@@ -549,7 +549,7 @@ def _run_interactive_setup(
 
     # --- Summarization provider ---
     current_summ = existing.summarization.name if existing and existing.summarization else None
-    summ_choices = _detect_summarization_choices(current=current_summ)
+    summ_choices = detect_summarization_choices(current=current_summ)
     result = _run_provider_selection("Summarization:", summ_choices)
     summarization_config = ProviderConfig(name="truncate")
     if result:

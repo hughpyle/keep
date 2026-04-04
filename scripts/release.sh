@@ -120,7 +120,7 @@ echo ""
 
 echo "--- Building ---"
 rm -rf dist/
-python3 -m build
+uv build
 echo ""
 
 # Verify expected files exist
@@ -145,7 +145,7 @@ echo ""
 # ---------------------------------------------------------------------------
 
 echo "--- Pushing ---"
-git push origin main --tags
+git push origin main "$TAG"
 echo ""
 
 # ---------------------------------------------------------------------------

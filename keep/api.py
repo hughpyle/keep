@@ -756,7 +756,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         finally:
             recon_ds.close()
 
-    def _ensure_sysdocs(self) -> None:
+    def ensure_sysdocs(self) -> None:
         """Run deferred system-doc migration if needed (idempotent, best-effort)."""
         if not self._needs_sysdoc_migration:
             return
@@ -1891,7 +1891,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         chroma_coll = self._resolve_chroma_collection()
 
         # Deferred init tasks (best-effort — don't block user writes)
-        self._ensure_sysdocs()
+        self.ensure_sysdocs()
 
         # Get existing item to preserve tags (check document store first, fall back to ChromaDB)
         existing_tags = {}
@@ -2676,7 +2676,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # enqueued edge-backfill tasks, process them synchronously so
         # edges are available for this query.
         if deep and self._needs_sysdoc_migration:
-            self._ensure_sysdocs()
+            self.ensure_sysdocs()
             if not self._needs_sysdoc_migration:
                 # Migration succeeded — drain edge-backfill tasks so
                 # edges are ready for this search.
@@ -3961,7 +3961,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         chroma_coll = self._resolve_chroma_collection()
 
         # Deferred system doc migration (normally runs on first _upsert)
-        self._ensure_sysdocs()
+        self.ensure_sysdocs()
 
         # Validate inputs
         id = normalize_id(id)
@@ -5049,7 +5049,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             run_flow,
         )
 
-        self._ensure_sysdocs()
+        self.ensure_sysdocs()
         env = LocalFlowEnvironment(self)
         if query_embedding is not None:
             env._query_embedding = query_embedding
@@ -5163,7 +5163,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             budget = self._config.budget_per_flow
 
         if state_doc_yaml is None and state != "prompt":
-            self._ensure_sysdocs()
+            self.ensure_sysdocs()
 
         env = LocalFlowEnvironment(self)
         base_runner = make_action_runner(env, writable=writable)

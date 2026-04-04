@@ -247,7 +247,7 @@ def render_context(ctx: ItemContext, as_json: bool = False) -> str:
     """
     if as_json:
         return json.dumps(ctx.to_dict(), indent=2)
-    return _render_frontmatter(ctx)
+    return _render_item_context(ctx)
 
 
 def _dicts_to_items(raw: list, summary_limit: int = 200) -> "list[Item]":
@@ -408,8 +408,8 @@ def render_find_context(
     return render_find_context_plan(plan)
 
 
-def _render_frontmatter(ctx: ItemContext) -> str:
-    """Render ItemContext as YAML frontmatter with summary."""
+def _render_item_context(ctx: ItemContext) -> str:
+    """Render a complete item: YAML-style metadata block, then body text."""
     cols = _output_width()
     item = ctx.item
 
@@ -663,7 +663,7 @@ def _format_items(items: list[Item], as_json: bool = False, keeper=None, show_ta
                 parts=[PartRef(part_num=p.part_num, summary=p.summary) for p in manifest] if manifest else [],
                 focus_part=focus_int,
             )
-            parts.append(_render_frontmatter(ctx))
+            parts.append(_render_item_context(ctx))
         return "\n\n".join(parts)
 
     # Compute ID column width for alignment (capped to avoid long URIs dominating)

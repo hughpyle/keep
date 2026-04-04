@@ -8,9 +8,9 @@ import pytest
 
 from keep.setup_wizard import (
     needs_wizard,
-    _detect_embedding_choices,
-    _detect_summarization_choices,
-    _detect_tool_choices,
+    detect_embedding_choices,
+    detect_summarization_choices,
+    detect_tool_choices,
     run_wizard,
 )
 
@@ -32,7 +32,7 @@ class TestDetectToolChoices:
         (tmp_path / ".claude").mkdir()
         (tmp_path / ".kiro").mkdir()
 
-        choices = _detect_tool_choices()
+        choices = detect_tool_choices()
         found = {c["key"]: c["found"] for c in choices}
         assert found["claude_code"] is True
         assert found["kiro"] is True
@@ -41,7 +41,7 @@ class TestDetectToolChoices:
 
     def test_no_tools_found(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        choices = _detect_tool_choices()
+        choices = detect_tool_choices()
         assert all(not c["found"] for c in choices)
 
 
@@ -61,7 +61,7 @@ class TestDetectEmbeddingChoices:
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
 
-        choices = _detect_embedding_choices()
+        choices = detect_embedding_choices()
         ollama_choices = [c for c in choices if "Ollama" in c["name"]]
         assert len(ollama_choices) == 1
         assert ollama_choices[0]["available"] is True
@@ -77,7 +77,7 @@ class TestDetectEmbeddingChoices:
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
 
-        choices = _detect_embedding_choices()
+        choices = detect_embedding_choices()
         voyage = [c for c in choices if "Voyage" in c["name"]]
         assert len(voyage) == 1
         assert voyage[0]["available"] is True
@@ -93,7 +93,7 @@ class TestDetectEmbeddingChoices:
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
 
-        choices = _detect_embedding_choices()
+        choices = detect_embedding_choices()
         openai = [c for c in choices if "OpenAI" in c["name"]]
         assert len(openai) == 1
         assert openai[0]["available"] is False
@@ -132,7 +132,7 @@ class TestDetectSummarizationChoices:
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
 
-        choices = _detect_summarization_choices()
+        choices = detect_summarization_choices()
         truncate = [c for c in choices if "truncate" in c["name"]]
         assert len(truncate) == 1
         assert truncate[0]["available"] is True

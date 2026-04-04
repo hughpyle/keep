@@ -190,7 +190,7 @@ class ContextResolutionMixin:
             attributes={"item_id": id},
         ) as span:
             # Ensure state docs are in the store for the read flow.
-            self._ensure_sysdocs()
+            self.ensure_sysdocs()
 
             # Parse @V{N} version ref from ID (explicit version= takes precedence)
             base_id, id_version = parse_version_ref(id)
@@ -449,7 +449,7 @@ class ContextResolutionMixin:
             PromptResult with prompt template and optional flow bindings,
             or None if the prompt doc doesn't exist.
         """
-        self._ensure_sysdocs()
+        self.ensure_sysdocs()
         doc_id = f".prompt/agent/{name}"
         doc = self.get(doc_id)
         if doc is None:
@@ -570,7 +570,7 @@ class ContextResolutionMixin:
             List of PromptInfo with name and summary for each
             ``.prompt/agent/*`` doc in the store.
         """
-        self._ensure_sysdocs()
+        self.ensure_sysdocs()
         prefix = ".prompt/agent/"
         items = self.list_items(
             prefix=prefix, include_hidden=True, limit=100,
