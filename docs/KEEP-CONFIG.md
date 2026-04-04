@@ -191,6 +191,40 @@ Any provider that works with keep (Ollama, MLX, API-based) works with Claude Des
 | **MLX** | Media | `mlx-vlm` for images, `mlx-whisper` for audio (Apple Silicon only) |
 | **MLX** | OCR | `mlx-vlm` vision models (Apple Silicon only) |
 
+### OpenAI-Compatible Local Servers
+
+The OpenAI provider supports a `base_url` parameter that redirects it to any
+server implementing the OpenAI API (``/v1/embeddings``, ``/v1/chat/completions``).
+This works with **llama-server** (llama.cpp), **vLLM**, **LM Studio**, **LocalAI**,
+and similar tools.  No API key is required for local servers.
+
+Each model needs its own server process (llama-server binds one model per port):
+
+```bash
+# Terminal 1: embedding model
+llama-server --model nomic-embed-text-v1.5.Q8_0.gguf --port 8801 --embedding
+
+# Terminal 2: chat model
+llama-server --model llama-3.2-3b-instruct.Q4_K_M.gguf --port 8802
+```
+
+Then configure `keep.toml`:
+
+```toml
+[embedding]
+name = "openai"
+model = "nomic-embed-text"
+base_url = "http://localhost:8801/v1"
+
+[summarization]
+name = "openai"
+model = "llama-3.2-3b"
+base_url = "http://localhost:8802/v1"
+```
+
+No auto-detection or auto-pull — you manage the server processes yourself.
+Embedding dimensions are detected automatically on first use.
+
 ### Media Description (optional)
 
 When configured, images and audio files get model-generated descriptions alongside their extracted metadata, making them semantically searchable. Without this, media files are indexed with metadata only (EXIF, ID3 tags).

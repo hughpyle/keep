@@ -734,12 +734,19 @@ def load_config(config_dir: Path) -> StoreConfig:
         except Exception:
             pass  # re-detection is best-effort; don't block config loading
 
-    # KEEP_LOCAL_ONLY=1 overrides remote providers to None/fallback
+    # KEEP_LOCAL_ONLY=1 overrides remote providers to None/fallback.
+    # A provider with base_url set is targeting a local server — keep it.
     if os.environ.get("KEEP_LOCAL_ONLY"):
         _REMOTE_PROVIDERS = {"voyage", "openai", "gemini", "anthropic", "mistral"}
-        if embedding_config and embedding_config.name in _REMOTE_PROVIDERS:
+
+        def _is_remote(cfg: ProviderConfig | None) -> bool:
+            if cfg is None or cfg.name not in _REMOTE_PROVIDERS:
+                return False
+            return not cfg.params.get("base_url")
+
+        if _is_remote(embedding_config):
             embedding_config = None
-        if summarization_config and summarization_config.name in _REMOTE_PROVIDERS:
+        if _is_remote(summarization_config):
             summarization_config = ProviderConfig("truncate")
         remote = None
 

@@ -1,8 +1,12 @@
 """Embedding providers for generating vector representations of text."""
 
+import logging
 import os
+import sys
+import time
 
 from .base import EmbedTask, get_registry
+from .openai_client import create_openai_client
 
 
 class SentenceTransformerEmbedding:
@@ -22,7 +26,7 @@ class SentenceTransformerEmbedding:
             Disabled by default for security — only enable for models you trust.
         """
         try:
-            from sentence_transformers import SentenceTransformer
+            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
         except ImportError:
             raise RuntimeError(
                 "SentenceTransformerEmbedding requires 'sentence-transformers' library. "
@@ -35,7 +39,7 @@ class SentenceTransformerEmbedding:
         # Expand short model names (e.g. "all-MiniLM-L6-v2" -> "sentence-transformers/all-MiniLM-L6-v2")
         local_only = False
         try:
-            from huggingface_hub import try_to_load_from_cache
+            from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
             repo_id = model if "/" in model else f"sentence-transformers/{model}"
             cached = try_to_load_from_cache(repo_id, "config.json")
             local_only = cached is not None
@@ -43,8 +47,6 @@ class SentenceTransformerEmbedding:
             pass
 
         if not local_only:
-            import logging
-            import sys
             logging.getLogger(__name__).info("Downloading embedding model '%s' (first use)...", model)
             print(f"Downloading embedding model '{model}' (first use)...", file=sys.stderr)
 
@@ -86,50 +88,43 @@ class SentenceTransformerEmbedding:
 
 
 class OpenAIEmbedding:
-    """Embedding provider using OpenAI's API.
-    
-    Requires: KEEP_OPENAI_API_KEY or OPENAI_API_KEY environment variable.
+    """Embedding provider using OpenAI's API or any OpenAI-compatible endpoint.
+
+    Works with OpenAI, llama-server, vLLM, LM Studio, LocalAI, or any service
+    that implements the ``/v1/embeddings`` endpoint.
+
     Requires: pip install openai
     """
-    
+
     # Model dimensions (as of 2024)
     MODEL_DIMENSIONS = {
         "text-embedding-3-small": 1536,
         "text-embedding-3-large": 3072,
         "text-embedding-ada-002": 1536,
     }
-    
+
     def __init__(
         self,
         model: str = "text-embedding-3-small",
         api_key: str | None = None,
+        base_url: str | None = None,
     ):
         """Initialize.
 
         Args:
-        model: OpenAI embedding model name
-        api_key: API key (defaults to environment variable).
+        model: Embedding model name.
+        api_key: API key (defaults to environment variable).  Not required
+            when ``base_url`` points at a local server.
+        base_url: Override the API base URL (e.g.
+            ``http://localhost:8801/v1`` for llama-server).  When set, the
+            provider connects to this endpoint instead of api.openai.com.
         """
-        try:
-            from openai import OpenAI
-        except ImportError:
-            raise RuntimeError(
-                "OpenAIEmbedding requires 'openai' library. "
-                "Install with: pip install openai"
-            )
-        
-        self.model_name = model
-        # Use lookup table if available, otherwise detect lazily from first embedding
+        # Include base_url in model_name so embedding identity and cache keys
+        # distinguish between different servers using the same model string.
+        self.model_name = f"{model}@{base_url}" if base_url else model
+        self._api_model = model  # raw model name for API calls
         self._dimension = self.MODEL_DIMENSIONS.get(model)
-
-        # Resolve API key
-        key = api_key or os.environ.get("KEEP_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        if not key:
-            raise ValueError(
-                "OpenAI API key required. Set KEEP_OPENAI_API_KEY or OPENAI_API_KEY"
-            )
-        
-        self._client = OpenAI(api_key=key)
+        self._client = create_openai_client(api_key=api_key, base_url=base_url)
     
     @property
     def dimension(self) -> int:
@@ -143,7 +138,7 @@ class OpenAIEmbedding:
     def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Generate embedding for a single text."""
         response = self._client.embeddings.create(
-            model=self.model_name,
+            model=self._api_model,
             input=text,
         )
         embedding = response.data[0].embedding
@@ -155,7 +150,7 @@ class OpenAIEmbedding:
     def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
         response = self._client.embeddings.create(
-            model=self.model_name,
+            model=self._api_model,
             input=texts,
         )
         # Sort by index to ensure order matches input
@@ -195,16 +190,17 @@ class GeminiEmbedding:
             gemini-embedding-001 which defaults to 3072). When set, the
             API returns truncated vectors via Matryoshka representation.
         """
-        from google.genai import types
-        from .gemini_client import create_gemini_client
+        from google.genai import types as genai_types  # noqa: PLC0415
+        from .gemini_client import create_gemini_client  # noqa: PLC0415
 
         self.model_name = model
         self._client = create_gemini_client(api_key)
+        self._genai_types = genai_types
 
         # Build embed config if dimensionality is requested
-        self._embed_config: types.EmbedContentConfig | None = None
+        self._embed_config: genai_types.EmbedContentConfig | None = None
         if output_dimensionality is not None:
-            self._embed_config = types.EmbedContentConfig(
+            self._embed_config = self._genai_types.EmbedContentConfig(
                 output_dimensionality=output_dimensionality,
             )
             self._dimension: int | None = output_dimensionality
@@ -227,15 +223,13 @@ class GeminiEmbedding:
 
     def _embed_config_for(self, task: EmbedTask):
         """Build EmbedContentConfig with task_type merged in."""
-        from google.genai import types
-
         task_type = self._TASK_TYPES.get(task)
         if self._embed_config is not None:
-            return types.EmbedContentConfig(
+            return self._genai_types.EmbedContentConfig(
                 output_dimensionality=self._embed_config.output_dimensionality,
                 task_type=task_type,
             )
-        return types.EmbedContentConfig(task_type=task_type)
+        return self._genai_types.EmbedContentConfig(task_type=task_type)
 
     def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Generate embedding for a single text."""
@@ -278,8 +272,9 @@ class OllamaEmbedding:
         model: Ollama model name
         base_url: Ollama API base URL (default: OLLAMA_HOST or http://localhost:11434).
         """
+        from .ollama_utils import ollama_base_url, ollama_ensure_model  # noqa: PLC0415
+
         self.model_name = model
-        from .ollama_utils import ollama_base_url, ollama_ensure_model
         self.base_url = ollama_base_url(base_url)
         self._dimension: int | None = None
         ollama_ensure_model(self.base_url, self.model_name)
@@ -322,7 +317,7 @@ class OllamaEmbedding:
         error (instant 500), trims ~10% and retries. Only the final
         successful call does real compute; rejections are near-free.
         """
-        from .ollama_utils import ollama_session
+        from .ollama_utils import ollama_session  # noqa: PLC0415
 
         prompt = text
         if self._uses_task_prefix():
@@ -425,10 +420,8 @@ class VoyageEmbedding:
 
     def _request_with_retry(self, payload: dict, timeout: int) -> dict:
         """Make API request with exponential backoff retry for rate limits."""
-        import time
-
-        import requests
-        from keep.providers.http import http_session
+        import requests  # noqa: PLC0415
+        from .http import http_session  # noqa: PLC0415
 
         backoff = self.INITIAL_BACKOFF
         last_exception = None
@@ -555,13 +548,7 @@ class MistralEmbedding:
         model: str = "mistral-embed",
         api_key: str | None = None,
     ):
-        try:
-            from mistralai import Mistral
-        except ImportError:
-            raise RuntimeError(
-                "MistralEmbedding requires 'mistralai' library. "
-                "Install with: pip install mistralai"
-            )
+        from mistralai import Mistral  # noqa: PLC0415
 
         self.model_name = model
         self._dimension = self.MODEL_DIMENSIONS.get(model)

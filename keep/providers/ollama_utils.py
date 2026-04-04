@@ -1,5 +1,6 @@
 """Shared Ollama utilities — base URL resolution, model check, auto-pull."""
 
+import json
 import logging
 import os
 import sys
@@ -69,7 +70,6 @@ def ollama_ensure_model(base_url: str, model: str) -> None:
     for line in resp.iter_lines():
         if not line:
             continue
-        import json
         try:
             data = json.loads(line)
         except json.JSONDecodeError:

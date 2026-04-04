@@ -520,32 +520,32 @@ class ProviderRegistry:
         # Import provider modules to trigger registration
         # These imports are safe - they only register classes, don't instantiate
         try:
-            from . import documents
+            from . import documents  # noqa: PLC0415
         except ImportError:
             pass  # Document provider might not be available
 
         try:
-            from . import embeddings
+            from . import embeddings  # noqa: PLC0415
         except ImportError:
             pass  # Embedding providers might not be available
 
         try:
-            from . import summarization
+            from . import summarization  # noqa: PLC0415
         except ImportError:
             pass  # Summarization providers might not be available
 
         try:
-            from . import llm
+            from . import llm  # noqa: PLC0415
         except ImportError:
             pass  # LLM providers might not be available
 
         try:
-            from . import mlx
+            from . import mlx  # noqa: PLC0415
         except ImportError:
             pass  # MLX providers might not be available
 
         try:
-            from .. import analyzers
+            from .. import analyzers  # noqa: PLC0415
         except ImportError:
             pass  # Analyzer module might not be available
 

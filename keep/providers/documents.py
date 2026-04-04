@@ -1,12 +1,26 @@
 """Document providers for fetching content from various URI schemes."""
 
+import email
+import email.policy
+import email.utils
+import ipaddress
+import logging
 import re
+import shutil
+import socket
 import tempfile
+import time
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
+from ..paths import validate_path_within_home
 from .base import Document, DocumentProvider, get_registry
+from . import http as _http_mod
+from .model_files import extract_3d_metadata
 
 
 # RFC 822 email header detection — matches common email headers at line start
@@ -57,8 +71,7 @@ def extract_html_text(html_content: str) -> str:
     Raises:
         ImportError: If beautifulsoup4 is not installed
     """
-    from bs4 import BeautifulSoup
-
+    from bs4 import BeautifulSoup  # noqa: PLC0415
     soup = BeautifulSoup(html_content, "html.parser")
 
     # Remove script and style elements
@@ -200,8 +213,6 @@ class FileDocumentProvider:
             raise IOError(f"Not a file: {path}")
 
         # Reject paths outside user's home directory as a safety boundary
-        from ..paths import validate_path_within_home
-
         try:
             validate_path_within_home(path)
         except ValueError:
@@ -262,7 +273,6 @@ class FileDocumentProvider:
                 content_type.startswith("model/")
                 or suffix in (".ply", ".3mf")
             ):
-                from .model_files import extract_3d_metadata
                 content = extract_3d_metadata(str(path))
             elif content_type and not content_type.startswith("text/"):
                 # Binary file without a dedicated extractor — use filename only
@@ -275,7 +285,6 @@ class FileDocumentProvider:
                     content, extracted_tags, email_attachments = self._extract_email(path)
                     content_type = "message/rfc822"
         except Exception as e:
-            import logging
             logging.getLogger(__name__).warning(
                 "Text extraction failed for %s: %s", path.name, e
             )
@@ -325,7 +334,7 @@ class FileDocumentProvider:
         tags: dict[str, str] = {}
         try:
             if suffix == ".pdf":
-                from pypdf import PdfReader
+                from pypdf import PdfReader  # noqa: PLC0415
                 reader = PdfReader(path)
                 info = reader.metadata
                 if info:
@@ -334,7 +343,7 @@ class FileDocumentProvider:
                     if info.title:
                         tags["title"] = info.title
             elif suffix == ".docx":
-                from docx import Document as DocxDocument
+                from docx import Document as DocxDocument  # noqa: PLC0415
                 doc = DocxDocument(path)
                 props = doc.core_properties
                 if props.author:
@@ -342,7 +351,7 @@ class FileDocumentProvider:
                 if props.title:
                     tags["title"] = props.title
             elif suffix == ".pptx":
-                from pptx import Presentation
+                from pptx import Presentation  # noqa: PLC0415
                 prs = Presentation(path)
                 props = prs.core_properties
                 if props.author:
@@ -356,15 +365,7 @@ class FileDocumentProvider:
     def _extract_docx(self, path: Path) -> tuple[str, dict[str, str]]:
         """Extract text and metadata from DOCX file."""
         try:
-            from docx import Document as DocxDocument
-        except ImportError:
-            raise IOError(
-                f"DOCX support requires 'python-docx' library. "
-                f"Install with: pip install python-docx\n"
-                f"Cannot read DOCX: {path}"
-            )
-
-        try:
+            from docx import Document as DocxDocument  # noqa: PLC0415
             doc = DocxDocument(path)
             parts = []
 
@@ -395,8 +396,6 @@ class FileDocumentProvider:
                 tags["title"] = props.title
 
             return content, tags or None
-        except ImportError:
-            raise
         except IOError:
             raise
         except Exception as e:
@@ -405,15 +404,7 @@ class FileDocumentProvider:
     def _extract_pptx(self, path: Path) -> tuple[str, dict[str, str]]:
         """Extract text and metadata from PPTX file."""
         try:
-            from pptx import Presentation
-        except ImportError:
-            raise IOError(
-                f"PPTX support requires 'python-pptx' library. "
-                f"Install with: pip install python-pptx\n"
-                f"Cannot read PPTX: {path}"
-            )
-
-        try:
+            from pptx import Presentation  # noqa: PLC0415
             prs = Presentation(path)
             parts = []
 
@@ -448,8 +439,6 @@ class FileDocumentProvider:
                 tags["title"] = props.title
 
             return content, tags or None
-        except ImportError:
-            raise
         except IOError:
             raise
         except Exception as e:
@@ -462,8 +451,6 @@ class FileDocumentProvider:
         No production Python parser exists, so we extract what we can from the
         ZIP structure and return a non-text content type for media description.
         """
-        import zipfile
-
         format_names = {
             "application/vnd.apple.pages": "Pages",
             "application/vnd.apple.keynote": "Keynote",
@@ -493,8 +480,6 @@ class FileDocumentProvider:
         Pulls <title>, <desc>, and <text> elements from the XML,
         ignoring the visual markup (paths, shapes, transforms).
         """
-        import xml.etree.ElementTree as ET
-
         try:
             tree = ET.parse(path)
         except ET.ParseError as e:
@@ -552,7 +537,7 @@ class FileDocumentProvider:
     def _extract_audio_metadata(self, path: Path) -> tuple[str, dict[str, str]]:
         """Extract metadata from audio file as structured text."""
         try:
-            from tinytag import TinyTag
+            from tinytag import TinyTag  # noqa: PLC0415
         except ImportError:
             raise IOError(
                 f"Audio metadata support requires 'tinytag' library. "
@@ -607,8 +592,8 @@ class FileDocumentProvider:
     def _extract_image_metadata(self, path: Path) -> tuple[str, dict[str, str]]:
         """Extract EXIF metadata from image file as structured text."""
         try:
-            from PIL import Image
-            from PIL.ExifTags import TAGS as EXIF_TAGS
+            from PIL import Image  # noqa: PLC0415
+            from PIL.ExifTags import TAGS as EXIF_TAGS  # noqa: PLC0415
         except ImportError:
             raise IOError(
                 f"Image metadata support requires 'Pillow' library. "
@@ -703,15 +688,7 @@ class FileDocumentProvider:
             OCR pages are deferred to background processing.
         """
         try:
-            from pypdf import PdfReader
-        except ImportError:
-            raise IOError(
-                f"PDF support requires 'pypdf' library. "
-                f"Install with: pip install pypdf\n"
-                f"Cannot read PDF: {path}"
-            )
-
-        try:
+            from pypdf import PdfReader  # noqa: PLC0415
             reader = PdfReader(path)
             text_parts: list[tuple[int, str]] = []
             ocr_needed: list[int] = []
@@ -781,13 +758,10 @@ class FileDocumentProvider:
             extractor: ContentExtractor to use. Falls back to
                        self._content_extractor if not provided.
         """
-        import logging
-        import tempfile
-        import time
         _log = logging.getLogger(__name__)
 
         try:
-            import pypdfium2 as pdfium
+            import pypdfium2 as pdfium  # noqa: PLC0415
         except ImportError:
             _log.warning("pypdfium2 not installed; cannot OCR PDF pages")
             return []
@@ -829,7 +803,6 @@ class FileDocumentProvider:
                     _log.warning("OCR failed for page %d: %s", i, e)
         finally:
             pdf.close()
-            import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
         elapsed = time.monotonic() - start
@@ -868,12 +841,6 @@ class FileDocumentProvider:
         try:
             html_content = path.read_text(encoding="utf-8")
             return extract_html_text(html_content)
-        except ImportError:
-            raise IOError(
-                f"HTML text extraction requires 'beautifulsoup4' library. "
-                f"Install with: pip install beautifulsoup4\n"
-                f"Cannot extract text from HTML: {path}"
-            )
         except Exception as e:
             raise IOError(f"Failed to extract text from HTML {path}: {e}")
 
@@ -881,10 +848,7 @@ class FileDocumentProvider:
     def _extract_pdf_links(path: Path) -> list[str] | None:
         """Extract hyperlink URLs from PDF annotations."""
         try:
-            from pypdf import PdfReader
-        except ImportError:
-            return None
-        try:
+            from pypdf import PdfReader  # noqa: PLC0415
             reader = PdfReader(path)
             urls: list[str] = []
             seen: set[str] = set()
@@ -910,11 +874,8 @@ class FileDocumentProvider:
     def _extract_html_links(path: Path) -> list[str] | None:
         """Extract href URLs from HTML anchor tags."""
         try:
-            from bs4 import BeautifulSoup
-        except ImportError:
-            return None
-        try:
             html = path.read_text(encoding="utf-8")
+            from bs4 import BeautifulSoup  # noqa: PLC0415
             soup = BeautifulSoup(html, "html.parser")
             urls: list[str] = []
             seen: set[str] = set()
@@ -931,10 +892,7 @@ class FileDocumentProvider:
     def _extract_docx_links(path: Path) -> list[str] | None:
         """Extract hyperlink URLs from DOCX document relationships."""
         try:
-            from docx import Document as DocxDocument
-        except ImportError:
-            return None
-        try:
+            from docx import Document as DocxDocument  # noqa: PLC0415
             doc = DocxDocument(path)
             urls: list[str] = []
             seen: set[str] = set()
@@ -952,10 +910,7 @@ class FileDocumentProvider:
     def _extract_pptx_links(path: Path) -> list[str] | None:
         """Extract hyperlink URLs from PPTX slide relationships."""
         try:
-            from pptx import Presentation
-        except ImportError:
-            return None
-        try:
+            from pptx import Presentation  # noqa: PLC0415
             prs = Presentation(path)
             urls: list[str] = []
             seen: set[str] = set()
@@ -995,10 +950,6 @@ class FileDocumentProvider:
             content_type, size. Each path is a temp file that the caller
             should clean up after processing. None if no attachments.
         """
-        import email
-        import email.policy
-        import email.utils
-
         raw = path.read_bytes()
         msg = email.message_from_bytes(raw, policy=email.policy.default)
 
@@ -1258,10 +1209,6 @@ class HttpDocumentProvider:
         Sufficient for CLI use; a hosted service should enforce this at the
         network layer (firewall/VPC rules) rather than relying on client checks.
         """
-        from urllib.parse import urlparse
-        import ipaddress
-        import socket
-
         parsed = urlparse(uri)
         hostname = parsed.hostname
         if not hostname:
@@ -1296,12 +1243,10 @@ class HttpDocumentProvider:
         if self._is_private_url(uri):
             raise IOError(f"Blocked request to private/internal address: {uri}")
 
-        from keep.providers.http import http_session
-
         # Follow redirects manually so each hop is validated against SSRF
         target = uri
         for _ in range(self._MAX_REDIRECTS):
-            resp = http_session().get(
+            resp = _http_mod.http_session().get(
                 target,
                 timeout=self.timeout,
                 stream=True,
@@ -1355,10 +1300,7 @@ class HttpDocumentProvider:
                 if content_type == "text/html":
                     encoding = resp.encoding or "utf-8"
                     content = raw.decode(encoding, errors="replace")
-                    try:
-                        content = extract_html_text(content)
-                    except ImportError:
-                        pass
+                    content = extract_html_text(content)
                 elif _is_extractable_binary(content_type, url_suffix):
                     # Binary type with text extraction support —
                     # write to temp file and use FileDocumentProvider

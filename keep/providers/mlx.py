@@ -6,7 +6,9 @@ run entirely locally with no API keys required.
 Requires: pip install mlx-lm mlx
 """
 
+import logging
 import platform
+import sys
 
 from .base import (
     EmbedTask,
@@ -33,8 +35,8 @@ class MLXEmbedding:
                Default: all-MiniLM-L6-v2 (384 dims, fast, no auth required).
         """
         try:
-            import mlx.core as mx
-            from sentence_transformers import SentenceTransformer
+            import mlx.core as mx  # noqa: PLC0415
+            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
         except ImportError:
             raise RuntimeError(
                 "MLXEmbedding requires 'mlx' and 'sentence-transformers'. "
@@ -46,7 +48,7 @@ class MLXEmbedding:
         # Check if model is already cached locally to avoid network calls
         local_only = False
         try:
-            from huggingface_hub import try_to_load_from_cache
+            from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
             repo_id = model if "/" in model else f"sentence-transformers/{model}"
             cached = try_to_load_from_cache(repo_id, "config.json")
             local_only = cached is not None
@@ -54,8 +56,6 @@ class MLXEmbedding:
             pass
 
         if not local_only:
-            import logging
-            import sys
             logging.getLogger(__name__).info("Downloading embedding model '%s' (first use)...", model)
             print(f"Downloading embedding model '{model}' (first use)...", file=sys.stderr)
 
@@ -123,7 +123,7 @@ class MLXSummarization:
         max_tokens: Maximum tokens in generated summary.
         """
         try:
-            from mlx_lm import load
+            from mlx_lm import load  # noqa: PLC0415
         except ImportError:
             raise RuntimeError(
                 "MLXSummarization requires 'mlx-lm'. "
@@ -136,15 +136,13 @@ class MLXSummarization:
         # Check if model is already cached
         _downloading = False
         try:
-            from huggingface_hub import try_to_load_from_cache
+            from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
             cached = try_to_load_from_cache(model, "config.json")
             _downloading = cached is None
         except ImportError:
             pass
 
         if _downloading:
-            import logging
-            import sys
             logging.getLogger(__name__).info("Downloading MLX model '%s' (first use)...", model)
             print(f"Downloading MLX model '{model}' (first use)...", file=sys.stderr)
 
@@ -175,7 +173,7 @@ class MLXSummarization:
         max_tokens: int = 4096,
     ) -> str | None:
         """Send a raw prompt to MLX-LM and return generated text."""
-        from mlx_lm import generate
+        from mlx_lm import generate  # noqa: PLC0415
 
         if hasattr(self._tokenizer, "apply_chat_template"):
             messages = [
@@ -219,7 +217,7 @@ class MLXVisionDescriber:
         max_tokens: int = 300,
     ):
         try:
-            from mlx_vlm import load as vlm_load
+            from mlx_vlm import load as vlm_load  # noqa: PLC0415
         except ImportError:
             raise RuntimeError(
                 "MLXVisionDescriber requires 'mlx-vlm'. "
@@ -231,15 +229,13 @@ class MLXVisionDescriber:
 
         _downloading = False
         try:
-            from huggingface_hub import try_to_load_from_cache
+            from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
             cached = try_to_load_from_cache(model, "config.json")
             _downloading = cached is None
         except ImportError:
             pass
 
         if _downloading:
-            import logging
-            import sys
             logging.getLogger(__name__).info("Downloading MLX vision model '%s' (first use)...", model)
             print(f"Downloading MLX vision model '{model}' (first use)...", file=sys.stderr)
 
@@ -250,7 +246,7 @@ class MLXVisionDescriber:
         if not content_type.startswith("image/"):
             return None
 
-        from mlx_vlm import generate as vlm_generate
+        from mlx_vlm import generate as vlm_generate  # noqa: PLC0415
 
         response = vlm_generate(
             self._model,
@@ -278,7 +274,7 @@ class MLXWhisperDescriber:
         model: str = "mlx-community/whisper-large-v3-turbo",
     ):
         try:
-            import mlx_whisper  # noqa: F401
+            import mlx_whisper  # noqa: F401, PLC0415
         except ImportError:
             raise RuntimeError(
                 "MLXWhisperDescriber requires 'mlx-whisper'. "
@@ -292,7 +288,7 @@ class MLXWhisperDescriber:
         if not content_type.startswith("audio/"):
             return None
 
-        import mlx_whisper
+        import mlx_whisper  # noqa: PLC0415
 
         result = mlx_whisper.transcribe(
             path,
@@ -320,7 +316,7 @@ class MLXContentExtractor:
         max_tokens: int = 2000,
     ):
         try:
-            from mlx_vlm import load as vlm_load
+            from mlx_vlm import load as vlm_load  # noqa: PLC0415
         except ImportError:
             raise RuntimeError(
                 "MLXContentExtractor requires 'mlx-vlm'. "
@@ -332,15 +328,13 @@ class MLXContentExtractor:
 
         _downloading = False
         try:
-            from huggingface_hub import try_to_load_from_cache
+            from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
             cached = try_to_load_from_cache(model, "config.json")
             _downloading = cached is None
         except ImportError:
             pass
 
         if _downloading:
-            import logging
-            import sys
             logging.getLogger(__name__).info("Downloading MLX OCR model '%s' (first use)...", model)
             print(f"Downloading MLX OCR model '{model}' (first use)...", file=sys.stderr)
 
@@ -351,7 +345,7 @@ class MLXContentExtractor:
         if not content_type.startswith("image/"):
             return None
 
-        from mlx_vlm import generate as vlm_generate
+        from mlx_vlm import generate as vlm_generate  # noqa: PLC0415
 
         response = vlm_generate(
             self._model,

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..const import SQLITE_BUSY_TIMEOUT_MS
+from ..tracing import get_tracer
 from .base import EmbedTask, EmbeddingProvider
 
 logger = logging.getLogger(__name__)
@@ -303,7 +304,6 @@ class CachingEmbeddingProvider:
 
         Cache failures are non-fatal — falls through to the real provider.
         """
-        from ..tracing import get_tracer
         _tracer = get_tracer("embed")
 
         cache_model = self._cache_key_model(task)

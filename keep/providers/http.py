@@ -2,6 +2,8 @@
 
 import requests
 
+from keep.types import user_agent
+
 _session: requests.Session | None = None
 
 
@@ -13,8 +15,6 @@ def http_session() -> requests.Session:
     """
     global _session
     if _session is None:
-        from keep.types import user_agent
-
         _session = requests.Session()
         _session.headers["User-Agent"] = user_agent()
     return _session

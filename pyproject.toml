@@ -113,7 +113,7 @@ target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["D"]
+select = ["D", "PLC0415"]
 ignore = [
     "D100",  # Missing docstring in public module
     "D102",  # Missing docstring in public method
@@ -131,6 +131,11 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = ["D101"]
 "tests/**/*.py" = ["D101"]
+# PLC0415: pre-existing inline imports — to be cleaned up incrementally.
+# New files must use top-level imports (use `# noqa: PLC0415` only for
+# try/except ImportError guards on truly optional dependencies).
+"keep/*.py" = ["PLC0415"]
+"keep/actions/*.py" = ["PLC0415"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

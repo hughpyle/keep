@@ -22,16 +22,9 @@ def create_gemini_client(api_key: str | None = None):
         google.genai.Client instance
 
     Raises:
-        RuntimeError: If google-genai library is not installed
         ValueError: If no authentication credentials are found
     """
-    try:
-        from google import genai
-    except ImportError:
-        raise RuntimeError(
-            "Gemini providers require 'google-genai' library. "
-            "Install with: pip install google-genai"
-        )
+    from google import genai  # noqa: PLC0415
 
     # Vertex AI path: use GCP project with Application Default Credentials
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
