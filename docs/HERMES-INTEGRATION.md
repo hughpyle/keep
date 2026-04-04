@@ -32,9 +32,15 @@ Hermes agents can be reluctant to follow the first-time instructions unprompted.
 
 Once the agent completes the initial practice (reading, reflecting, updating now), it typically generates its own workflow or checklist for using reflective memory effectively. This self-generated practice tends to be more durable than the initial instructions.
 
+## Store location
+
+By default, the setup wizard creates the store at `$HERMES_HOME/keep` (e.g. `~/.hermes/keep`). This is written to `$HERMES_HOME/.env` as `KEEP_STORE_PATH`.
+
+If `KEEP_STORE_PATH` is already set in the environment when `initialize()` runs, the provider uses that path instead. This allows sharing a store across profiles or pointing to an external store, but it overrides the per-profile default.
+
 ## Using keep CLI with the Hermes store
 
-The Hermes store lives at `~/.hermes/keep` (profile-isolated). To use the `keep` CLI with it:
+To use the `keep` CLI with the Hermes store, set `KEEP_STORE_PATH`:
 
 ```bash
 export KEEP_STORE_PATH=~/.hermes/keep
@@ -47,5 +53,5 @@ keep flow stats
 
 - **In-process Keeper** handles reads (search, get, prompt rendering) and writes directly — no RPC overhead
 - **Background daemon** (auto-started) handles embeddings and summaries asynchronously
-- **Per-profile isolation** — each Hermes profile gets its own keep store
+- **Per-profile store** — defaults to `$HERMES_HOME/keep`; overridable via `KEEP_STORE_PATH`
 - **Conversation versioning** — each turn is stored as a version of a per-channel item
