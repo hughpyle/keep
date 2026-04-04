@@ -143,13 +143,27 @@ class WorkQueue:
         ):
             self._conn.execute(f"DROP TABLE IF EXISTS {table}")
 
-        # Enable auto_vacuum so DELETE immediately reclaims disk space.
-        # Requires a one-time VACUUM to rewrite the DB with the new mode.
-        auto_vacuum = self._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
-        if auto_vacuum == 0:
-            logger.info("Enabling auto_vacuum on %s (one-time VACUUM)", self._db_path)
+    # ------------------------------------------------------------------
+    # Maintenance (called explicitly by daemon, not on every open)
+    # ------------------------------------------------------------------
+
+    def enable_auto_vacuum(self) -> bool:
+        """Enable auto_vacuum=FULL if not already set.
+
+        Requires a one-time VACUUM that rewrites the entire database.
+        Call only from daemon startup — not from interactive commands.
+        Returns True if VACUUM was performed.
+        """
+        with self._lock:
+            auto_vacuum = self._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+            if auto_vacuum != 0:
+                return False
+            logger.info(
+                "Enabling auto_vacuum on %s (one-time VACUUM)", self._db_path,
+            )
             self._conn.execute("PRAGMA auto_vacuum = FULL")
             self._conn.execute("VACUUM")
+            return True
 
     # ------------------------------------------------------------------
     # Enqueue
@@ -539,8 +553,9 @@ class WorkQueue:
             )
             self._conn.commit()
             deleted = cur.rowcount
+            if deleted:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         if deleted:
-            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             logger.info("Pruned %d terminal work items (cutoff=%s)", deleted, cutoff)
         return deleted
 

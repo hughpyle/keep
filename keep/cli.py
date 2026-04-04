@@ -1318,6 +1318,7 @@ def run_pending_daemon(kp) -> None:
         _daemon_logger.info("Deferred startup maintenance running in background")
 
     _release_stale_daemon_leases(kp, flow_worker_id, _daemon_logger)
+    _enable_work_queue_auto_vacuum(kp, _daemon_logger)
     _log_daemon_startup_state(kp, _daemon_logger)
 
     _last_cleanup_ts = 0.0
@@ -1496,6 +1497,15 @@ def _release_stale_daemon_leases(kp, flow_worker_id: str, daemon_logger) -> None
     released = wq.release_stale_leases(flow_worker_id) if wq is not None else 0
     if released:
         daemon_logger.info("Released %d stale leases from previous daemon", released)
+
+
+def _enable_work_queue_auto_vacuum(kp, daemon_logger) -> None:
+    """Enable auto_vacuum on continuation.db if not already set."""
+    wq = kp._get_work_queue()
+    if wq is None:
+        return
+    if wq.enable_auto_vacuum():
+        daemon_logger.info("Enabled auto_vacuum on continuation.db (one-time VACUUM)")
 
 
 def _prune_work_if_due(kp, *, last_prune_ts: float, prune_interval: float) -> float:

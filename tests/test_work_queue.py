@@ -160,36 +160,40 @@ def test_migrate_drops_orphaned_flow_engine_tables(tmp_path):
         queue.close()
 
 
-def test_migrate_enables_auto_vacuum(tmp_path):
-    """WorkQueue._migrate() enables auto_vacuum and VACUUMs once."""
+def test_enable_auto_vacuum(tmp_path):
+    """enable_auto_vacuum() enables auto_vacuum=FULL via one-time VACUUM."""
     db_path = tmp_path / "work.db"
-
-    # Pre-create a DB without auto_vacuum (the default).
-    conn = sqlite3.connect(str(db_path), isolation_level=None)
-    assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 0
-    conn.execute("CREATE TABLE continue_work (work_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, input_json TEXT NOT NULL, output_contract_json TEXT NOT NULL, result_json TEXT, attempt INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
-    conn.close()
-
-    # Opening WorkQueue triggers migration.
     queue = WorkQueue(db_path)
     try:
+        # Fresh DB starts without auto_vacuum.
         mode = queue._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
-        assert mode == 1, f"Expected auto_vacuum=FULL (1), got {mode}"
+        assert mode == 0
 
-        # Second open should be a no-op (already enabled).
-        queue.close()
-        queue2 = WorkQueue(db_path)
-        mode2 = queue2._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
-        assert mode2 == 1
-        queue2.close()
+        # First call enables it.
+        assert queue.enable_auto_vacuum() is True
+        mode = queue._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+        assert mode == 1
+
+        # Second call is a no-op.
+        assert queue.enable_auto_vacuum() is False
     finally:
         queue.close()
+
+    # Persists across reopens.
+    queue2 = WorkQueue(db_path)
+    try:
+        mode = queue2._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+        assert mode == 1
+        assert queue2.enable_auto_vacuum() is False
+    finally:
+        queue2.close()
 
 
 def test_auto_vacuum_reclaims_disk_space(tmp_path):
     """With auto_vacuum enabled, prune actually shrinks the file on disk."""
     db_path = tmp_path / "work.db"
     queue = WorkQueue(db_path)
+    queue.enable_auto_vacuum()
     try:
         # Insert substantial data to make the size measurable.
         payload = {"data": "x" * 10000}
