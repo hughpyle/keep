@@ -89,8 +89,7 @@ class KeepMemoryProvider:
         self._session_tags: Dict[str, str] = {"source": "hermes"}
         self._setup_required = False
         self._system_prompt_token_budget = 1200
-        self._prefetch_inline_token_budget = 900
-        self._prefetch_background_token_budget = 1500
+        self._prefetch_token_budget = 1200
         self._prefetch_result = ""
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread: Optional[threading.Thread] = None
@@ -277,7 +276,7 @@ class KeepMemoryProvider:
             result = self._render_prompt(
                 PROMPT_QUERY,
                 text=query,
-                token_budget=self._prefetch_inline_token_budget,
+                token_budget=self._prefetch_token_budget,
             )
             if not result:
                 return ""
@@ -292,7 +291,7 @@ class KeepMemoryProvider:
                 text = self._render_prompt(
                     PROMPT_QUERY,
                     text=query,
-                    token_budget=self._prefetch_background_token_budget,
+                    token_budget=self._prefetch_token_budget,
                 )
                 if text and text.strip():
                     with self._prefetch_lock:
@@ -481,6 +480,8 @@ class KeepMemoryProvider:
 
         # Always render readable output. Use explicit token_budget if
         # provided, otherwise default so read operations aren't terse.
+        # Note: this default (4000) is larger than the memory-injection
+        # budgets — it's for tool output, not system prompt injection.
         token_budget = args.get("token_budget") or 4000
         if token_budget:
             from keep.cli import render_flow_response
@@ -598,8 +599,7 @@ class KeepMemoryProvider:
         total_tokens = max(200, math.ceil(total_chars / _MEMORY_CHARS_PER_TOKEN)) if total_chars > 0 else 1300
 
         self._system_prompt_token_budget = total_tokens
-        self._prefetch_inline_token_budget = max(300, round(total_tokens * 0.70))
-        self._prefetch_background_token_budget = max(500, round(total_tokens * 1.15))
+        self._prefetch_token_budget = max(400, round(total_tokens * 0.90))
 
     def _provider_config_from_choice(self, provider_cls, choice):
         if choice is None:

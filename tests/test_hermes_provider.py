@@ -403,8 +403,7 @@ class TestTokenBudgets:
         p = KeepMemoryProvider()
         p._configure_token_budgets()
         assert p._system_prompt_token_budget > 0
-        assert p._prefetch_inline_token_budget > 0
-        assert p._prefetch_background_token_budget > 0
+        assert p._prefetch_token_budget > 0
 
     def test_custom_budgets(self):
         p = KeepMemoryProvider()
