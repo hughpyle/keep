@@ -2084,7 +2084,7 @@ def doctor(
             from .providers.base import get_registry
             registry = get_registry()
             provider = registry.create_media(cfg.media.name, cfg.media.params)
-            model = getattr(provider, "model", getattr(provider, "model_name", cfg.media.name))
+            model = getattr(provider, "model_name", cfg.media.name)
             ok(f"Media: {cfg.media.name} ({model})")
         except Exception as e:
             fail(f"Media: {e}")

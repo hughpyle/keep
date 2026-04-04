@@ -293,7 +293,7 @@ class ProviderLifecycleMixin:
                 # budget auto-selected based on the model's effective context quality.
                 from .analyzers import SlidingWindowAnalyzer, get_budget_for_model
                 provider = self._get_summarization_provider()
-                model = getattr(provider, "model", "")
+                model = getattr(provider, "model_name", "")
                 provider_name = self._config.summarization.name if self._config.summarization else ""
                 budget = get_budget_for_model(model, provider_name)
                 self._analyzer = SlidingWindowAnalyzer(
