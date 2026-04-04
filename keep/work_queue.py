@@ -134,6 +134,7 @@ class WorkQueue:
 
         # Drop orphaned FlowEngine tables (replaced by WorkQueue in v0.100).
         # These are no longer referenced by any code and just waste space.
+        # Downgrade to versions that used FlowEngine is not supported.
         for table in (
             "continue_flows",
             "continue_events",
@@ -141,6 +142,14 @@ class WorkQueue:
             "continue_idempotency",
         ):
             self._conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+        # Enable auto_vacuum so DELETE immediately reclaims disk space.
+        # Requires a one-time VACUUM to rewrite the DB with the new mode.
+        auto_vacuum = self._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+        if auto_vacuum == 0:
+            logger.info("Enabling auto_vacuum on %s (one-time VACUUM)", self._db_path)
+            self._conn.execute("PRAGMA auto_vacuum = FULL")
+            self._conn.execute("VACUUM")
 
     # ------------------------------------------------------------------
     # Enqueue
@@ -513,7 +522,8 @@ class WorkQueue:
 
         Removes rows with status 'completed', 'superseded', or 'dead_letter'
         whose updated_at is older than the retention cutoff.  Returns the
-        number of rows deleted.
+        number of rows deleted.  Checkpoints the WAL so auto_vacuum can
+        reclaim disk space immediately.
         """
         cutoff = (
             datetime.now(timezone.utc) - timedelta(hours=max(keep_hours, 1))
@@ -530,6 +540,7 @@ class WorkQueue:
             self._conn.commit()
             deleted = cur.rowcount
         if deleted:
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             logger.info("Pruned %d terminal work items (cutoff=%s)", deleted, cutoff)
         return deleted
 
