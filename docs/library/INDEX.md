@@ -13,6 +13,7 @@ The content, as well as the format, is relevant to the practice of this skill.
 - **Language:** Middle English
 - **Translator:** James Morton, The Camden Society, London 1853
 - **Source:** https://www.bsswebsite.me.uk/History/AncreneRiwle/AncreneRiwle2.html
+- **Source PDF:** https://www.bsswebsite.me.uk/History/AncreneRiwle/AnchoressesRule.pdf
 - **Status:** Public domain
 - **Description:** A monastic guide for Christian anchoresses.  Provides guidance on conduct with an "inner" and "outer" rule, and their relationship: "one relates to the right conduct of the heart; the other, to the regulation of the outward life".
 
@@ -48,7 +49,7 @@ The content, as well as the format, is relevant to the practice of this skill.
 - **Translator:** Bhikkhu Sujato
 - **Source:** SuttaCentral
 - **Source URL:** https://suttacentral.net/an5.57/en/sujato?lang=en
-- **Data:** https://github.com/suttacentral/sc-data/blob/main/sc_bilara_data/translation/en/sujato/sutta/an/an5/an5.57_translation-en-sujato.json
+- **Source JSON:** https://github.com/suttacentral/sc-data/blob/main/sc_bilara_data/translation/en/sujato/sutta/an/an5/an5.57_translation-en-sujato.json
 - **License:** Creative Commons CC0 1.0 Universal (SuttaCentral translations)
 - **Description:** The Five Remembrances - five subjects that all sentient beings should reflect on regularly: aging, sickness, death, separation from loved ones, and being heir to one's own actions.  "Reviewing this subject often, they entirely give up bad conduct, or at least reduce it".
 
@@ -59,6 +60,7 @@ The content, as well as the format, is relevant to the practice of this skill.
 - **Date:** Eastern Han Dynasty (25-220 CE)
 - **Language:** Classical Chinese
 - **Source:** Project Gutenberg (#23585)
+- **Source URL:** https://www.gutenberg.org/cache/epub/23585/pg23585.txt
 - **Status:** Public domain
 - **Description:** One of the earliest Buddhist texts to reach China, traditionally attributed to translation by Kāśyapa Mātaṅga and Dharmarakṣa
 
@@ -70,6 +72,7 @@ The content, as well as the format, is relevant to the practice of this skill.
 - **Date:** 1924
 - **Language:** English
 - **Source:** Internet Archive (sticksstones0000lewi)
+- **Source URL:** https://archive.org/download/sticksstones0000lewi/sticksstones0000lewi.pdf
 - **Status:** Public domain (published before 1929)
 - **Description:** Mumford's first major work on architecture, examining American building traditions from medieval influences through industrialization. Includes chapters on "The Medieval Tradition," "The Renaissance in New England," "The Age of Rationalism," and more.
 
