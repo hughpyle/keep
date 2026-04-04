@@ -455,7 +455,11 @@ class KeepMemoryProvider:
         if not state:
             return json.dumps({"error": "Missing required parameter: state"})
 
-        params = args.get("params") or {}
+        params = dict(args.get("params") or {})
+
+        # State docs use item_id internally; user-facing params use id.
+        if "id" in params and "item_id" not in params:
+            params["item_id"] = params["id"]
 
         # Models sometimes put params into state_doc_yaml as YAML text.
         # Rescue by parsing the YAML as params if no explicit params given.
@@ -483,13 +487,29 @@ class KeepMemoryProvider:
         # Note: this default (4000) is larger than the memory-injection
         # budgets — it's for tool output, not system prompt injection.
         token_budget = args.get("token_budget") or 4000
-        if token_budget:
-            from keep.cli import render_flow_response
-            rendered = render_flow_response(
-                result, token_budget=token_budget, keeper=self._keeper,
-            )
-            if rendered:
-                return json.dumps({"result": rendered})
+
+        # render_flow_response renders from result.data, but get/list
+        # flows return content in result.bindings. Fall back to
+        # _render_item_context for item-bearing bindings.
+        from keep.cli import render_flow_response, _render_item_context
+        rendered = render_flow_response(
+            result, token_budget=token_budget, keeper=self._keeper,
+        )
+        # If the rendered output is just a header (no content), check
+        # bindings for an item to render directly.
+        if rendered and "\n" not in rendered.strip() and result.bindings:
+            item_binding = result.bindings.get("item") or result.bindings.get("target")
+            if item_binding:
+                try:
+                    ctx = self._keeper.get_context(
+                        str(item_binding.get("id", "")),
+                    )
+                    if ctx:
+                        rendered = _render_item_context(ctx)
+                except Exception:
+                    pass
+        if rendered:
+            return json.dumps({"result": rendered})
 
         output: dict[str, Any] = {
             "status": result.status,
