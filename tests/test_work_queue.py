@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 from keep.work_queue import WorkQueue
 
@@ -119,5 +121,97 @@ def test_concurrent_producers_and_consumers_do_not_raise_sqlite_errors(tmp_path)
         assert processed == total
         assert len(seen_work_ids) == total
         assert queue.count() == 0
+    finally:
+        queue.close()
+
+
+def test_migrate_drops_orphaned_flow_engine_tables(tmp_path):
+    """WorkQueue._migrate() drops the legacy FlowEngine tables."""
+    db_path = tmp_path / "continuation.db"
+
+    # Pre-create the legacy tables as the old FlowEngine would have.
+    conn = sqlite3.connect(str(db_path))
+    for table in (
+        "continue_flows",
+        "continue_events",
+        "continue_mutations",
+        "continue_idempotency",
+    ):
+        conn.execute(f"CREATE TABLE {table} (id TEXT PRIMARY KEY)")
+        conn.execute(f"INSERT INTO {table} VALUES ('test')")
+    conn.commit()
+    conn.close()
+
+    # Opening a WorkQueue triggers _init_db → _migrate, which should drop them.
+    queue = WorkQueue(db_path)
+    try:
+        tables = {
+            row[0]
+            for row in queue._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "continue_work" in tables
+        assert "continue_flows" not in tables
+        assert "continue_events" not in tables
+        assert "continue_mutations" not in tables
+        assert "continue_idempotency" not in tables
+    finally:
+        queue.close()
+
+
+def test_prune_deletes_old_terminal_items(tmp_path):
+    """prune() removes completed/superseded/dead_letter rows older than retention."""
+    queue = WorkQueue(tmp_path / "work.db")
+    try:
+        # Enqueue and complete some work.
+        ids = []
+        for i in range(5):
+            wid = queue.enqueue("tag", {"i": i})
+            ids.append(wid)
+        # Claim and complete all.
+        items = queue.claim("w", limit=10)
+        for item in items:
+            queue.complete(item.work_id)
+
+        # Backdate updated_at to 48 hours ago for 3 of them.
+        old_ts = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        for wid in ids[:3]:
+            queue._conn.execute(
+                "UPDATE continue_work SET updated_at = ? WHERE work_id = ?",
+                (old_ts, wid),
+            )
+
+        # Prune with 24h retention — should delete the 3 old ones.
+        deleted = queue.prune(keep_hours=24)
+        assert deleted == 3
+
+        # The 2 recent ones remain.
+        remaining = queue._conn.execute(
+            "SELECT COUNT(*) FROM continue_work"
+        ).fetchone()[0]
+        assert remaining == 2
+
+        # Prune again — nothing more to delete.
+        assert queue.prune(keep_hours=24) == 0
+    finally:
+        queue.close()
+
+
+def test_prune_preserves_requested_items(tmp_path):
+    """prune() must not touch items that are still in 'requested' status."""
+    queue = WorkQueue(tmp_path / "work.db")
+    try:
+        queue.enqueue("tag", {"i": 0})
+
+        # Backdate it.
+        old_ts = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        queue._conn.execute(
+            "UPDATE continue_work SET updated_at = ?", (old_ts,),
+        )
+
+        # Prune should skip it — it's still requested.
+        assert queue.prune(keep_hours=24) == 0
+        assert queue.count() == 1
     finally:
         queue.close()

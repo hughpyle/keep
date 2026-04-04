@@ -8,15 +8,18 @@ DB file so there is no migration.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from .const import SQLITE_BUSY_TIMEOUT_MS
+
+logger = logging.getLogger(__name__)
 
 # Fixed flow_id for directly-enqueued work (no FlowEngine flow).
 _DIRECT_FLOW_ID = "_direct"
@@ -81,6 +84,10 @@ class WorkQueue:
             ON continue_work(flow_id, status)
         """)
         self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_continue_work_prune
+            ON continue_work(status, updated_at)
+        """)
+        self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_continue_work_claimable
             ON continue_work(status, retry_after, lease_until, created_at)
         """)
@@ -124,6 +131,16 @@ class WorkQueue:
                 pass
         if "priority" not in columns:
             _add("priority", "INTEGER NOT NULL DEFAULT 5")
+
+        # Drop orphaned FlowEngine tables (replaced by WorkQueue in v0.100).
+        # These are no longer referenced by any code and just waste space.
+        for table in (
+            "continue_flows",
+            "continue_events",
+            "continue_mutations",
+            "continue_idempotency",
+        ):
+            self._conn.execute(f"DROP TABLE IF EXISTS {table}")
 
     # ------------------------------------------------------------------
     # Enqueue
@@ -490,6 +507,31 @@ class WorkQueue:
             )
             self._conn.commit()
             return cur.rowcount
+
+    def prune(self, keep_hours: int = 24) -> int:
+        """Delete terminal work items older than *keep_hours*.
+
+        Removes rows with status 'completed', 'superseded', or 'dead_letter'
+        whose updated_at is older than the retention cutoff.  Returns the
+        number of rows deleted.
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=max(keep_hours, 1))
+        ).isoformat()
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                DELETE FROM continue_work
+                WHERE status IN ('completed', 'superseded', 'dead_letter')
+                  AND updated_at < ?
+                """,
+                (cutoff,),
+            )
+            self._conn.commit()
+            deleted = cur.rowcount
+        if deleted:
+            logger.info("Pruned %d terminal work items (cutoff=%s)", deleted, cutoff)
+        return deleted
 
     # ------------------------------------------------------------------
     # Lifecycle
