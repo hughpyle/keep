@@ -151,13 +151,34 @@ See [TAGGING.md](use keep_help with topic="tagging") for the full speech-act fra
 ## Data Model
 
 An item has:
-- A unique identifier (URI, content hash, or system ID)
+- A unique identifier (see below)
 - Timestamps (`_created`, `_updated`)
 - A summary of the content
 - Tags (`{key: value, ...}`)
 - Version history (previous versions archived automatically)
 
 The full original document is not stored. Summaries are contextual — tags shape how new items are understood. See [KEEP-PUT.md](use keep_help with topic="keep-put").
+
+### Item IDs
+
+IDs are strings. The format tells you what kind of item it is:
+
+| Format | Meaning | Versioning | Example |
+|--------|---------|------------|---------|
+| `%hexhash` | Content-addressed — derived from content hash | Usually single version | `%a1b2c3d4e5f6` |
+| `https://...` | Web URL — ingested document | Usually single version | `https://docs.example.com/auth` |
+| `file:///...` | Local file — ingested document | Usually single version | `file:///path/to/design.pdf` |
+| `custom-name` | Named by user or agent | Accumulates versions | `auth-decisions`, `meeting-notes` |
+| `now` | Working context — current intentions | Accumulates versions | `now` |
+| `.system/...` | System doc — bundled with keep | Managed by keep | `.library/mn61`, `.tag/act` |
+| `cli` | Agent conversation (CLI) | Turn-by-turn versions | `cli` |
+| `default:discord:...` | Agent conversation (gateway) | Turn-by-turn versions | `default:discord:bg_174301` |
+
+**Content-addressed IDs** (`%hex`): When you `put` content without specifying an `id`, keep hashes the content and uses `%hash` as the ID. These are stable — the same content always produces the same ID. They don't typically accumulate versions because re-putting the same content is a no-op.
+
+**`now`**: A convention, not a special system feature. It's just an item with ID `now` that agents use to track current working context and intentions. The `get_now()` API and `keep now` CLI are convenience shortcuts for `get("now")`. Each `put` to `now` creates a new version, building a trace of how intentions evolved.
+
+**Version selectors**: Append `@V{N}` to read a specific version: `now@V{1}` (previous), `now@V{2}` (two back), `now@V{-1}` (oldest). Parts use `@P{N}`: `doc@P{1}` (first structural part).
 
 ---
 
