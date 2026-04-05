@@ -348,6 +348,7 @@ def plan_find_context_render(
 
         focus = item.tags.get("_focus_summary")
         display_summary = focus if focus else note_display_name(item.tags, item.summary)
+        budget_summary = focus if focus else (item.summary or "").strip()
         line = f"- {item.id}"
         if item.score is not None:
             line += f" ({item.score:.2f})"
@@ -356,11 +357,19 @@ def plan_find_context_render(
             line += f"  [{date}]"
         line += f"  {display_summary}"
 
+        budget_line = f"- {item.id}"
+        if item.score is not None:
+            budget_line += f" ({item.score:.2f})"
+        if date:
+            budget_line += f"  [{date}]"
+        budget_line += f"  {budget_summary}"
+
         block = FindContextBlockPlan(item=item)
         block.sections.append(budget.force_section(
             kind="summary",
             phase="summary",
             lines=[line],
+            line_costs=[_tok(budget_line)],
         ))
         blocks.append(block)
 

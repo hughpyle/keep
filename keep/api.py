@@ -1604,16 +1604,17 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if id.startswith("."):
             return
 
-        # Determine which keys to check: union of current and previous
-        current_keys = {
+        # Determine which keys to check: preserve first-seen key order from the
+        # incoming write, then any keys that only existed on the prior version.
+        current_keys = [
             k for k in merged_tags
             if not k.startswith(SYSTEM_TAG_PREFIX) and tag_values(merged_tags, k)
-        }
-        previous_keys = {
+        ]
+        previous_keys = [
             k for k in existing_tags
             if not k.startswith(SYSTEM_TAG_PREFIX) and tag_values(existing_tags, k)
-        }
-        all_keys = current_keys | previous_keys
+        ]
+        all_keys = list(dict.fromkeys(current_keys + previous_keys))
         if not all_keys:
             return  # no user tags → no edges possible
 
@@ -1647,11 +1648,13 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if isinstance(inverse, list):
                 inverse = inverse[0]
 
-            current_values = set(tag_values(merged_tags, key))
-            previous_values = set(tag_values(existing_tags, key))
+            current_values = tag_values(merged_tags, key)
+            previous_values = tag_values(existing_tags, key)
+            previous_value_set = set(previous_values)
+            current_value_set = set(current_values)
 
-            removed_values = previous_values - current_values
-            added_values = current_values - previous_values
+            removed_values = [v for v in previous_values if v not in current_value_set]
+            added_values = [v for v in current_values if v not in previous_value_set]
 
             # Tag values removed → queue edge deletions.
             for removed in removed_values:
@@ -1663,7 +1666,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 edges_to_delete.append((id, key, target_id))
 
             # Tag present → queue edge upsert + auto-vivify target.
-            for current_value in sorted(added_values):
+            for current_value in added_values:
                 if not current_value:
                     continue
                 raw_target_id, target_label = parse_ref(current_value)

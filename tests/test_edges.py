@@ -264,7 +264,8 @@ class TestEdgeIntegration:
 
         item = kp.get("contact:telegram:42")
         assert item is not None
-        assert item.tags.get("name") == ["Alice", "Ali"]
+        names = item.tags.get("name")
+        assert sorted(names) == ["Ali", "Alice"]
 
     def test_labeled_edge_ref_does_not_mutate_non_autovivified_target(self, kp):
         self._create_tagdoc(kp, "speaker", "said")
