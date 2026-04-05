@@ -435,7 +435,8 @@ class TestFlowRendering:
 
         output = render_context(ctx)
         assert "tags/said:" not in output
-        assert 'said: conv1 [2026-02-27] "Gina said \\"hello\\""' in output
+        assert "said:" in output
+        assert '- conv1 [2026-02-27] "Gina said \\"hello\\""' in output
         # Edge refs supersede raw scalar display for the same key.
         assert 'said: "manual-tag"' not in output
 

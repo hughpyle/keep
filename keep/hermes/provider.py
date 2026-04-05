@@ -273,6 +273,33 @@ class KeepMemoryProvider:
 
         return ""
 
+    def _enrich_query(self, user_message: str) -> str:
+        """Prepend session context to the user message for better similarity search.
+
+        Short or generic user messages ("yes", "ok do it") produce poor
+        embedding queries.  Enriching with the session item's analysis
+        (top part) or most recent turn summary gives the search vector
+        enough signal to surface relevant notes.
+        """
+        if not self._keeper or not self._session_item_id:
+            return user_message
+        try:
+            item = self._keeper.peek(self._session_item_id)
+            if not item:
+                return user_message
+            # Prefer the topmost analysis part (concise session theme)
+            parts = self._keeper.list_parts(self._session_item_id)
+            if parts:
+                context = parts[0].summary
+            elif item.summary:
+                # Fall back to latest turn summary
+                context = item.summary[:200]
+            else:
+                return user_message
+            return f"{context}\n{user_message}"
+        except Exception:
+            return user_message
+
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         if self._keeper is None:
             return ""
@@ -285,9 +312,14 @@ class KeepMemoryProvider:
             self._prefetch_result = ""
 
         if not result:
+            enriched = self._enrich_query(query)
+            # Use session item as context anchor so meta-docs resolve
+            # from session tags (topic, user_id) instead of the `now` note.
+            ctx_id = self._session_item_id or "now"
             result = self._render_prompt(
                 PROMPT_HERMES_ASSEMBLE,
-                text=query,
+                text=enriched,
+                id=ctx_id,
                 token_budget=self._prefetch_token_budget,
             )
             if not result:
@@ -300,9 +332,12 @@ class KeepMemoryProvider:
 
         def _run():
             try:
+                enriched = self._enrich_query(query)
+                ctx_id = self._session_item_id or "now"
                 text = self._render_prompt(
                     PROMPT_HERMES_ASSEMBLE,
-                    text=query,
+                    text=enriched,
+                    id=ctx_id,
                     token_budget=self._prefetch_token_budget,
                 )
                 if text and text.strip():

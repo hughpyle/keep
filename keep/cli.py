@@ -153,12 +153,9 @@ def _render_tags_frontmatter(
                 rendered_refs.append(rv)
             if not rendered_refs:
                 continue
-            if len(rendered_refs) == 1:
-                lines.append(f"  {key}: {rendered_refs[0]}")
-            else:
-                lines.append(f"  {key}:")
-                for rv in rendered_refs:
-                    lines.append(f"    - {rv}")
+            lines.append(f"  {key}:")
+            for rv in rendered_refs:
+                lines.append(f"    - {rv}")
             continue
 
         values = tag_values(tags, key)
@@ -1144,10 +1141,23 @@ def expand_prompt(result: "PromptResult", kp=None) -> str:
         n_bindings = sum(1 for b in result.flow_bindings.values() if b)
         per_binding = budget // max(n_bindings, 1)
         for name, binding in result.flow_bindings.items():
-            placeholder = "{" + name + "}"
-            if placeholder in output:
+            # Match {name} or {name|fallback} — fallback text is used when
+            # the binding renders empty (e.g. {edges|(none)}).
+            _pat = re.compile(r'\{' + re.escape(name) + r'(?:\|([^}]*))?\}')
+            for m in _pat.finditer(output):
                 rendered = _render_binding(name, binding, kp=kp, token_budget=per_binding)
-                output = output.replace(placeholder, rendered)
+                if not rendered.strip() and m.group(1) is not None:
+                    rendered = m.group(1)
+                output = output.replace(m.group(0), rendered)
+
+    # Replace remaining binding placeholders whose rules didn't fire
+    # (e.g. {similar} when search ran instead).  Supports {name|fallback}.
+    _known_value_placeholders = {"{text}", "{since}", "{until}"}
+    _unfired_re = re.compile(r'\{([a-z_]+)(?:\|([^}]*))?\}')
+    for m in _unfired_re.finditer(output):
+        if m.group(0) not in _known_value_placeholders:
+            fallback = m.group(2) if m.group(2) is not None else ""
+            output = output.replace(m.group(0), fallback)
 
     # Expand {text}, {since}, {until} with raw filter values
     output = output.replace("{text}", result.text or "")

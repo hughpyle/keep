@@ -12,10 +12,12 @@ message as a similarity query.
 
 ## Prompt
 
-{find_results}
+Context in `keep` includes:
+  Similar:
+  {find_results|(none)}
 
-Meta (learnings, commitments, patterns):
-{meta}
+  Groups:
+  {meta|(none)}
 
-Linked items:
-{edges}
+  Links:
+  {edges|(none)}
