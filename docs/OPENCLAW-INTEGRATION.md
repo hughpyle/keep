@@ -228,11 +228,16 @@ keep auto-detects AI providers from environment variables:
 
 ```bash
 export OPENAI_API_KEY=...      # Handles both embeddings + summarization
+export OPENROUTER_API_KEY=...  # Also handles both, via OpenRouter
 # Or: GEMINI_API_KEY=...       # Also does both
 # Or: VOYAGE_API_KEY=... and ANTHROPIC_API_KEY=...  # Separate services
 ```
 
 If Ollama is running locally, it's auto-detected with no configuration needed.
+
+Use `openai` for direct OpenAI, `openrouter` for OpenRouter, and `openai` with
+`base_url` for local OpenAI-compatible servers such as `llama-server`, vLLM, or
+LM Studio.
 
 For explicit setup: `openclaw keep setup` or `keep config --setup`
 

@@ -106,6 +106,10 @@ keep_flow(state="put", params={content: "file:///path/to/design.pdf", tags: {typ
 
 Ask: what is this? Why is it important? Tag appropriately.
 
+> NOTE: With the CLI you can **index and watch** full directory structures, including Git repositories.  Caution: processing large directories will consume significant resources.
+
+The ability to index, version, cross-reference and link external sources allows you to use memory for provenance, not just summary context.
+
 ---
 
 ## Breakdowns as Learning
@@ -137,6 +141,8 @@ keep_flow(state="query-resolve", params={query: "open commitments", tags: {act: 
 # Close the loop
 keep_flow(state="tag", params={id: "ID", tags: {status: "fulfilled"}})
 ```
+
+You should actively manage the list of open commitments. Fulfilled? Tag them.
 
 See [TAGGING.md](use keep_help with topic="tagging") for the full speech-act framework.
 

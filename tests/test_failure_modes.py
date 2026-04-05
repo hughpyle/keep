@@ -10,10 +10,13 @@ Covers the scenarios that actually broke in production:
 
 import threading
 import time
+from unittest.mock import MagicMock
 
 import pytest
 
 from keep.api import Keeper
+from tests.conftest import MockChromaStore
+
 MAX_SUMMARY_ATTEMPTS = 5  # default; tests use this as the expected value
 from keep.pending_summaries import PendingSummaryQueue
 
@@ -124,6 +127,25 @@ class TestEmbeddingDimensionValidation:
         assert kp._config.embedding_identity.model == "different-model"
         kp.close()
 
+    def test_openrouter_compatible_model_switch_skips_reindex(self, mock_providers, tmp_path):
+        """OpenAI and OpenRouter identities for the same model reuse the index."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("hello", id="doc1")
+
+        kp._config.embedding.name = "openrouter"
+        openrouter_embed = MagicMock()
+        openrouter_embed.dimension = 384
+        openrouter_embed.model_name = "openai/mock-model"
+        kp.enqueue_reindex = MagicMock(return_value={"enqueued": 0, "versions": 0})
+
+        kp._validate_embedding_identity(openrouter_embed)
+
+        assert kp._config.embedding_identity.provider == "openrouter"
+        assert kp._config.embedding_identity.model == "openai/mock-model"
+        assert kp._config.embedding_identity.key == "openai_mock_model"
+        kp.enqueue_reindex.assert_not_called()
+        kp.close()
+
 
 # ---------------------------------------------------------------------------
 # Dual-write partial failures
@@ -134,8 +156,6 @@ class TestDualWriteRecovery:
 
     def test_doc_store_ok_vector_store_fails(self, mock_providers, tmp_path):
         """If ChromaDB fails after doc store write, doc should still exist."""
-        from tests.conftest import MockChromaStore
-
         kp = Keeper(store_path=tmp_path)
         embed = mock_providers["embedding"]
 

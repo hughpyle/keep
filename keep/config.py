@@ -61,12 +61,41 @@ class ProviderConfig:
 class EmbeddingIdentity:
     """Identity of an embedding model for compatibility checking.
     
-    Two embeddings are compatible only if they have the same identity.
-    Different models, even with the same dimension, produce incompatible vectors.
+    Routing services may add provider prefixes (for example
+    ``openai/text-embedding-3-small`` via OpenRouter). Compatibility and
+    collection naming normalize those prefixes so equivalent models can reuse
+    the same vector index.
     """
     provider: str  # e.g., "sentence-transformers", "openai"
     model: str     # e.g., "all-MiniLM-L6-v2", "text-embedding-3-small"
     dimension: int # e.g., 384, 1536
+
+    @property
+    def canonical_model(self) -> str:
+        """Model name without OpenRouter routing prefix."""
+        if self.provider == "openrouter" and "/" in self.model:
+            return self.model.split("/", 1)[1]
+        return self.model
+
+    @property
+    def canonical_provider(self) -> str:
+        """Provider family used for shared collection names."""
+        if self.provider == "openrouter" and "/" in self.model:
+            routed = self.model.split("/", 1)[0].lower()
+            return {
+                "openai": "openai",
+                "google": "gemini",
+                "anthropic": "anthropic",
+                "mistralai": "mistral",
+                "mistral": "mistral",
+                "voyage": "voyage",
+            }.get(routed, routed)
+        return self.provider
+
+    @property
+    def compatibility_key(self) -> tuple[str, int]:
+        """Fields that determine vector compatibility."""
+        return (self.canonical_model, self.dimension)
     
     @property
     def key(self) -> str:
@@ -77,7 +106,13 @@ class EmbeddingIdentity:
         """
         # Simplify model name for use in collection names
         # ChromaDB collection names only allow [a-zA-Z0-9_-]
-        model_slug = self.model.replace("/", "_").replace("-", "_").replace(".", "_").replace(":", "_")
+        model_slug = (
+            self.canonical_model
+            .replace("/", "_")
+            .replace("-", "_")
+            .replace(".", "_")
+            .replace(":", "_")
+        )
         # Remove common prefixes
         for prefix in ["all_", "text_embedding_"]:
             if model_slug.lower().startswith(prefix):
@@ -90,7 +125,8 @@ class EmbeddingIdentity:
             "ollama": "ollama",
             "voyage": "voyage",
             "mistral": "mistral",
-        }.get(self.provider, self.provider[:6])
+            "anthropic": "anthropic",
+        }.get(self.canonical_provider, self.canonical_provider[:6])
         
         return f"{provider_short}_{model_slug}"
 
@@ -383,16 +419,18 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     """Detect the best default providers for the current environment.
 
     Priority for embeddings:
-    1. API keys: VOYAGE_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
-    2. Ollama (if running locally with models)
-    3. Local models (if installed)
-    4. None if nothing available
+    1. Direct API keys: VOYAGE_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY
+    2. OpenRouter: OPENROUTER_API_KEY
+    3. Ollama (if running locally with models)
+    4. Local models (if installed)
+    5. None if nothing available
 
     Priority for summarization:
-    1. API keys: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), OPENAI_API_KEY, GEMINI_API_KEY
-    2. Ollama (if running locally with a generative model)
-    3. Local models (if installed)
-    4. Fallback: truncate (always available)
+    1. Direct API keys: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), OPENAI_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY
+    2. OpenRouter: OPENROUTER_API_KEY
+    3. Ollama (if running locally with a generative model)
+    4. Local models (if installed)
+    5. Fallback: truncate (always available)
 
     Returns provider configs for: embedding, summarization, document.
     embedding may be None if no provider is available.
@@ -434,6 +472,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     )
     has_voyage_key = not local_only and bool(os.environ.get("VOYAGE_API_KEY"))
     has_mistral_key = not local_only and bool(os.environ.get("MISTRAL_API_KEY"))
+    has_openrouter_key = not local_only and bool(os.environ.get("OPENROUTER_API_KEY"))
 
     # Check for Ollama (lazy — only probed when no API key covers both)
     _ollama_info: dict | None = None
@@ -447,7 +486,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         return _ollama_info
 
     # --- Embedding provider ---
-    # Priority: Voyage > OpenAI > Gemini > Ollama > MLX > sentence-transformers
+    # Priority: Voyage > OpenAI > Gemini > Mistral > OpenRouter > Ollama > MLX > sentence-transformers
     embedding_provider: ProviderConfig | None = None
 
     # 1. API providers first (Voyage uses direct REST, no SDK import needed)
@@ -459,6 +498,11 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         embedding_provider = ProviderConfig("gemini")
     elif has_mistral_key:
         embedding_provider = ProviderConfig("mistral")
+    elif has_openrouter_key:
+        embedding_provider = ProviderConfig(
+            "openrouter",
+            {"model": "openai/text-embedding-3-small"},
+        )
 
     # 2. Ollama (local server, no API key needed)
     if embedding_provider is None:
@@ -491,7 +535,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     providers["embedding"] = embedding_provider
 
     # --- Summarization provider ---
-    # Priority: Anthropic > OpenAI > Gemini > Ollama > MLX > truncate
+    # Priority: Anthropic > OpenAI > Gemini > Mistral > OpenRouter > Ollama > MLX > truncate
     summarization_provider: ProviderConfig | None = None
 
     # 1. API providers
@@ -503,6 +547,11 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         summarization_provider = ProviderConfig("gemini")
     elif has_mistral_key:
         summarization_provider = ProviderConfig("mistral")
+    elif has_openrouter_key:
+        summarization_provider = ProviderConfig(
+            "openrouter",
+            {"model": "openai/gpt-4o-mini"},
+        )
 
     # 2. Ollama (needs a generative model, not embedding-only)
     if summarization_provider is None:
@@ -737,7 +786,7 @@ def load_config(config_dir: Path) -> StoreConfig:
     # KEEP_LOCAL_ONLY=1 overrides remote providers to None/fallback.
     # A provider with base_url set is targeting a local server — keep it.
     if os.environ.get("KEEP_LOCAL_ONLY"):
-        _REMOTE_PROVIDERS = {"voyage", "openai", "gemini", "anthropic", "mistral"}
+        _REMOTE_PROVIDERS = {"voyage", "openai", "openrouter", "gemini", "anthropic", "mistral"}
 
         def _is_remote(cfg: ProviderConfig | None) -> bool:
             if cfg is None or cfg.name not in _REMOTE_PROVIDERS:

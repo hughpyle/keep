@@ -420,8 +420,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if name in self._SYMMETRIC_PROVIDERS:
             return False
 
-        # Always asymmetric (Voyage, Gemini)
-        if name in ("voyage", "gemini"):
+        # Always asymmetric (Voyage, Gemini, OpenRouter)
+        if name in ("voyage", "gemini", "openrouter"):
             return True
 
         # Model-specific: check if model name matches known asymmetric prefixes
@@ -1009,7 +1009,19 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             save_config(self._config)
             self._store.reset_embedding_dimension(current.dimension)
         else:
-            # Check for provider change
+            if stored.compatibility_key == current.compatibility_key:
+                if (stored.provider != current.provider or
+                    stored.model != current.model):
+                    logger.info(
+                        "Embedding provider changed compatibly: %s/%s (%dd) → %s/%s (%dd)",
+                        stored.provider, stored.model, stored.dimension,
+                        current.provider, current.model, current.dimension,
+                    )
+                    self._config.embedding_identity = current
+                    save_config(self._config)
+                return
+
+            # Check for provider change requiring a reindex
             if (stored.provider != current.provider or
                 stored.model != current.model or
                 stored.dimension != current.dimension):

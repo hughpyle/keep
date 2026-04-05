@@ -1,4 +1,12 @@
 
+* hermes plugin
+
+* stats rendering
+
+* "look" reconstruction: "around" & "towards"
+
+* MCP sampling support??! - fully delegate certain decisions to the agent (flag on the statedoc)
+
 * sysdoc: enforce context= matching the id, otherwise we'll get confused
 
 * sysdoc: query by context tag, not by id?
@@ -333,3 +341,6 @@ x acp
 . review actions & hardcoded processing, available factoring
 . mcp API shape is not clear enough
 . more perf
+. embedding task (document, query)
+. llama-cpp / llama-serve compat, by editing config to specify URL per service
+. openrouter

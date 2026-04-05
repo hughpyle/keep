@@ -540,6 +540,11 @@ class ProviderRegistry:
             pass  # LLM providers might not be available
 
         try:
+            from . import openrouter  # noqa: PLC0415
+        except ImportError:
+            pass  # OpenRouter provider might not be available
+
+        try:
             from . import mlx  # noqa: PLC0415
         except ImportError:
             pass  # MLX providers might not be available

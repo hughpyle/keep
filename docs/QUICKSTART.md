@@ -14,13 +14,19 @@ Then run `keep` — it walks you through first-time setup: choosing embedding an
 keep
 ```
 
-If [Ollama](https://ollama.com/) is running, it's offered as the default — no API keys needed. Otherwise choose from any detected provider (OpenAI, Voyage, Gemini, etc.) or use the [hosted service](https://keepnotes.ai):
+If [Ollama](https://ollama.com/) is running, it's offered as the default — no API keys needed. Otherwise choose from any detected provider (OpenAI, OpenRouter, Voyage, Gemini, etc.) or use the [hosted service](https://keepnotes.ai):
 
 ```bash
 export KEEPNOTES_API_KEY=kn_...
 ```
 
 Re-run setup anytime with `keep config --setup`. See [Configuration](KEEP-CONFIG.md) for all provider options and advanced setup.
+
+Provider choice in one line:
+
+- Use `openai` for the direct OpenAI API.
+- Use `openrouter` for OpenRouter's hosted routing layer.
+- Use `openai` with `base_url` for local OpenAI-compatible servers such as `llama-server`, vLLM, or LM Studio.
 
 ## Store a note
 

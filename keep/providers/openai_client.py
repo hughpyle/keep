@@ -11,6 +11,7 @@ import os
 def create_openai_client(
     api_key: str | None = None,
     base_url: str | None = None,
+    default_headers: dict[str, str] | None = None,
 ):
     """Create an OpenAI client for the OpenAI API or a compatible local server.
 
@@ -19,6 +20,8 @@ def create_openai_client(
             Not required when *base_url* points at a local server.
         base_url: Override the API base URL (e.g.
             ``http://localhost:8801/v1`` for llama-server).
+        default_headers: Optional default headers to send with every request.
+            Used by OpenRouter for app attribution headers.
 
     Returns:
         openai.OpenAI client instance
@@ -47,4 +50,8 @@ def create_openai_client(
         )
 
     # The SDK requires a non-empty api_key; local servers ignore it.
-    return OpenAI(api_key=key or "not-required", base_url=base_url)
+    return OpenAI(
+        api_key=key or "not-required",
+        base_url=base_url,
+        default_headers=default_headers,
+    )

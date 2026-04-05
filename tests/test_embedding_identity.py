@@ -43,3 +43,20 @@ class TestEmbeddingIdentity:
 
         key = identity.key
         assert "openai_" in key
+
+    def test_openrouter_openai_canonicalizes_to_same_key(self) -> None:
+        """OpenRouter-routed OpenAI embeddings reuse the direct OpenAI index."""
+        direct = EmbeddingIdentity(
+            provider="openai",
+            model="text-embedding-3-small",
+            dimension=1536,
+        )
+        routed = EmbeddingIdentity(
+            provider="openrouter",
+            model="openai/text-embedding-3-small",
+            dimension=1536,
+        )
+
+        assert routed.canonical_model == "text-embedding-3-small"
+        assert routed.compatibility_key == direct.compatibility_key
+        assert routed.key == direct.key

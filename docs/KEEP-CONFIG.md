@@ -59,11 +59,11 @@ version = 2
 max_summary_length = 1000
 
 [embedding]
-name = "ollama"                        # or "voyage", "openai", "gemini", "mistral", "mlx", "sentence-transformers"
+name = "ollama"                        # or "voyage", "openai", "openrouter", "gemini", "mistral", "mlx", "sentence-transformers"
 model = "nomic-embed-text"
 
 [summarization]
-name = "ollama"                        # or "anthropic", "openai", "gemini", "mistral", "mlx"
+name = "ollama"                        # or "anthropic", "openai", "openrouter", "gemini", "mistral", "mlx"
 model = "gemma3:1b"
 
 [media]
@@ -124,6 +124,7 @@ Set environment variables for your preferred providers:
 | **Voyage AI** | `VOYAGE_API_KEY` | [dash.voyageai.com](https://dash.voyageai.com/) | yes | - |
 | **Anthropic** | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`* | [console.anthropic.com](https://console.anthropic.com/) | - | yes |
 | **OpenAI** | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/) | yes | yes |
+| **OpenRouter** | `OPENROUTER_API_KEY` | [openrouter.ai](https://openrouter.ai/) | yes | yes |
 | **Google Gemini** | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com/) | yes | yes |
 | **Mistral** | `MISTRAL_API_KEY` | [console.mistral.ai](https://console.mistral.ai/) | yes | yes |
 | **Vertex AI** | `GOOGLE_CLOUD_PROJECT` | GCP Workload Identity / ADC | yes | yes |
@@ -137,9 +138,15 @@ Set environment variables for your preferred providers:
 **Simplest setup** (single API key):
 ```bash
 export OPENAI_API_KEY=...      # Does both embeddings + summarization
+# Or: OPENROUTER_API_KEY=...   # Also does both, via OpenRouter
 # Or: GEMINI_API_KEY=...       # Also does both
 keep put "test"
 ```
+
+OpenRouter accepts OpenRouter-prefixed model names such as
+`openai/text-embedding-3-small` and `openai/gpt-4o-mini`. For common models,
+bare names are accepted and normalized to the prefixed form in config and
+diagnostics.
 
 **Best quality** (two API keys for optimal embeddings):
 ```bash
@@ -147,6 +154,28 @@ export VOYAGE_API_KEY=...      # Embeddings (Anthropic's partner)
 export ANTHROPIC_API_KEY=...   # Summarization (cost-effective: claude-3-haiku)
 keep put "test"
 ```
+
+### Choosing Between OpenAI, OpenRouter, and Local OpenAI-Compatible Servers
+
+These three paths overlap at the protocol level, but they are different
+provider choices in keep:
+
+| Use case | keep provider | Typical config |
+|----------|---------------|----------------|
+| Direct OpenAI API | `openai` | `OPENAI_API_KEY` |
+| OpenRouter hosted routing layer | `openrouter` | `OPENROUTER_API_KEY` |
+| Local or self-hosted OpenAI-compatible server (`llama-server`, vLLM, LM Studio, LocalAI) | `openai` | `name = "openai"` plus `base_url = "http://..."` |
+
+- Choose **`openai`** when you want OpenAI's API directly.
+- Choose **`openrouter`** when you want OpenRouter's routing, prefixed model names such as `openai/gpt-4o-mini`, or OpenRouter-specific headers.
+- Choose **`openai` + `base_url`** when you are talking to a local or self-hosted server that implements the OpenAI API. This is the path for **llama-server** (llama.cpp), **vLLM**, **LM Studio**, and similar servers.
+- Do not use `openai` with `base_url = "https://openrouter.ai/api/v1"` in keep. OpenRouter is a first-class provider because its config, model naming, and headers differ from direct OpenAI and local compatible servers.
+
+Auto-detection priority follows the same separation:
+
+1. Direct provider keys (`VOYAGE_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`)
+2. `OPENROUTER_API_KEY`
+3. Local providers such as Ollama or MLX
 
 ### Local MLX Providers (Apple Silicon)
 
@@ -177,6 +206,8 @@ Any provider that works with keep (Ollama, MLX, API-based) works with Claude Des
 | **Anthropic** | Summarization | `claude-3-haiku-20240307` (default, $0.25/MTok), `claude-3-5-haiku-20241022` |
 | **OpenAI** | Embeddings | `text-embedding-3-small` (default), `text-embedding-3-large` |
 | **OpenAI** | Summarization | `gpt-4o-mini` (default), `gpt-4o` |
+| **OpenRouter** | Embeddings | `openai/text-embedding-3-small` (default), `openai/text-embedding-3-large` |
+| **OpenRouter** | Summarization | `openai/gpt-4o-mini` (default), other OpenRouter model slugs |
 | **Gemini** | Embeddings | `text-embedding-004` (default) |
 | **Gemini** | Summarization | `gemini-2.5-flash` (default), `gemini-2.5-pro` |
 | **Mistral** | Embeddings | `mistral-embed` (default, 1024 dims) |
@@ -193,10 +224,13 @@ Any provider that works with keep (Ollama, MLX, API-based) works with Claude Des
 
 ### OpenAI-Compatible Local Servers
 
-The OpenAI provider supports a `base_url` parameter that redirects it to any
+The `openai` provider supports a `base_url` parameter that redirects it to any
 server implementing the OpenAI API (``/v1/embeddings``, ``/v1/chat/completions``).
 This works with **llama-server** (llama.cpp), **vLLM**, **LM Studio**, **LocalAI**,
 and similar tools.  No API key is required for local servers.
+
+This section is for **local/self-hosted OpenAI-compatible servers**, not OpenRouter.
+For OpenRouter, use `name = "openrouter"` with `OPENROUTER_API_KEY`.
 
 Each model needs its own server process (llama-server binds one model per port):
 
@@ -249,7 +283,9 @@ KEEP_TAG_PROJECT=myapp               # Auto-apply tags (any KEEP_TAG_* variable)
 KEEP_VERBOSE=1                       # Debug logging to stderr
 KEEP_NO_SETUP=1                      # Skip auto-install of tool integrations
 OLLAMA_HOST=http://localhost:11434   # Ollama server URL (auto-detected)
+OPENROUTER_API_KEY=...               # For OpenRouter (embeddings + summarization)
 OPENAI_API_KEY=sk-...                # For OpenAI (embeddings + summarization)
+KEEP_OPENAI_API_KEY=sk-...           # Explicit OpenAI override used by keep
 GEMINI_API_KEY=...                   # For Gemini (embeddings + summarization)
 GOOGLE_CLOUD_PROJECT=my-project      # Vertex AI via Workload Identity / ADC
 GOOGLE_CLOUD_LOCATION=us-east1       # Vertex AI region (default: us-east1)

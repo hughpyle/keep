@@ -60,6 +60,15 @@ EMBEDDING_PROVIDERS: list[dict[str, Any]] = [
         "env_keys": ["MISTRAL_API_KEY"],
         "env_hint": "MISTRAL_API_KEY",
     },
+    {
+        "key": "openrouter",
+        "name": "OpenRouter",
+        "model": "openai/text-embedding-3-small",
+        "provider": "openrouter",
+        "env_keys": ["OPENROUTER_API_KEY"],
+        "env_hint": "OPENROUTER_API_KEY",
+        "show_when_available_only": True,
+    },
 ]
 
 SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
@@ -99,6 +108,16 @@ SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
         "provider": "mistral",
         "env_keys": ["MISTRAL_API_KEY"],
         "env_hint": "MISTRAL_API_KEY",
+    },
+    {
+        "key": "openrouter",
+        "name": "OpenRouter",
+        "model_display": "openai/gpt-4o-mini",
+        "model": "openai/gpt-4o-mini",
+        "provider": "openrouter",
+        "env_keys": ["OPENROUTER_API_KEY"],
+        "env_hint": "OPENROUTER_API_KEY",
+        "show_when_available_only": True,
     },
 ]
 
@@ -179,6 +198,8 @@ def _detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, A
         for p in EMBEDDING_PROVIDERS:
             display = f"{p['name']} ({p['model']})"
             available = _has_env(*p["env_keys"])
+            if p.get("show_when_available_only") and not available:
+                continue
             params = {"model": p["model"]} if p["model"] else {}
             if current:
                 is_default = current == p["provider"]
@@ -274,6 +295,8 @@ def _detect_summarization_choices(current: Optional[str] = None) -> list[dict[st
         for p in SUMMARIZATION_PROVIDERS:
             display = f"{p['name']} ({p['model_display']})" if p["model_display"] else p["name"]
             available = _has_env(*p["env_keys"])
+            if p.get("show_when_available_only") and not available:
+                continue
             params = {"model": p["model"]} if p["model"] else {}
             if current:
                 is_default = current == p["provider"]
@@ -517,7 +540,7 @@ def _run_interactive_setup(
     else:
         print("  No embedding provider available. You need one of:", file=sys.stderr)
         print("    - Install Ollama: https://ollama.com  (easiest)", file=sys.stderr)
-        print("    - Set OPENAI_API_KEY or GEMINI_API_KEY", file=sys.stderr)
+        print("    - Set OPENAI_API_KEY, GEMINI_API_KEY, or OPENROUTER_API_KEY", file=sys.stderr)
         print("    - uv tool install 'keep-skill[local]'", file=sys.stderr)
         print(file=sys.stderr)
         print("  Set one up and run `keep` again.", file=sys.stderr)

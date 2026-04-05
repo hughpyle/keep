@@ -318,6 +318,7 @@ Generate vector representations for semantic search.
 - **gemini**: API-based, Google (GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT for Vertex AI)
 - **voyage**: API-based, Anthropic's recommended partner (VOYAGE_API_KEY)
 - **openai**: API-based, high quality (OPENAI_API_KEY)
+- **openrouter**: API-based routing layer over multiple model providers (OPENROUTER_API_KEY)
 - **mistral**: API-based (MISTRAL_API_KEY)
 - **ollama**: Local server, auto-detected, any model (OLLAMA_HOST)
 - **sentence-transformers**: Local, CPU/GPU, no API key
@@ -325,11 +326,17 @@ Generate vector representations for semantic search.
 
 Dimension determined by model. Must be consistent across indexing and queries.
 
+`openai` also supports `base_url` for local or self-hosted OpenAI-compatible
+servers such as llama.cpp `llama-server`, vLLM, LM Studio, or LocalAI. That is
+distinct from the `openrouter` provider, which has its own model naming and
+headers even though both use the OpenAI SDK underneath.
+
 ### Summarization Providers
 Generate human-readable summaries from content.
 
 - **anthropic**: LLM-based, cost-effective option (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)
 - **openai**: LLM-based, high quality (OPENAI_API_KEY)
+- **openrouter**: LLM-based routing layer over multiple hosted models (OPENROUTER_API_KEY)
 - **gemini**: LLM-based, Google (GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT for Vertex AI)
 - **mistral**: LLM-based (MISTRAL_API_KEY)
 - **ollama**: LLM-based, local server, auto-detected (OLLAMA_HOST)

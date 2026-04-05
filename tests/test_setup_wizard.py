@@ -56,6 +56,7 @@ class TestDetectEmbeddingChoices:
         monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("KEEP_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
@@ -71,6 +72,7 @@ class TestDetectEmbeddingChoices:
         monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("KEEP_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
@@ -86,6 +88,7 @@ class TestDetectEmbeddingChoices:
         monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("KEEP_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
@@ -96,6 +99,25 @@ class TestDetectEmbeddingChoices:
         assert openai[0]["available"] is False
         assert "requires" in openai[0]["hint"]
 
+    def test_openrouter_shown_only_when_key_present(self, monkeypatch):
+        monkeypatch.setattr("keep.setup_wizard._detect_ollama", lambda: None)
+        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("KEEP_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+        choices = _detect_embedding_choices()
+        assert not any("OpenRouter" in c["name"] for c in choices)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        choices = _detect_embedding_choices()
+        openrouter = [c for c in choices if "OpenRouter" in c["name"]]
+        assert len(openrouter) == 1
+        assert openrouter[0]["available"] is True
+
 
 class TestDetectSummarizationChoices:
     """Tests for summarization choice detection."""
@@ -105,6 +127,7 @@ class TestDetectSummarizationChoices:
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("KEEP_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
@@ -113,6 +136,26 @@ class TestDetectSummarizationChoices:
         truncate = [c for c in choices if "truncate" in c["name"]]
         assert len(truncate) == 1
         assert truncate[0]["available"] is True
+
+    def test_openrouter_summarization_shown_only_when_key_present(self, monkeypatch):
+        monkeypatch.setattr("keep.setup_wizard._detect_ollama", lambda: None)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("KEEP_OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+
+        choices = _detect_summarization_choices()
+        assert not any("OpenRouter" in c["name"] for c in choices)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        choices = _detect_summarization_choices()
+        openrouter = [c for c in choices if "OpenRouter" in c["name"]]
+        assert len(openrouter) == 1
+        assert openrouter[0]["available"] is True
 
 
 class TestRunWizardNonInteractive:
