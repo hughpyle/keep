@@ -301,6 +301,8 @@ def render_flow_response(
     # on the text surface. Prompt expansion still consumes bindings directly;
     # this only affects rendered flow/tool output.
     from .const import FLOW_NOTE_FIRST_RENDER_STATES
+    # Only match direct single-step flows; compound flows that transition
+    # through `get` use the generic renderer to avoid masking intermediate data.
     state_name = result.history[-1] if len(result.history) == 1 else None
     if state_name in FLOW_NOTE_FIRST_RENDER_STATES and result.bindings and remaining > 0:
         binding_render = _render_context_from_flow_bindings(result.bindings, kp=keeper)

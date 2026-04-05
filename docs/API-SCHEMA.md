@@ -211,11 +211,11 @@ The exact attached sections depend on what exists for the requested note. Tags a
 
 **Examples:**
 ```
-keep_flow(state="get", params={item_id:"now")              # current working context
-keep_flow(state="get", params={item_id:"%a1b2c3")          # specific item
-keep_flow(state="get", params={item_id:"%a1b2c3@V{1}")    # previous version
-keep_flow(state="get", params={item_id:"%a1b2c3@P{1}")    # first structural part
-keep_flow(state="get", params={item_id:".tag/act")         # tag description doc
+keep_flow(state="get", params={id:"now"})                   # current working context
+keep_flow(state="get", params={id:"%a1b2c3"})              # specific note
+keep_flow(state="get", params={id:"%a1b2c3@V{1}"})        # previous version
+keep_flow(state="get", params={id:"%a1b2c3@P{1}"})        # first structural part
+keep_flow(state="get", params={id:".tag/act"})             # tag description doc
 ```
 
 ---

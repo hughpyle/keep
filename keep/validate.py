@@ -14,6 +14,8 @@ will accept the doc.
 from __future__ import annotations
 
 import re
+
+from .const import STATE_FIND_DEEP, STATE_GET_CONTEXT, STATE_QUERY_RESOLVE
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -580,9 +582,9 @@ def _check_action_name(result: ValidationResult, name: str, loc: str) -> None:
 # Entry points: which state docs are reachable from which caller paths.
 _STATE_ENTRY_POINTS: dict[str, str] = {
     "after-write": "put()",
-    "get": "get()",
-    "find-deep": "find(deep)",
-    "query-resolve": "query",
+    STATE_GET_CONTEXT: "get()",
+    STATE_FIND_DEEP: "find(deep)",
+    STATE_QUERY_RESOLVE: "query",
 }
 
 

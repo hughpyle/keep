@@ -18,6 +18,7 @@ import pytest
 from keep.api import Keeper
 from keep.config import StoreConfig
 from keep.daemon_server import DaemonServer
+from keep.const import STATE_DELETE, STATE_PUT, STATE_TAG
 from keep.flow_client import (
     delete_item,
     find_items,
@@ -171,16 +172,16 @@ def test_flow_host_contract_now_semantics(flow_host: FlowHostProtocol):
 
 
 def test_flow_host_contract_named_writable_flows(flow_host: FlowHostProtocol):
-    result = flow_host.run_flow("put", params={"content": "via flow", "id": "flow-contract"})
+    result = flow_host.run_flow(STATE_PUT, params={"content": "via flow", "id": "flow-contract"})
     assert result.status == "done"
     assert get_item(flow_host, "flow-contract") is not None
 
-    result = flow_host.run_flow("tag", params={"id": "flow-contract", "tags": {"status": "queued"}})
+    result = flow_host.run_flow(STATE_TAG, params={"id": "flow-contract", "tags": {"status": "queued"}})
     assert result.status == "done"
     tagged = get_item(flow_host, "flow-contract")
     assert tagged is not None
     assert tagged.tags.get("status") == "queued"
 
-    result = flow_host.run_flow("delete", params={"id": "flow-contract"})
+    result = flow_host.run_flow(STATE_DELETE, params={"id": "flow-contract"})
     assert result.status == "done"
     assert get_item(flow_host, "flow-contract") is None

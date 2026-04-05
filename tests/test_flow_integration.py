@@ -12,6 +12,7 @@ import pytest
 from unittest.mock import patch
 
 from keep.api import Keeper, FindResults
+from keep.const import STATE_DELETE, STATE_MOVE, STATE_PUT, STATE_TAG
 from keep.state_doc import parse_state_doc
 from keep.state_doc_runtime import run_flow
 
@@ -784,23 +785,23 @@ class TestFlowValidation:
     """Verify that missing required params produce error bindings, not silent nulls."""
 
     def test_put_missing_content(self, kp):
-        r = kp.run_flow_command("put", params={}, budget=1)
+        r = kp.run_flow_command(STATE_PUT, params={}, budget=1)
         assert r.data.get("stored", {}).get("error")
         assert "content" in r.data["stored"]["error"]
 
     def test_tag_missing_tags(self, kp):
-        r = kp.run_flow_command("tag", params={"id": "x"}, budget=1)
+        r = kp.run_flow_command(STATE_TAG, params={"id": "x"}, budget=1)
         tagged = r.data.get("tagged", {})
         # Action skips gracefully when no tags provided
         assert tagged.get("skipped") or tagged.get("error")
 
     def test_delete_missing_id(self, kp):
-        r = kp.run_flow_command("delete", params={}, budget=1)
+        r = kp.run_flow_command(STATE_DELETE, params={}, budget=1)
         assert r.data.get("result", {}).get("error")
         assert "id" in r.data["result"]["error"]
 
     def test_move_missing_name(self, kp):
-        r = kp.run_flow_command("move", params={}, budget=1)
+        r = kp.run_flow_command(STATE_MOVE, params={}, budget=1)
         assert r.data.get("moved", {}).get("error")
         assert "name" in r.data["moved"]["error"]
 

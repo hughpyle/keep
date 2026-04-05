@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from keep.const import STATE_FIND_DEEP
 from keep.state_doc import parse_state_doc
 from keep.state_doc_runtime import FlowResult, decode_cursor, run_flow
 
@@ -493,18 +494,18 @@ class TestMakeStateDocLoader:
         from keep.state_doc_runtime import make_state_doc_loader
 
         class FakeNote:
-            id = ".state/find-deep"
+            id = f".state/{STATE_FIND_DEEP}"
             summary = "match: sequence\nrules:\n  - return: error"
             tags = {}
 
         class FakeEnv:
             def get(self, id):
-                if id == ".state/find-deep":
+                if id == f".state/{STATE_FIND_DEEP}":
                     return FakeNote()
                 return None
 
         loader = make_state_doc_loader(FakeEnv())
-        result = run_flow("find-deep", {}, load_state_doc=loader, run_action=_make_runner())
+        result = run_flow(STATE_FIND_DEEP, {}, load_state_doc=loader, run_action=_make_runner())
         assert result.status == "error"
 
     def test_empty_store_summary_returns_none(self):

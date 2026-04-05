@@ -501,6 +501,10 @@ class ContextResolutionMixin:
         deep: bool = False,
     ) -> PromptResult:
         """Run a state-doc flow and return a PromptResult with bindings."""
+        # No early return for empty text — state docs handle missing params
+        # via their own `when` guards, and short-circuiting here would bypass
+        # context assembly (e.g. `get` note-first rendering) for prompts that
+        # use non-query state docs.
         params: dict[str, Any] = {}
         context_id = id or "now"
         if context_id == "now":

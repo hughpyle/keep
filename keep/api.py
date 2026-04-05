@@ -67,6 +67,7 @@ from .types import (
     repair_surrogate_text,
 )
 from .context_cache import ContextCache
+from .const import STATE_PROMPT
 from .flow_client import (
     delete_item as flow_delete_item,
     find_items as flow_find_items,
@@ -5122,7 +5123,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         )
 
         # Prompt rendering: render_prompt + expand_prompt as a flow command
-        if state == "prompt":
+        if state == STATE_PROMPT:
             p = params or {}
             name = p.get("name", "")
             # list mode: return available prompts
@@ -5162,7 +5163,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if budget is None:
             budget = self._config.budget_per_flow
 
-        if state_doc_yaml is None and state != "prompt":
+        if state_doc_yaml is None and state != STATE_PROMPT:
             self.ensure_sysdocs()
 
         env = LocalFlowEnvironment(self)

@@ -12,7 +12,9 @@ import pytest
 
 from keep.api import Keeper
 from keep.config import StoreConfig
-from keep.flow_client import (
+from keep.const import (
+    STATE_COMPAT_FIND,
+    STATE_COMPAT_GET_ITEM,
     STATE_DELETE,
     STATE_PUT,
     STATE_TAG,
@@ -77,17 +79,17 @@ def test_keeper_public_memory_methods_delegate_via_run_flow(kp):
 
 
 def test_named_writable_flows_apply_effects(kp):
-    result = kp.run_flow("put", params={"content": "via flow", "id": "flow-note"})
+    result = kp.run_flow(STATE_PUT, params={"content": "via flow", "id": "flow-note"})
     assert result.status == "done"
     assert kp.get("flow-note") is not None
 
-    result = kp.run_flow("tag", params={"id": "flow-note", "tags": {"status": "open"}})
+    result = kp.run_flow(STATE_TAG, params={"id": "flow-note", "tags": {"status": "open"}})
     assert result.status == "done"
     tagged = kp.get("flow-note")
     assert tagged is not None
     assert tagged.tags.get("status") == "open"
 
-    result = kp.run_flow("delete", params={"id": "flow-note"})
+    result = kp.run_flow(STATE_DELETE, params={"id": "flow-note"})
     assert result.status == "done"
     assert kp.get("flow-note") is None
 
@@ -114,7 +116,7 @@ def test_remote_keeper_public_memory_methods_delegate_via_run_flow(tmp_path: Pat
 
     def fake_run_flow(state, **kwargs):
         calls.append(state)
-        if state == "compat-get-item":
+        if state == STATE_COMPAT_GET_ITEM:
             item_id = kwargs.get("params", {}).get("id", "fh-remote")
             if item_id == "missing":
                 return FlowResult(status="done", data={"item": None}, ticks=1)
@@ -130,7 +132,7 @@ def test_remote_keeper_public_memory_methods_delegate_via_run_flow(tmp_path: Pat
                 bindings={"stored": {"id": params.get("id", "fh-remote"), "summary": params.get("content", ""), "tags": params.get("tags", {}) or {}}},
                 ticks=1,
             )
-        if state == "compat-find":
+        if state == STATE_COMPAT_FIND:
             return FlowResult(
                 status="done",
                 data={

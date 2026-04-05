@@ -17,7 +17,7 @@ import typer
 
 from .daemon_client import get_port as _daemon_get_port
 from .daemon_client import http_request as _http
-from .const import DAEMON_PORT_FILE, DAEMON_TOKEN_FILE
+from .const import DAEMON_PORT_FILE, DAEMON_TOKEN_FILE, STATE_PROMPT
 
 app = typer.Typer(
     name="keep",
@@ -1248,7 +1248,7 @@ def prompt(
 
     if list_prompts or not name:
         # List prompts via flow
-        data = _post(port, "/v1/flow", {"state": "prompt", "params": {"list": True}})
+        data = _post(port, "/v1/flow", {"state": STATE_PROMPT, "params": {"list": True}})
         prompts = data.get("data", {}).get("prompts", [])
         if not prompts:
             typer.echo("No agent prompts available.", err=True)
@@ -1267,7 +1267,7 @@ def prompt(
             tags_dict[k] = v
 
     # Render prompt via flow
-    data = _post(port, "/v1/flow", {"state": "prompt", "params": {
+    data = _post(port, "/v1/flow", {"state": STATE_PROMPT, "params": {
         "name": name,
         "text": text,
         "id": id,

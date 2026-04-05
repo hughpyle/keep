@@ -10,11 +10,21 @@ See docs/design/BUILTIN-STATE-DOCS.md for the full spec.
 
 from __future__ import annotations
 
+from .const import (
+    STATE_DELETE,
+    STATE_FIND_DEEP,
+    STATE_GET_CONTEXT,
+    STATE_MOVE,
+    STATE_PUT,
+    STATE_QUERY_RESOLVE,
+    STATE_TAG,
+)
+
 BUILTIN_STATE_DOCS: dict[str, str] = {
     # -----------------------------------------------------------------
     # Simple operations (thin wrappers for flow-based access)
     # -----------------------------------------------------------------
-    "put": """\
+    STATE_PUT: """\
 match: sequence
 rules:
   - id: stored
@@ -30,7 +40,7 @@ rules:
   - return: done
 """,
 
-    "tag": """\
+    STATE_TAG: """\
 match: sequence
 rules:
   - id: tagged
@@ -44,7 +54,7 @@ rules:
   - return: done
 """,
 
-    "delete": """\
+    STATE_DELETE: """\
 match: sequence
 rules:
   - id: result
@@ -55,7 +65,7 @@ rules:
   - return: done
 """,
 
-    "move": """\
+    STATE_MOVE: """\
 match: sequence
 rules:
   - id: moved
@@ -102,7 +112,7 @@ post:
     # -----------------------------------------------------------------
     # Read path: context assembly
     # -----------------------------------------------------------------
-    "get": """\
+    STATE_GET_CONTEXT: """\
 match: all
 rules:
   - id: similar
@@ -146,7 +156,7 @@ post:
     # -----------------------------------------------------------------
     # Read path: query resolution
     # -----------------------------------------------------------------
-    "query-resolve": """\
+    STATE_QUERY_RESOLVE: """\
 match: sequence
 rules:
   - id: search
@@ -284,7 +294,7 @@ rules:
     # -----------------------------------------------------------------
     # Read path: deep find (search + edge traversal)
     # -----------------------------------------------------------------
-    "find-deep": """\
+    STATE_FIND_DEEP: """\
 match: sequence
 rules:
   - id: search
@@ -374,7 +384,7 @@ rules:
       tag: duplicates
 """,
     },
-    "get": {
+    STATE_GET_CONTEXT: {
         "openclaw": """\
 order: before:similar
 rules:

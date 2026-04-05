@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from keep.const import STATE_DELETE, STATE_PUT, STATE_QUERY_RESOLVE
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -62,7 +64,7 @@ class TestKeepFlow:
             "data": {"id": "test-123"},
             "bindings": {}, "history": [], "cursor": None, "tried_queries": [],
         })
-        result = await keep_flow(state="put", params={"content": "hello"})
+        result = await keep_flow(state=STATE_PUT, params={"content": "hello"})
         parsed = json.loads(result)
         assert parsed["status"] == "done"
         assert parsed["data"]["id"] == "test-123"
@@ -77,7 +79,7 @@ class TestKeepFlow:
             "bindings": {}, "history": [],
         })
         result = await keep_flow(
-            state="query-resolve", params={"query": "test"}, budget=3,
+            state=STATE_QUERY_RESOLVE, params={"query": "test"}, budget=3,
         )
         parsed = json.loads(result)
         assert parsed["status"] == "stopped"
@@ -90,7 +92,7 @@ class TestKeepFlow:
     async def test_flow_error(self, mock_daemon):
         from keep.mcp import keep_flow
         mock_daemon.return_value = (500, {"error": "bad params"})
-        result = await keep_flow(state="put")
+        result = await keep_flow(state=STATE_PUT)
         assert "Error" in result
 
     @pytest.mark.asyncio
@@ -101,7 +103,7 @@ class TestKeepFlow:
             "data": None, "bindings": {}, "history": [],
             "cursor": None, "tried_queries": [],
         })
-        result = await keep_flow(state="delete", params={"id": "x"})
+        result = await keep_flow(state=STATE_DELETE, params={"id": "x"})
         parsed = json.loads(result)
         assert "data" not in parsed
 
@@ -114,7 +116,7 @@ class TestKeepFlow:
             "cursor": None, "tried_queries": [],
             "rendered": "Rendered output text",
         })
-        result = await keep_flow(state="query-resolve", token_budget=4000)
+        result = await keep_flow(state=STATE_QUERY_RESOLVE, token_budget=4000)
         assert result == "Rendered output text"
         # Verify token_budget was sent in the request
         call_body = mock_daemon.call_args[0][3]  # body arg
@@ -137,7 +139,7 @@ class TestKeepFlow:
                 }),
             ]
 
-            result = await keep_flow(state="put", params={"content": "hello"})
+            result = await keep_flow(state=STATE_PUT, params={"content": "hello"})
 
         parsed = json.loads(result)
         assert parsed["status"] == "done"

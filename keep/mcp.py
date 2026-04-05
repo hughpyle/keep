@@ -19,6 +19,7 @@ import sys
 from typing import Annotated, Any, Optional
 from urllib.parse import quote, unquote
 
+from .const import STATE_PROMPT
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
 from mcp.types import (
@@ -93,7 +94,7 @@ def _get(path: str) -> tuple[int, dict]:
 def _list_agent_prompt_metadata(*, suppress_errors: bool = False) -> list[dict[str, Any]]:
     """Return agent prompt metadata from the daemon's prompt flow."""
     try:
-        status, resp = _post("/v1/flow", {"state": "prompt", "params": {"list": True}})
+        status, resp = _post("/v1/flow", {"state": STATE_PROMPT, "params": {"list": True}})
     except Exception as exc:
         if suppress_errors:
             logger.warning("MCP prompt discovery unavailable: %s", exc)
@@ -195,7 +196,7 @@ class KeepFastMCP(FastMCP):
                         continue
                 flow_params[arg] = value
 
-        status, resp = _post("/v1/flow", {"state": "prompt", "params": flow_params})
+        status, resp = _post("/v1/flow", {"state": STATE_PROMPT, "params": flow_params})
         if status != 200:
             raise ValueError(resp.get("error", "unknown"))
 
@@ -528,7 +529,7 @@ async def keep_prompt(
         if token_budget:
             flow_params["token_budget"] = token_budget
 
-    status, resp = _post("/v1/flow", {"state": "prompt", "params": flow_params})
+    status, resp = _post("/v1/flow", {"state": STATE_PROMPT, "params": flow_params})
     if status != 200:
         error = f"Error: {resp.get('error', 'unknown')}"
         return CallToolResult(

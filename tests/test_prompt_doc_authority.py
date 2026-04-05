@@ -1,6 +1,7 @@
 """Regression tests for store-backed prompt and state doc authority."""
 
 from keep.api import Keeper
+from keep.const import STATE_FIND_DEEP, STATE_PROMPT
 from keep.flow_env import LocalFlowEnvironment
 from keep.state_doc_runtime import FlowResult
 from keep.state_doc_runtime import make_action_runner
@@ -22,7 +23,7 @@ def test_render_prompt_requires_state_for_dynamic_prompt(mock_providers, tmp_pat
         tags={"category": "system", "context": "prompt"},
     )
 
-    result = kp.run_flow_command("prompt", params={"name": "test-dynamic"})
+    result = kp.run_flow_command(STATE_PROMPT, params={"name": "test-dynamic"})
 
     assert result.status == "error"
     assert "no state tag" in str(result.data.get("error", "")).lower()
@@ -31,7 +32,7 @@ def test_render_prompt_requires_state_for_dynamic_prompt(mock_providers, tmp_pat
 def test_prompt_list_bootstraps_on_fresh_store(mock_providers, tmp_path):
     kp = Keeper(store_path=tmp_path)
 
-    result = kp.run_flow_command("prompt", params={"list": True})
+    result = kp.run_flow_command(STATE_PROMPT, params={"list": True})
 
     assert result.status == "done"
     prompts = result.data.get("prompts", [])
@@ -63,7 +64,7 @@ def test_prompt_list_normalizes_mcp_prompt_tag_variants(mock_providers, tmp_path
         },
     )
 
-    result = kp.run_flow_command("prompt", params={"list": True})
+    result = kp.run_flow_command(STATE_PROMPT, params={"list": True})
 
     assert result.status == "done"
     prompts = {prompt["name"]: prompt for prompt in result.data.get("prompts", [])}
@@ -85,7 +86,7 @@ def test_prompt_list_normalizes_json_encoded_mcp_prompt_tag(mock_providers, tmp_
         },
     )
 
-    result = kp.run_flow_command("prompt", params={"list": True})
+    result = kp.run_flow_command(STATE_PROMPT, params={"list": True})
 
     assert result.status == "done"
     prompts = {prompt["name"]: prompt for prompt in result.data.get("prompts", [])}
@@ -98,7 +99,7 @@ def test_query_prompt_without_text_renders_without_running_query_resolution(
     kp = Keeper(store_path=tmp_path)
     _ensure_system_docs(kp)
 
-    result = kp.run_flow_command("prompt", params={"name": "query"})
+    result = kp.run_flow_command(STATE_PROMPT, params={"name": "query"})
 
     assert result.status == "done"
     text = result.data.get("text", "")
@@ -113,7 +114,7 @@ def test_query_prompt_uses_find_deep_state(mock_providers, tmp_path):
     prompt_doc = kp.get(".prompt/agent/query")
 
     assert prompt_doc is not None
-    assert prompt_doc.tags.get("state") == "find-deep"
+    assert prompt_doc.tags.get("state") == STATE_FIND_DEEP
 
 
 def test_prompt_render_tolerates_ambiguous_stopped_flow(mock_providers, tmp_path):
@@ -123,7 +124,7 @@ def test_prompt_render_tolerates_ambiguous_stopped_flow(mock_providers, tmp_path
     original = kp.run_flow_command
 
     def _patched(state, params=None, **kwargs):
-        if state == "find-deep":
+        if state == STATE_FIND_DEEP:
             return FlowResult(
                 status="stopped",
                 bindings={
