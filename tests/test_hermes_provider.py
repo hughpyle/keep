@@ -5,6 +5,7 @@ Tests cover the full MemoryProvider protocol surface.
 """
 
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -50,6 +51,14 @@ class TestLifecycle:
         p.initialize("s1", hermes_home=str(tmp_path), platform="cli")
         p.shutdown()
         p.shutdown()  # second call should not raise
+
+    def test_initialize_keeps_working_when_daemon_start_fails(self, mock_providers, tmp_path):
+        p = KeepMemoryProvider()
+        with patch("keep.daemon_client.get_port", side_effect=SystemExit(1)):
+            p.initialize("s1", hermes_home=str(tmp_path), platform="cli")
+        assert p._setup_required is False
+        assert p._keeper is not None
+        p.shutdown()
 
 
 class TestSystemPrompt:

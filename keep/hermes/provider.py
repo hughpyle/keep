@@ -211,11 +211,10 @@ class KeepMemoryProvider:
             logger.debug("Keep skipped: cron/flush context")
             return
 
-        # Ensure the daemon is running for background processing.
-        # If setup is required, skip Keeper creation — the store isn't ready.
+        # Try to start the daemon for background processing, but decide
+        # setup-required from the actual Keeper config rather than
+        # get_port() exit paths.
         self._ensure_daemon()
-        if self._setup_required:
-            return
 
         # Create in-process Keeper
         try:
@@ -225,6 +224,12 @@ class KeepMemoryProvider:
                 store_path=self._store_path,
                 defer_startup_maintenance=True,
             )
+            if self._keeper.config.embedding is None:
+                self._setup_required = True
+                self._keeper.close()
+                self._keeper = None
+                logger.warning("Keep store not configured for this Hermes profile")
+                return
             # Ensure system docs (prompts, library, now) are present before
             # first render.  Deferred maintenance skips this on fresh stores.
             self._keeper.ensure_sysdocs()
@@ -567,8 +572,7 @@ class KeepMemoryProvider:
             from keep.daemon_client import get_port
             get_port(self._store_path)
         except SystemExit:
-            self._setup_required = True
-            logger.warning("Keep daemon not available (needs setup)")
+            logger.warning("Keep daemon unavailable; continuing without background daemon")
         except Exception as e:
             logger.debug("Keep daemon check failed: %s", e)
 

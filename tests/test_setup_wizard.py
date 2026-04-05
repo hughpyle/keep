@@ -109,11 +109,11 @@ class TestDetectEmbeddingChoices:
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
-        choices = _detect_embedding_choices()
+        choices = detect_embedding_choices()
         assert not any("OpenRouter" in c["name"] for c in choices)
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-        choices = _detect_embedding_choices()
+        choices = detect_embedding_choices()
         openrouter = [c for c in choices if "OpenRouter" in c["name"]]
         assert len(openrouter) == 1
         assert openrouter[0]["available"] is True
@@ -148,11 +148,11 @@ class TestDetectSummarizationChoices:
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
 
-        choices = _detect_summarization_choices()
+        choices = detect_summarization_choices()
         assert not any("OpenRouter" in c["name"] for c in choices)
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-        choices = _detect_summarization_choices()
+        choices = detect_summarization_choices()
         openrouter = [c for c in choices if "OpenRouter" in c["name"]]
         assert len(openrouter) == 1
         assert openrouter[0]["available"] is True

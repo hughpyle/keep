@@ -178,7 +178,7 @@ def test_find(http):
 
 def test_http_compat_routes_delegate_to_run_flow(daemon):
     server, kp, port = daemon
-    kp._ensure_sysdocs()
+    kp.ensure_sysdocs()
     client = httpx.Client(
         base_url=f"http://127.0.0.1:{port}",
         headers={"Authorization": f"Bearer {server.auth_token}"},

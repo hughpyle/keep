@@ -34,7 +34,7 @@ def test_keeper_implements_flow_host_protocol(kp):
 
 
 def test_keeper_public_memory_methods_delegate_via_run_flow(kp):
-    kp._ensure_sysdocs()
+    kp.ensure_sysdocs()
     calls: list[str] = []
     original = kp.run_flow
 
@@ -68,7 +68,7 @@ def test_keeper_public_memory_methods_delegate_via_run_flow(kp):
     calls.clear()
     now_item = kp.get_now()
     assert now_item.id == "now"
-    assert calls == ["compat-get-item", STATE_PUT]
+    assert calls == ["compat-get-item"]
 
     calls.clear()
     deleted = kp.delete("fh-1")

@@ -248,7 +248,7 @@ def _make_mock_doc(uri, content, content_type, tags=None, metadata=None):
 
 def _keeper_bootstrap_sysdocs(kp):
     """Ensure store-backed system docs exist for flow-backed APIs."""
-    kp._ensure_sysdocs()
+    kp.ensure_sysdocs()
 
 
 def _claimed_flow_items(kp, limit=20):
