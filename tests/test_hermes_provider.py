@@ -70,12 +70,13 @@ class TestSystemPrompt:
         p = KeepMemoryProvider()
         assert p.system_prompt_block() == ""
 
-    def test_returns_header_when_initialized(self, mock_providers, tmp_path):
+    def test_returns_system_doc_when_initialized(self, mock_providers, tmp_path):
         p = KeepMemoryProvider()
         p.initialize("s1", hermes_home=str(tmp_path), platform="cli")
         block = p.system_prompt_block()
-        assert "# Keep Memory" in block
-        assert "Active" in block
+        # The system doc (.prompt/agent/system) is a sysdoc migrated on init
+        assert "Reflective Memory" in block
+        assert "keep_flow" in block
         p.shutdown()
 
     def test_setup_required_message(self, mock_providers, tmp_path):

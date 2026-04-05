@@ -1,5 +1,6 @@
 
-* hermes plugin
+* better item entries per property block
+
 
 * stats rendering
 
@@ -344,3 +345,4 @@ x acp
 . embedding task (document, query)
 . llama-cpp / llama-serve compat, by editing config to specify URL per service
 . openrouter
+. hermes plugin

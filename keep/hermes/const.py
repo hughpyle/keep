@@ -32,12 +32,6 @@ SUMMARIZATION_LABEL = "Summarization"
 
 # -- System prompt blocks ----------------------------------------------------
 
-SYSTEM_PROMPT_HEADER = (
-    "# Keep Memory\n"
-    "Active. Use keep_flow to search, store, and manage "
-    "reflective memory. Use keep_prompt for context-injected prompts."
-)
-
 SYSTEM_PROMPT_SETUP_REQUIRED = (
     "# Keep Memory\n"
     "Configured as Hermes's active external memory provider, but the "
@@ -63,8 +57,8 @@ ROLE_ASSISTANT = "Assistant:"
 
 # -- Prompt names used by lifecycle hooks ------------------------------------
 
-PROMPT_SESSION_START = "session-start"
-PROMPT_QUERY = "query"
+PROMPT_SYSTEM = "system"
+PROMPT_HERMES_ASSEMBLE = "hermes-assemble"
 
 # -- Tool schemas (hermes-specific format) -----------------------------------
 

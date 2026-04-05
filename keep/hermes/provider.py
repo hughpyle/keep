@@ -28,13 +28,13 @@ from keep.hermes.const import (
     FLOW_SCHEMA,
     HELP_SCHEMA,
     KEEP_SKILL_MISSING_ERROR,
-    PROMPT_QUERY,
+    PROMPT_HERMES_ASSEMBLE,
     PROMPT_SCHEMA,
+    PROMPT_SYSTEM,
     ROLE_ASSISTANT,
     ROLE_USER,
     SETUP_COMMAND,
     SUMMARIZATION_LABEL,
-    SYSTEM_PROMPT_HEADER,
     SYSTEM_PROMPT_SETUP_REQUIRED,
     TOOL_ERROR_INACTIVE,
     TOOL_ERROR_SETUP_HINT,
@@ -254,24 +254,24 @@ class KeepMemoryProvider:
         if self._keeper is None:
             return ""
 
+        # Read the stable system prompt doc — persistent instructions for the
+        # agent, not volatile session state.  This is cached for the session
+        # by the host (Hermes), so it must not contain per-turn data.
         try:
-            now = self._keeper.get_now()
-            if now and now.summary and now.summary.strip():
-                body = now.summary
-                # Respect the configured token budget to prevent prompt bloat
+            result = self._keeper.render_prompt(PROMPT_SYSTEM)
+            body_raw = (result.text if result and result.text
+                        else result.prompt if result and result.prompt
+                        else None)
+            if body_raw and body_raw.strip():
+                body = body_raw.strip()
                 max_chars = int(self._system_prompt_token_budget * _MEMORY_CHARS_PER_TOKEN)
-                header_chars = len(SYSTEM_PROMPT_HEADER) + 2  # + "\n\n"
-                remaining = max(200, max_chars - header_chars)
-                if len(body) > remaining:
-                    body = body[:remaining].rsplit("\n", 1)[0] + "\n…"
-                return (
-                    f"{SYSTEM_PROMPT_HEADER}\n\n"
-                    f"{body}"
-                )
+                if len(body) > max_chars:
+                    body = body[:max_chars].rsplit("\n", 1)[0] + "\n…"
+                return body
         except Exception as e:
             logger.debug("Keep system_prompt_block failed: %s", e)
 
-        return SYSTEM_PROMPT_HEADER
+        return ""
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         if self._keeper is None:
@@ -286,7 +286,7 @@ class KeepMemoryProvider:
 
         if not result:
             result = self._render_prompt(
-                PROMPT_QUERY,
+                PROMPT_HERMES_ASSEMBLE,
                 text=query,
                 token_budget=self._prefetch_token_budget,
             )
@@ -301,7 +301,7 @@ class KeepMemoryProvider:
         def _run():
             try:
                 text = self._render_prompt(
-                    PROMPT_QUERY,
+                    PROMPT_HERMES_ASSEMBLE,
                     text=query,
                     token_budget=self._prefetch_token_budget,
                 )

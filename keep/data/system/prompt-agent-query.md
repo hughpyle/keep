@@ -7,7 +7,7 @@ tags:
 ---
 # .prompt/agent/query
 
-Answer questions using retrieved memory context.
+Answer questions using retrieved memory context.  This prompt is used only for specific purpose of **answering a question** from all available context (not for general search and retrieval).
 
 ## Prompt
 
