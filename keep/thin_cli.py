@@ -18,6 +18,7 @@ import typer
 from .daemon_client import get_port as _daemon_get_port
 from .daemon_client import http_request as _http
 from .const import DAEMON_PORT_FILE, DAEMON_TOKEN_FILE, STATE_PROMPT
+from .types import note_display_name
 
 app = typer.Typer(
     name="keep",
@@ -299,7 +300,9 @@ def _render_item_line(item: dict, w: int, id_width: int = 0) -> str:
     score_str = f" ({score:.2f})" if score is not None else ""
     date_str = f" {date}" if date else ""
     prefix_len = len(padded) + len(score_str) + len(date_str) + 2
-    summary = _truncate(item.get("summary", ""), w - prefix_len)
+    summary = note_display_name(
+        tags, item.get("summary", ""), max_len=max(w - prefix_len, 20)
+    )
     return f"{padded}{score_str}{date_str} {summary}"
 
 

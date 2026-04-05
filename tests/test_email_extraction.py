@@ -118,7 +118,7 @@ class TestExtractEmail:
         assert 'carol@example.com' in tags['cc']
         assert 'dave@example.com' in tags['cc']
 
-    def test_display_names_stripped(self, tmp_path, provider):
+    def test_display_names_preserved_as_labeled_refs(self, tmp_path, provider):
         email_file = tmp_path / "test.eml"
         email_file.write_text(textwrap.dedent("""\
             From: "Alice Smith" <alice@example.com>
@@ -130,8 +130,8 @@ class TestExtractEmail:
 
         content, tags, _ = provider._extract_email(email_file)
 
-        assert tags['from'] == 'alice@example.com'
-        assert tags['to'] == 'bob@example.com'
+        assert tags['from'] == 'alice@example.com[[Alice Smith]]'
+        assert tags['to'] == 'bob@example.com[[Bob Jones]]'
 
     def test_addresses_lowercased(self, tmp_path, provider):
         email_file = tmp_path / "test.eml"

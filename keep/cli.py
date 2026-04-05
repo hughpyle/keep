@@ -53,6 +53,7 @@ from .types import (
     SimilarRef,
     VersionRef,
     local_date,
+    note_display_name,
     tag_values,
 )
 from .utils import _text_content_id
@@ -301,9 +302,10 @@ def render_flow_response(
     # on the text surface. Prompt expansion still consumes bindings directly;
     # this only affects rendered flow/tool output.
     from .const import FLOW_NOTE_FIRST_RENDER_STATES
-    # Only match direct single-step flows; compound flows that transition
-    # through `get` use the generic renderer to avoid masking intermediate data.
-    state_name = result.history[-1] if len(result.history) == 1 else None
+    state_name = next(
+        (name for name in reversed(result.history) if name in FLOW_NOTE_FIRST_RENDER_STATES),
+        None,
+    )
     if state_name in FLOW_NOTE_FIRST_RENDER_STATES and result.bindings and remaining > 0:
         binding_render = _render_context_from_flow_bindings(result.bindings, kp=keeper)
         if binding_render:
@@ -591,13 +593,11 @@ def _format_summary_line(item: Item, id_width: int = 0, show_tags: bool = False)
     # Get date in local timezone
     date = local_date(item.tags.get("_created") or item.tags.get("_updated", ""))
 
-    # Truncate summary to fit terminal width, collapse newlines
+    # Truncate display name/summary to fit terminal width, collapse newlines
     cols = _output_width()
     prefix_len = len(padded_id) + len(score_str) + 1 + len(date) + 1  # "id (score) date "
     max_summary = max(cols - prefix_len, 20)
-    summary = item.summary.replace("\n", " ")
-    if len(summary) > max_summary:
-        summary = summary[:max_summary - 3].rsplit(" ", 1)[0] + "..."
+    summary = note_display_name(item.tags, item.summary, max_len=max_summary)
 
     line = f"{padded_id}{score_str} {date} {summary}"
 

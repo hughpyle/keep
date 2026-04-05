@@ -196,6 +196,30 @@ class TestHumanOutput:
 
         assert "file:///doc.md" in output
         assert "A document about testing" in output
+
+    def test_human_item_prefers_name_then_title(self):
+        """List-style human output uses note display-name conventions."""
+        from keep.cli import _format_summary_line
+        from keep.types import Item
+
+        named = Item(
+            id="contact:discord:42",
+            summary="Longer fallback summary",
+            tags={"name": ["Alice", "Alicia"], "title": "Ignored"},
+        )
+        titled = Item(
+            id="doc:1",
+            summary="Fallback summary",
+            tags={"title": ["Old title", "Current title"]},
+        )
+
+        named_output = _format_summary_line(named)
+        titled_output = _format_summary_line(titled)
+
+        assert "Alicia" in named_output
+        assert "Longer fallback summary" not in named_output
+        assert "Current title" in titled_output
+        assert "Fallback summary" not in titled_output
     
     def test_human_item_with_score(self):
         """Human-readable item shows score in full YAML mode."""
@@ -295,6 +319,55 @@ class TestFlowRendering:
         assert "flow: done" in rendered
         assert "---\nid: test-item" in rendered
         assert "\nsimilar:\n" not in rendered
+
+    def test_render_flow_response_get_uses_cli_context_shape_without_keeper(self):
+        from keep.cli import render_flow_response
+
+        result = FlowResult(
+            status="done",
+            ticks=1,
+            history=["get"],
+            bindings={
+                "item": {
+                    "id": "test-item",
+                    "summary": "important fact",
+                    "tags": {"topic": "test"},
+                },
+                "similar": {
+                    "results": [
+                        {"id": "other", "summary": "other fact", "tags": {}},
+                    ]
+                },
+            },
+        )
+
+        rendered = render_flow_response(result, keeper=None)
+
+        assert "flow: done" in rendered
+        assert "---\nid: test-item" in rendered
+        assert "\nsimilar:\n" in rendered
+        assert "other fact" in rendered
+
+    def test_render_flow_response_get_uses_note_first_for_fragment_history(self):
+        from keep.cli import render_flow_response
+
+        result = FlowResult(
+            status="done",
+            ticks=1,
+            history=["openclaw", "get"],
+            bindings={
+                "item": {
+                    "id": "test-item",
+                    "summary": "important fact",
+                    "tags": {"topic": "test"},
+                },
+            },
+        )
+
+        rendered = render_flow_response(result, keeper=None)
+
+        assert "flow: done" in rendered
+        assert "---\nid: test-item" in rendered
 
     def test_render_flow_response_renders_results_binding(self):
         from keep.cli import render_flow_response

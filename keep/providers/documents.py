@@ -56,6 +56,15 @@ _EMAIL_SKIP_HEADERS = frozenset({
 })
 
 
+def _format_email_edge_ref(display_name: str, email_addr: str) -> str:
+    """Format an email edge target as canonical addr with optional label."""
+    addr = (email_addr or "").strip().lower()
+    if not addr:
+        return ""
+    label = " ".join((display_name or "").split()).strip()
+    return f"{addr}[[{label}]]" if label else addr
+
+
 def extract_html_text(html_content: str) -> str:
     """Extract readable text from HTML, removing scripts and styles.
 
@@ -1027,7 +1036,11 @@ class FileDocumentProvider:
         from_header = msg.get('From', '')
         if from_header:
             addrs = email.utils.getaddresses([from_header])
-            from_values = [addr[1].lower() for addr in addrs if addr[1]]
+            from_values = [
+                _format_email_edge_ref(display, addr)
+                for display, addr in addrs
+                if addr
+            ]
             if len(from_values) == 1:
                 tags['from'] = from_values[0]
             elif from_values:
@@ -1037,7 +1050,11 @@ class FileDocumentProvider:
         to_headers = msg.get_all('To', [])
         if to_headers:
             addrs = email.utils.getaddresses(to_headers)
-            to_values = [addr[1].lower() for addr in addrs if addr[1]]
+            to_values = [
+                _format_email_edge_ref(display, addr)
+                for display, addr in addrs
+                if addr
+            ]
             if len(to_values) == 1:
                 tags['to'] = to_values[0]
             elif to_values:
@@ -1047,7 +1064,11 @@ class FileDocumentProvider:
         cc_headers = msg.get_all('Cc', [])
         if cc_headers:
             addrs = email.utils.getaddresses(cc_headers)
-            cc_values = [addr[1].lower() for addr in addrs if addr[1]]
+            cc_values = [
+                _format_email_edge_ref(display, addr)
+                for display, addr in addrs
+                if addr
+            ]
             if len(cc_values) == 1:
                 tags['cc'] = cc_values[0]
             elif cc_values:
@@ -1057,7 +1078,11 @@ class FileDocumentProvider:
         bcc_headers = msg.get_all('Bcc', [])
         if bcc_headers:
             addrs = email.utils.getaddresses(bcc_headers)
-            bcc_values = [addr[1].lower() for addr in addrs if addr[1]]
+            bcc_values = [
+                _format_email_edge_ref(display, addr)
+                for display, addr in addrs
+                if addr
+            ]
             if len(bcc_values) == 1:
                 tags['bcc'] = bcc_values[0]
             elif bcc_values:

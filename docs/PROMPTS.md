@@ -82,7 +82,6 @@ Dynamic agent prompts must reference a state doc via a `state` tag. The state do
 
 ```bash
 keep put "## Prompt
-{intentions}
 {similar}
 Question: {text}
 " --id .prompt/agent/my-query -t state=my-retrieval-flow -t context=prompt

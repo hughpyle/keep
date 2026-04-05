@@ -339,6 +339,38 @@ def set_tag_values(tags: dict[str, Any], key: str, values: list[str]) -> None:
         tags[key] = packed
 
 
+def note_display_name(
+    tags: dict[str, Any] | None,
+    summary: str = "",
+    *,
+    max_len: int = 80,
+) -> str:
+    """Return a compact, single-line display name for a note."""
+    tags = tags or {}
+
+    text = ""
+    for key in ("name", "title"):
+        values = tag_values(tags, key)
+        if values:
+            text = values[-1].strip()
+            if text:
+                break
+
+    if not text:
+        text = (summary or "").strip()
+
+    text = " ".join(text.split())
+    if len(text) <= max_len:
+        return text
+    if max_len <= 1:
+        return text[:max_len]
+
+    clipped = text[: max_len - 1].rstrip()
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0]
+    return clipped.rstrip() + "…"
+
+
 def normalize_tag_map(tags: dict[str, Any]) -> TagMap:
     """Normalize a tag map while preserving key spelling.
 

@@ -307,7 +307,7 @@ rules:
       since: "{params.since}"
       until: "{params.until}"
       offset: "{params.offset}"
-  - when: "search.count == 0"
+  - when: "!has(search.count) || search.count == 0"
     return:
       status: done
       with:

@@ -76,6 +76,27 @@ def test_render_item_line():
     assert "A test item" in line
 
 
+def test_render_item_line_prefers_name_then_title():
+    named = {
+        "id": "contact:discord:42",
+        "tags": {"_updated": "2026-03-26T12:00:00", "name": ["Alice", "Alicia"]},
+        "summary": "Fallback summary",
+    }
+    titled = {
+        "id": "doc:1",
+        "tags": {"_updated": "2026-03-26T12:00:00", "title": ["Old", "Current"]},
+        "summary": "Fallback summary",
+    }
+
+    named_line = _render_item_line(named, 80)
+    titled_line = _render_item_line(titled, 80)
+
+    assert "Alicia" in named_line
+    assert "Fallback summary" not in named_line
+    assert "Current" in titled_line
+    assert "Fallback summary" not in titled_line
+
+
 def test_render_context_minimal():
     data = {
         "item": {"id": "test-1", "summary": "Test summary", "tags": {"topic": "cache"}},

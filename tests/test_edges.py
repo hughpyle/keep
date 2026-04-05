@@ -14,7 +14,33 @@ from pathlib import Path
 
 from keep.api import Keeper
 from keep.document_store import DocumentStore
-from keep.types import EdgeRef
+from keep.types import EdgeRef, note_display_name
+
+
+# ---------------------------------------------------------------------------
+# note_display_name helper
+# ---------------------------------------------------------------------------
+
+
+class TestNoteDisplayName:
+    def test_prefers_last_name_over_title_and_summary(self):
+        assert note_display_name(
+            {"name": ["Alice", "Alice Smith"], "title": "Engineer"},
+            "Longer summary",
+        ) == "Alice Smith"
+
+    def test_falls_back_to_last_title(self):
+        assert note_display_name(
+            {"title": ["Old Title", "Project Plan"]},
+            "Summary",
+        ) == "Project Plan"
+
+    def test_falls_back_to_summary(self):
+        assert note_display_name({}, "Summary text") == "Summary text"
+
+    def test_collapses_newlines_and_truncates(self):
+        result = note_display_name({}, "line one\nline two\nline three", max_len=12)
+        assert result == "line one…"
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +212,101 @@ class TestEdgeIntegration:
         item = kp.get("nate")
         assert item is not None
         assert item.tags.get("_source") == "auto-vivify"
+
+    def test_labeled_edge_ref_sets_name_on_auto_vivified_target(self, kp):
+        self._create_tagdoc(kp, "speaker", "said")
+
+        kp.put(
+            content="Message",
+            id="conv-labeled",
+            summary="Greeting",
+            tags={"speaker": "contact:telegram:42[[Alice]]"},
+        )
+
+        item = kp.get("contact:telegram:42")
+        assert item is not None
+        assert item.tags.get("_source") == "auto-vivify"
+        assert item.tags.get("name") == "Alice"
+
+    def test_labeled_edge_ref_updates_existing_auto_vivified_target(self, kp):
+        self._create_tagdoc(kp, "speaker", "said")
+
+        kp.put(
+            content="First message",
+            id="conv-first",
+            summary="Greeting",
+            tags={"speaker": "contact:telegram:42"},
+        )
+        kp.put(
+            content="Second message",
+            id="conv-second",
+            summary="Follow-up",
+            tags={"speaker": "contact:telegram:42[[Alice]]"},
+        )
+
+        item = kp.get("contact:telegram:42")
+        assert item is not None
+        assert item.tags.get("name") == "Alice"
+
+    def test_labeled_edge_ref_deduplicates_labels_across_predicates_in_one_pass(self, kp):
+        self._create_tagdoc(kp, "speaker", "said")
+        self._create_tagdoc(kp, "author", "authored")
+
+        kp.put(
+            content="Message",
+            id="conv-multi-label",
+            summary="Greeting",
+            tags={
+                "speaker": "contact:telegram:42[[Alice]]",
+                "author": "contact:telegram:42[[Ali]]",
+            },
+        )
+
+        item = kp.get("contact:telegram:42")
+        assert item is not None
+        assert item.tags.get("name") == ["Alice", "Ali"]
+
+    def test_labeled_edge_ref_does_not_mutate_non_autovivified_target(self, kp):
+        self._create_tagdoc(kp, "speaker", "said")
+        kp.put(
+            content="Curated contact note",
+            id="contact:telegram:42",
+            summary="Curated",
+            tags={"topic": "contacts"},
+        )
+
+        kp.put(
+            content="Message",
+            id="conv-curated",
+            summary="Greeting",
+            tags={"speaker": "contact:telegram:42[[Alice]]"},
+        )
+
+        item = kp.get("contact:telegram:42")
+        assert item is not None
+        assert "name" not in item.tags
+
+    def test_edge_refs_use_target_display_name(self, kp):
+        """Edge display prefers target note name/title over raw summary."""
+        self._create_tagdoc(kp, "speaker", "said")
+
+        kp.put(
+            content="Alice contact note",
+            id="contact:telegram:42",
+            summary="Raw summary that should not win",
+            tags={"name": "Alice"},
+        )
+        kp.put(
+            content="Message from Alice",
+            id="conv1",
+            summary="Greeting",
+            tags={"speaker": "contact:telegram:42"},
+        )
+
+        ctx = kp.get_context("conv1")
+        assert "speaker" in ctx.edges
+        assert len(ctx.edges["speaker"]) == 1
+        assert ctx.edges["speaker"][0].summary == "Alice"
 
     def test_auto_vivify_created_inherits_source_created(self, kp):
         """Auto-vivified target _created should inherit the source note timestamp."""

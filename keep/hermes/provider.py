@@ -69,6 +69,13 @@ def _display_path(path: Path) -> str:
         return str(path)
 
 
+def _contact_ref(*, platform: str, user_id: str, user_name: str = "") -> str:
+    """Build a canonical contact ref, optionally labeled with a display name."""
+    target_id = f"contact:{platform}:{user_id}"
+    label = (user_name or "").strip()
+    return f"{target_id}[[{label}]]" if label else target_id
+
+
 # ---------------------------------------------------------------------------
 # Provider
 # ---------------------------------------------------------------------------
@@ -310,7 +317,13 @@ class KeepMemoryProvider:
         self._prefetch_thread.start()
 
     def sync_turn(
-        self, user_content: str, assistant_content: str, *, session_id: str = ""
+        self,
+        user_content: str,
+        assistant_content: str,
+        *,
+        session_id: str = "",
+        user_id: str = "",
+        user_name: str = "",
     ) -> None:
         if self._keeper is None:
             return
@@ -319,6 +332,17 @@ class KeepMemoryProvider:
         turn = self._turn_count
         item_id = self._session_item_id or f"hermes:{self._session_id}"
         tags = dict(self._session_tags)
+        platform = str(tags.get("platform") or "").strip()
+        raw_user_id = str(user_id or "").strip()
+        turn_user_name = str(user_name or "").strip()
+        if raw_user_id:
+            tags["user_id"] = _contact_ref(
+                platform=platform or "hermes",
+                user_id=raw_user_id,
+                user_name=turn_user_name,
+            )
+        if turn_user_name:
+            tags["user_name"] = turn_user_name
 
         def _sync():
             try:
@@ -598,9 +622,22 @@ class KeepMemoryProvider:
 
     def _build_session_tags(self, session_id: str, **kwargs) -> Dict[str, str]:
         tags = {"source": "hermes"}
-        for key in (
-            "platform", "user_id", "agent_identity",
-        ):
+        platform = str(kwargs.get("platform") or "").strip()
+        raw_user_id = str(kwargs.get("user_id") or "").strip()
+        user_name = str(kwargs.get("user_name") or "").strip()
+
+        if platform:
+            tags["platform"] = platform
+        if raw_user_id:
+            tags["user_id"] = _contact_ref(
+                platform=platform or "hermes",
+                user_id=raw_user_id,
+                user_name=user_name,
+            )
+        if user_name:
+            tags["user_name"] = user_name
+
+        for key in ("agent_identity",):
             value = kwargs.get(key)
             if value:
                 tags[key] = str(value)

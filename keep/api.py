@@ -59,7 +59,7 @@ from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, EdgeRef, TagMap,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
-    iter_tag_pairs, set_tag_values, tag_values, parse_ref,
+    iter_tag_pairs, note_display_name, set_tag_values, tag_values, parse_ref,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     is_system_id,
@@ -1627,6 +1627,15 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         edges_to_delete: list[tuple[str, str, str]] = []  # (source_id, predicate, target_id)
         edges_to_add: list[tuple[str, str, str, str, str]] = []  # (source_id, predicate, target_id, inverse, created)
         backfill_checks: list[tuple[str, str]] = []  # (predicate, inverse)
+        target_name_updates: dict[str, list[str]] = {}
+
+        def _queue_target_name(target_id: str, label: str | None) -> None:
+            label = (label or "").strip()
+            if not label:
+                return
+            names = target_name_updates.setdefault(target_id, [])
+            if label not in names:
+                names.append(label)
 
         for key in all_keys:
             td_tags = _get_tagdoc_tags(key)
@@ -1657,13 +1666,15 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             for current_value in sorted(added_values):
                 if not current_value:
                     continue
+                raw_target_id, target_label = parse_ref(current_value)
                 try:
-                    target_id = normalize_id(parse_ref(current_value)[0])
+                    target_id = normalize_id(raw_target_id)
                 except ValueError:
                     logger.debug("Skipping invalid edge target for tag %r: %r", key, current_value)
                     continue
                 if target_id.startswith("."):
                     continue
+                _queue_target_name(target_id, target_label)
                 # Auto-vivify: create target as empty doc if it doesn't exist.
                 # Uses atomic INSERT OR IGNORE to avoid TOCTOU race where a
                 # concurrent writer creates the real document between check
@@ -1674,14 +1685,17 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     or utc_now()
                 )
                 now = utc_now()
+                target_tags = {
+                    "_created": reference_created,
+                    "_updated": now,
+                    "_source": "auto-vivify",
+                }
+                if target_id in target_name_updates:
+                    set_tag_values(target_tags, "name", target_name_updates[target_id])
                 inserted = self._document_store.insert_if_absent(
                     doc_coll, target_id,
                     summary="",
-                    tags={
-                        "_created": reference_created,
-                        "_updated": now,
-                        "_source": "auto-vivify",
-                    },
+                    tags=target_tags,
                     created_at=reference_created,
                 )
                 if inserted:
@@ -1689,17 +1703,37 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                         target_id, doc_coll, target_id,
                         task_type="reindex",
                         metadata={
-                            "tags": {
-                                "_created": reference_created,
-                                "_updated": now,
-                                "_source": "auto-vivify",
-                            },
+                            "tags": target_tags,
                         },
                     )
 
                 created = merged_tags.get("_created") or merged_tags.get("_updated") or utc_now()
                 edges_to_add.append((id, key, target_id, inverse, created))
                 backfill_checks.append((key, inverse))
+
+        if target_name_updates:
+            chroma_coll = self._resolve_chroma_collection()
+            targets = self._document_store.get_many(doc_coll, list(target_name_updates))
+            for target_id, incoming_names in target_name_updates.items():
+                target_doc = targets.get(target_id)
+                if target_doc is None:
+                    continue
+                if target_doc.tags.get("_source") != "auto-vivify":
+                    continue
+                merged_name_values = tag_values(target_doc.tags, "name")
+                changed = False
+                for name in incoming_names:
+                    if name not in merged_name_values:
+                        merged_name_values.append(name)
+                        changed = True
+                if not changed:
+                    continue
+                updated_tags = dict(target_doc.tags)
+                set_tag_values(updated_tags, "name", merged_name_values)
+                self._document_store.update_tags(doc_coll, target_id, updated_tags)
+                self._store.update_tags(
+                    chroma_coll, target_id, casefold_tags_for_index(updated_tags)
+                )
 
         # Execute batched edge mutations
         if edges_to_delete:
@@ -3270,7 +3304,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                         created = local_date(
                             doc.tags.get("_created") or doc.tags.get("_updated") or ""
                         )
-                        summary = doc.summary or ""
+                        summary = note_display_name(doc.tags, doc.summary)
                     _upsert(key, EdgeRef(
                         source_id=target_id, date=created, summary=summary,
                     ))
@@ -3284,7 +3318,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 _upsert(inverse, EdgeRef(
                     source_id=source_id,
                     date=local_date(created),
-                    summary=doc.summary if doc else "",
+                    summary=note_display_name(doc.tags, doc.summary) if doc else "",
                 ), prefer_new=True)
 
         return {

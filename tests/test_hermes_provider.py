@@ -138,6 +138,24 @@ class TestSyncTurn:
         assert item.summary  # non-empty summary (content or auto-generated)
         p.shutdown()
 
+    def test_sync_turn_overlays_turn_user_identity_tags(self, mock_providers, tmp_path):
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="discord",
+                     agent_identity="test")
+        p.sync_turn(
+            "ping",
+            "pong",
+            user_id="42",
+            user_name="Alice",
+        )
+        if p._sync_thread:
+            p._sync_thread.join(timeout=5.0)
+        item = p._keeper.get(p._session_item_id)
+        assert item is not None
+        assert item.tags["user_id"] == "contact:discord:42[[Alice]]"
+        assert item.tags["user_name"] == "Alice"
+        p.shutdown()
+
     def test_sync_turn_skips_when_not_initialized(self):
         p = KeepMemoryProvider()
         # Should not raise
@@ -480,6 +498,19 @@ class TestSessionTags:
         p = KeepMemoryProvider()
         tags = p._build_session_tags("s1", agent_identity="coder")
         assert tags["agent_identity"] == "coder"
+
+    def test_user_id_tag_uses_canonical_contact_ref(self):
+        p = KeepMemoryProvider()
+        tags = p._build_session_tags("s1", platform="telegram", user_id="42")
+        assert tags["user_id"] == "contact:telegram:42"
+
+    def test_user_id_tag_can_carry_label_and_user_name_tag(self):
+        p = KeepMemoryProvider()
+        tags = p._build_session_tags(
+            "s1", platform="telegram", user_id="42", user_name="Alice"
+        )
+        assert tags["user_id"] == "contact:telegram:42[[Alice]]"
+        assert tags["user_name"] == "Alice"
 
 
 class TestConfigSchema:

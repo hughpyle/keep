@@ -12,7 +12,7 @@ rules:
     with:
       query: "{params.query}"
       limit: "{params.limit}"
-  - when: "search.count == 0"
+  - when: "!has(search.count) || search.count == 0"
     return: done
   - id: related
     # Follow edges from search hits

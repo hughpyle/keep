@@ -81,6 +81,7 @@ When you add `_inverse` to an existing tagdoc, keep automatically backfills edge
 | Tag | `_inverse` | Example | Meaning |
 |-----|-----------|---------|---------|
 | `speaker` | `said` | `speaker: Deborah` on a turn | `get Deborah` → `said:` entries |
+| `user_id` | `user_id_of` | `user_id: contact:telegram:42` on a Hermes note | `get contact:telegram:42` → `user_id_of:` entries |
 | `informs` | `informed_by` | `informs: auth-decision` on a URL | `get auth-decision` → `informed_by:` entries |
 | `references` | `referenced_by` | `references: other-note` via link extraction | `get other-note` → `referenced_by:` entries |
 | `duplicates` | `duplicates` | `duplicates: notes-v1` on a duplicate | Symmetric: both sides show `duplicates:` |

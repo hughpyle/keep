@@ -67,3 +67,4 @@ keep flow stats
 - **Background daemon** (auto-started) handles embeddings and summaries asynchronously
 - **Per-profile store** — defaults to `$HERMES_HOME/keep`; overridable via `KEEP_STORE_PATH`
 - **Conversation versioning** — each turn is stored as a version of a per-channel item
+- **Shared-chat grouping** — Hermes gateway sessions are per-user in groups/channels by default (`group_sessions_per_user: true`); set it to `false` in Hermes if you want one shared session per channel/thread

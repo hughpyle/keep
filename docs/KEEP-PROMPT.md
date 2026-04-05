@@ -50,12 +50,11 @@ Dynamic prompts are state-doc backed: a prompt that uses `{get}` or `{find}` but
 
 ### Example
 
-Given the `.state/get` state doc (with its openclaw fragment) that produces bindings `intentions`, `similar`, `meta`, `edges`, `session`:
+Given the `.state/get` state doc (with its openclaw fragment) that produces bindings `similar`, `meta`, `edges`, `session`:
 
 ```bash
 keep put "$(cat <<'EOF'
 ## Prompt
-{intentions}
 {similar}
 {session}
 

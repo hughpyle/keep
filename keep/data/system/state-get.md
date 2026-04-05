@@ -9,7 +9,7 @@ tags:
 #
 # This is the base context assembly state doc. Fragments in
 # state-get/ extend it for specific platforms (e.g., openclaw
-# adds search, intentions, and session rules).
+# adds search and session rules).
 #
 # The `similar` rule has a `when` guard so fragments can provide
 # an alternative search strategy (e.g., query-based search for
