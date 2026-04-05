@@ -13,7 +13,11 @@ class Get:
         raw_id = params.get("id")
         if raw_id is None:
             raise ValueError("get requires id")
-        item = context.get(str(raw_id))
+        item_id = str(raw_id)
+        if item_id == "now" and hasattr(context, "get_now"):
+            item = context.get_now()
+        else:
+            item = context.get(item_id)
         if item is None:
             return {}
         tags = getattr(item, "tags", None)

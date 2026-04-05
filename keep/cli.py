@@ -362,6 +362,33 @@ def render_flow_response(
                 lines.append(line)
                 remaining -= _tok(line)
 
+    # Some flows return their useful payload only in bindings, not data.
+    # If we only have the status header so far, render bindings directly.
+    if len(lines) == 1 and result.bindings and remaining > 0:
+        binding_render = _render_context_from_flow_bindings(result.bindings, kp=keeper)
+        if not binding_render:
+            binding_sections = []
+            for name, binding in result.bindings.items():
+                if remaining <= 0 or not isinstance(binding, dict):
+                    continue
+                rendered = _render_binding(
+                    name,
+                    binding,
+                    kp=keeper,
+                    token_budget=min(remaining, token_budget),
+                )
+                if not rendered:
+                    continue
+                section = f"\n{name}:\n{rendered}"
+                binding_sections.append(section)
+                remaining -= _tok(section)
+        else:
+            section = f"\n{binding_render}"
+            binding_sections = [section]
+            remaining -= _tok(section)
+
+        lines.extend(binding_sections)
+
     # Tried queries (for stopped flows)
     if result.tried_queries and remaining > 0:
         line = f"queries tried: {', '.join(repr(q) for q in result.tried_queries)}"
@@ -911,11 +938,24 @@ def _render_context_from_flow_bindings(bindings: dict[str, dict], kp=None) -> st
     if "id" not in item_binding or "summary" not in item_binding:
         return ""
 
+    item_id = str(item_binding["id"])
+    if kp is not None:
+        try:
+            # `now` is a virtual/default note until first materialized. Ensure
+            # it exists before asking get_context() to assemble the full view.
+            if item_id == "now" and hasattr(kp, "get_now"):
+                kp.get_now()
+            ctx = kp.get_context(item_id)
+            if ctx is not None and getattr(ctx, "item", None) is not None:
+                return render_context(ctx)
+        except Exception:
+            pass
+
     from ._context_resolution import ItemContext
     from .types import Item
 
     item = Item(
-        id=str(item_binding["id"]),
+        id=item_id,
         summary=str(item_binding.get("summary", "")),
         tags=dict(item_binding.get("tags") or {}),
     )

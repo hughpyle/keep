@@ -603,6 +603,12 @@ class _EnvActionContext:
         peek_fn = getattr(self._env, "peek", None)
         return peek_fn(id) if peek_fn else self._env.get(id)
 
+    def get_now(self, *, scope: str | None = None) -> Any:
+        fn = getattr(self._env, "get_now", None)
+        if fn is None:
+            raise AttributeError("Flow action context does not support get_now")
+        return fn(scope=scope)
+
     def find(
         self,
         query: str | None = None,

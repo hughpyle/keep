@@ -198,6 +198,74 @@ class TestKeepFlow:
             "params": {"id": "test-item"},
         }))
         assert "result" in result  # rendered text
+        assert "important fact" in result["result"]
+        p.shutdown()
+
+    def test_flow_get_now_renders_full_body(self, mock_providers, tmp_path):
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="cli")
+        result = json.loads(p.handle_tool_call("keep_flow", {
+            "state": "get",
+            "params": {"id": "now"},
+        }))
+        assert "result" in result
+        assert "# Keep" in result["result"]
+        assert "Read the practice guide" in result["result"]
+        p.shutdown()
+
+    def test_flow_inline_state_doc_yaml_uses_inline_doc(self, mock_providers, tmp_path):
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="cli")
+        yaml_doc = """\
+match: sequence
+rules:
+  - id: wanted
+    do: get
+    with:
+      id: ".library"
+post:
+  - return: done
+"""
+        result = json.loads(p.handle_tool_call("keep_flow", {
+            "state": "get",
+            "state_doc_yaml": yaml_doc,
+        }))
+        assert "result" in result
+        assert ".library" in result["result"]
+        assert "reflective memory" in result["result"].lower()
+        p.shutdown()
+
+    def test_flow_state_doc_yaml_action_shorthand_rescues_to_params(self, mock_providers, tmp_path):
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="cli")
+        yaml_doc = """\
+action: get
+id: .library
+"""
+        result = json.loads(p.handle_tool_call("keep_flow", {
+            "state": "get",
+            "state_doc_yaml": yaml_doc,
+        }))
+        assert "result" in result
+        assert ".library" in result["result"]
+        assert "# Library" in result["result"]
+        p.shutdown()
+
+    def test_flow_state_doc_yaml_do_with_shorthand_rescues_to_params(self, mock_providers, tmp_path):
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="cli")
+        yaml_doc = """\
+do: get
+with:
+  id: .library
+"""
+        result = json.loads(p.handle_tool_call("keep_flow", {
+            "state": "get",
+            "state_doc_yaml": yaml_doc,
+        }))
+        assert "result" in result
+        assert ".library" in result["result"]
+        assert "# Library" in result["result"]
         p.shutdown()
 
     def test_flow_unknown_state(self, mock_providers, tmp_path):

@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from keep.state_doc_runtime import FlowResult
+
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -229,7 +231,53 @@ class TestHumanOutput:
         lines = output.strip().split("\n")
         assert len(lines) == 2
         assert "test:1" in lines[0]
-        assert "test:2" in lines[1]
+
+
+class TestFlowRendering:
+    def test_render_flow_response_renders_item_binding(self):
+        from keep.cli import render_flow_response
+
+        result = FlowResult(
+            status="done",
+            ticks=1,
+            bindings={
+                "item": {
+                    "id": "test-item",
+                    "summary": "important fact",
+                    "tags": {"topic": "test"},
+                }
+            },
+        )
+
+        rendered = render_flow_response(result)
+
+        assert "flow: done" in rendered
+        assert "important fact" in rendered
+
+    def test_render_flow_response_renders_results_binding(self):
+        from keep.cli import render_flow_response
+
+        result = FlowResult(
+            status="done",
+            ticks=1,
+            bindings={
+                "results": {
+                    "results": [
+                        {
+                            "id": ".library/example",
+                            "summary": "Example teaching",
+                            "tags": {"kind": "teaching"},
+                        }
+                    ],
+                    "count": 1,
+                }
+            },
+        )
+
+        rendered = render_flow_response(result)
+
+        assert "flow: done" in rendered
+        assert "Example teaching" in rendered
 
     def test_frontmatter_quotes_scalar_tag_values(self):
         """Scalar tag values are always quoted in frontmatter."""

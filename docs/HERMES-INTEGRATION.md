@@ -24,6 +24,16 @@ On first session, the system prompt includes the nowdoc with step-by-step instru
 
 Three tools are available: `keep_flow` (all operations), `keep_help` (documentation), `keep_prompt` (context-injected prompts).
 
+For `keep_flow`, the normal form is always `state + params`:
+
+```text
+keep_flow(state="get", params={"id": "now"})
+keep_flow(state="list", params={"prefix": ".library", "include_hidden": true})
+keep_flow(state="put", params={"id": "now", "content": "updated intentions"})
+```
+
+`state_doc_yaml` is available, but it is an advanced escape hatch for genuinely custom inline flows. Hermes agents, especially lighter models, are more reliable when examples stick to `state + params`.
+
 ## Agent behavior
 
 Hermes agents can be reluctant to follow the first-time instructions unprompted. If the agent doesn't engage with the practice guide on its own, ask it directly:

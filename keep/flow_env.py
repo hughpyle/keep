@@ -175,6 +175,32 @@ class LocalFlowEnvironment:
         """Read an item without updating accessed_at."""
         return self._keeper.peek(id)
 
+    def get_now(self, *, scope: str | None = None) -> Any:
+        doc_id = f"now:{scope}" if scope else "now"
+        existing = self.get(doc_id)
+        if existing is not None:
+            return existing
+
+        if scope:
+            return self._keeper._put_direct(
+                f"# Now ({scope})\n\nWorking context.",
+                id=doc_id,
+                tags={"user": scope},
+            )
+
+        from .system_docs import SYSTEM_DOC_DIR, _load_frontmatter
+
+        try:
+            default_content, default_tags = _load_frontmatter(SYSTEM_DOC_DIR / "now.md")
+        except FileNotFoundError:
+            default_content = "# Now\n\nYour working context."
+            default_tags = {}
+        return self._keeper._put_direct(
+            default_content,
+            id=doc_id,
+            tags=default_tags or None,
+        )
+
     def find(
         self,
         query: str | None = None,

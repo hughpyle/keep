@@ -142,7 +142,7 @@ For inline text without an explicit `id`, keep uses a content-addressed ID.
 **Examples:**
 ```
 keep_flow(state="put", params={content:"OAuth2 uses PKCE for public clients", tags={"topic": "auth"})
-keep_flow(state="put", params={content:"https://docs.example.com/api", tags={"type": "reference"})
+keep_flow(state="put", params={uri:"https://docs.example.com/api", tags={"type": "reference"})
 keep_flow(state="put", params={content:"Long document...", analyze=true)
 keep_flow(state="put", params={content:"My design notes", id="design-notes", summary="Architecture decisions")
 ```
@@ -383,7 +383,7 @@ keep_flow(state="tag", params={id:"ID", tags={"status": "fulfilled"})           
 
 ### Index a document
 ```
-keep_flow(state="put", params={content:"https://docs.example.com/api", tags={"type": "reference", "topic": "api"})
+keep_flow(state="put", params={uri:"https://docs.example.com/api", tags={"type": "reference", "topic": "api"})
 keep_flow(state="query-resolve", params={query:"API documentation")
 ```
 

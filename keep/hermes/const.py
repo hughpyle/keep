@@ -71,6 +71,8 @@ FLOW_SCHEMA = {
     "name": "keep_flow",
     "description": (
         "Execute a keep operation via state-doc flow. "
+        "Use state + params for normal calls. "
+        "Only use state_doc_yaml for advanced custom flows.\n"
         "Examples:\n"
         '  Search: state="query-resolve", params={"query": "auth patterns"}\n'
         '  Get context: state="get", params={"id": "now"}\n'
@@ -97,7 +99,7 @@ FLOW_SCHEMA = {
                 "type": "object",
                 "description": (
                     "Flow parameters as a JSON object. "
-                    "Pass all operation arguments here. "
+                    "Use this for normal calls; pass all operation arguments here. "
                     "Common keys: query, id, content, uri, tags, "
                     "summary, limit, since, scope, prefix, "
                     "include_hidden, deep, bias."
@@ -114,8 +116,8 @@ FLOW_SCHEMA = {
             "state_doc_yaml": {
                 "type": "string",
                 "description": (
-                    "Advanced: inline YAML state doc override. "
-                    "Most operations should use state + params instead."
+                    "Advanced only: inline YAML state doc override for custom "
+                    "flows. Most operations should use state + params instead."
                 ),
             },
         },

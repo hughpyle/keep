@@ -100,8 +100,8 @@ keep_flow(state="move", params={name: "frontend-work", tags: {project: "frontend
 Whenever you encounter documents important to the task, index them:
 
 ```
-keep_flow(state="put", params={content: "https://docs.example.com/auth", tags: {topic: "auth", project: "myapp"}})
-keep_flow(state="put", params={content: "file:///path/to/design.pdf", tags: {type: "reference", topic: "architecture"}})
+keep_flow(state="put", params={uri: "https://docs.example.com/auth", tags: {topic: "auth", project: "myapp"}})
+keep_flow(state="put", params={uri: "file:///path/to/design.pdf", tags: {type: "reference", topic: "architecture"}})
 ```
 
 Ask: what is this? Why is it important? Tag appropriately.
