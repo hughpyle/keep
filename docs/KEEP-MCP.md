@@ -103,7 +103,7 @@ Common state docs:
 | State | Purpose | Key params |
 |-------|---------|------------|
 | `query-resolve` | Search with multi-step refinement | `query`, `tags`, `bias`, `since`, `until` |
-| `get` | Retrieve item with similar/meta/versions/edges | `item_id` |
+| `get` | Retrieve note-first output with tags plus similar/meta/versions/edges context | `item_id` |
 | `find-deep` | Search with edge traversal | `query` |
 | `put` | Store content or index a URI | `content` or `uri`, `tags`, `id` |
 | `tag` | Apply tags to one or more items | `id` or `items`, `tags` |

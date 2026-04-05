@@ -297,6 +297,25 @@ def render_flow_response(
     lines.append(header)
     remaining -= _tok(header)
 
+    # Some state docs have an explicitly declared note-first render contract
+    # on the text surface. Prompt expansion still consumes bindings directly;
+    # this only affects rendered flow/tool output.
+    from .const import FLOW_NOTE_FIRST_RENDER_STATES
+    state_name = result.history[-1] if len(result.history) == 1 else None
+    if state_name in FLOW_NOTE_FIRST_RENDER_STATES and result.bindings and remaining > 0:
+        binding_render = _render_context_from_flow_bindings(result.bindings, kp=keeper)
+        if binding_render:
+            section = f"\n{binding_render}"
+            lines.append(section)
+            remaining -= _tok(section)
+
+            if result.tried_queries and remaining > 0:
+                line = f"queries tried: {', '.join(repr(q) for q in result.tried_queries)}"
+                lines.append(line)
+            if result.cursor:
+                lines.append(f"\ncursor: {result.cursor}")
+            return "\n".join(lines)
+
     # Render data fields — auto-detect result lists, meta sections, scalars
     def _render_result_list(label: str, raw: list) -> None:
         nonlocal remaining

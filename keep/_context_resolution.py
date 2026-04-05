@@ -501,18 +501,6 @@ class ContextResolutionMixin:
         deep: bool = False,
     ) -> PromptResult:
         """Run a state-doc flow and return a PromptResult with bindings."""
-        if state_doc == "query-resolve" and (text is None or text == ""):
-            return PromptResult(
-                context=None,
-                search_results=None,
-                prompt=prompt_body,
-                text=text,
-                since=since,
-                until=until,
-                token_budget=token_budget,
-                flow_bindings=None,
-            )
-
         params: dict[str, Any] = {}
         context_id = id or "now"
         if context_id == "now":

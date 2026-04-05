@@ -32,6 +32,8 @@ keep_flow(state="list", params={"prefix": ".library", "include_hidden": true})
 keep_flow(state="put", params={"id": "now", "content": "updated intentions"})
 ```
 
+`keep_flow(state="get", ...)` returns the requested note in note-first form, including its tags and body, with contextual sections such as similar notes, related/meta sections, parts, and version navigation when available. It is not a bare exact-fetch API.
+
 `state_doc_yaml` is available, but it is an advanced escape hatch for genuinely custom inline flows. Hermes agents, especially lighter models, are more reliable when examples stick to `state + params`.
 
 ## Agent behavior

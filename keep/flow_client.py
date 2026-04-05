@@ -11,17 +11,19 @@ from __future__ import annotations
 from textwrap import dedent
 from typing import Any, Optional
 
+from .const import (
+    STATE_COMPAT_FIND,
+    STATE_COMPAT_GET_ITEM,
+    STATE_DELETE,
+    STATE_FIND_DEEP,
+    STATE_GET_CONTEXT,
+    STATE_LIST,
+    STATE_MOVE,
+    STATE_PUT,
+    STATE_TAG,
+)
 from .protocol import FlowHostProtocol
 from .types import Item, TagMap
-
-
-STATE_PUT = "put"
-STATE_TAG = "tag"
-STATE_DELETE = "delete"
-STATE_MOVE = "move"
-STATE_LIST = "list"
-STATE_GET_CONTEXT = "get"
-STATE_FIND_DEEP = "find-deep"
 
 _COMPAT_GET_ITEM = dedent(
     """
@@ -131,13 +133,13 @@ def _run(host: FlowHostProtocol, state: str, *, params: dict[str, Any], writable
 def get_item(host: FlowHostProtocol, id: str) -> Optional[Item]:
     result = _run(
         host,
-        "compat-get-item",
+        STATE_COMPAT_GET_ITEM,
         params={"id": id},
         writable=False,
         state_doc_yaml=_COMPAT_GET_ITEM,
     )
     binding = getattr(result, "bindings", {}).get("item", {})
-    _raise_binding_error(binding, "compat-get-item")
+    _raise_binding_error(binding, STATE_COMPAT_GET_ITEM)
     data = getattr(result, "data", None) or {}
     item = data.get("item")
     if item is None:
@@ -232,7 +234,7 @@ def find_items(
     else:
         result = _run(
             host,
-            "compat-find",
+            STATE_COMPAT_FIND,
             params={
                 "query": query,
                 "tags": tags,
@@ -249,7 +251,7 @@ def find_items(
             state_doc_yaml=_COMPAT_FIND,
         )
         binding = getattr(result, "bindings", {}).get("results", {})
-        _raise_binding_error(binding, "compat-find")
+        _raise_binding_error(binding, STATE_COMPAT_FIND)
         data = getattr(result, "data", None) or {}
         items = _coerce_item_list(data.get("items", []))
         deep_groups_raw = data.get("deep_groups", {}) if deep else {}

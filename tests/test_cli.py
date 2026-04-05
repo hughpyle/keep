@@ -254,6 +254,48 @@ class TestFlowRendering:
         assert "flow: done" in rendered
         assert "important fact" in rendered
 
+    def test_render_flow_response_get_uses_cli_context_shape(self):
+        from keep.cli import render_flow_response
+        from keep.types import Item, ItemContext
+
+        class KeeperStub:
+            def get_context(self, item_id):
+                assert item_id == "test-item"
+                return ItemContext(
+                    item=Item(id="test-item", summary="important fact", tags={"topic": "test"}),
+                )
+
+        result = FlowResult(
+            status="done",
+            ticks=1,
+            history=["get"],
+            data={
+                "similar": {
+                    "results": [
+                        {"id": "other", "summary": "other fact", "tags": {}},
+                    ]
+                }
+            },
+            bindings={
+                "item": {
+                    "id": "test-item",
+                    "summary": "important fact",
+                    "tags": {"topic": "test"},
+                },
+                "similar": {
+                    "results": [
+                        {"id": "other", "summary": "other fact", "tags": {}},
+                    ]
+                },
+            },
+        )
+
+        rendered = render_flow_response(result, keeper=KeeperStub())
+
+        assert "flow: done" in rendered
+        assert "---\nid: test-item" in rendered
+        assert "\nsimilar:\n" not in rendered
+
     def test_render_flow_response_renders_results_binding(self):
         from keep.cli import render_flow_response
 

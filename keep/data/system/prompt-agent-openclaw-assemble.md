@@ -7,15 +7,12 @@ tags:
 # .prompt/agent/openclaw-assemble
 
 Context assembly for OpenClaw agent turns. Uses the `get` state doc
-(with openclaw fragment) for retrieval — intentions, similar items,
-meta, edges, and session history.
+(with openclaw fragment) for retrieval — similar items, meta, edges,
+and session history.
 
 ## Prompt
 
 The following is retrieved memory context from keep.
-
-Current intentions (`now`):
-{intentions}
 
 Related items:
 {search}{similar}

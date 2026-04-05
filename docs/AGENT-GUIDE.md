@@ -21,6 +21,8 @@ keep_flow(state="get", params={id: "now"}, token_budget=2000)
 keep_flow(state="query-resolve", params={query: "this situation"}, token_budget=2000)
 ```
 
+`keep_flow(state="get", ...)` returns the requested note first, including its tags, with any relevant attached context such as similar notes, meta sections, parts, linked notes, and version navigation. Read it as "show me this note and what surrounds it", not as a bare exact fetch.
+
 **While acting:** Is this leading to harm? If yes: give it up.
 
 **Reflect after acting:** What happened? What did I learn?

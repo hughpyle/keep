@@ -179,13 +179,13 @@ keep_flow(state="query-resolve", params={query:"architecture decisions", deep=tr
 
 ### get (state doc)
 
-Retrieve one item with full context: similar items, meta sections, structural parts, and version history.
+Retrieve one note in note-first form, with attached context. The result starts with the requested note's tags and body, then may include contextual sections such as similar notes, meta sections, structural parts, linked items, and version navigation.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|:--------:|---------|-------------|
-| `id` | string | yes | — | Item ID. Use `"now"` for current working context |
+| `id` | string | yes | — | Note ID. Use `"now"` for current working context |
 
-**Returns:** YAML frontmatter with sections:
+**Returns:** YAML frontmatter for the requested note plus any available context sections:
 
 ```yaml
 ---
@@ -199,11 +199,15 @@ meta/todo:
   - %d3e4f5 Open task related to this item...
 parts:
   - @P{1} Section one summary...
+edges/informs:
+  - other-note  Related note surfaced via edge tags...
 prev:
   - @V{1} 2026-01-13 Previous version summary...
 ---
 Item summary or content here
 ```
+
+The exact attached sections depend on what exists for the requested note. Tags are always part of the returned note shape; `similar`, `meta/*`, `parts`, `edges/*`, `prev`, and `next` appear when relevant.
 
 **Examples:**
 ```

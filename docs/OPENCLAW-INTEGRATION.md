@@ -84,7 +84,7 @@ stage of the agent lifecycle:
 | Lifecycle method | What keep does |
 |-----------------|----------------|
 | **bootstrap** | Mark session for first-assemble enrichment |
-| **assemble** | Render the `openclaw-assemble` prompt template — retrieves intentions, similar items, meta, edges, and session history via the `.state/get` state doc (with openclaw fragment) |
+| **assemble** | Render the `openclaw-assemble` prompt template — retrieves the requested note plus similar items, meta, edges, and session history via the `.state/get` state doc (with openclaw fragment) |
 | **afterTurn** | Ingest each new user/assistant message as a version of the session item; detect inflection points (topic shifts, commitments, substantial work); trigger background reflection; set up workspace watches |
 | **compact** | Advisory only — logs diagnostics (OpenClaw manages its own compaction) |
 | **prepareSubagentSpawn** | Link child session to parent via tags, write spawn marker as first version of child item |

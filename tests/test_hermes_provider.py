@@ -213,6 +213,7 @@ class TestKeepFlow:
         }))
         assert "result" in result  # rendered text
         assert "important fact" in result["result"]
+        assert "intentions:" not in result["result"]
         p.shutdown()
 
     def test_flow_get_now_renders_full_body(self, mock_providers, tmp_path):
@@ -223,8 +224,10 @@ class TestKeepFlow:
             "params": {"id": "now"},
         }))
         assert "result" in result
+        assert "---\nid: now" in result["result"]
         assert "# Keep" in result["result"]
         assert "Read the practice guide" in result["result"]
+        assert "intentions:" not in result["result"]
         p.shutdown()
 
     def test_flow_list_versions_exposes_version_history(self, mock_providers, tmp_path):

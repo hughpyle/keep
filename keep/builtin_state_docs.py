@@ -385,10 +385,6 @@ rules:
       query: "{params.prompt}"
       bias: { "now": 0 }
       limit: 7
-  - id: intentions
-    do: get
-    with:
-      id: "now"
   - id: session
     do: get
     with:
