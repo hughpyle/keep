@@ -43,7 +43,7 @@ keep_flow(state="get", params={item_id: "now"}, token_budget=2000)              
 keep_flow(state="query-resolve", params={query: "topic"}, token_budget=2000)              # What do I know?
 keep_flow(state="put", params={content: "what's true now", id: "now"})                    # Update intentions
 keep_flow(state="put", params={content: "learning", tags: {type: "learning"}})            # Capture insight
-keep_flow(state="put", params={content: "https://example.com/doc", tags: {topic: "X"}})   # Index a URL
+keep_flow(state="put", params={uri: "https://example.com/doc", tags: {topic: "X"}})       # Index a URL
 keep_flow(state="tag", params={id: "item", tags: {reviewed: "true"}})                     # Tag an item
 keep_help(topic="flow-actions")                                                            # Action reference
 \`\`\`
@@ -115,14 +115,14 @@ keep_flow(state="put", params={content: "Assumed X, actually Y", tags: {type: "b
 
 **Index important documents.** Whenever you encounter documents (URLs, files, references) important to the user or task, index them:
 ```
-keep_flow(state="put", params={content: "https://example.com/doc", tags: {topic: "auth", project: "myapp"}})
-keep_flow(state="put", params={content: "file:///path/to/important.pdf", tags: {type: "reference", topic: "security"}})
+keep_flow(state="put", params={uri: "https://example.com/doc", tags: {topic: "auth", project: "myapp"}})
+keep_flow(state="put", params={uri: "file:///path/to/important.pdf", tags: {type: "reference", topic: "security"}})
 ```
 Ask: What is this document? Why is it important? Tag appropriately. Documents indexed during work become navigable knowledge.
 
 **Link sources to outcomes.** When a document informs a decision or learning, connect them with `informs`/`informed_by`:
 ```
-keep_flow(state="put", params={content: "https://example.com/doc", tags: {topic: "auth", informs: "auth-decision"}})
+keep_flow(state="put", params={uri: "https://example.com/doc", tags: {topic: "auth", informs: "auth-decision"}})
 keep_flow(state="put", params={content: "We chose OAuth2 because...", tags: {type: "learning", informed_by: "https://example.com/doc"}})
 ```
 This makes provenance navigable — `get` on a note shows what informed it, and vice versa.
