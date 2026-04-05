@@ -13,6 +13,7 @@ EMBEDDING_EMPTY_MESSAGE = "No embedding provider available. You need one of:"
 EMBEDDING_EMPTY_HINTS = [
     "Install Ollama (https://ollama.com) — free, local, easiest option",
     "Set OPENAI_API_KEY for OpenAI embeddings",
+    "Set OPENROUTER_API_KEY for OpenRouter embeddings",
     "Set GEMINI_API_KEY for Google Gemini embeddings",
     f"Then run `{SETUP_COMMAND}` again.",
 ]

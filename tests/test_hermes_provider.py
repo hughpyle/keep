@@ -5,11 +5,13 @@ Tests cover the full MemoryProvider protocol surface.
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from keep.hermes.provider import KeepMemoryProvider
+from keep.hermes.const import EMBEDDING_EMPTY_HINTS
 
 
 class TestLifecycle:
@@ -174,6 +176,9 @@ class TestToolSchemas:
         assert "not configured" in result["error"]
         assert "hint" in result
 
+    def test_setup_hints_mention_openrouter(self):
+        assert any("OPENROUTER_API_KEY" in hint for hint in EMBEDDING_EMPTY_HINTS)
+
 
 class TestKeepFlow:
     """keep_flow tool — state-doc flow execution."""
@@ -220,6 +225,24 @@ class TestKeepFlow:
         assert "result" in result
         assert "# Keep" in result["result"]
         assert "Read the practice guide" in result["result"]
+        p.shutdown()
+
+    def test_flow_list_versions_exposes_version_history(self, mock_providers, tmp_path):
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="cli")
+        # The mock document store used in this fixture does not persist
+        # archived versions automatically, so stub the history explicitly.
+        p._keeper._document_store.list_versions = lambda collection, id, limit=10: [
+            SimpleNamespace(summary="initial schedule", created_at="2026-04-05T02:03:28")
+        ]
+        result = json.loads(p.handle_tool_call("keep_flow", {
+            "state": "list_versions",
+            "params": {"id": "schedule-note", "limit": 5},
+        }))
+        assert "result" in result
+        assert "versions:" in result["result"]
+        assert "@V{1}" in result["result"]
+        assert "initial schedule" in result["result"]
         p.shutdown()
 
     def test_flow_inline_state_doc_yaml_uses_inline_doc(self, mock_providers, tmp_path):
