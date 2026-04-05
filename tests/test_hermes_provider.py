@@ -499,18 +499,12 @@ class TestSessionTags:
         tags = p._build_session_tags("s1", agent_identity="coder")
         assert tags["agent_identity"] == "coder"
 
-    def test_user_id_tag_uses_canonical_contact_ref(self):
+    def test_session_tags_omit_user_identity(self):
+        """user_id/user_name vary per message — not baked into session tags."""
         p = KeepMemoryProvider()
-        tags = p._build_session_tags("s1", platform="telegram", user_id="42")
-        assert tags["user_id"] == "contact:telegram:42"
-
-    def test_user_id_tag_can_carry_label_and_user_name_tag(self):
-        p = KeepMemoryProvider()
-        tags = p._build_session_tags(
-            "s1", platform="telegram", user_id="42", user_name="Alice"
-        )
-        assert tags["user_id"] == "contact:telegram:42[[Alice]]"
-        assert tags["user_name"] == "Alice"
+        tags = p._build_session_tags("s1", platform="telegram", user_id="42", user_name="Alice")
+        assert "user_id" not in tags
+        assert "user_name" not in tags
 
 
 class TestConfigSchema:

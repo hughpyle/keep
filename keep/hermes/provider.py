@@ -622,22 +622,11 @@ class KeepMemoryProvider:
 
     def _build_session_tags(self, session_id: str, **kwargs) -> Dict[str, str]:
         tags = {"source": "hermes"}
-        platform = str(kwargs.get("platform") or "").strip()
-        raw_user_id = str(kwargs.get("user_id") or "").strip()
-        user_name = str(kwargs.get("user_name") or "").strip()
-
-        if platform:
-            tags["platform"] = platform
-        if raw_user_id:
-            tags["user_id"] = _contact_ref(
-                platform=platform or "hermes",
-                user_id=raw_user_id,
-                user_name=user_name,
-            )
-        if user_name:
-            tags["user_name"] = user_name
-
-        for key in ("agent_identity",):
+        # user_id / user_name are not set here — they vary per message
+        # and are overlaid by sync_turn on each version instead.
+        for key in (
+            "platform", "agent_identity",
+        ):
             value = kwargs.get(key)
             if value:
                 tags[key] = str(value)
