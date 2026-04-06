@@ -250,6 +250,37 @@ def parse_ref(value: str) -> tuple[str, str | None]:
     return value, None
 
 
+# Whole-string match for ``[Title](URL)``. Title rejects ``]`` to keep the
+# pattern unambiguous; URL rejects whitespace and ``)``. We anchor on a
+# web/file scheme so relative paths and other markdown links don't match.
+_MARKDOWN_LINK_REF_RE = re.compile(
+    r"^\[([^\]]+)\]\((https?://[^)\s]+|file://[^)\s]+)\)$"
+)
+
+
+def normalize_edge_value(value: str) -> str:
+    """Coerce a single edge-tag value into the canonical ``id[[alias]]`` form.
+
+    Agents (and humans) often emit markdown link syntax ``[Title](URL)``
+    when populating an edge tag. Stored as-is, the literal ``[Title](URL)``
+    string becomes the edge target ID, which is junk. This helper detects
+    that shape and rewrites it to the wikilink-style ``URL[[Title]]`` form
+    that the rest of the pipeline already understands.
+
+    Returns the value unchanged when it doesn't match (already canonical,
+    bare URL, internal ID, etc.).
+    """
+    if not value or "[" not in value:
+        return value
+    m = _MARKDOWN_LINK_REF_RE.match(value.strip())
+    if not m:
+        return value
+    title, url = m.group(1).strip(), m.group(2).strip()
+    if not title or not url or "]]" in title:
+        return value
+    return f"{url}[[{title}]]"
+
+
 def normalize_id(id: str) -> str:
     """Validate and normalize a document ID.
 

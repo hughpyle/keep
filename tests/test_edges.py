@@ -267,6 +267,61 @@ class TestEdgeIntegration:
         names = item.tags.get("name")
         assert sorted(names) == ["Ali", "Alice"]
 
+    def test_markdown_link_edge_value_is_normalized_to_wikilink(self, kp):
+        """`[Title](URL)` on an edge tag stores as `URL[[Title]]` and routes correctly.
+
+        Mirrors the bug observed in the wild where an agent wrote raw
+        markdown link syntax into an edge tag and the literal string
+        became the edge target ID.
+        """
+        self._create_tagdoc(kp, "cites", "cited_by")
+
+        kp.put(
+            content="A paper that cites another",
+            id="paper-A",
+            summary="Citing paper",
+            tags={"cites": "[Example Paper](https://example.com/paper)"},
+        )
+
+        # The stored tag value should be the canonical wikilink form,
+        # not the literal markdown blob.
+        stored = kp.get("paper-A")
+        assert stored is not None
+        cites_values = stored.tags.get("cites")
+        if isinstance(cites_values, list):
+            assert "https://example.com/paper[[Example Paper]]" in cites_values
+        else:
+            assert cites_values == "https://example.com/paper[[Example Paper]]"
+
+        # The edge target is the URL (not the markdown blob).
+        target = kp.get("https://example.com/paper")
+        assert target is not None
+        assert target.tags.get("_source") == "auto-vivify"
+        # And the alias seeded the target's name tag.
+        name = target.tags.get("name")
+        assert name == "Example Paper" or "Example Paper" in (name or [])
+
+        # The literal markdown string should not exist as an item ID.
+        assert kp.get("[Example Paper](https://example.com/paper)") is None
+
+        # Inverse edge resolves cleanly.
+        ctx = kp.get_context("https://example.com/paper")
+        assert "cited_by" in ctx.edges
+        assert any(e.source_id == "paper-A" for e in ctx.edges["cited_by"])
+
+    def test_markdown_link_normalization_skipped_for_non_edge_tags(self, kp):
+        """Non-edge tags keep markdown link strings verbatim."""
+        # No tagdoc → not an edge tag.
+        kp.put(
+            content="Note with markdown in a content tag",
+            id="note-A",
+            summary="Note",
+            tags={"freeform": "[Example](https://example.com)"},
+        )
+
+        stored = kp.get("note-A")
+        assert stored.tags.get("freeform") == "[Example](https://example.com)"
+
     def test_labeled_edge_ref_does_not_mutate_non_autovivified_target(self, kp):
         self._create_tagdoc(kp, "speaker", "said")
         kp.put(

@@ -95,6 +95,46 @@ class TestFindTagsFilter:
         results_default = kp.find("pets")
         assert {r.id for r in results_none} == {r.id for r in results_default}
 
+    def test_ids_matching_tags_paginates_for_multi_tag_conjunction(
+        self, mock_providers, tmp_path,
+    ):
+        """Multi-tag conjunctions must scan past the first LIMIT rows.
+
+        Regression for the reviewer's finding: the old implementation
+        asked SQLite for the first ``limit`` rows matching the first
+        tag pair, then post-filtered in Python. If the true multi-tag
+        match sat outside that recency window, it disappeared.
+        """
+        kp = Keeper(store_path=tmp_path)
+
+        # The rare match — older than the decoys below.
+        kp.put(
+            "rare match content",
+            id="rare-match",
+            tags={"project": "journal", "topic": "rare"},
+        )
+
+        # Decoys: more than the _FIND_PART_JOIN_LIMIT cap, all matching
+        # only the first tag pair, with newer updated_at timestamps.
+        decoy_count = kp._FIND_PART_JOIN_LIMIT + 50
+        for i in range(decoy_count):
+            kp.put(
+                f"decoy {i}",
+                id=f"decoy:{i}",
+                tags={"project": "journal"},
+            )
+
+        doc_coll = kp._resolve_doc_collection()
+        from keep.types import casefold_tags
+        cf = casefold_tags({"project": "journal", "topic": "rare"})
+        matching = kp._ids_matching_tags(
+            doc_coll, cf, limit=kp._FIND_PART_JOIN_LIMIT,
+        )
+
+        # The rare match must surface despite being older than the
+        # first LIMIT rows of the broad first-tag query.
+        assert "rare-match" in matching
+
     def test_find_rejects_invalid_tag_key(self, kp):
         """find() rejects tag keys that fail the shared key validator."""
         with pytest.raises(ValueError, match="invalid characters"):

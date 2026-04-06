@@ -880,20 +880,36 @@ class FileDocumentProvider:
             return None
 
     @staticmethod
-    def _extract_html_links(path: Path) -> list[str] | None:
-        """Extract href URLs from HTML anchor tags."""
+    def _extract_html_links(path: Path) -> list[dict[str, str]] | None:
+        """Extract href URLs and anchor text from HTML <a> tags.
+
+        Returns a list of ``{"url": ..., "title": ...}`` dicts. ``title``
+        is omitted when the anchor text is empty or equal to the URL.
+        First occurrence wins on duplicate URLs.
+        """
         try:
             html = path.read_text(encoding="utf-8")
             from bs4 import BeautifulSoup  # noqa: PLC0415
             soup = BeautifulSoup(html, "html.parser")
-            urls: list[str] = []
+            links: list[dict[str, str]] = []
             seen: set[str] = set()
             for a in soup.find_all("a", href=True):
                 href = a["href"]
-                if href and href.startswith(("http://", "https://")) and href not in seen:
-                    seen.add(href)
-                    urls.append(href)
-            return urls or None
+                if not (href and href.startswith(("http://", "https://"))):
+                    continue
+                if href in seen:
+                    continue
+                seen.add(href)
+                entry: dict[str, str] = {"url": href}
+                # Use a space separator so nested elements don't get glued
+                # together (e.g. "<b>Example</b> Site" → "Example Site").
+                title = " ".join(a.get_text(separator=" ").split())
+                # Reject empty, URL-equal, or unsafe titles. ``]]`` would
+                # break the ``id[[alias]]`` ref encoding downstream.
+                if title and title != href and "]]" not in title:
+                    entry["title"] = title
+                links.append(entry)
+            return links or None
         except Exception:
             return None
 

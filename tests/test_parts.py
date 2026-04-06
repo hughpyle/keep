@@ -285,9 +285,65 @@ class TestKeeperAnalyze:
         assert len(parts) == 2
         assert parts[0].part_num == 1
         assert parts[0].summary == "Introduction"
+        # Analyzer-assigned tag is preserved.
         assert parts[0].tags.get("topic") == "intro"
-        # Parent tags inherited
-        assert parts[0].tags.get("project") == "test"
+        # Parent tags are NOT inherited — parts only carry analyzer-assigned
+        # tags plus _base_id/_part_num bookkeeping. See analyze.py for the
+        # rationale (no drift, no edge-tag clones).
+        assert "project" not in parts[0].tags
+        assert parts[0].tags.get("_base_id") == "test-doc"
+        assert parts[0].tags.get("_part_num") == "1"
+
+    def test_parts_do_not_inherit_edge_tags_from_parent(self, mock_providers, tmp_path):
+        """Edge tags on the parent must not clone onto every part.
+
+        This is the regression test for the in-the-wild bug where a
+        survey paper's `informs`/`referenced_by` lists ended up cloned
+        onto every analyzed part, turning each fragment into a noisy
+        wearer of the parent's full citation graph.
+        """
+        from keep.types import utc_now
+        kp = Keeper(store_path=tmp_path)
+
+        # Create an edge tag (like `references`).
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+        kp._document_store.upsert(
+            collection=doc_coll,
+            id=".tag/cites",
+            summary="Tag: cites",
+            tags={
+                "_inverse": "cited_by", "_created": now, "_updated": now,
+                "_source": "inline", "category": "system",
+            },
+        )
+
+        kp.put(
+            "A long document about many topics. " * 20,
+            id="paper-A",
+            tags={
+                "topic": "graphs",  # content tag
+                "year": "2024",     # content tag
+                "cites": "https://example.com/other-paper[[Other Paper]]",  # edge tag
+            },
+        )
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
+            mock_llm.return_value = [
+                {"summary": "Section 1", "content": "Body 1"},
+                {"summary": "Section 2", "content": "Body 2"},
+            ]
+            parts = kp.analyze("paper-A", force=True)
+
+        for part in parts:
+            # Edge tag must not appear on parts.
+            assert "cites" not in part.tags
+            # Content tags from the parent must not appear either.
+            assert "topic" not in part.tags
+            assert "year" not in part.tags
+            # System bookkeeping is present.
+            assert part.tags.get("_base_id") == "paper-A"
+            assert part.tags.get("_part_num") in ("1", "2")
 
     def test_analyze_replaces_parts(self, mock_providers, tmp_path):
         """Re-analyze replaces all previous parts."""
@@ -570,6 +626,69 @@ class TestFindPartUplift:
         # Should NOT have raw part IDs in results
         part_results = [r for r in results if "@p" in r.id or "@P" in r.id]
         assert len(part_results) == 0
+
+    def test_find_with_tag_filter_still_reaches_parts(self, mock_providers, tmp_path):
+        """Tag-filtered find() must still reach parts via the _base_id join.
+
+        Parts intentionally don't inherit parent tags (see analyze.py),
+        so Chroma's marker-based where clause on its own would filter
+        parts out of tag-filtered searches. The _base_id expansion in
+        _find_direct lets parts of matching parents through.
+
+        Without the expansion, this test would fail: the part carries
+        no `project` tag of its own, so the Chroma tag filter would
+        reject it before the part-uplift code ever runs.
+        """
+        kp = Keeper(store_path=tmp_path)
+        kp.put(
+            "A multi-topic document about trips and work. " * 20,
+            id="test-doc",
+            tags={"project": "journal"},
+        )
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc", force=True)
+
+        # Sanity check: parts do not carry the parent's project tag.
+        part = kp.get_part("test-doc", 1)
+        assert part is not None
+        assert "project" not in part.tags
+
+        # Query text hits a part's content ("Miami" is in the first part),
+        # and the tag filter matches the parent. The part must still
+        # reach the result set so it can be uplifted to the parent.
+        results = kp.find("Miami trip", tags={"project": "journal"})
+        parent_ids = {r.id for r in results}
+        assert "test-doc" in parent_ids
+
+    def test_find_with_tag_filter_reaches_parts_fts_only(self, mock_providers, tmp_path):
+        """FTS-only find() (no embedding provider) must also reach parts via _base_id.
+
+        Regression for the reviewer's finding: the first pass only
+        patched the Chroma semantic where clause, leaving query_fts's
+        p.tags_json filter narrower than the parent set.
+        """
+        kp = Keeper(store_path=tmp_path)
+        kp.put(
+            "A multi-topic document about trips and work. " * 20,
+            id="test-doc",
+            tags={"project": "journal"},
+        )
+
+        with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
+            mock_llm.return_value = list(self.MOCK_PARTS)
+            kp.analyze("test-doc", force=True)
+
+        # Force the FTS-only branch by disabling the embedding provider.
+        kp._config.embedding = None
+
+        # The part contains "Miami" but carries no `project` tag. The
+        # parent carries project=journal. The FTS part-tag filter must
+        # allow the part through via the _base_id join.
+        results = kp.find("Miami trip", tags={"project": "journal"})
+        parent_ids = {r.id for r in results}
+        assert "test-doc" in parent_ids
 
     def test_find_dedupes_multiple_part_hits(self, mock_providers, tmp_path):
         """Multiple parts of the same parent produce one result."""

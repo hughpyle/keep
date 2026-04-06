@@ -218,15 +218,17 @@ class Analyze:
 
             doc = context.get_document(item_id) if hasattr(context, "get_document") else None
             existing_tags = dict(getattr(doc, "tags", None) or {}) if doc else {}
-            parent_user_tags = {
-                key: value for key, value in existing_tags.items()
-                if not key.startswith(SYSTEM_TAG_PREFIX)
-            }
 
+            # Parts do NOT inherit parent tags — neither edge tags (which
+            # would clone the parent's relationship graph onto every
+            # fragment) nor content tags (which drift when the parent is
+            # re-tagged). Each part carries only what the analyzer
+            # assigned plus _base_id/_part_num bookkeeping. Search/find
+            # can recover parent-tag filtering by joining through
+            # _base_id when needed.
             for idx, part in enumerate(parts, start=1):
                 part_id = f"{item_id}@p{idx}"
-                tags = dict(parent_user_tags)
-                tags.update(dict(part.get("tags") or {}))
+                tags = dict(part.get("tags") or {})
                 tags["_base_id"] = item_id
                 tags["_part_num"] = str(idx)
                 mutations.append(

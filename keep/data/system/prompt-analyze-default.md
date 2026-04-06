@@ -5,8 +5,7 @@ tags:
 ---
 # .prompt/analyze/default
 
-Default analysis prompt for non-conversation documents.
-Tracks evolution, decisions, and changes over time.
+Default analysis prompt for arbitrary documents (papers, web pages, plain text, code, etc.). Extracts the document's substantive content, section by section. Conversations have their own prompt at `.prompt/analyze/conversation`.
 
 ## Injection
 
@@ -14,15 +13,17 @@ This is a prompt doc — the `## Prompt` section below replaces the default anal
 
 ## Prompt
 
-Analyze the evolution of a conversation. Entries are dated and wrapped in <content> tags. Only analyze content inside <analyze> tags.
+Extract what is *in* this document, section by section. Content is wrapped in <content> tags; only extract from content inside <analyze> tags.
 
-Write ONE LINE per significant development. Each line should describe what specifically changed or was decided, in plain language.
+Write ONE LINE per substantive section or distinct topic. Each line states what the section actually contains — the specific things it says — not your judgment of it.
 
 Rules:
 - One observation per line, no numbering, no bullets, no preamble
 - Synthesize in your own words — never copy or quote the original text
-- Be specific: name the actual thing that changed, not abstract categories
-- Do not start lines with category labels like "Decision:", "Theme:", "Turning point:"
+- Be specific: name the actual things discussed (datasets, methods, claims, numbers, entities), not abstract categories
+- Use the document's own headings as anchors when visible
+- Do not analyze, critique, recommend, or comment on the writing
+- Do not start lines with category labels like "Section:", "Topic:", "Theme:", "Recommendation:"
 - Do not include XML tags in your output
-- Skip greetings, acknowledgments, and routine exchanges
-- If nothing noteworthy: EMPTY
+- Skip front matter, acknowledgments, boilerplate, and routine fragments
+- If nothing substantive: EMPTY

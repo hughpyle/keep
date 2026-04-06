@@ -100,16 +100,23 @@ class TestVstringOverview:
         assert parts[0].part_num == 0
         assert parts[1].part_num == 1
 
-    def test_overview_inherits_user_tags(self, mock_providers, tmp_path):
-        """@P{0} inherits parent's user tags but not system tags."""
+    def test_overview_does_not_inherit_user_tags(self, mock_providers, tmp_path):
+        """@P{0} carries only its own marker tag, not parent user tags.
+
+        Parts (including the @P{0} overview) follow a no-inheritance rule:
+        each part is a clean sub-note containing analyzer-derived tags
+        plus _base_id/_part_num bookkeeping. Parent tag filters reach
+        parts via _base_id joins, not by tag duplication.
+        """
         kp = Keeper(store_path=tmp_path)
         _setup(kp, "doc5", tags={"project": "test", "topic": "ai"})
 
         parts = self._analyze_with_versions(kp, "doc5")
 
         overview = next(p for p in parts if p.part_num == 0)
-        assert overview.tags.get("project") == "test"
         assert overview.tags.get("_part_type") == "overview"
+        assert "project" not in overview.tags
+        assert "topic" not in overview.tags
 
     def test_reanalyze_replaces_overview(self, mock_providers, tmp_path):
         """Re-analysis produces a fresh @P{0}, not a duplicate."""

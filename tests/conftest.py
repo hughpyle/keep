@@ -157,16 +157,27 @@ class MockChromaStore:
         return False
 
     def _match_where(self, tags: dict, where: dict | None) -> bool:
-        """Check if tags match a ChromaDB where clause."""
+        """Check if tags match a ChromaDB where clause.
+
+        Supports a small subset of Chroma's where grammar:
+        $and, $or, $in, and flat key=value equality. Nested operators
+        compose. Sufficient for unit-test coverage of the production
+        code paths that build these clauses.
+        """
         if not where:
             return True
-        conditions = {}
         if "$and" in where:
-            for clause in where["$and"]:
-                conditions.update(clause)
-        else:
-            conditions = where
-        return all(tags.get(k) == v for k, v in conditions.items())
+            return all(self._match_where(tags, clause) for clause in where["$and"])
+        if "$or" in where:
+            return any(self._match_where(tags, clause) for clause in where["$or"])
+        for key, value in where.items():
+            if isinstance(value, dict) and "$in" in value:
+                if tags.get(key) not in value["$in"]:
+                    return False
+                continue
+            if tags.get(key) != value:
+                return False
+        return True
 
     @staticmethod
     def _cosine_distance(a: list[float], b: list[float]) -> float:
@@ -574,8 +585,16 @@ class MockDocumentStore:
         pass
 
     def query_fts(self, collection: str, query: str, limit: int = 10,
-                  tags: dict = None) -> list[tuple[str, str, float]]:
-        """Mock FTS5 search — case-insensitive OR-token matching on summaries + parts."""
+                  tags: dict = None,
+                  part_tag_join_base_ids: list[str] | None = None,
+                  ) -> list[tuple[str, str, float]]:
+        """Mock FTS5 search — case-insensitive OR-token matching on summaries + parts.
+
+        ``part_tag_join_base_ids`` mirrors the production param: when a
+        tag filter is set, parts whose parent ID is in this list are
+        accepted regardless of their own tag markers (see analyze.py
+        for why parts don't inherit parent tags).
+        """
         def _matches_filter(item_tags: dict, filt: dict | None) -> bool:
             if not filt:
                 return True
@@ -588,6 +607,7 @@ class MockDocumentStore:
         tokens = [t.lower() for t in query.split()]
         if not tokens:
             return []
+        join_set = set(part_tag_join_base_ids or [])
         results = []
         # Search document summaries
         for id, rec in self._data.get(collection, {}).items():
@@ -607,17 +627,26 @@ class MockDocumentStore:
                 continue
             for part in parts:
                 text = (part.summary + " " + part.content).lower()
-                if any(t in text for t in tokens):
-                    if not _matches_filter(part.tags, tags):
+                if not any(t in text for t in tokens):
+                    continue
+                if tags and not _matches_filter(part.tags, tags):
+                    # Bypass the tag filter when the part belongs to
+                    # one of the join base IDs.
+                    if parts_id not in join_set:
                         continue
-                    results.append((f"{parts_id}@p{part.part_num}", part.summary, -1.0))
+                results.append((f"{parts_id}@p{part.part_num}", part.summary, -1.0))
         return results[:limit]
 
     def query_fts_scoped(self, collection: str, query: str, ids: list[str],
                          limit: int = 10,
-                         tags: dict = None) -> list[tuple[str, str, float]]:
+                         tags: dict = None,
+                         part_tag_join_base_ids: list[str] | None = None,
+                         ) -> list[tuple[str, str, float]]:
         """Mock scoped FTS — delegates to query_fts then filters to ids."""
-        all_results = self.query_fts(collection, query, limit=limit * 3, tags=tags)
+        all_results = self.query_fts(
+            collection, query, limit=limit * 3, tags=tags,
+            part_tag_join_base_ids=part_tag_join_base_ids,
+        )
         id_set = set(ids)
         filtered = []
         for r in all_results:

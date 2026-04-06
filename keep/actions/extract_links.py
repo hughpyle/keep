@@ -222,14 +222,25 @@ class ExtractLinks:
         links = _parse_links(content, content_type=ct)
 
         # Merge pre-extracted structured links from document provider
-        # (PDF annotations, DOCX/PPTX hyperlinks, HTML <a> tags)
+        # (PDF annotations, DOCX/PPTX hyperlinks, HTML <a> tags). Each
+        # entry is either a bare URL string or ``{"url": ..., "title"?:}``.
         doc_links = params.get("doc_links") or []
         if doc_links:
             seen = {l["target"] for l in links}
-            for url in doc_links:
-                if url and url not in seen:
-                    seen.add(url)
-                    links.append({"target": url, "style": "structured"})
+            for entry in doc_links:
+                if isinstance(entry, dict):
+                    url = entry.get("url")
+                    title = entry.get("title")
+                else:
+                    url = entry
+                    title = None
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                link: dict[str, str] = {"target": url, "style": "structured"}
+                if title:
+                    link["title"] = title
+                links.append(link)
 
         if not links:
             return {"skipped": True}
@@ -259,10 +270,27 @@ class ExtractLinks:
             style = link["style"]
 
             if _is_url(target):
-                # External URL — use as-is
-                resolved_targets.append(target)
-                if create_targets:
-                    # Auto-vivify: create a stub item for the URL if missing
+                # External URL — encode an alias if the structured
+                # extractor gave us link text (e.g. HTML <a> anchor text).
+                # When a title is present we deliberately skip the explicit
+                # put_item: the edge processor's auto-vivify path seeds the
+                # target's `name` tag from the alias, which is what we want.
+                # Pre-creating the stub here would block that path (the
+                # target would already exist by the time set_tags fires).
+                title = link.get("title")
+                # When create_targets=false, strip the alias so the edge
+                # processor doesn't seed a `name` on the auto-vivified
+                # target. The caller asked not to create target docs;
+                # the edge row itself is still created (existing
+                # behavior for URL tag values), but we stop the
+                # upgrade-to-named-entity that a title would trigger.
+                if title and not create_targets:
+                    title = None
+                ref_value = f"{target}[[{title}]]" if title else target
+                resolved_targets.append(ref_value)
+                if create_targets and not title:
+                    # Untitled URL — keep the legacy put_item so the stub
+                    # gets queued for background summarization.
                     existing = context.get(target)
                     if existing is None:
                         mutations.append({

@@ -2502,6 +2502,7 @@ class DocumentStore:
         query: str,
         limit: int = 10,
         tags: Optional[dict[str, str]] = None,
+        part_tag_join_base_ids: Optional[list[str]] = None,
     ) -> list[tuple[str, str, float]]:
         """Full-text search using FTS5 indexes (documents + parts).
 
@@ -2515,6 +2516,13 @@ class DocumentStore:
             limit: Max results
             tags: Optional tag filter — only return items matching all tags
                   (keys and values should be casefolded)
+            part_tag_join_base_ids: Optional list of base document IDs
+                  whose parts should bypass the ``tags`` filter. Parts
+                  do not inherit parent tags (see analyze.py), so when
+                  a tag filter is applied the caller precomputes the
+                  set of parents whose own tags match and passes them
+                  here; parts belonging to any of those parents are
+                  then accepted regardless of their own tag markers.
 
         Returns:
             List of (id, summary, bm25_rank) tuples ordered by relevance.
@@ -2534,6 +2542,7 @@ class DocumentStore:
                 "limit": limit,
                 "query": query,
                 "tag_count": len(tags or {}),
+                "part_join_size": len(part_tag_join_base_ids or []),
             },
         ) as span:
             # --- Search documents ---
@@ -2568,14 +2577,36 @@ class DocumentStore:
             """
             part_params: list[Any] = [fts_query, collection]
             if tags:
+                # Build the per-tag EXISTS clauses for the part's own tags.
+                tag_clauses: list[str] = []
+                tag_params: list[Any] = []
                 for k in tags:
                     for v in tag_values(tags, k):
-                        part_sql += (
-                            " AND EXISTS ("
+                        tag_clauses.append(
+                            "EXISTS ("
                             "SELECT 1 FROM json_each(p.tags_json, ?) jv "
                             "WHERE CAST(jv.value AS TEXT) = ?)"
                         )
-                        part_params.extend([f"$.{k}", v])
+                        tag_params.extend([f"$.{k}", v])
+                own_match = " AND ".join(tag_clauses) if tag_clauses else ""
+                if part_tag_join_base_ids and own_match:
+                    # Part is accepted if its own tags match all filters
+                    # OR its _base_id (p.id) is in the precomputed set of
+                    # parents whose own tags match. See analyze.py for why
+                    # parts don't inherit parent tags.
+                    placeholders = ",".join("?" * len(part_tag_join_base_ids))
+                    part_sql += (
+                        f" AND (({own_match}) OR p.id IN ({placeholders}))"
+                    )
+                    part_params.extend(tag_params)
+                    part_params.extend(part_tag_join_base_ids)
+                elif part_tag_join_base_ids:
+                    placeholders = ",".join("?" * len(part_tag_join_base_ids))
+                    part_sql += f" AND p.id IN ({placeholders})"
+                    part_params.extend(part_tag_join_base_ids)
+                elif own_match:
+                    part_sql += f" AND {own_match}"
+                    part_params.extend(tag_params)
             part_sql += " ORDER BY f.rank LIMIT ?"
             part_params.append(limit)
             part_rows = self._execute(part_sql, part_params).fetchall()
@@ -2618,12 +2649,18 @@ class DocumentStore:
         ids: list[str],
         limit: int = 10,
         tags: Optional[dict[str, str]] = None,
+        part_tag_join_base_ids: Optional[list[str]] = None,
     ) -> list[tuple[str, str, float]]:
         """Full-text search scoped to a whitelist of base document IDs.
 
         Same as :meth:`query_fts` but adds ``AND <table>.id IN (...)``
         to each sub-query so only documents, parts, and versions belonging
         to *ids* are considered.  Used by edge-following deep search.
+
+        The ``part_tag_join_base_ids`` parameter has the same meaning
+        as on :meth:`query_fts`: parts whose ``p.id`` is in this list
+        bypass the ``tags`` filter, since parts intentionally do not
+        inherit parent tags (see analyze.py).
         """
         if not self._fts_available or not ids:
             return []
@@ -2639,6 +2676,7 @@ class DocumentStore:
                 "query": query,
                 "scope_size": len(ids),
                 "tag_count": len(tags or {}),
+                "part_join_size": len(part_tag_join_base_ids or []),
             },
         ) as span:
             placeholders = ",".join("?" * len(ids))
@@ -2677,14 +2715,31 @@ class DocumentStore:
             """
             part_params: list[Any] = [fts_query, collection, *ids]
             if tags:
+                tag_clauses: list[str] = []
+                tag_params: list[Any] = []
                 for k in tags:
                     for v in tag_values(tags, k):
-                        part_sql += (
-                            " AND EXISTS ("
+                        tag_clauses.append(
+                            "EXISTS ("
                             "SELECT 1 FROM json_each(p.tags_json, ?) jv "
                             "WHERE CAST(jv.value AS TEXT) = ?)"
                         )
-                        part_params.extend([f"$.{k}", v])
+                        tag_params.extend([f"$.{k}", v])
+                own_match = " AND ".join(tag_clauses) if tag_clauses else ""
+                if part_tag_join_base_ids and own_match:
+                    join_ph = ",".join("?" * len(part_tag_join_base_ids))
+                    part_sql += (
+                        f" AND (({own_match}) OR p.id IN ({join_ph}))"
+                    )
+                    part_params.extend(tag_params)
+                    part_params.extend(part_tag_join_base_ids)
+                elif part_tag_join_base_ids:
+                    join_ph = ",".join("?" * len(part_tag_join_base_ids))
+                    part_sql += f" AND p.id IN ({join_ph})"
+                    part_params.extend(part_tag_join_base_ids)
+                elif own_match:
+                    part_sql += f" AND {own_match}"
+                    part_params.extend(tag_params)
             part_sql += " ORDER BY f.rank LIMIT ?"
             part_params.append(limit)
             part_rows = self._execute(part_sql, part_params).fetchall()

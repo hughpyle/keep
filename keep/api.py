@@ -59,7 +59,7 @@ from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, EdgeRef, TagMap,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
-    iter_tag_pairs, note_display_name, set_tag_values, tag_values, parse_ref,
+    iter_tag_pairs, note_display_name, normalize_edge_value, set_tag_values, tag_values, parse_ref,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     is_system_id,
@@ -1460,6 +1460,75 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if not conditions:
             return None
         return conditions[0] if len(conditions) == 1 else {"$and": conditions}
+
+    # Cap for the _base_id expansion in tag-filtered find. Large enough
+    # to cover realistic "papers tagged topic=X" fan-outs without
+    # producing an unwieldy Chroma where clause.
+    _FIND_PART_JOIN_LIMIT = 200
+    # Hard ceiling on rows scanned when paginating the first-tag query
+    # for multi-tag conjunctions. Prevents pathological "first tag
+    # matches everything, second tag narrows it" queries from scanning
+    # the entire collection while still being large enough to find
+    # realistic matches that sit outside the _FIND_PART_JOIN_LIMIT
+    # recency window.
+    _FIND_PART_JOIN_SCAN_BUDGET = 10_000
+
+    def _ids_matching_tags(
+        self, doc_coll: str, casefolded_tags: dict, limit: int,
+    ) -> set[str]:
+        """IDs of documents whose own stored tags satisfy every filter.
+
+        Used by tag-filtered find() to expand the where clause so that
+        parts reach their matching parents via ``_base_id`` — parts
+        intentionally don't inherit parent tags (see analyze.py), so
+        without this expansion a query like
+        ``find(query=X, tags={topic: Y})`` would silently stop
+        surfacing parts of topic=Y papers.
+
+        For single-tag filters this is a direct ``query_by_tag_value``
+        call capped at ``limit``. For multi-tag filters it paginates
+        the first tag's rows and post-filters the rest in Python,
+        accumulating matches until either ``limit`` is reached or the
+        ``_FIND_PART_JOIN_SCAN_BUDGET`` is exhausted. The scan budget
+        prevents a broad first tag from producing false negatives
+        when the true match lies outside the first ``limit`` rows.
+        """
+        tag_pairs = list(iter_tag_pairs(casefolded_tags))
+        if not tag_pairs:
+            return set()
+
+        first_key, first_value = tag_pairs[0]
+        if len(tag_pairs) == 1:
+            docs = self._document_store.query_by_tag_value(
+                doc_coll, first_key, first_value, limit=limit,
+            )
+            return {doc.id for doc in docs}
+
+        # Multi-tag conjunction: paginate first tag and post-filter.
+        result: set[str] = set()
+        offset = 0
+        page_size = max(limit, 500)
+        while len(result) < limit and offset < self._FIND_PART_JOIN_SCAN_BUDGET:
+            docs = self._document_store.query_by_tag_value(
+                doc_coll, first_key, first_value,
+                limit=page_size, offset=offset,
+            )
+            if not docs:
+                break
+            for doc in docs:
+                all_match = True
+                for extra_key, extra_value in tag_pairs[1:]:
+                    if extra_value not in tag_values(doc.tags, extra_key):
+                        all_match = False
+                        break
+                if all_match:
+                    result.add(doc.id)
+                    if len(result) >= limit:
+                        break
+            offset += len(docs)
+            if len(docs) < page_size:
+                break  # source exhausted
+        return result
     
     # -------------------------------------------------------------------------
     # Tag Validation
@@ -1580,6 +1649,46 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
     # -------------------------------------------------------------------------
     # Edge processing (tag-driven relationship edges)
     # -------------------------------------------------------------------------
+
+    def _normalize_edge_tag_values(
+        self, merged_tags: dict[str, Any], doc_coll: str,
+    ) -> None:
+        """Rewrite markdown-style link values on edge tags into wikilink form.
+
+        Mutates ``merged_tags`` in place. For each non-system key whose
+        ``.tag/{key}`` tagdoc declares an ``_inverse`` (i.e. it's an edge
+        tag), every value matching ``[Title](URL)`` is rewritten to
+        ``URL[[Title]]``. Non-edge tags are left alone — markdown-link
+        text in a content tag is none of our business.
+
+        This is the single normalization point for both ``put`` and
+        ``set_tags`` mutation paths, so the canonical storage form stays
+        ``id[[alias]]`` regardless of which writer produced the value.
+        """
+        if not merged_tags:
+            return
+        for key in list(merged_tags.keys()):
+            if key.startswith(SYSTEM_TAG_PREFIX):
+                continue
+            value = merged_tags[key]
+            # Only proceed if this key is actually an edge tag.
+            if key not in self._tagdoc_cache:
+                parent = self._document_store.get(doc_coll, f".tag/{key}")
+                self._tagdoc_cache[key] = parent.tags if parent else None
+            td_tags = self._tagdoc_cache[key]
+            if td_tags is None or not td_tags.get("_inverse"):
+                continue
+            if isinstance(value, list):
+                rewritten = [
+                    normalize_edge_value(v) if isinstance(v, str) else v
+                    for v in value
+                ]
+                if rewritten != value:
+                    merged_tags[key] = rewritten
+            elif isinstance(value, str):
+                rewritten_str = normalize_edge_value(value)
+                if rewritten_str != value:
+                    merged_tags[key] = rewritten_str
 
     def _process_edge_tags(
         self,
@@ -2020,6 +2129,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             and "_analyzed_version" not in merged_tags
         ):
             merged_tags["_analyzed_version"] = _prev_analyzed_version
+
+        # Normalize markdown-style edge tag values to canonical id[[alias]]
+        # form before change detection and storage. Done here so a single
+        # call covers both cloud and local code paths below, and so the
+        # change-detection diff sees the canonical form.
+        self._normalize_edge_tag_values(merged_tags, doc_coll)
 
         # Change detection (before embedding to allow early return)
         content_unchanged = (
@@ -2725,12 +2840,38 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # Build where clause from tags filter
         where = None
         casefolded_tags: Optional[dict] = None
+        # Parents whose own tags satisfy the filter — used to let parts
+        # of those parents bypass the tag filter in both the semantic
+        # (Chroma) and lexical (FTS) search branches. Parts intentionally
+        # don't inherit parent tags (see analyze.py), so without this
+        # expansion a tag filter would never reach them.
+        tag_join_base_ids: list[str] = []
         if tags:
             casefolded_tags = casefold_tags(tags)
             for k in casefolded_tags:
                 if not k.startswith(SYSTEM_TAG_PREFIX):
                     validate_tag_key(k)
             where = self._build_tag_where(casefolded_tags)
+
+            if where is not None:
+                parent_ids_set = self._ids_matching_tags(
+                    doc_coll, casefolded_tags,
+                    limit=self._FIND_PART_JOIN_LIMIT,
+                )
+                # Drop any parent IDs that are themselves parts — we
+                # only want real base IDs for the _base_id join.
+                parent_ids_set = {
+                    pid for pid in parent_ids_set if not is_part_id(pid)
+                }
+                if parent_ids_set:
+                    tag_join_base_ids = sorted(parent_ids_set)
+                    # Semantic branch: $or expansion on the where clause.
+                    where = {
+                        "$or": [
+                            where,
+                            {"_base_id": {"$in": tag_join_base_ids}},
+                        ],
+                    }
 
         if similar_to:
             # Similar-to mode: use stored embedding from existing item
@@ -2782,10 +2923,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     fts_rows = self._document_store.query_fts_scoped(
                         doc_coll, query, list(scope_ids),
                         limit=fts_fetch, tags=casefolded_tags,
+                        part_tag_join_base_ids=tag_join_base_ids or None,
                     )
                 else:
                     fts_rows = self._document_store.query_fts(
                         doc_coll, query, limit=fts_fetch, tags=casefolded_tags,
+                        part_tag_join_base_ids=tag_join_base_ids or None,
                     )
             fts_items = [Item(id=r[0], summary=r[1]) for r in fts_rows]
 
@@ -2804,10 +2947,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     fts_rows = self._document_store.query_fts_scoped(
                         doc_coll, query, list(scope_ids),
                         limit=fetch_limit, tags=casefolded_tags,
+                        part_tag_join_base_ids=tag_join_base_ids or None,
                     )
                 else:
                     fts_rows = self._document_store.query_fts(
                         doc_coll, query, limit=fetch_limit, tags=casefolded_tags,
+                        part_tag_join_base_ids=tag_join_base_ids or None,
                     )
             items = [Item(id=r[0], summary=r[1]) for r in fts_rows]
 
@@ -4621,15 +4766,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         chroma_coll = self._resolve_chroma_collection()
         max_part = self._document_store.max_part_num(doc_coll, id)
-        parent_user_tags = {
-            k: v for k, v in doc_record.tags.items()
-            if not k.startswith(SYSTEM_TAG_PREFIX)
-        }
         embed = self._get_embedding_provider()
         now = utc_now()
 
+        # Parts do NOT inherit parent tags — see analyze.py for the
+        # rationale. Each part carries only its analyzer-assigned tags
+        # plus _base_id/_part_num bookkeeping.
         for i, raw in enumerate(new_parts, start=max_part + 1):
-            part_tags = dict(parent_user_tags)
+            part_tags: dict[str, Any] = {}
             if raw.get("tags"):
                 part_tags.update(raw["tags"])
             part_tags["_base_id"] = id
@@ -4672,15 +4816,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         """Write or replace the @P{0} overview part."""
         from .document_store import PartInfo
 
-        parent_user_tags = {
-            k: v for k, v in doc_record.tags.items()
-            if not k.startswith(SYSTEM_TAG_PREFIX)
-        }
+        # The overview part follows the same no-inheritance rule as
+        # decomposed parts: it carries only its own marker tag plus
+        # _base_id/_part_num bookkeeping.
         now = utc_now()
         overview_part = PartInfo(
             part_num=0,
             summary=overview,
-            tags=dict(parent_user_tags, _part_type="overview"),
+            tags={"_part_type": "overview"},
             content="",
             created_at=now,
         )

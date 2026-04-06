@@ -287,6 +287,36 @@ def test_system_hermes_prompt_embeds_generic_body(mock_providers, tmp_path):
     assert "{{include:" not in result.prompt
 
 
+def test_analyze_prompt_resolution_by_type(mock_providers, tmp_path):
+    """`type=paper` resolves to the paper prompt; conversation/default still match."""
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    # Default fallback (no type tag) → analyze/default
+    default_prompt = kp._resolve_prompt_doc("analyze", {})
+    assert default_prompt is not None
+    assert "section by section" in default_prompt.lower()
+    assert "evolution of a conversation" not in default_prompt.lower()
+
+    # type=conversation → analyze/conversation (unchanged behavior)
+    conv_prompt = kp._resolve_prompt_doc("analyze", {"type": "conversation"})
+    assert conv_prompt is not None
+    assert "facts" in conv_prompt.lower()
+    assert "conversation" in conv_prompt.lower()
+
+    # type=paper → analyze/paper (new)
+    paper_prompt = kp._resolve_prompt_doc("analyze", {"type": "paper"})
+    assert paper_prompt is not None
+    assert "paper" in paper_prompt.lower()
+    assert "section" in paper_prompt.lower()
+    # Distinguishes paper prompt from default fallback.
+    assert paper_prompt != default_prompt
+
+    # An unrelated type still falls back to default.
+    other_prompt = kp._resolve_prompt_doc("analyze", {"type": "unknown"})
+    assert other_prompt == default_prompt
+
+
 def test_analyze_action_errors_when_default_prompt_is_broken(mock_providers, tmp_path):
     kp = Keeper(store_path=tmp_path)
     _ensure_system_docs(kp)

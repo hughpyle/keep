@@ -763,14 +763,13 @@ class BackgroundProcessingMixin:
 
             mutations.append({"op": "delete_prefix", "prefix": f"{item_id}@p"})
 
-            parent_user_tags = {
-                k: v for k, v in (existing_tags or {}).items()
-                if not k.startswith(SYSTEM_TAG_PREFIX)
-            }
+            # Parts do NOT inherit parent tags — see analyze.py for the
+            # rationale. Each part carries only its analyzer-assigned
+            # tags plus _base_id/_part_num bookkeeping.
             for i, raw in enumerate(raw_parts, 1):
                 if not isinstance(raw, dict):
                     continue
-                part_tags = dict(parent_user_tags)
+                part_tags: dict[str, Any] = {}
                 if isinstance(raw.get("tags"), dict):
                     part_tags.update(raw["tags"])
                 part_tags["_base_id"] = item_id
