@@ -11,7 +11,7 @@ for retrieval — search results, meta, edges — keyed on the user's
 message as a similarity query.
 
 ## Prompt
-
+---
 Context in `keep` includes:
   Similar:
   {find_results|(none)}
