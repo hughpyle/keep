@@ -7,6 +7,8 @@ Supports two modes:
 
 import os
 
+from .url_validation import _validate_provider_url
+
 
 def create_openai_client(
     api_key: str | None = None,
@@ -37,6 +39,10 @@ def create_openai_client(
             "OpenAI provider requires the 'openai' library. "
             "Install with: pip install openai"
         )
+
+    # SSRF prevention: validate base_url before passing to SDK
+    if base_url:
+        _validate_provider_url(base_url)
 
     key = (
         api_key

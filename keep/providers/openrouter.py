@@ -77,9 +77,10 @@ def _openrouter_headers(
 ) -> dict[str, str] | None:
     headers: dict[str, str] = {}
     if site_url:
-        headers["HTTP-Referer"] = site_url
+        # Strip CRLF to prevent header injection (httpx also rejects these)
+        headers["HTTP-Referer"] = site_url.replace("\r", "").replace("\n", "").strip()
     if app_name:
-        headers["X-OpenRouter-Title"] = app_name
+        headers["X-OpenRouter-Title"] = app_name.replace("\r", "").replace("\n", "").strip()
     return headers or None
 
 
@@ -90,6 +91,7 @@ def _create_openrouter_client(
     site_url: str | None,
     app_name: str | None,
 ):
+    # SSRF prevention: base_url is validated inside create_openai_client
     return create_openai_client(
         api_key=_resolve_openrouter_key(api_key),
         base_url=base_url or OPENROUTER_BASE_URL,

@@ -8,6 +8,7 @@ import sys
 import requests
 
 from keep.providers.http import http_session as ollama_session  # back-compat alias
+from keep.providers.url_validation import _validate_provider_url
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,10 @@ def ollama_base_url(url: str | None = None) -> str:
         url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     if not url.startswith("http"):
         url = f"http://{url}"
-    return url.rstrip("/")
+    url = url.rstrip("/")
+    # SSRF prevention: block link-local/metadata endpoints
+    _validate_provider_url(url)
+    return url
 
 
 def ollama_ensure_model(base_url: str, model: str) -> None:

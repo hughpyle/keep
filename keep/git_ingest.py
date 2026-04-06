@@ -8,9 +8,14 @@ Incremental: tracks a watermark SHA so re-scans only process new commits.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
+
+# Valid git SHA: 40-char (SHA-1) or 64-char (SHA-256) hex string.
+# Used to prevent argument injection via stored watermark values.
+_VALID_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
 
 logger = logging.getLogger(__name__)
 
@@ -162,9 +167,21 @@ def get_commits_since(
     limit: int = 500,
 ) -> list[dict[str, Any]]:
     """Get commits since watermark (or all if no watermark)."""
+    # Security: sanitize limit to prevent negative-number argument injection
+    limit = max(1, int(limit))
     args = ["log", f"--format={_LOG_FORMAT}", "--name-only", f"-{limit}"]
     if watermark:
-        args.append(f"{watermark}..HEAD")
+        # Security: validate watermark is a hex SHA to prevent git argument
+        # injection via stored watermark values (e.g. "--exec=..." or shell chars)
+        if not _VALID_SHA_RE.match(watermark):
+            # Invalid/corrupted watermark — fall back to full scan rather
+            # than permanently wedging the repo with empty results.
+            logger.warning(
+                "Invalid watermark SHA %r, ignoring — will do full scan",
+                watermark,
+            )
+        else:
+            args.append(f"{watermark}..HEAD")
 
     raw = _run_git(repo_dir, args, timeout=30)
     if not raw:
