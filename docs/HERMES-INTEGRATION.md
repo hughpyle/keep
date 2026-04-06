@@ -20,7 +20,9 @@ The first session initializes the store, migrates system docs, and presents the 
 
 ## What the agent sees
 
-On first session, the system prompt includes the nowdoc with step-by-step instructions to read the practice guide (`keep_help`), read the library teachings (`keep_flow get`), and reflect (`keep_prompt reflect`). After the agent completes this and updates `now`, subsequent sessions show its own working context instead.
+The agent's system prompt is framed by a Hermes-specific wrapper (`.prompt/agent/system-hermes`) that renders alongside the built-in `memory` tool and the USER PROFILE / MEMORY blocks. It positions keep as the cross-session working memory (`now`) and long-term store, sitting above Hermes' pinned-essentials layer. The wrapper then includes the generic reflective-memory practice (`.prompt/agent/system`), so the same core instructions are available in any host.
+
+On first session, the prefetched user-message context includes the nowdoc with step-by-step instructions to read the practice guide (`keep_help`), read the library teachings (`keep_flow get`), and reflect (`keep_prompt reflect`). After the agent completes this and updates `now`, subsequent sessions show its own working context instead.
 
 Three tools are available: `keep_flow` (all operations), `keep_help` (documentation), `keep_prompt` (context-injected prompts).
 

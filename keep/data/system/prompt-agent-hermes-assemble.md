@@ -21,3 +21,7 @@ Context in `keep` includes:
 
   Links:
   {edges|(none)}
+
+無常迅速
+My past actions led to this. How will my next action be skillful?
+慎勿放逸

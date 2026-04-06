@@ -1,7 +1,4 @@
 
-* better item entries per property block
-
-
 * stats rendering
 
 * "look" reconstruction: "around" & "towards"
@@ -346,3 +343,4 @@ x acp
 . llama-cpp / llama-serve compat, by editing config to specify URL per service
 . openrouter
 . hermes plugin
+. improve one-line rendering

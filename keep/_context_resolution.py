@@ -13,7 +13,15 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import yaml
 
+import re
+
 from .analyzers import extract_prompt_section
+
+# Matches {{include:NAME}} where NAME is a prompt path under .prompt/
+# (e.g. "agent/system" -> ".prompt/agent/system"). Bounded character set
+# prevents path escape: no dots, no whitespace, no relative segments.
+_PROMPT_INCLUDE_RE = re.compile(r"\{\{include:([a-zA-Z0-9][a-zA-Z0-9/_-]*)\}\}")
+_PROMPT_INCLUDE_MAX_DEPTH = 3
 from .tracing import get_tracer
 from .types import (
     Item,
@@ -411,6 +419,51 @@ class ContextResolutionMixin:
 
         return tuple(ordered)
 
+    def _expand_prompt_includes(
+        self,
+        body: str,
+        *,
+        visited: set[str],
+        depth: int,
+    ) -> str:
+        """Expand ``{{include:NAME}}`` directives to other prompt bodies.
+
+        NAME is resolved to ``.prompt/{NAME}`` — the include mechanism is
+        bounded to the prompt namespace, so wrappers cannot pull in tag
+        specs, state docs, or arbitrary store content.
+
+        Cycles are rejected via the ``visited`` set. Depth is capped to
+        avoid pathological nesting. Missing targets raise ``ValueError``;
+        a silent empty-expansion would make broken prompts invisible.
+        """
+        if not body or "{{include:" not in body:
+            return body
+        if depth >= _PROMPT_INCLUDE_MAX_DEPTH:
+            raise ValueError(
+                f"prompt include depth exceeded (max {_PROMPT_INCLUDE_MAX_DEPTH})"
+            )
+
+        def _replace(match: "re.Match[str]") -> str:
+            rel = match.group(1)
+            target_id = f".prompt/{rel}"
+            if target_id in visited:
+                raise ValueError(
+                    f"prompt include cycle: {target_id} already on the chain"
+                )
+            target = self.get(target_id)
+            if target is None:
+                raise ValueError(
+                    f"prompt include not found: {target_id}"
+                )
+            inner = extract_prompt_section(target.summary) or target.summary
+            return self._expand_prompt_includes(
+                inner,
+                visited=visited | {target_id},
+                depth=depth + 1,
+            )
+
+        return _PROMPT_INCLUDE_RE.sub(_replace, body)
+
     def render_prompt(
         self,
         name: str,
@@ -459,6 +512,10 @@ class ContextResolutionMixin:
         if not prompt_body:
             # Fall back to full content if no ## Prompt section
             prompt_body = doc.summary
+
+        prompt_body = self._expand_prompt_includes(
+            prompt_body, visited={doc_id}, depth=0,
+        )
 
         token_budget = self._coerce_token_budget(token_budget)
 

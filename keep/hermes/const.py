@@ -57,7 +57,7 @@ ROLE_ASSISTANT = "Assistant:"
 
 # -- Prompt names used by lifecycle hooks ------------------------------------
 
-PROMPT_SYSTEM = "system"
+PROMPT_SYSTEM = "system-hermes"
 PROMPT_HERMES_ASSEMBLE = "hermes-assemble"
 
 # -- Tool schemas (hermes-specific format) -----------------------------------

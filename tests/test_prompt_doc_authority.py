@@ -184,6 +184,109 @@ def test_summarize_action_errors_when_default_prompt_is_broken(mock_providers, t
         assert "missing prompt doc for summarize" in str(exc).lower()
 
 
+def test_render_prompt_expands_include_directive(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    kp.put(
+        "# Inner\n\n## Prompt\ninner body text",
+        id=".prompt/agent/test-inner",
+        tags={"category": "system", "context": "prompt"},
+    )
+    kp.put(
+        "# Wrapper\n\n## Prompt\nbefore\n{{include:agent/test-inner}}\nafter",
+        id=".prompt/agent/test-wrapper",
+        tags={"category": "system", "context": "prompt"},
+    )
+
+    result = kp.render_prompt(name="test-wrapper")
+
+    assert result is not None
+    assert result.prompt is not None
+    assert "before" in result.prompt
+    assert "inner body text" in result.prompt
+    assert "after" in result.prompt
+    assert "{{include:" not in result.prompt
+
+
+def test_render_prompt_include_missing_target_raises(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    kp.put(
+        "# Wrapper\n\n## Prompt\n{{include:agent/does-not-exist}}",
+        id=".prompt/agent/test-missing-include",
+        tags={"category": "system", "context": "prompt"},
+    )
+
+    try:
+        kp.render_prompt(name="test-missing-include")
+        assert False, "missing include target should raise"
+    except ValueError as exc:
+        assert "not found" in str(exc).lower()
+
+
+def test_render_prompt_include_cycle_raises(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    kp.put(
+        "# A\n\n## Prompt\n{{include:agent/test-cycle-b}}",
+        id=".prompt/agent/test-cycle-a",
+        tags={"category": "system", "context": "prompt"},
+    )
+    kp.put(
+        "# B\n\n## Prompt\n{{include:agent/test-cycle-a}}",
+        id=".prompt/agent/test-cycle-b",
+        tags={"category": "system", "context": "prompt"},
+    )
+
+    try:
+        kp.render_prompt(name="test-cycle-a")
+        assert False, "include cycle should raise"
+    except ValueError as exc:
+        assert "cycle" in str(exc).lower()
+
+
+def test_render_prompt_include_rejects_path_escape(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    # Dots are not in the allowed include character set — the directive
+    # should simply not match, leaving the literal text in place (and
+    # therefore not pulling anything from outside the prompt namespace).
+    kp.put(
+        "# Wrapper\n\n## Prompt\n{{include:../tag/act}}",
+        id=".prompt/agent/test-escape",
+        tags={"category": "system", "context": "prompt"},
+    )
+
+    result = kp.render_prompt(name="test-escape")
+
+    assert result is not None
+    assert "{{include:../tag/act}}" in result.prompt
+
+
+def test_system_hermes_prompt_embeds_generic_body(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    result = kp.render_prompt(name="system-hermes")
+
+    assert result is not None
+    assert result.prompt is not None
+    # Framed header from the wrapper
+    assert "KEEP — REFLECTIVE MEMORY" in result.prompt
+    # Division-of-labor text from the wrapper
+    assert "Use them together" in result.prompt
+    assert "Built-in `memory`" in result.prompt
+    # Content pulled in from the generic .prompt/agent/system
+    assert "keep_prompt" in result.prompt
+    assert "keep_flow" in result.prompt
+    # Include directive must have been expanded, not left literal
+    assert "{{include:" not in result.prompt
+
+
 def test_analyze_action_errors_when_default_prompt_is_broken(mock_providers, tmp_path):
     kp = Keeper(store_path=tmp_path)
     _ensure_system_docs(kp)

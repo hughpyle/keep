@@ -39,8 +39,29 @@ Prompt docs may contain placeholders that are expanded at render time:
 | `{since}` | The `--since` filter value (ISO duration or date), empty if not given |
 | `{until}` | The `--until` filter value (ISO duration or date), empty if not given |
 | `{binding_name}` | Flow binding — see *State-doc backed prompts* below |
+| `{{include:NAME}}` | Literal include of another prompt doc's `## Prompt` body — resolves to `.prompt/NAME` (e.g. `{{include:agent/system}}`) |
 
 When no text argument is given, `{find}` and `{text}` expand to empty. When no `--id` is given, `{get}` shows the `now` document context.
+
+### Prompt includes
+
+`{{include:NAME}}` is expanded before any other placeholders and lets one prompt doc wrap or extend another. The directive is bounded to the prompt namespace — `NAME` resolves to `.prompt/{NAME}` — so included content can only come from other prompt docs. Cycles and missing targets raise an error rather than silently rendering empty. The character set disallows path escapes (no `..`, no dots).
+
+A typical use is a host-specific wrapper that adds framing around a generic prompt body:
+
+```
+## Prompt
+
+══════════════════════════════════════════════
+KEEP — REFLECTIVE MEMORY
+══════════════════════════════════════════════
+
+Host-specific orientation here…
+
+{{include:agent/system}}
+
+══════════════════════════════════════════════
+```
 
 ## State-doc backed prompts
 
@@ -87,6 +108,8 @@ Bundled prompts, loaded on first use:
 | `query` | `.prompt/agent/query` | Answer questions using retrieved memory context |
 | `session-start` | `.prompt/agent/session-start` | Context injection at session start |
 | `subagent-start` | `.prompt/agent/subagent-start` | Context injection for subagent initialization |
+| `system` | `.prompt/agent/system` | Generic system-prompt orientation for agents using keep as a memory provider |
+| `system-hermes` | `.prompt/agent/system-hermes` | Hermes-specific system-prompt wrapper (frames `system` with layered-memory division of labor) |
 
 ### Viewing and editing
 
