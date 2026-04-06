@@ -165,6 +165,39 @@ class TestEdgeIntegration:
         assert len(ctx.edges["said"]) == 1
         assert ctx.edges["said"][0].source_id == "conv1"
 
+    def test_bundled_cites_tagdoc_creates_cited_by_edges(self, kp):
+        """The bundled .tag/cites tagdoc wires cites ↔ cited_by edges.
+
+        Regression lock-in for the new system doc: writing a ``cites``
+        tag on a source should produce a ``cited_by`` inverse on the
+        target, with alias-driven name seeding intact.
+        """
+        # Trigger system doc migration so .tag/cites is loaded.
+        kp.put("migration trigger", id="_cites-test-trigger")
+        kp.delete("_cites-test-trigger")
+
+        kp.put(
+            content="Survey paper body",
+            id="https://arxiv.org/abs/2403.04782",
+            summary="Temporal KG Survey",
+            tags={
+                "cites": "https://arxiv.org/abs/2201.08236[[TKG Survey 2022]]",
+            },
+        )
+
+        target = kp.get("https://arxiv.org/abs/2201.08236")
+        assert target is not None
+        assert target.tags.get("_source") == "auto-vivify"
+        name = target.tags.get("name")
+        assert name == "TKG Survey 2022" or "TKG Survey 2022" in (name or [])
+
+        ctx = kp.get_context("https://arxiv.org/abs/2201.08236")
+        assert "cited_by" in ctx.edges
+        assert any(
+            e.source_id == "https://arxiv.org/abs/2403.04782"
+            for e in ctx.edges["cited_by"]
+        )
+
     def test_edge_target_uri_value_is_normalized(self, kp):
         """Edge target values that are HTTP URIs use canonical ID normalization."""
         self._create_tagdoc(kp, "speaker", "said")
