@@ -27,8 +27,9 @@ The prompt docs in the store are authoritative at runtime. Bundled prompt files 
 |----|-----------|---------|
 | `.prompt/summarize/default` | *(none — fallback)* | Default summarization prompt |
 | `.prompt/summarize/conversation` | `type=conversation` | Preserves dates, names, facts from conversations |
-| `.prompt/analyze/default` | *(none — fallback)* | Default analysis prompt for structural decomposition |
+| `.prompt/analyze/default` | *(none — fallback)* | Section-by-section extraction for arbitrary documents |
 | `.prompt/analyze/conversation` | `type=conversation` | Fact extraction from conversations |
+| `.prompt/analyze/paper` | `type=paper` | Structural decomposition of research papers along actual sections |
 
 ### Creating custom prompts
 

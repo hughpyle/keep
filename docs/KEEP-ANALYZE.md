@@ -124,6 +124,21 @@ Use `--force` to override the skip:
 keep analyze doc:1 --force            # Re-analyze regardless
 ```
 
+## Part tags
+
+Parts do **not** inherit tags from their parent document. Each part carries only:
+
+- `_base_id` — the parent document's ID (for navigation and join queries)
+- `_part_num` — the 1-based part number (`0` for the optional vstring overview)
+- `_start_line` / `_end_line` — line ranges when the analyzer tracks source spans
+- Any tags the analyzer assigned to that specific part (e.g., classifier output)
+
+This keeps parts clean sub-notes rather than clones of the parent's tag graph, and prevents drift when the parent is re-tagged without re-analysis. Document-level relationships like `references`, `cites`, and `informs` stay on the parent where they semantically belong.
+
+The tradeoff is recovered automatically by `find`: a tag-filtered query like `find("X", tags={"project": "alpha"})` still returns parts of matching parents via a `_base_id` join, so nothing is lost from the caller's perspective.
+
+If the analyzer itself decides a particular part warrants a topic or type tag (via classifier output or guidance tags), that tag lives on the part. Everything else comes from the parent at read time, not write time.
+
 ## Part immutability
 
 Parts are machine-generated analysis results, not human observations.
