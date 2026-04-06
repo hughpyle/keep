@@ -222,6 +222,50 @@ class TestIngest:
         assert watermark is not None
         assert len(watermark) == 40  # full SHA
 
+    def test_incremental_watermark_stays_scalar(self, kp, git_repo):
+        """git_watermark is singular — re-ingest must replace, not append.
+
+        Regression: pre-singular stores accumulated a list of SHAs,
+        which broke the next ingest run because re.match got a list.
+        """
+        # Two ingest runs back-to-back produce at most one watermark value.
+        ingest_git_history(kp, git_repo)
+        ingest_git_history(kp, git_repo)
+
+        dir_item = kp.get(f"file://{git_repo}")
+        assert dir_item is not None
+        watermark = dir_item.tags.get("git_watermark")
+        assert isinstance(watermark, str), \
+            f"git_watermark must be a scalar string, got {type(watermark).__name__}: {watermark!r}"
+        assert len(watermark) == 40
+
+    def test_ingest_tolerates_legacy_list_watermark(self, kp, git_repo):
+        """Defensive: old stores may hold a list-valued git_watermark.
+
+        Rather than blowing up with ``TypeError: expected string or
+        bytes-like object, got 'list'`` when re.match runs on the list,
+        the reader picks the last value and proceeds.
+        """
+        # First ingest establishes the watermark in singular form.
+        ingest_git_history(kp, git_repo)
+        dir_uri = f"file://{git_repo}"
+        first_watermark = kp.get(dir_uri).tags.get("git_watermark")
+        assert isinstance(first_watermark, str)
+
+        # Simulate a corrupted store by rewriting the tag as a list
+        # directly via the document store (bypassing the singular
+        # enforcement in the tag path).
+        doc_coll = kp._resolve_doc_collection()
+        doc = kp._document_store.get(doc_coll, dir_uri)
+        fake_list = ["0" * 40, first_watermark]  # last value is real
+        updated_tags = dict(doc.tags)
+        updated_tags["git_watermark"] = fake_list
+        kp._document_store.update_tags(doc_coll, dir_uri, updated_tags)
+
+        # Re-ingest: must not raise. Incremental: no new commits.
+        result = ingest_git_history(kp, git_repo)
+        assert result["commits"] == 0
+
     def test_not_git_repo(self, kp, tmp_path):
         result = ingest_git_history(kp, tmp_path)
         assert result["commits"] == 0

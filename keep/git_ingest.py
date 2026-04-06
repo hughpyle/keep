@@ -239,12 +239,20 @@ def ingest_git_history(
     root = get_repo_root(repo_dir) or repo_dir
     repo = _repo_name(root)
 
-    # Read watermark from the directory item
+    # Read watermark from the directory item. The canonical shape is a
+    # scalar (the tag is `_singular: "true"` — see .tag/git_watermark),
+    # but tolerate pre-existing list-valued tags from stores that
+    # predate the singular declaration: pick the most recently-added
+    # value and let the SHA validator downstream catch anything weird.
     dir_uri = f"file://{root}"
     dir_item = keeper.get(dir_uri)
     watermark: str | None = None
     if dir_item:
-        watermark = (dir_item.tags or {}).get("git_watermark")
+        raw_watermark = (dir_item.tags or {}).get("git_watermark")
+        if isinstance(raw_watermark, list):
+            watermark = raw_watermark[-1] if raw_watermark else None
+        elif isinstance(raw_watermark, str):
+            watermark = raw_watermark
 
     # Get new commits
     commits = get_commits_since(root, watermark=watermark, limit=limit)
