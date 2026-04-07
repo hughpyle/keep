@@ -590,6 +590,199 @@ class MistralEmbedding:
         return [d.embedding for d in sorted_data]
 
 
+class MiniMaxEmbedding:
+    """Embedding provider using MiniMax's REST API.
+
+    MiniMax's embedding endpoint is **not** OpenAI-compatible — it uses its
+    own ``texts``/``type``/``vectors`` schema and requires a GroupId query
+    parameter alongside the bearer token.  Errors are signalled inside a
+    ``base_resp.status_code`` field even when the HTTP status is 200.
+
+    The model is asymmetric: ``type=db`` for documents being indexed,
+    ``type=query`` for search inputs.
+
+    Note on hosts: ``api.minimax.io`` serves the international platform
+    (keys minted at platform.minimax.io); ``api.minimax.chat`` is the
+    legacy China host.  We default to the international host because that's
+    what platform.minimax.io issues keys for — using ``.chat`` with an
+    international key returns ``status 2049: invalid api key``.
+
+    Requires: MINIMAX_API_KEY and MINIMAX_GROUP_ID environment variables.
+    """
+
+    # Model dimensions (as of 2026)
+    MODEL_DIMENSIONS = {
+        "embo-01": 1536,
+    }
+
+    API_URL = "https://api.minimax.io/v1/embeddings"
+
+    # Retry settings (mirror Voyage)
+    MAX_RETRIES = 5
+    INITIAL_BACKOFF = 1.0  # seconds
+    MAX_BACKOFF = 60.0  # seconds
+
+    def __init__(
+        self,
+        model: str = "embo-01",
+        api_key: str | None = None,
+        group_id: str | None = None,
+    ):
+        """Initialize.
+
+        Args:
+        model: MiniMax embedding model name.
+        api_key: API key (defaults to MINIMAX_API_KEY env var).
+        group_id: MiniMax group/organisation id (defaults to MINIMAX_GROUP_ID
+            env var).  Required by the MiniMax API as a query parameter.
+        """
+        self.model_name = model
+        self._dimension = self.MODEL_DIMENSIONS.get(model)
+
+        self._api_key = api_key or os.environ.get("MINIMAX_API_KEY")
+        if not self._api_key:
+            raise ValueError(
+                "MiniMax API key required. Set MINIMAX_API_KEY environment variable.\n"
+                "Get your API key at: https://platform.minimax.io/"
+            )
+
+        self._group_id = group_id or os.environ.get("MINIMAX_GROUP_ID")
+        if not self._group_id:
+            raise ValueError(
+                "MiniMax group id required. Set MINIMAX_GROUP_ID environment variable.\n"
+                "Find your GroupId in the MiniMax console under account settings."
+            )
+
+    @property
+    def dimension(self) -> int:
+        """Get embedding dimension for the model (detected lazily if unknown)."""
+        if self._dimension is None:
+            test_embedding = self.embed("dimension test")
+            self._dimension = len(test_embedding)
+        return self._dimension
+
+    _INPUT_TYPES = {
+        EmbedTask.DOCUMENT: "db",
+        EmbedTask.QUERY: "query",
+    }
+
+    def _request_with_retry(self, payload: dict, timeout: int) -> dict:
+        """POST to MiniMax with exponential backoff for transient failures."""
+        import requests  # noqa: PLC0415
+        from .http import http_session  # noqa: PLC0415
+
+        backoff = self.INITIAL_BACKOFF
+        last_exception: Exception | None = None
+
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                response = http_session().post(
+                    self.API_URL,
+                    params={"GroupId": self._group_id},
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=timeout,
+                )
+
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    try:
+                        wait_time = float(retry_after) if retry_after else backoff
+                    except ValueError:
+                        wait_time = backoff
+                    wait_time = min(wait_time, self.MAX_BACKOFF)
+                    time.sleep(wait_time)
+                    backoff = min(backoff * 2, self.MAX_BACKOFF)
+                    continue
+
+                if response.status_code in (401, 403):
+                    raise RuntimeError(
+                        f"MiniMax API authentication failed ({response.status_code}).\n"
+                        "Check MINIMAX_API_KEY and MINIMAX_GROUP_ID environment variables."
+                    )
+
+                response.raise_for_status()
+                data = response.json()
+
+                # MiniMax signals errors inside base_resp even on HTTP 200.
+                # Codes documented at platform.minimax.io/docs/api-reference/errorcode
+                base_resp = data.get("base_resp") or {}
+                status = base_resp.get("status_code", 0)
+                if status != 0:
+                    msg = base_resp.get("status_msg", "unknown error")
+                    # 1004 = not authorized; 2049 = invalid api key — fail fast.
+                    if status in (1004, 2049):
+                        raise RuntimeError(
+                            f"MiniMax API authentication failed (status {status}: {msg}).\n"
+                            "Check MINIMAX_API_KEY and MINIMAX_GROUP_ID environment variables.\n"
+                            "Keys from platform.minimax.io target api.minimax.io — "
+                            "make sure you're not using a key from a different region."
+                        )
+                    # Retryable: 1001 timeout, 1002 RPM rate-limit, 1024 internal,
+                    # 1033 mysql/system, 1041 conn limit.
+                    if status in (1001, 1002, 1024, 1033, 1041) and attempt < self.MAX_RETRIES - 1:
+                        time.sleep(backoff)
+                        backoff = min(backoff * 2, self.MAX_BACKOFF)
+                        continue
+                    raise RuntimeError(
+                        f"MiniMax API error (status {status}): {msg}"
+                    )
+
+                return data
+
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                error_msg = str(e).lower()
+                if "connection" in error_msg or "network" in error_msg or "resolve" in error_msg:
+                    raise RuntimeError(
+                        f"Cannot reach MiniMax API: {e}\n\n"
+                        "If running in a sandboxed environment (e.g., Claude Desktop):\n"
+                        "Add api.minimax.chat to your network allowlist."
+                    ) from e
+                if attempt < self.MAX_RETRIES - 1:
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, self.MAX_BACKOFF)
+                    continue
+                raise
+
+        raise RuntimeError(
+            f"MiniMax API rate limit exceeded after {self.MAX_RETRIES} retries. "
+            "Please wait and try again."
+        ) from last_exception
+
+    def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
+        """Generate embedding for a single text."""
+        data = self._request_with_retry(
+            payload={
+                "model": self.model_name,
+                "type": self._INPUT_TYPES[task],
+                "texts": [text],
+            },
+            timeout=60,
+        )
+        embedding = data["vectors"][0]
+        if self._dimension is None:
+            self._dimension = len(embedding)
+        return embedding
+
+    def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
+        """Generate embeddings for multiple texts."""
+        if not texts:
+            return []
+        data = self._request_with_retry(
+            payload={
+                "model": self.model_name,
+                "type": self._INPUT_TYPES[task],
+                "texts": texts,
+            },
+            timeout=120,
+        )
+        return list(data["vectors"])
+
+
 # Register providers
 _registry = get_registry()
 _registry.register_embedding("sentence-transformers", SentenceTransformerEmbedding)
@@ -598,3 +791,4 @@ _registry.register_embedding("gemini", GeminiEmbedding)
 _registry.register_embedding("ollama", OllamaEmbedding)
 _registry.register_embedding("voyage", VoyageEmbedding)
 _registry.register_embedding("mistral", MistralEmbedding)
+_registry.register_embedding("minimax", MiniMaxEmbedding)

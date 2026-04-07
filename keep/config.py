@@ -89,6 +89,8 @@ class EmbeddingIdentity:
                 "mistralai": "mistral",
                 "mistral": "mistral",
                 "voyage": "voyage",
+                "minimax": "minimax",
+                "minimaxai": "minimax",
             }.get(routed, routed)
         return self.provider
 
@@ -125,6 +127,7 @@ class EmbeddingIdentity:
             "ollama": "ollama",
             "voyage": "voyage",
             "mistral": "mistral",
+            "minimax": "minimax",
             "anthropic": "anthropic",
         }.get(self.canonical_provider, self.canonical_provider[:6])
         
@@ -418,14 +421,16 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     """Detect the best default providers for the current environment.
 
     Priority for embeddings:
-    1. Direct API keys: VOYAGE_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY
+    1. Direct API keys: VOYAGE_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY,
+       MISTRAL_API_KEY, MINIMAX_API_KEY (+ MINIMAX_GROUP_ID)
     2. OpenRouter: OPENROUTER_API_KEY
     3. Ollama (if running locally with models)
     4. Local models (if installed)
     5. None if nothing available
 
     Priority for summarization:
-    1. Direct API keys: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), OPENAI_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY
+    1. Direct API keys: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN),
+       OPENAI_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY, MINIMAX_API_KEY
     2. OpenRouter: OPENROUTER_API_KEY
     3. Ollama (if running locally with a generative model)
     4. Local models (if installed)
@@ -471,6 +476,10 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     )
     has_voyage_key = not local_only and bool(os.environ.get("VOYAGE_API_KEY"))
     has_mistral_key = not local_only and bool(os.environ.get("MISTRAL_API_KEY"))
+    # Embeddings need both MINIMAX_API_KEY and MINIMAX_GROUP_ID; the
+    # OpenAI-compat chat endpoint only needs the API key.
+    has_minimax_key = not local_only and bool(os.environ.get("MINIMAX_API_KEY"))
+    has_minimax_embedding_key = has_minimax_key and bool(os.environ.get("MINIMAX_GROUP_ID"))
     has_openrouter_key = not local_only and bool(os.environ.get("OPENROUTER_API_KEY"))
 
     # Check for Ollama (lazy — only probed when no API key covers both)
@@ -497,6 +506,8 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         embedding_provider = ProviderConfig("gemini")
     elif has_mistral_key:
         embedding_provider = ProviderConfig("mistral")
+    elif has_minimax_embedding_key:
+        embedding_provider = ProviderConfig("minimax", {"model": "embo-01"})
     elif has_openrouter_key:
         embedding_provider = ProviderConfig(
             "openrouter",
@@ -546,6 +557,8 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         summarization_provider = ProviderConfig("gemini")
     elif has_mistral_key:
         summarization_provider = ProviderConfig("mistral")
+    elif has_minimax_key:
+        summarization_provider = ProviderConfig("minimax", {"model": "MiniMax-M2.7"})
     elif has_openrouter_key:
         summarization_provider = ProviderConfig(
             "openrouter",
@@ -785,7 +798,7 @@ def load_config(config_dir: Path) -> StoreConfig:
     # KEEP_LOCAL_ONLY=1 overrides remote providers to None/fallback.
     # A provider with base_url set is targeting a local server — keep it.
     if os.environ.get("KEEP_LOCAL_ONLY"):
-        _REMOTE_PROVIDERS = {"voyage", "openai", "openrouter", "gemini", "anthropic", "mistral"}
+        _REMOTE_PROVIDERS = {"voyage", "openai", "openrouter", "gemini", "anthropic", "mistral", "minimax"}
 
         def _is_remote(cfg: ProviderConfig | None) -> bool:
             if cfg is None or cfg.name not in _REMOTE_PROVIDERS:

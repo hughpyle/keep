@@ -61,6 +61,17 @@ EMBEDDING_PROVIDERS: list[dict[str, Any]] = [
         "env_hint": "MISTRAL_API_KEY",
     },
     {
+        "key": "minimax",
+        "name": "MiniMax",
+        "model": "embo-01",
+        "provider": "minimax",
+        # Both must be set; env_hint surfaces the group id since it's the
+        # less-obvious requirement.
+        "env_keys": ["MINIMAX_API_KEY", "MINIMAX_GROUP_ID"],
+        "env_hint": "MINIMAX_API_KEY + MINIMAX_GROUP_ID",
+        "env_requires_all": True,
+    },
+    {
         "key": "openrouter",
         "name": "OpenRouter",
         "model": "openai/text-embedding-3-small",
@@ -108,6 +119,16 @@ SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
         "provider": "mistral",
         "env_keys": ["MISTRAL_API_KEY"],
         "env_hint": "MISTRAL_API_KEY",
+    },
+    {
+        "key": "minimax",
+        "name": "MiniMax",
+        "model_display": "MiniMax-M2.7",
+        "model": "MiniMax-M2.7",
+        "provider": "minimax",
+        # Summarization only needs the API key — GroupId is for embeddings.
+        "env_keys": ["MINIMAX_API_KEY"],
+        "env_hint": "MINIMAX_API_KEY",
     },
     {
         "key": "openrouter",
@@ -197,7 +218,10 @@ def detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, An
         has_default = any(c["default"] for c in choices)
         for p in EMBEDDING_PROVIDERS:
             display = f"{p['name']} ({p['model']})"
-            available = _has_env(*p["env_keys"])
+            if p.get("env_requires_all"):
+                available = all(os.environ.get(k) for k in p["env_keys"])
+            else:
+                available = _has_env(*p["env_keys"])
             if p.get("show_when_available_only") and not available:
                 continue
             params = {"model": p["model"]} if p["model"] else {}
@@ -294,7 +318,10 @@ def detect_summarization_choices(current: Optional[str] = None) -> list[dict[str
     if not local_only:
         for p in SUMMARIZATION_PROVIDERS:
             display = f"{p['name']} ({p['model_display']})" if p["model_display"] else p["name"]
-            available = _has_env(*p["env_keys"])
+            if p.get("env_requires_all"):
+                available = all(os.environ.get(k) for k in p["env_keys"])
+            else:
+                available = _has_env(*p["env_keys"])
             if p.get("show_when_available_only") and not available:
                 continue
             params = {"model": p["model"]} if p["model"] else {}

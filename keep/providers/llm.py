@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import re
 
 from .base import (
     get_registry,
@@ -169,6 +170,74 @@ class OpenAISummarization:
         if response.choices:
             return response.choices[0].message.content
         return None
+
+
+class MiniMaxSummarization(OpenAISummarization):
+    """Summarization provider using MiniMax's OpenAI-compatible chat API.
+
+    MiniMax exposes an OpenAI-compatible ``/v1/chat/completions`` surface at
+    ``https://api.minimax.io/v1``.  This is distinct from the *embeddings*
+    endpoint, which uses MiniMax's native schema (see ``MiniMaxEmbedding``).
+
+    The current generation (M2.x) are **reasoning models**: they emit their
+    chain-of-thought inside ``<think>...</think>`` tags as part of
+    ``message.content`` rather than in a separate field.  We strip those
+    tags in :meth:`generate` so summaries returned to callers contain only
+    the final answer.  Reasoning tokens also do not count against
+    ``max_tokens`` consistently, so the default is set generously.
+
+    Default model is ``MiniMax-M2.7`` ($0.30/$1.20 per MTok).  The
+    ``-highspeed`` variants exist but cost 2× — set explicitly via
+    ``keep.toml`` if you want them:
+
+        [summarization]
+        name = "minimax"
+        model = "MiniMax-M2.7-highspeed"
+
+    Requires: MINIMAX_API_KEY environment variable.
+    """
+
+    BASE_URL = "https://api.minimax.io/v1"
+
+    # Strip reasoning chain-of-thought leaked into message.content.
+    # Matches the canonical <think>...</think> wrapper used by MiniMax-M2.x
+    # and several other reasoning models.  DOTALL so newlines are crossed.
+    _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+
+    def __init__(
+        self,
+        model: str = "MiniMax-M2.7",
+        api_key: str | None = None,
+        # Reasoning models burn tokens on the <think> block before producing
+        # any visible content; 200 is too tight and yields empty summaries.
+        max_tokens: int = 1024,
+    ):
+        key = api_key or os.environ.get("MINIMAX_API_KEY")
+        if not key:
+            raise ValueError(
+                "MiniMax API key required. Set MINIMAX_API_KEY environment variable.\n"
+                "Get your API key at: https://platform.minimax.io/"
+            )
+        super().__init__(
+            model=model,
+            api_key=key,
+            base_url=self.BASE_URL,
+            max_tokens=max_tokens,
+        )
+
+    def generate(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+    ) -> str | None:
+        """Send a raw prompt and strip leaked <think> reasoning blocks."""
+        result = super().generate(system, user, max_tokens=max_tokens)
+        if not result:
+            return result
+        cleaned = self._THINK_RE.sub("", result).strip()
+        return cleaned or None
 
 
 class OllamaSummarization:
@@ -589,6 +658,7 @@ _registry.register_summarization("openai", OpenAISummarization)
 _registry.register_summarization("ollama", OllamaSummarization)
 _registry.register_summarization("gemini", GeminiSummarization)
 _registry.register_summarization("mistral", MistralSummarization)
+_registry.register_summarization("minimax", MiniMaxSummarization)
 _registry.register_summarization("passthrough", PassthroughSummarization)
 _registry.register_media("ollama", OllamaMediaDescriber)
 _registry.register_content_extractor("ollama", OllamaContentExtractor)
