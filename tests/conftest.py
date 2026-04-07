@@ -1045,7 +1045,7 @@ def pytest_configure(config):
 def _kill_leaked_test_daemons():
     """Kill any subprocess daemons spawned during the test session.
 
-    Tests may trigger daemon auto-start via the thin CLI's get_port().
+    Tests may trigger daemon auto-start via the command app's get_port().
     Those daemons run in their own session (start_new_session=True) and
     survive test teardown.  This fixture kills them by PID file after all
     tests complete.

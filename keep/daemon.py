@@ -13,7 +13,7 @@ def _load_daemon_runtime():
     """Load Keeper and run_pending_daemon for module or script execution."""
     try:
         from .api import Keeper
-        from .cli import run_pending_daemon
+        from .console_support import run_pending_daemon
         return Keeper, run_pending_daemon
     except ImportError:
         if __package__ not in (None, ""):
@@ -23,7 +23,7 @@ def _load_daemon_runtime():
         if repo_root_str not in sys.path:
             sys.path.insert(0, repo_root_str)
         from keep.api import Keeper
-        from keep.cli import run_pending_daemon
+        from keep.console_support import run_pending_daemon
         return Keeper, run_pending_daemon
 
 

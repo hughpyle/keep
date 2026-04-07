@@ -647,14 +647,14 @@ class TestFlowCLI:
         """CLI runner with in-process daemon (no subprocess needed)."""
         from keep.api import Keeper
         from keep.daemon_server import DaemonServer
-        from keep.thin_cli import app
+        from keep.cli_app import app
         from typer.testing import CliRunner
 
         kp = Keeper(store_path=tmp_path)
         server = DaemonServer(kp, port=0)
         port = server.start()
 
-        # Write daemon files so thin CLI connects to our in-process server
+        # Write daemon files so the command app connects to our in-process server
         (tmp_path / ".daemon.port").write_text(str(port))
         (tmp_path / ".daemon.token").write_text(server.auth_token)
 

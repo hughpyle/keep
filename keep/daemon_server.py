@@ -420,7 +420,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             token_budget = 0
         if token_budget > 0:
-            from .cli import render_flow_response
+            from .console_support import render_flow_response
             resp["rendered"] = render_flow_response(
                 result, token_budget=token_budget, keeper=self.keeper,
             )

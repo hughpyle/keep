@@ -1,9 +1,8 @@
-"""CLI interface for reflective memory.
+"""Console rendering and daemon support utilities.
 
-Usage:
-    keep find "query text"
-    keep put file:///path/to/doc.md
-    keep get file:///path/to/doc.md
+Provides prompt expansion, flow/context rendering, config formatting,
+directory/watch helpers, and the pending-daemon runtime used by the command
+app and other integrations.
 """
 
 import importlib.metadata
@@ -761,7 +760,7 @@ def _get_keeper(store: Optional[Path], *, _force_local: bool = False) -> Keeper:
 
     Returns a local Keeper or RemoteKeeper (cloud) depending on config.
     Local daemon commands (put directory, pending, etc.)
-    always use a local Keeper — the thin CLI handles the daemon HTTP path.
+    always use a local Keeper — the command app handles the daemon HTTP path.
 
     When ``_force_local`` is True, skips the remote backend check
     (used by ``keep pending`` which manages the daemon itself).
@@ -1358,7 +1357,7 @@ def run_pending_daemon(kp) -> None:
     init_tracing(tree_log=True)
     clear_shutdown()
 
-    _daemon_logger = logging.getLogger("keep.cli.daemon")
+    _daemon_logger = logging.getLogger("keep.console_support.daemon")
     pid_path = kp._processor_pid_path
     processor_lock = ModelLock(kp._store_path / ".processor.lock")
     flow_worker_id = f"pending-daemon:{os.getpid()}"
@@ -1592,7 +1591,7 @@ def _prune_work_if_due(kp, *, last_prune_ts: float, prune_interval: float) -> fl
         if wq is not None:
             wq.prune()
     except Exception:
-        logging.getLogger("keep.cli.daemon").warning(
+        logging.getLogger("keep.console_support.daemon").warning(
             "Work queue prune failed", exc_info=True,
         )
     return now

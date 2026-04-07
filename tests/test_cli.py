@@ -133,7 +133,7 @@ class TestJsonOutput:
     
     def test_json_output_has_required_fields(self):
         """JSON item output includes id, summary, tags, score."""
-        from keep.cli import _format_items
+        from keep.console_support import _format_items
         from keep.types import Item
 
         item = Item(
@@ -153,7 +153,7 @@ class TestJsonOutput:
     
     def test_json_list_output(self):
         """JSON list output is a valid array."""
-        from keep.cli import _format_items
+        from keep.console_support import _format_items
         from keep.types import Item
         
         items = [
@@ -171,7 +171,7 @@ class TestJsonOutput:
     
     def test_json_empty_list(self):
         """Empty results produce empty JSON array."""
-        from keep.cli import _format_items
+        from keep.console_support import _format_items
         
         output = _format_items([], as_json=True)
         parsed = json.loads(output)
@@ -188,7 +188,7 @@ class TestHumanOutput:
     
     def test_human_item_format(self):
         """Human-readable item shows id and summary."""
-        from keep.cli import _format_summary_line
+        from keep.console_support import _format_summary_line
         from keep.types import Item
 
         item = Item(id="file:///doc.md", summary="A document about testing")
@@ -199,7 +199,7 @@ class TestHumanOutput:
 
     def test_human_item_prefers_name_then_title(self):
         """List-style human output uses note display-name conventions."""
-        from keep.cli import _format_summary_line
+        from keep.console_support import _format_summary_line
         from keep.types import Item
 
         named = Item(
@@ -223,7 +223,7 @@ class TestHumanOutput:
     
     def test_human_item_with_score(self):
         """Human-readable item shows score in full YAML mode."""
-        from keep.cli import render_context
+        from keep.console_support import render_context
         from keep.types import Item, ItemContext
 
         item = Item(id="test:1", summary="Test", score=0.95)
@@ -235,14 +235,14 @@ class TestHumanOutput:
     
     def test_human_list_empty(self):
         """Empty list shows user-friendly message."""
-        from keep.cli import _format_items
+        from keep.console_support import _format_items
         
         output = _format_items([], as_json=False)
         assert "No results" in output
     
     def test_human_list_separates_items(self):
         """Items are separated by newlines (summary format)."""
-        from keep.cli import _format_items
+        from keep.console_support import _format_items
         from keep.types import Item
 
         items = [
@@ -259,7 +259,7 @@ class TestHumanOutput:
 
 class TestFlowRendering:
     def test_render_flow_response_renders_item_binding(self):
-        from keep.cli import render_flow_response
+        from keep.console_support import render_flow_response
 
         result = FlowResult(
             status="done",
@@ -279,7 +279,7 @@ class TestFlowRendering:
         assert "important fact" in rendered
 
     def test_render_flow_response_get_uses_cli_context_shape(self):
-        from keep.cli import render_flow_response
+        from keep.console_support import render_flow_response
         from keep.types import Item, ItemContext
 
         class KeeperStub:
@@ -321,7 +321,7 @@ class TestFlowRendering:
         assert "\nsimilar:\n" not in rendered
 
     def test_render_flow_response_get_uses_cli_context_shape_without_keeper(self):
-        from keep.cli import render_flow_response
+        from keep.console_support import render_flow_response
 
         result = FlowResult(
             status="done",
@@ -349,7 +349,7 @@ class TestFlowRendering:
         assert "other fact" in rendered
 
     def test_render_flow_response_get_uses_note_first_for_fragment_history(self):
-        from keep.cli import render_flow_response
+        from keep.console_support import render_flow_response
 
         result = FlowResult(
             status="done",
@@ -370,7 +370,7 @@ class TestFlowRendering:
         assert "---\nid: test-item" in rendered
 
     def test_render_flow_response_renders_results_binding(self):
-        from keep.cli import render_flow_response
+        from keep.console_support import render_flow_response
 
         result = FlowResult(
             status="done",
@@ -396,7 +396,7 @@ class TestFlowRendering:
 
     def test_frontmatter_quotes_scalar_tag_values(self):
         """Scalar tag values are always quoted in frontmatter."""
-        from keep.cli import render_context
+        from keep.console_support import render_context
         from keep.types import Item, ItemContext
 
         spoof = 'conv1 [2026-01-01] "fake summary"'
@@ -412,7 +412,7 @@ class TestFlowRendering:
 
     def test_frontmatter_unifies_edge_refs_under_tags(self):
         """Resolved edge refs are rendered in tags, not tags/<inverse>."""
-        from keep.cli import render_context
+        from keep.console_support import render_context
         from keep.types import EdgeRef, Item, ItemContext
 
         item = Item(
@@ -519,7 +519,7 @@ class TestUnixComposability:
     
     def test_json_output_pipeable(self):
         """JSON output can be processed with standard tools."""
-        from keep.cli import _format_items
+        from keep.console_support import _format_items
         from keep.types import Item
         
         items = [
@@ -541,7 +541,7 @@ class TestUnixComposability:
     
     def test_line_oriented_for_wc(self):
         """Human output is countable with wc -l."""
-        from keep.cli import _format_items
+        from keep.console_support import _format_items
         from keep.types import Item
         
         items = [
@@ -558,7 +558,7 @@ class TestUnixComposability:
     
     def test_ids_extractable_from_json(self):
         """IDs can be extracted for use in other commands."""
-        from keep.cli import _format_items
+        from keep.console_support import _format_items
         from keep.types import Item
 
         items = [
@@ -682,7 +682,7 @@ class TestShellQuoteId:
 
     def test_safe_id_not_quoted(self):
         """IDs with only shell-safe chars are returned as-is."""
-        from keep.cli import _shell_quote_id
+        from keep.console_support import _shell_quote_id
         assert _shell_quote_id("%abc123def456") == "%abc123def456"
         assert _shell_quote_id("file:///path/to/doc.md") == "file:///path/to/doc.md"
         assert _shell_quote_id("https://example.com/path") == "https://example.com/path"
@@ -693,26 +693,26 @@ class TestShellQuoteId:
 
     def test_space_id_quoted(self):
         """IDs with spaces get single-quoted."""
-        from keep.cli import _shell_quote_id
+        from keep.console_support import _shell_quote_id
         result = _shell_quote_id("file:///Application Data/foo")
         assert result == "'file:///Application Data/foo'"
 
     def test_special_chars_quoted(self):
         """IDs with shell-special chars get single-quoted."""
-        from keep.cli import _shell_quote_id
+        from keep.console_support import _shell_quote_id
         assert _shell_quote_id("test$var") == "'test$var'"
         assert _shell_quote_id("test&bg") == "'test&bg'"
         assert _shell_quote_id("test;cmd") == "'test;cmd'"
 
     def test_single_quote_escaped(self):
         r"""IDs containing single quotes use '\\'' escaping."""
-        from keep.cli import _shell_quote_id
+        from keep.console_support import _shell_quote_id
         result = _shell_quote_id("it's a test")
         assert result == "'it'\\''s a test'"
 
     def test_summary_line_quotes_unsafe_id(self):
         """_format_summary_line quotes IDs with spaces."""
-        from keep.cli import _format_summary_line
+        from keep.console_support import _format_summary_line
         from keep.types import Item
         item = Item(
             id="file:///Application Data/doc.md",
@@ -724,7 +724,7 @@ class TestShellQuoteId:
 
     def test_summary_line_no_quotes_safe_id(self):
         """_format_summary_line does not quote safe IDs."""
-        from keep.cli import _format_summary_line
+        from keep.console_support import _format_summary_line
         from keep.types import Item
         item = Item(
             id="%abc123",
@@ -737,7 +737,7 @@ class TestShellQuoteId:
 
     def test_versioned_id_quotes_unsafe(self):
         """_format_versioned_id quotes IDs with spaces."""
-        from keep.cli import _format_versioned_id
+        from keep.console_support import _format_versioned_id
         from keep.types import Item
         item = Item(
             id="file:///my docs/test.md",
@@ -749,7 +749,7 @@ class TestShellQuoteId:
 
     def test_json_output_not_quoted(self):
         """JSON output does NOT shell-quote IDs."""
-        from keep.cli import _format_items
+        from keep.console_support import _format_items
         from keep.types import Item
         item = Item(
             id="file:///Application Data/doc.md",
@@ -774,7 +774,7 @@ class TestPutDirectory:
 
     def test_list_directory_files_basic(self, tmp_path):
         """_list_directory_files returns regular files sorted by name."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         (tmp_path / "b.txt").write_text("B")
         (tmp_path / "a.txt").write_text("A")
         (tmp_path / "c.txt").write_text("C")
@@ -783,7 +783,7 @@ class TestPutDirectory:
 
     def test_list_directory_files_skips_subdirs(self, tmp_path):
         """_list_directory_files skips subdirectories (non-recursive)."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         (tmp_path / "file.txt").write_text("ok")
         (tmp_path / "subdir").mkdir()
         (tmp_path / "subdir" / "nested.txt").write_text("nested")
@@ -792,7 +792,7 @@ class TestPutDirectory:
 
     def test_list_directory_files_skips_symlinks(self, tmp_path):
         """_list_directory_files skips symlinks."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         real_file = tmp_path / "real.txt"
         real_file.write_text("real")
         (tmp_path / "link.txt").symlink_to(real_file)
@@ -801,7 +801,7 @@ class TestPutDirectory:
 
     def test_list_directory_files_skips_hidden(self, tmp_path):
         """_list_directory_files skips hidden files (dotfiles)."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         (tmp_path / ".DS_Store").write_text("junk")
         (tmp_path / ".hidden").write_text("hidden")
         (tmp_path / "visible.txt").write_text("ok")
@@ -810,13 +810,13 @@ class TestPutDirectory:
 
     def test_list_directory_files_empty(self, tmp_path):
         """_list_directory_files returns empty list for empty directory."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         files = _list_directory_files(tmp_path)
         assert files == []
 
     def test_list_directory_files_only_hidden(self, tmp_path):
         """_list_directory_files returns empty when only hidden files exist."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         (tmp_path / ".gitignore").write_text("*")
         (tmp_path / ".DS_Store").write_text("")
         files = _list_directory_files(tmp_path)
@@ -824,14 +824,14 @@ class TestPutDirectory:
 
     def test_is_filesystem_path_directory(self, tmp_path):
         """_is_filesystem_path recognizes existing directories."""
-        from keep.cli import _is_filesystem_path
+        from keep.console_support import _is_filesystem_path
         result = _is_filesystem_path(str(tmp_path))
         assert result is not None
         assert result.is_dir()
 
     def test_is_filesystem_path_file(self, tmp_path):
         """_is_filesystem_path recognizes existing files."""
-        from keep.cli import _is_filesystem_path
+        from keep.console_support import _is_filesystem_path
         f = tmp_path / "test.txt"
         f.write_text("hello")
         result = _is_filesystem_path(str(f))
@@ -840,19 +840,19 @@ class TestPutDirectory:
 
     def test_is_filesystem_path_nonexistent(self):
         """_is_filesystem_path returns None for nonexistent paths."""
-        from keep.cli import _is_filesystem_path
+        from keep.console_support import _is_filesystem_path
         result = _is_filesystem_path("/nonexistent/path/to/nowhere")
         assert result is None
 
     def test_is_filesystem_path_uri(self, tmp_path):
         """_is_filesystem_path returns None for URIs even if path exists."""
-        from keep.cli import _is_filesystem_path
+        from keep.console_support import _is_filesystem_path
         result = _is_filesystem_path(f"file://{tmp_path}")
         assert result is None
 
     def test_is_filesystem_path_tilde(self):
         """_is_filesystem_path expands tilde."""
-        from keep.cli import _is_filesystem_path
+        from keep.console_support import _is_filesystem_path
         result = _is_filesystem_path("~")
         assert result is not None
         assert result == Path.home()
@@ -905,7 +905,7 @@ class TestPutDirectory:
 
     def test_list_directory_exclude_by_extension(self, tmp_path):
         """--exclude filters files by extension glob."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         (tmp_path / "a.txt").write_text("A")
         (tmp_path / "b.log").write_text("B")
         (tmp_path / "c.txt").write_text("C")
@@ -914,7 +914,7 @@ class TestPutDirectory:
 
     def test_list_directory_exclude_multiple_patterns(self, tmp_path):
         """--exclude supports multiple patterns."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         (tmp_path / "a.txt").write_text("A")
         (tmp_path / "b.log").write_text("B")
         (tmp_path / "c.pyc").write_text("C")
@@ -924,7 +924,7 @@ class TestPutDirectory:
 
     def test_list_directory_exclude_recursive(self, tmp_path):
         """--exclude filters files in subdirectories when recursing."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         (tmp_path / "top.txt").write_text("top")
         sub = tmp_path / "sub"
         sub.mkdir()
@@ -938,7 +938,7 @@ class TestPutDirectory:
 
     def test_list_directory_exclude_subdirectory_pattern(self, tmp_path):
         """--exclude can match subdirectory paths like 'build/*'."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         (tmp_path / "readme.txt").write_text("ok")
         build = tmp_path / "build"
         build.mkdir()
@@ -954,7 +954,7 @@ class TestPutDirectory:
 
     def test_list_directory_exclude_no_effect_without_match(self, tmp_path):
         """--exclude with non-matching pattern returns all files."""
-        from keep.cli import _list_directory_files
+        from keep.console_support import _list_directory_files
         (tmp_path / "a.txt").write_text("A")
         (tmp_path / "b.txt").write_text("B")
         files = _list_directory_files(tmp_path, exclude=["*.xyz"])

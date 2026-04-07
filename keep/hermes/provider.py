@@ -564,7 +564,7 @@ class KeepMemoryProvider:
         # budgets — it's for tool output, not system prompt injection.
         token_budget = args.get("token_budget") or 4000
 
-        from keep.cli import render_flow_response
+        from keep.console_support import render_flow_response
         rendered = render_flow_response(
             result, token_budget=token_budget, keeper=self._keeper,
         )
@@ -622,7 +622,7 @@ class KeepMemoryProvider:
         result = self._keeper.render_prompt(name, text, **kwargs)
         if result is None:
             return None
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
         return expand_prompt(result, self._keeper)
 
     def _ensure_daemon(self) -> None:

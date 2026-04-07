@@ -86,7 +86,7 @@ dev = [
 ]
 
 [project.scripts]
-keep = "keep.thin_cli:main"
+keep = "keep.cli_app:main"
 
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"

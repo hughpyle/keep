@@ -149,7 +149,7 @@ def test_prompt_render_tolerates_ambiguous_stopped_flow(mock_providers, tmp_path
 
 
 def test_render_prompt_coerces_string_token_budget(mock_providers, tmp_path):
-    from keep.cli import expand_prompt
+    from keep.console_support import expand_prompt
 
     kp = Keeper(store_path=tmp_path)
     _ensure_system_docs(kp)

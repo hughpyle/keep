@@ -1,4 +1,4 @@
-"""Tests for the thin CLI renderers, HTTP round-trip, and put input handling."""
+"""Tests for the command app renderers, HTTP round-trip, and put input handling."""
 
 import http.client
 import io
@@ -11,7 +11,7 @@ import pytest
 
 from keep.api import Keeper
 from keep.daemon_server import DaemonServer
-from keep.thin_cli import (
+from keep.cli_app import (
     _render_context,
     _render_find,
     _render_item_line,
@@ -228,10 +228,10 @@ def test_thin_cli_context_round_trip(daemon):
 
 
 def test_get_one_item_retries_after_connection_refused():
-    """The thin CLI re-resolves daemon discovery if the first request loses the daemon."""
+    """The command app re-resolves daemon discovery if the first request loses the daemon."""
     with (
-        patch("keep.thin_cli._http") as mock_http,
-        patch("keep.thin_cli._get_port", return_value=5338),
+        patch("keep.cli_app._http") as mock_http,
+        patch("keep.cli_app._get_port", return_value=5338),
     ):
         mock_http.side_effect = [
             ConnectionRefusedError(61, "refused"),
@@ -277,7 +277,7 @@ def test_get_now_uses_now_context_defaults():
         "prev": [],
         "next": [],
     }
-    with patch("keep.thin_cli._get", return_value=data) as mock_get:
+    with patch("keep.cli_app._get", return_value=data) as mock_get:
         result = _get_one_item(
             5337,
             "now",
@@ -308,11 +308,11 @@ def test_put_id_now_inline_matches_now_output():
         "next": [],
     }
     with (
-        patch("keep.thin_cli._get_port", return_value=5337),
-        patch("keep.thin_cli._post") as mock_post,
-        patch("keep.thin_cli._get", return_value=data) as mock_get,
-        patch("keep.thin_cli._render_context", return_value="rendered now") as mock_render,
-        patch("keep.thin_cli.typer.echo") as mock_echo,
+        patch("keep.cli_app._get_port", return_value=5337),
+        patch("keep.cli_app._post") as mock_post,
+        patch("keep.cli_app._get", return_value=data) as mock_get,
+        patch("keep.cli_app._render_context", return_value="rendered now") as mock_render,
+        patch("keep.cli_app.typer.echo") as mock_echo,
     ):
         put(source="Working on CLI cleanup", id="now", tags=["topic=cli"])
 
@@ -331,10 +331,10 @@ def test_put_id_now_file_keeps_put_semantics(tmp_path):
     note = tmp_path / "note.md"
     note.write_text("hello")
     with (
-        patch("keep.thin_cli._get_port", return_value=5337),
-        patch("keep.thin_cli._post", return_value={"id": "now"}) as mock_post,
-        patch("keep.thin_cli._get") as mock_get,
-        patch("keep.thin_cli.typer.echo") as mock_echo,
+        patch("keep.cli_app._get_port", return_value=5337),
+        patch("keep.cli_app._post", return_value={"id": "now"}) as mock_post,
+        patch("keep.cli_app._get") as mock_get,
+        patch("keep.cli_app.typer.echo") as mock_echo,
     ):
         put(source=str(note), id="now")
 
@@ -410,10 +410,10 @@ class TestPutStdinSafety:
         Socket-backed stdin (e.g. exec sandboxes) is not a TTY but has
         no data — _has_stdin_data returns False via select(), preventing hangs.
         """
-        from keep.thin_cli import _has_stdin_data
+        from keep.cli_app import _has_stdin_data
 
         # A TTY is not stdin data
-        with patch("keep.thin_cli.sys") as mock_sys:
+        with patch("keep.cli_app.sys") as mock_sys:
             mock_sys.stdin.isatty.return_value = True
             assert _has_stdin_data() is False
 
@@ -467,7 +467,7 @@ class TestPutMultiValueTags:
 
     def test_repeated_tag_key_produces_list(self):
         """Using -t key=a -t key=b produces {"key": ["a", "b"]}."""
-        from keep.thin_cli import put
+        from keep.cli_app import put
 
         # We can't easily call put() directly (it needs a daemon),
         # so test the parsing logic inline

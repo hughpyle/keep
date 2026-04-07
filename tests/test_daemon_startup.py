@@ -55,7 +55,7 @@ def test_daemon_entrypoint_uses_deferred_startup_maintenance(tmp_path):
 
     with (
         patch("keep.api.Keeper", DummyKeeper),
-        patch("keep.cli.run_pending_daemon"),
+        patch("keep.console_support.run_pending_daemon"),
         patch.object(sys, "argv", ["python", "--store", str(tmp_path)]),
     ):
         from keep import daemon
@@ -77,7 +77,7 @@ def test_daemon_script_entrypoint_supports_direct_python_execution(tmp_path):
 
     with (
         patch("keep.api.Keeper", DummyKeeper),
-        patch("keep.cli.run_pending_daemon"),
+        patch("keep.console_support.run_pending_daemon"),
         patch.object(sys, "argv", ["python", "--store", str(tmp_path)]),
     ):
         run_path("keep/daemon.py", run_name="__main__")

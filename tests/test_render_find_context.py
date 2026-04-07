@@ -17,7 +17,7 @@ class TestRenderFindContext:
     """Tests for the token-budgeted progressive renderer."""
 
     def test_basic_rendering(self):
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         items = [_item(id="a", summary="First item"), _item(id="b", summary="Second item")]
         result = render_find_context(items)
         assert "a" in result
@@ -26,18 +26,18 @@ class TestRenderFindContext:
         assert "Second item" in result
 
     def test_empty_items(self):
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         result = render_find_context([])
         assert result == "No results."
 
     def test_score_included(self):
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         items = [_item(id="a", summary="With score", score=0.85)]
         result = render_find_context(items)
         assert "(0.85)" in result
 
     def test_date_included(self):
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         items = [_item(id="a", summary="Dated",
                        tags={"_created": "2026-01-15T12:00:00"})]
         result = render_find_context(items)
@@ -45,7 +45,7 @@ class TestRenderFindContext:
 
     def test_focus_summary_rendered(self):
         """Focus summary replaces parent summary on the primary line."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         items = [_item(id="a", summary="Parent doc",
                        tags={"_updated_date": "2026-02-20",
                              "_focus_summary": "The matching part content"})]
@@ -55,7 +55,7 @@ class TestRenderFindContext:
 
     def test_budget_limits_items(self):
         """With a very small budget, only the first item should appear."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         items = [
             _item(id="first", summary="A" * 200),
             _item(id="second", summary="B" * 200),
@@ -69,14 +69,14 @@ class TestRenderFindContext:
 
     def test_large_budget_includes_all(self):
         """With a large budget, all items should appear."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         items = [_item(id=f"item-{i}", summary=f"Summary {i}") for i in range(10)]
         result = render_find_context(items, token_budget=10000)
         for i in range(10):
             assert f"item-{i}" in result
 
     def test_no_score_when_none(self):
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         items = [_item(id="a", summary="No score", score=None)]
         result = render_find_context(items)
         assert "(" not in result  # no score parens
@@ -86,7 +86,7 @@ class TestExpandPromptFindBudget:
     """Tests for {find:N} budget override syntax in expand_prompt."""
 
     def test_default_budget(self):
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
         result = PromptResult(
             context=None,
             search_results=[_item(id="a", summary="Test")],
@@ -99,7 +99,7 @@ class TestExpandPromptFindBudget:
 
     def test_budget_from_placeholder_when_no_explicit(self):
         """Template budget wins when token_budget is None (user didn't specify)."""
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
         # Create many items
         items = [_item(id=f"item-{i}", summary="X" * 200) for i in range(20)]
         # token_budget=None means user didn't specify, template says 50
@@ -116,7 +116,7 @@ class TestExpandPromptFindBudget:
 
     def test_explicit_budget_overrides_placeholder(self):
         """Explicit token_budget from CLI overrides template budget."""
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
         items = [_item(id=f"item-{i}", summary="X" * 200) for i in range(20)]
         # User set --tokens 10000, template says 50 — explicit wins
         result = PromptResult(
@@ -132,7 +132,7 @@ class TestExpandPromptFindBudget:
 
     def test_deep_with_budget(self):
         """The {find:deep:8000} syntax should be expanded using template budget."""
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
         result = PromptResult(
             context=None,
             search_results=[_item(id="a", summary="Test")],
@@ -145,7 +145,7 @@ class TestExpandPromptFindBudget:
 
     def test_deep_without_budget(self):
         """The {find:deep} syntax should use default budget when no explicit override."""
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
         result = PromptResult(
             context=None,
             search_results=[_item(id="a", summary="Deep test")],
@@ -157,7 +157,7 @@ class TestExpandPromptFindBudget:
 
     def test_no_results(self):
         """Empty search results should produce empty expansion."""
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
         result = PromptResult(
             context=None,
             search_results=None,
@@ -170,7 +170,7 @@ class TestExpandPromptFindBudget:
 
     def test_find_uses_flow_binding_alias(self):
         """{find} expands from prompt flow bindings when no direct search results exist."""
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
 
         result = PromptResult(
             context=None,
@@ -191,7 +191,7 @@ class TestExpandPromptFindBudget:
 
     def test_get_uses_flow_binding_alias(self):
         """{get} expands from ``item`` and related flow bindings."""
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
 
         result = PromptResult(
             context=None,
@@ -221,7 +221,7 @@ class TestDeepPrimaryCap:
 
     def test_deep_placeholder_syntax(self):
         """The {find:deep:8000} syntax should be parsed and expanded."""
-        from keep.cli import expand_prompt
+        from keep.console_support import expand_prompt
         result = PromptResult(
             context=None,
             search_results=[_item(id="a", summary="Test")],
@@ -234,7 +234,7 @@ class TestDeepPrimaryCap:
 
     def test_cap_reduces_primaries(self):
         """With deep_primary_cap=2 and deep groups, only 2 primaries shown."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         items = [_item(id=f"p-{i}", summary=f"Primary {i}") for i in range(5)]
@@ -253,7 +253,7 @@ class TestDeepPrimaryCap:
 
     def test_cap_renders_deep_before_detail(self):
         """With deep_primary_cap, deep items render before parts/versions."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         parts = [
@@ -282,7 +282,7 @@ class TestDeepPrimaryCap:
 
     def test_no_cap_without_deep_groups(self):
         """Without deep groups, deep_primary_cap has no effect."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
 
         items = [_item(id=f"p-{i}", summary=f"Primary {i}") for i in range(5)]
         result = render_find_context(items, token_budget=5000, deep_primary_cap=2)
@@ -292,7 +292,7 @@ class TestDeepPrimaryCap:
 
     def test_cap_prefers_items_with_deep_groups(self):
         """Capped primaries should prefer those that have deep groups."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         items = [
@@ -312,7 +312,7 @@ class TestDeepPrimaryCap:
 
     def test_cap_applied_before_low_budget_spend(self):
         """Low budgets should still include entity/deep-group primaries."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         items = [
@@ -342,7 +342,7 @@ class TestDeepPrimaryCap:
 
     def test_deep_line_prefers_focus_summary(self):
         """Deep sub-item lines should render _focus_summary when present."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         items = [_item(id="parent", summary="Parent summary")]
@@ -362,7 +362,7 @@ class TestDeepPrimaryCap:
 
     def test_low_budget_deep_uses_compact_mode(self):
         """Low deep budgets should avoid expensive Thread/Story expansion."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         keeper = MagicMock()
@@ -394,7 +394,7 @@ class TestDeepPrimaryCap:
 
     def test_deep_window_includes_version_thread(self):
         """Deep anchors with _focus_version should render a local version thread."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         keeper = MagicMock()
@@ -424,7 +424,7 @@ class TestDeepPrimaryCap:
 
     def test_deep_window_merges_multiple_focus_versions_per_parent(self):
         """Multiple deep anchors from one parent should emit one merged Thread block."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         keeper = MagicMock()
@@ -473,7 +473,7 @@ class TestDeepPrimaryCap:
 
     def test_deep_window_tapers_thread_radius_at_mid_budget(self):
         """Mid budgets should shrink version window to radius=1."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         keeper = MagicMock()
@@ -501,7 +501,7 @@ class TestDeepPrimaryCap:
 
     def test_deep_window_tapers_thread_radius_to_focus_only(self):
         """Low non-compact budgets should use radius=0."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         keeper = MagicMock()
@@ -527,7 +527,7 @@ class TestDeepPrimaryCap:
 
     def test_deep_window_drops_duplicate_focus_only_thread(self):
         """Do not render Thread block when radius=0 duplicates deep line."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         keeper = MagicMock()
@@ -561,7 +561,7 @@ class TestDeepPrimaryCap:
 
     def test_deep_window_never_emits_empty_story_or_thread_headers(self):
         """Tight budgets should not leave orphan Story/Thread headers."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         from keep.api import FindResults
 
         keeper = MagicMock()
@@ -612,7 +612,7 @@ class TestRenderFindContextDetail:
 
     def test_pass2_renders_parts(self):
         """With >=2 items and a keeper, parts are rendered."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         parts = [
             PartRef(part_num=0, summary="Overview of the topic"),
             PartRef(part_num=1, summary="Details and analysis"),
@@ -627,7 +627,7 @@ class TestRenderFindContextDetail:
 
     def test_pass2_renders_versions(self):
         """With >=2 items and a keeper, version history is rendered."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         versions = [
             VersionInfo(version=1, summary="Initial draft", tags={"_updated_date": "2026-01-01"}, created_at="2026-01-01", content_hash="a"),
             VersionInfo(version=2, summary="Added section B", tags={"_updated_date": "2026-01-15"}, created_at="2026-01-15", content_hash="b"),
@@ -641,7 +641,7 @@ class TestRenderFindContextDetail:
 
     def test_pass2_renders_user_tags(self):
         """With show_tags=True, user tags appear in pass-2 detail."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         keeper = self._mock_keeper()
         items = [
             _item(id=f"doc-{i}", summary=f"Doc {i}",
@@ -654,7 +654,7 @@ class TestRenderFindContextDetail:
 
     def test_pass2_focus_version_uses_around(self):
         """When _focus_version is set, list_versions_around is called."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         around_versions = [
             VersionInfo(version=4, summary="Before hit", tags={"_updated_date": "2026-01-04"}, created_at="2026-01-04", content_hash="d"),
             VersionInfo(version=5, summary="The matched version", tags={"_updated_date": "2026-01-05"}, created_at="2026-01-05", content_hash="e"),
@@ -673,7 +673,7 @@ class TestRenderFindContextDetail:
 
     def test_pass2_skipped_without_keeper(self):
         """Without a keeper, pass 2 doesn't run (no parts/versions)."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         items = [_item(id=f"doc-{i}", summary=f"Doc {i}") for i in range(5)]
         result = render_find_context(items, keeper=None, token_budget=5000)
         assert "Key topics:" not in result
@@ -681,7 +681,7 @@ class TestRenderFindContextDetail:
 
     def test_zero_budget_returns_no_results(self):
         """Budget of 0 with items present returns 'No results.'."""
-        from keep.cli import render_find_context
+        from keep.console_support import render_find_context
         items = [_item(id="a", summary="Something")]
         result = render_find_context(items, token_budget=0)
         assert result == "No results."

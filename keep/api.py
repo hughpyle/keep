@@ -5331,7 +5331,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 return FlowResult(status="error", data={"error": str(e)})
             if result is None:
                 return FlowResult(status="error", data={"error": f"prompt not found: {name}"})
-            from .cli import expand_prompt
+            from .console_support import expand_prompt
             expanded = expand_prompt(result, self)
             data: dict[str, Any] = {"text": expanded}
             if result.context:

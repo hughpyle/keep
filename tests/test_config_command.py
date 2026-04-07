@@ -104,26 +104,26 @@ class TestGetConfigValue:
 
     def test_file_path(self, mock_keeper):
         """'file' returns config file path."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "file")
         assert result == "/test/config/keep.toml"
 
     def test_tool_path(self, mock_keeper):
         """'tool' returns tool directory."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
         from keep.config import get_tool_directory
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "tool")
         assert result == str(get_tool_directory())
 
     def test_store_path(self, mock_keeper):
         """'store' returns store path."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "store")
         assert result == "/test/store"
 
     def test_providers(self, mock_keeper):
         """'providers' returns dict of provider names."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "providers")
         assert result == {
             "embedding": "sentence-transformers",
@@ -133,32 +133,32 @@ class TestGetConfigValue:
 
     def test_providers_embedding(self, mock_keeper):
         """'providers.embedding' returns embedding provider name."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "providers.embedding")
         assert result == "sentence-transformers"
 
     def test_providers_summarization(self, mock_keeper):
         """'providers.summarization' returns summarization provider name."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "providers.summarization")
         assert result == "truncate"
 
     def test_providers_document(self, mock_keeper):
         """'providers.document' returns document provider name."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "providers.document")
         assert result == "composite"
 
     def test_tags(self, mock_keeper):
         """'tags' returns default tags dict."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "tags")
         assert result == {"project": "testproject"}
 
     def test_invalid_path_raises(self, mock_keeper):
         """Invalid path raises BadParameter."""
         import typer
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
         with pytest.raises(typer.BadParameter) as exc_info:
             _get_config_value(mock_keeper._config, mock_keeper._store_path, "invalid.path")
         assert "Unknown config path" in str(exc_info.value)
@@ -352,7 +352,7 @@ class TestConfigEdgeCases:
 
     def test_nested_attribute_access(self, mock_keeper):
         """Can access nested config attributes."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
 
         # Access embedding.name (ProviderConfig attribute)
         result = _get_config_value(mock_keeper._config, mock_keeper._store_path, "embedding")
@@ -361,14 +361,14 @@ class TestConfigEdgeCases:
 
     def test_no_config_file_returns_none(self):
         """'file' returns None when no config loaded."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
 
         result = _get_config_value(None, Path("/test/store"), "file")
         assert result is None
 
     def test_providers_no_config_returns_none(self):
         """'providers' returns None when no config loaded."""
-        from keep.cli import _get_config_value
+        from keep.console_support import _get_config_value
 
         result = _get_config_value(None, Path("/test/store"), "providers")
         assert result is None

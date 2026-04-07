@@ -1,7 +1,8 @@
-"""Thin CLI — pure display layer over the daemon HTTP API.
+"""Typer command app for keep.
 
-Parse args → one HTTP call → render JSON → exit.
-No keep internals, no models, no database. ~50ms startup.
+Primarily daemon-backed commands for note/query flows, plus a small set of
+retained local or delegated commands for setup, daemon control, MCP, and
+data import/export.
 """
 
 import json
@@ -120,6 +121,23 @@ def _expand_stdin_tag_list(tags: list[str] | None) -> list[str] | None:
         return tags
     data = _read_stdin_json()
     return [_expand_template(t, data) if _has_templates(t) else t for t in tags]
+
+
+def _read_stdin_text() -> str:
+    """Read stdin as strict UTF-8 text.
+
+    Python's text wrapper may use a permissive error handler for stdin on some
+    platforms, so decode from the buffered bytes directly when possible.
+    """
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is not None:
+        raw = buffer.read()
+        return raw.decode("utf-8")
+
+    text = sys.stdin.read()
+    if any(0xDC80 <= ord(ch) <= 0xDCFF for ch in text):
+        raise ValueError("stdin contains surrogate-escaped bytes")
+    return text
 
 
 def _get(port: int, path: str) -> dict:
@@ -927,8 +945,8 @@ def put(
     # Stdin mode
     if source == "-" or (source is None and _has_stdin_data()):
         try:
-            content = sys.stdin.read()
-        except UnicodeDecodeError:
+            content = _read_stdin_text()
+        except (UnicodeDecodeError, ValueError):
             typer.echo("Error: stdin contains binary data (not valid UTF-8)", err=True)
             typer.echo("Hint: for binary files, use: keep put file:///path/to/file", err=True)
             raise typer.Exit(1)
@@ -1545,7 +1563,7 @@ def pending(
 
     if list_items:
         from .daemon_client import get_port, resolve_store_path
-        from .cli import print_pending_list_lightweight
+        from .console_support import print_pending_list_lightweight
         store_path = resolve_store_path(_global_store)
         print_pending_list_lightweight(store_path)
         # Ensure daemon is running so pending items get processed
@@ -1557,7 +1575,7 @@ def pending(
     kp = Keeper(store_path=resolve_store_path(_global_store))
 
     if daemon:
-        from .cli import run_pending_daemon
+        from .console_support import run_pending_daemon
         run_pending_daemon(kp)
         return
 
@@ -1589,7 +1607,7 @@ def pending(
 
 
     # Interactive mode: show status, ensure daemon running, tail log
-    from .cli import print_pending_interactive
+    from .console_support import print_pending_interactive
     print_pending_interactive(kp)
     kp.close()
 
@@ -1651,7 +1669,7 @@ def config(
         run_wizard(config_dir, store_path, restart_command="keep config --setup")
         return
 
-    from .cli import _format_config_with_defaults, _get_config_value
+    from .console_support import _format_config_with_defaults, _get_config_value
     from .config import load_or_create_config
     from .paths import get_config_dir, get_default_store_path
 
@@ -1678,7 +1696,7 @@ def config(
     if is_json:
         import importlib.resources
 
-        from .cli import get_tool_directory
+        from .console_support import get_tool_directory
         result = {
             "file": str(cfg.config_path) if cfg else None,
             "tool": str(get_tool_directory()),
@@ -1704,7 +1722,7 @@ def doctor(
     use_faulthandler: Annotated[bool, typer.Option("--faulthandler", help="Enable faulthandler")] = False,
 ):
     """Diagnostic checks for debugging setup and crash issues."""
-    from .cli import doctor as doctor_impl
+    from .console_support import doctor as doctor_impl
     doctor_impl(log=log, use_faulthandler=use_faulthandler)
 
 

@@ -469,7 +469,7 @@ class TestHandleWatch:
         return Keeper(store_path=tmp_path)
 
     def test_watch_file(self, kp, tmp_path):
-        from keep.cli import _handle_watch
+        from keep.console_support import _handle_watch
         f = tmp_path / "test.txt"
         f.write_text("hello")
         _handle_watch(kp, True, False, f"file://{f}", "file", {})
@@ -478,7 +478,7 @@ class TestHandleWatch:
         assert watches[0].kind == "file"
 
     def test_unwatch_file(self, kp, tmp_path):
-        from keep.cli import _handle_watch
+        from keep.console_support import _handle_watch
         f = tmp_path / "test.txt"
         f.write_text("hello")
         _handle_watch(kp, True, False, f"file://{f}", "file", {})
@@ -487,7 +487,7 @@ class TestHandleWatch:
         assert len(list_watches(kp)) == 0
 
     def test_watch_with_interval(self, kp, tmp_path):
-        from keep.cli import _handle_watch
+        from keep.console_support import _handle_watch
         f = tmp_path / "test.txt"
         f.write_text("hello")
         _handle_watch(kp, True, False, f"file://{f}", "file", {}, interval="PT5M")
@@ -495,7 +495,7 @@ class TestHandleWatch:
         assert watches[0].interval == "PT5M"
 
     def test_watch_directory_with_options(self, kp, tmp_path):
-        from keep.cli import _handle_watch
+        from keep.console_support import _handle_watch
         d = tmp_path / "docs"
         d.mkdir()
         (d / "a.txt").write_text("A")
@@ -506,12 +506,12 @@ class TestHandleWatch:
         assert watches[0].exclude == ["*.log"]
 
     def test_watch_noop_when_neither(self, kp):
-        from keep.cli import _handle_watch
+        from keep.console_support import _handle_watch
         _handle_watch(kp, False, False, "file:///x", "file", {})
         assert list_watches(kp) == []
 
     def test_unwatch_nonexistent(self, kp):
-        from keep.cli import _handle_watch
+        from keep.console_support import _handle_watch
         # Should not raise, just prints "Not watching"
         _handle_watch(kp, False, True, "file:///nope", "file", {})
         assert list_watches(kp) == []

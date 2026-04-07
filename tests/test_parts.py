@@ -716,7 +716,7 @@ class TestCLIParts:
 
     def test_format_summary_line_with_part(self):
         """Summary line shows @P{N} for parts."""
-        from keep.cli import _format_summary_line
+        from keep.console_support import _format_summary_line
         from keep.types import Item
 
         item = Item(
