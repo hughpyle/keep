@@ -207,9 +207,12 @@ class FileDocumentProvider:
     
     def fetch(self, uri: str) -> Document:
         """Read file content from the filesystem with text extraction for PDF/HTML."""
-        # Normalize to path
+        # Normalize to path. For file:// URIs we percent-decode so that IDs
+        # normalized for validation (e.g. %27 for ') map back to the real
+        # on-disk path.
         if uri.startswith("file://"):
-            path_str = uri.removeprefix("file://")
+            from ..types import file_uri_to_path
+            path_str = file_uri_to_path(uri)
         else:
             path_str = uri
 

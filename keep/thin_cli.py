@@ -825,9 +825,30 @@ def _put_directory(
         elif unwatch:
             watch_body["unwatch"] = True
         try:
-            _daemon_request("POST", port, "/v1/notes", watch_body)
-        except Exception:
-            pass
+            status, data = _daemon_request("POST", port, "/v1/notes", watch_body)
+            if status == 200:
+                if watch and data.get("watch"):
+                    typer.echo(
+                        f"watching {resolved_path}/ "
+                        f"(interval {data['watch']['interval']})",
+                        err=True,
+                    )
+                elif unwatch:
+                    if data.get("unwatch"):
+                        typer.echo(f"watch removed: {resolved_path}/", err=True)
+                    else:
+                        typer.echo(f"not watching: {resolved_path}/", err=True)
+            else:
+                err = data.get("error") if isinstance(data, dict) else str(data)
+                typer.echo(
+                    f"Warning: watch registration failed: {err or 'unknown error'}",
+                    err=True,
+                )
+        except Exception as e:
+            typer.echo(
+                f"Warning: watch registration failed: {e}",
+                err=True,
+            )
 
 
 @app.command()
