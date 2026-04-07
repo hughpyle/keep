@@ -39,6 +39,7 @@ from .flow_client import (
     put_item as flow_put_item,
     tag_item as flow_tag_item,
 )
+from .watches import add_watch, remove_watch
 
 
 def _item_to_dict(item) -> dict:
@@ -284,6 +285,36 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_put(self, groups: dict):
         body = self._read_body()
+        watch = body.get("watch", False)
+        unwatch = body.get("unwatch", False)
+        watch_kind = body.get("watch_kind", "file")
+
+        # Directory watches do not correspond to a single document: the CLI
+        # walked the directory and posted each child file individually before
+        # this request. Skip flow_put_item entirely and go straight to watch
+        # registration, otherwise the put would blow up on "Not a file".
+        if (watch or unwatch) and watch_kind == "directory":
+            # Directory watch entries store a bare filesystem path, not a URI.
+            source = (body.get("uri") or "").removeprefix("file://")
+            if not source:
+                self._json(400, {"error": "directory watch requires a uri"})
+                return
+            resp: dict = {}
+            if unwatch:
+                resp["unwatch"] = remove_watch(self.keeper, source)
+            else:
+                entry = add_watch(
+                    self.keeper, source, watch_kind,
+                    tags=body.get("tags") or {},
+                    recurse=body.get("recurse", False),
+                    exclude=body.get("exclude") or [],
+                    interval=body.get("interval", "PT30S"),
+                    max_watches=self.keeper.config.max_watches,
+                )
+                resp["watch"] = {"source": entry.source, "interval": entry.interval}
+            self._json(200, resp)
+            return
+
         item = flow_put_item(
             self.keeper,
             content=body.get("content"),
@@ -296,19 +327,15 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         )
         resp = _item_to_dict(item)
 
-        # Watch management (after successful put)
-        watch = body.get("watch", False)
-        unwatch = body.get("unwatch", False)
+        # Watch management (after successful put) — file and url kinds only
         if watch or unwatch:
-            from .watches import add_watch, remove_watch
             source = body.get("uri") or item.id
-            kind = body.get("watch_kind", "file")
             if unwatch:
                 removed = remove_watch(self.keeper, source)
                 resp["unwatch"] = removed
             else:
                 entry = add_watch(
-                    self.keeper, source, kind,
+                    self.keeper, source, watch_kind,
                     tags=body.get("tags") or {},
                     recurse=body.get("recurse", False),
                     exclude=body.get("exclude") or [],

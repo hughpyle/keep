@@ -4,7 +4,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Literal, Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 
 # System tag prefix - tags starting with this are managed by the system
@@ -212,6 +212,36 @@ def _resolve_dot_segments(path: str) -> str:
     return resolved
 
 
+def file_uri_to_path(uri: str) -> str:
+    """Inverse of :func:`_normalize_file_uri`.
+
+    Percent-decodes a ``file://`` URI's path so it maps back to the on-disk
+    path. Non-``file://`` inputs pass through.
+    """
+    if uri[:7].lower() != "file://":
+        return uri
+    return unquote(uri[7:])
+
+
+def _encode_blocked_char(m: "re.Match[str]") -> str:
+    return "".join(f"%{b:02X}" for b in m.group(0).encode("utf-8"))
+
+
+def _normalize_file_uri(uri: str) -> str:
+    """Percent-encode ``file://`` URI characters that fail :data:`_ID_BLOCKED_RE`.
+
+    Quotes, backticks, control bytes, etc. are encoded. Other characters —
+    including spaces and non-ASCII letters — are preserved so existing stored
+    IDs aren't disturbed. Idempotent.
+    """
+    if uri[:7].lower() != "file://":
+        return uri
+    rest = uri[7:]
+    if not _ID_BLOCKED_RE.search(rest):
+        return uri
+    return uri[:7] + _ID_BLOCKED_RE.sub(_encode_blocked_char, rest)
+
+
 def _normalize_http_uri(uri: str) -> str:
     """RFC 3986 §6.2.2 syntax-based normalization for HTTP/HTTPS URIs."""
     parsed = urlparse(uri)
@@ -298,6 +328,11 @@ def normalize_id(id: str) -> str:
         base = id[:m.start()]
         digits = "".join(c for c in m.group() if c.isdigit())
         id = f"{base}@p{digits}"
+    # file:// URIs: percent-encode path characters that would fail validation
+    # (quotes, backticks, etc. are legal on disk but blocked for generic IDs).
+    # Done before validate_id so real filesystem paths don't get rejected.
+    if id[:7].lower() == "file://":
+        id = _normalize_file_uri(id)
     validate_id(id)
     id = unicodedata.normalize("NFC", id)
     if id[:8].lower().startswith(('http://', 'https://')):

@@ -158,6 +158,77 @@ def test_delete(http):
     assert r.status_code == 404
 
 
+# --- Directory watch via PUT /v1/notes ---
+
+def test_put_directory_watch_registers_without_put(daemon, http, tmp_path):
+    """PUT with watch_kind=directory skips flow_put_item and registers a watch.
+
+    Regression: previously the daemon called flow_put_item on the directory
+    URI first, which failed with "Not a file" and left the watch unregistered.
+    """
+    from keep.watches import list_watches
+
+    server, kp, port = daemon
+    d = tmp_path / "community"
+    d.mkdir()
+    (d / "a.md").write_text("hi")
+
+    r = http.post("/v1/notes", json={
+        "uri": f"file://{d}",
+        "watch": True,
+        "watch_kind": "directory",
+        "recurse": True,
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body.get("watch", {}).get("source") == str(d)
+
+    entries = list_watches(kp)
+    assert len(entries) == 1
+    assert entries[0].source == str(d)
+    assert entries[0].kind == "directory"
+    assert entries[0].recurse is True
+
+
+def test_put_directory_watch_does_not_create_document(daemon, http, tmp_path):
+    """Directory watch registration must not create a document for the dir itself."""
+    from keep.watches import list_watches
+
+    server, kp, port = daemon
+    d = tmp_path / "vault"
+    d.mkdir()
+
+    http.post("/v1/notes", json={
+        "uri": f"file://{d}",
+        "watch": True,
+        "watch_kind": "directory",
+    })
+
+    # No document with the directory URI should exist.
+    assert kp.get(f"file://{d}") is None
+    assert len(list_watches(kp)) == 1
+
+
+def test_put_directory_unwatch(daemon, http, tmp_path):
+    """Unwatch via PUT /v1/notes with watch_kind=directory removes the watch."""
+    from keep.watches import add_watch, list_watches
+
+    server, kp, port = daemon
+    d = tmp_path / "vault"
+    d.mkdir()
+    add_watch(kp, str(d), "directory")
+    assert len(list_watches(kp)) == 1
+
+    r = http.post("/v1/notes", json={
+        "uri": f"file://{d}",
+        "unwatch": True,
+        "watch_kind": "directory",
+    })
+    assert r.status_code == 200
+    assert r.json().get("unwatch") is True
+    assert list_watches(kp) == []
+
+
 # --- Tag ---
 
 def test_tag(http):

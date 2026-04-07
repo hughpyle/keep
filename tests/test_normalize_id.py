@@ -8,6 +8,7 @@ from keep.types import (
     normalize_id,
     normalize_tag_map,
     tag_values,
+    _normalize_file_uri,
     _normalize_http_uri,
     _decode_unreserved,
     _resolve_dot_segments,
@@ -215,6 +216,42 @@ class TestNormalizeId:
     def test_file_uri_passthrough(self):
         assert normalize_id("file:///Users/hugh/doc.md") == "file:///Users/hugh/doc.md"
 
+    def test_file_uri_single_quote_encoded(self):
+        # Paths with ' are valid on disk but blocked as generic IDs — encode.
+        assert normalize_id(
+            "file:///vault/'Natural'/Postnatural.md"
+        ) == "file:///vault/%27Natural%27/Postnatural.md"
+
+    def test_file_uri_double_quote_encoded(self):
+        assert normalize_id('file:///vault/a"b.md') == "file:///vault/a%22b.md"
+
+    def test_file_uri_backtick_encoded(self):
+        assert normalize_id("file:///vault/a`b.md") == "file:///vault/a%60b.md"
+
+    def test_file_uri_angle_bracket_encoded(self):
+        assert normalize_id("file:///vault/<x>.md") == "file:///vault/%3Cx%3E.md"
+
+    def test_file_uri_pipe_semicolon_encoded(self):
+        assert normalize_id("file:///vault/a|b;c.md") == "file:///vault/a%7Cb%3Bc.md"
+
+    def test_file_uri_backslash_encoded(self):
+        assert normalize_id("file:///vault/a\\b.md") == "file:///vault/a%5Cb.md"
+
+    def test_file_uri_space_preserved(self):
+        # Spaces aren't in the blocklist — leave them alone for backward compat.
+        assert normalize_id("file:///vault/a b.md") == "file:///vault/a b.md"
+
+    def test_file_uri_unicode_preserved(self):
+        # Non-ASCII letters aren't blocked — preserved as-is (NFC).
+        assert normalize_id("file:///vault/Café.md") == "file:///vault/Café.md"
+
+    def test_file_uri_idempotent(self):
+        once = normalize_id("file:///vault/'a'/b.md")
+        assert normalize_id(once) == once
+
+    def test_file_uri_mixed_scheme_case(self):
+        assert normalize_id("FILE:///vault/'a'.md") == "FILE:///vault/%27a%27.md"
+
     # HTTP URIs get normalized
     def test_http_normalized(self):
         assert normalize_id("HTTPS://Example.COM/path") == "https://example.com/path"
@@ -331,6 +368,22 @@ class TestNormalizationIntegration:
     def test_put_rejects_id_with_surrounding_whitespace(self, keeper):
         with pytest.raises(ValueError, match="leading or trailing whitespace"):
             keeper.put(content="test", id=" my-note ")
+
+    def test_put_get_file_uri_with_quote(self, keeper):
+        """file:// URIs with single quotes round-trip through put+get."""
+        item = keeper.put(
+            content="quoted", id="file:///vault/'Natural'/Post.md"
+        )
+        assert item.id == "file:///vault/%27Natural%27/Post.md"
+        # Lookup with either the raw or the encoded form finds the same item.
+        assert keeper.get("file:///vault/'Natural'/Post.md") is not None
+        assert keeper.get("file:///vault/%27Natural%27/Post.md") is not None
+
+    def test_file_uri_quote_upsert(self, keeper):
+        """Two puts with equivalent quoted paths update the same item."""
+        a = keeper.put(content="v1", id="file:///vault/'x'/doc.md")
+        b = keeper.put(content="v2", id="file:///vault/%27x%27/doc.md")
+        assert a.id == b.id
 
 
 class TestTagValueUriNormalization:
