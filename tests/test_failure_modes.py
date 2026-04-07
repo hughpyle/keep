@@ -146,6 +146,20 @@ class TestEmbeddingDimensionValidation:
         kp.enqueue_reindex.assert_not_called()
         kp.close()
 
+    def test_identity_uses_legacy_provider_model_attr(self, tmp_path):
+        """Identity resolution falls back to `.model` when `.model_name` is absent."""
+        kp = Keeper(store_path=tmp_path)
+
+        legacy_embed = MagicMock()
+        legacy_embed.dimension = 384
+        legacy_embed.model = "legacy-model"
+
+        kp._validate_embedding_identity(legacy_embed)
+
+        assert kp._config.embedding_identity is not None
+        assert kp._config.embedding_identity.model == "legacy-model"
+        kp.close()
+
 
 # ---------------------------------------------------------------------------
 # Dual-write partial failures

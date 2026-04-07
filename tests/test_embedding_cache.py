@@ -287,6 +287,25 @@ class TestCachingEmbeddingProvider:
     ) -> None:
         """Model name property passes through."""
         assert cached_provider.model_name == mock_provider.model_name
+
+    def test_model_name_falls_back_to_legacy_model_attr(self, tmp_path: Path) -> None:
+        """Legacy providers with only `.model` still get stable cache identity."""
+        class LegacyProvider:
+            model = "legacy-model"
+            dimension = 384
+
+            def embed(self, text: str, **kwargs) -> list[float]:
+                return [0.1] * self.dimension
+
+            def embed_batch(self, texts: list[str], **kwargs) -> list[list[float]]:
+                return [self.embed(text, **kwargs) for text in texts]
+
+        cached_provider = CachingEmbeddingProvider(
+            LegacyProvider(),
+            cache_path=tmp_path / "cache.db",
+        )
+
+        assert cached_provider.model_name == "legacy-model"
     
     def test_hit_rate_in_stats(
         self, cached_provider: CachingEmbeddingProvider

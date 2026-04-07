@@ -41,6 +41,7 @@ _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 from .api import Keeper
 from .config import get_tool_directory
 from .logging_config import configure_quiet_mode, enable_debug_mode
+from .provider_identity import provider_model_name
 from .projections import plan_find_context_render, render_find_context_plan
 from .types import (
     SYSTEM_TAG_PREFIX,
@@ -2128,7 +2129,7 @@ def doctor(
             vec = provider.embed("keep doctor test")
             elapsed_ms = (time.perf_counter() - t0) * 1000
             dim = len(vec)
-            model = getattr(provider, "model_name", "?")
+            model = provider_model_name(provider, "?")
             ok(f"Embedding: {model}, dim={dim}, {elapsed_ms:.0f}ms")
         except Exception as e:
             fail(f"Embedding: {e}")
@@ -2144,7 +2145,7 @@ def doctor(
             t0 = time.perf_counter()
             result = provider.summarize("The quick brown fox jumps over the lazy dog.")
             elapsed_ms = (time.perf_counter() - t0) * 1000
-            model = getattr(provider, "model_name", cfg.summarization.name)
+            model = provider_model_name(provider, cfg.summarization.name)
             ok(f"Summarization: {model}, {elapsed_ms:.0f}ms")
         except Exception as e:
             fail(f"Summarization: {e}")
@@ -2157,7 +2158,7 @@ def doctor(
             from .providers.base import get_registry
             registry = get_registry()
             provider = registry.create_media(cfg.media.name, cfg.media.params)
-            model = getattr(provider, "model_name", cfg.media.name)
+            model = provider_model_name(provider, cfg.media.name)
             ok(f"Media: {cfg.media.name} ({model})")
         except Exception as e:
             fail(f"Media: {e}")

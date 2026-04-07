@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from .provider_identity import provider_model_name
+
 logger = logging.getLogger(__name__)
 
 # fcntl is only available on POSIX systems
@@ -163,7 +165,7 @@ class LockedEmbeddingProvider:
 
     @property
     def model_name(self) -> str:
-        return getattr(self._provider, "model_name", "unknown")
+        return provider_model_name(self._provider)
 
     @property
     def dimension(self) -> int:
@@ -207,7 +209,7 @@ class LockedSummarizationProvider:
 
     @property
     def model_name(self) -> str:
-        return getattr(self._provider, "model_name", "unknown")
+        return provider_model_name(self._provider)
 
     def summarize(
         self,
@@ -248,7 +250,7 @@ class LockedMediaDescriber:
 
     @property
     def model_name(self) -> str:
-        return getattr(self._provider, "model_name", "unknown")
+        return provider_model_name(self._provider)
 
     def describe(self, path: str, content_type: str) -> str | None:
         with self._thread_lock:
@@ -281,7 +283,7 @@ class LockedContentExtractor:
 
     @property
     def model_name(self) -> str:
-        return getattr(self._provider, "model_name", "unknown")
+        return provider_model_name(self._provider)
 
     def extract(self, path: str, content_type: str) -> str | None:
         with self._thread_lock:

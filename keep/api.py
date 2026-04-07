@@ -43,6 +43,7 @@ import sys
 
 from .config import load_or_create_config, save_config, StoreConfig, EmbeddingIdentity
 from .paths import get_config_dir, get_default_store_path
+from .provider_identity import provider_model_name
 from .protocol import DocumentStoreProtocol, VectorStoreProtocol, PendingQueueProtocol
 from .providers import get_registry
 from .providers.base import (
@@ -994,7 +995,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # Get current provider's identity
         current = EmbeddingIdentity(
             provider=self._config.embedding.name,
-            model=getattr(provider, "model_name", "unknown"),
+            model=provider_model_name(provider),
             dimension=provider.dimension,
         )
 

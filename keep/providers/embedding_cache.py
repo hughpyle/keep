@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..const import SQLITE_BUSY_TIMEOUT_MS
+from ..provider_identity import provider_model_name
 from ..tracing import get_tracer
 from .base import EmbedTask, EmbeddingProvider
 
@@ -288,7 +289,7 @@ class CachingEmbeddingProvider:
     @property
     def model_name(self) -> str:
         """Get the underlying provider's model name."""
-        return getattr(self._provider, "model_name", "unknown")
+        return provider_model_name(self._provider)
     
     @property
     def dimension(self) -> int:
