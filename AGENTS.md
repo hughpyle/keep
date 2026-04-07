@@ -29,6 +29,19 @@ User-facing terminology: "notes" (not "items" or "documents" or whatever).
   to pick up new code (`keep pending --stop` then let it auto-start).
 - **Never run `uv tool upgrade` or `pip install`** — the editable install already tracks HEAD.
 
+## Pre-commit hooks
+
+- The repo uses [`pre-commit`](https://pre-commit.com); config lives in `.pre-commit-config.yaml` (all versions pinned).
+- Current hooks:
+  - **gitleaks** — blocks accidental secret disclosure
+  - **ruff-check** — same lint gate enforced at release time, now run per-commit
+  - **check-merge-conflict** — catches unresolved conflict markers
+  - **check-added-large-files** — rejects files over 1 MB to keep the repo lean
+- Install once per clone: `uv tool install pre-commit && pre-commit install`. This wires `.git/hooks/pre-commit` so every commit runs the hooks against staged changes.
+- Ad-hoc full-tree scan: `pre-commit run --all-files`. Full git-history secret scan: `gitleaks detect --no-banner` (requires system gitleaks, e.g. `brew install gitleaks`).
+- **Never bypass the hooks with `--no-verify`** unless the user explicitly asks. If gitleaks flags something, investigate: if it's a real secret, rotate it and remove it from history; if it's a false positive, add a narrow entry to `.gitleaksignore` (by fingerprint) or a rule allowlist in `.gitleaks.toml`. If ruff flags something, fix the lint.
+- CI backstop: `.github/workflows/secret-scan.yml` runs gitleaks against the full git history on every push to `main` and every PR, in case a contributor skipped or bypassed the local hook. The CI gitleaks version is kept in sync with the pre-commit pin.
+
 ## Release process
 
 - Feature work should be on its own branch.
