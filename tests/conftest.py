@@ -1142,6 +1142,23 @@ def _isolate_test_store_and_cleanup_daemons(monkeypatch, tmp_path):
     store.mkdir()
     monkeypatch.setenv("KEEP_STORE_PATH", str(store))
     monkeypatch.setenv("KEEP_CONFIG", str(store))
+    # Avoid slow and environment-dependent provider auto-detection for
+    # subprocess CLI tests by giving each test store a minimal fixed config.
+    (store / "keep.toml").write_text(
+        """[store]
+version = 3
+
+[embedding]
+name = "ollama"
+model = "nomic-embed-text:latest"
+
+[summarization]
+name = "truncate"
+
+[document]
+name = "composite"
+""",
+    )
 
     yield
 

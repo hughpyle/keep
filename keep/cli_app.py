@@ -909,7 +909,6 @@ def put(
     (source,) = _expand_stdin_templates(source)
     tags = _expand_stdin_tag_list(tags)
 
-    port = _get_port()
     parsed_tags: dict = {}
     for t in (tags or []):
         if "=" not in t:
@@ -962,9 +961,11 @@ def put(
         else:
             merged = parsed_tags
         if use_now_put_path:
+            port = _get_port()
             _post(port, "/v1/notes", {"content": content, "id": "now", "tags": merged or None})
             _show_now(port, json_output)
             return
+        port = _get_port()
         body: dict = {"content": content, "id": id, "tags": merged or None, "force": force or None}
         data = _post(port, "/v1/notes", body)
     elif source is None:
@@ -987,6 +988,7 @@ def put(
                 typer.echo("Error: --id cannot be used with directory mode", err=True)
                 raise typer.Exit(1)
             # Directory mode — iterate locally, put each file via HTTP
+            port = _get_port()
             _put_directory(
                 port, Path(source).resolve(), parsed_tags,
                 recurse=recurse, exclude=exclude,
@@ -1005,10 +1007,12 @@ def put(
             raise typer.Exit(1)
 
         if use_now_put_path and content is not None and uri is None:
+            port = _get_port()
             _post(port, "/v1/notes", {"content": content, "id": "now", "tags": parsed_tags or None})
             _show_now(port, json_output)
             return
 
+        port = _get_port()
         body = {
             "content": content,
             "uri": uri,

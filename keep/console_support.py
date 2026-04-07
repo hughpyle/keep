@@ -1378,6 +1378,13 @@ def run_pending_daemon(kp) -> None:
         (kp._store_path / ".processor.version").write_text(_ver)
     except Exception:
         pass
+
+    # Materialize system notes before serving requests. On a fresh store the
+    # first daemon-backed `get .meta/...` request would otherwise trigger
+    # ensure_sysdocs() concurrently with the daemon loop's own startup work.
+    # That race is enough to make SQLite fall over on brand-new stores.
+    kp.ensure_sysdocs()
+
     _daemon_server, _port_path, _token_path = _start_daemon_query_server(kp, _daemon_logger)
 
     from .shutdown import wait_or_shutdown
