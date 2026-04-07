@@ -85,22 +85,11 @@ class EvalResult:
 # CEL compilation
 # ---------------------------------------------------------------------------
 
-_cel_available = False
-
-try:
-    import cel as _cel
-    _cel_available = True
-except ImportError:
-    _cel = None  # type: ignore[assignment]
+import cel as _cel
 
 
 def _compile_predicate(source: str) -> Any:
     """Compile a CEL predicate string into a reusable program."""
-    if not _cel_available:
-        raise RuntimeError(
-            "common-expression-language package required for state-doc predicates; "
-            "install with: pip install common-expression-language"
-        )
     return _cel.compile(source)
 
 
