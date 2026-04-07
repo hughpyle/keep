@@ -53,7 +53,7 @@ User-facing terminology: "notes" (not "items" or "documents" or whatever).
 
 ## Testing
 
-- `tests/test_cli.py` tests depend on daemon state — kill stale daemons before running.
-- `pkill -9 -f 'keep.*pending.*daemon'` to kill all daemons.
+- Test fixtures in `tests/conftest.py` own per-test store isolation and daemon cleanup.
+- If a test leaves a daemon running, that is a test bug and must be fixed.
 - The full suite is `python -m pytest tests/ -x -q` (~1700 tests, ~90s).
 - If tests don't clean up, or leave daemons running, that is a bug in the tests and must be addressed.

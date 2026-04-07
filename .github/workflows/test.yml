@@ -9,6 +9,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v6
 
@@ -18,16 +22,16 @@ jobs:
           version: "latest"
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install ${{ matrix.python-version }}
 
       - name: Check lock file is current
         run: uv lock --check
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra langchain
+        run: uv sync --python ${{ matrix.python-version }} --extra dev --extra langchain
 
       - name: Run tests
-        run: uv run pytest --tb=short -q -m "not slow and not e2e"
+        run: uv run --python ${{ matrix.python-version }} pytest --tb=short -q -m "not slow and not e2e"
         env:
           # Dummy key so config detects a provider; mock_providers fixture
           # intercepts before any real API call is made

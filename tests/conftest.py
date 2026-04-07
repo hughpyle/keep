@@ -4,6 +4,11 @@ Provides mock providers to avoid loading heavy ML models during testing.
 """
 
 import hashlib
+import os
+import signal
+import subprocess
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -1041,25 +1046,108 @@ def pytest_configure(config):
     )
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _kill_leaked_test_daemons():
-    """Kill any subprocess daemons spawned during the test session.
+def _terminate_pid(pid: int) -> None:
+    """Terminate a daemon process, escalating to SIGKILL if needed."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        return
 
-    Tests may trigger daemon auto-start via the command app's get_port().
-    Those daemons run in their own session (start_new_session=True) and
-    survive test teardown.  This fixture kills them by PID file after all
-    tests complete.
-    """
-    yield
-    import glob
-    import os
-    import signal
-    import tempfile
-    tmp_root = tempfile.gettempdir()
-    # pytest tmp dirs live under /tmp/pytest-of-<user>/
-    for pid_file in glob.glob(os.path.join(tmp_root, "pytest-*/**/processor.pid"), recursive=True):
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
         try:
-            pid = int(Path(pid_file).read_text().strip())
-            os.kill(pid, signal.SIGTERM)
-        except (ValueError, OSError, ProcessLookupError):
-            pass
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        except OSError:
+            break
+        time.sleep(0.05)
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _cleanup_daemons_under(root: Path) -> None:
+    """Terminate any daemon processes tracked by processor.pid under root."""
+    killed: set[int] = set()
+    for pid_file in sorted(root.rglob("processor.pid")):
+        try:
+            pid = int(pid_file.read_text().strip())
+        except (ValueError, OSError):
+            continue
+        killed.add(pid)
+        _terminate_pid(pid)
+    for pid in _find_pytest_daemon_pids(root):
+        if pid not in killed:
+            _terminate_pid(pid)
+
+
+def _find_pytest_daemon_pids(root: Path) -> set[int]:
+    """Find detached pytest daemon processes rooted under ``root``."""
+    if os.name == "nt":
+        return set()
+    try:
+        output = subprocess.check_output(
+            ["ps", "-axo", "pid=,command="],
+            text=True,
+        )
+    except Exception:
+        return set()
+
+    root_str = str(root.resolve())
+    pids: set[int] = set()
+    for line in output.splitlines():
+        stripped = line.strip()
+        if " -m keep.daemon --store " not in stripped or "pytest-of-" not in stripped:
+            continue
+        pid_text, _, command = stripped.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if root_str in command:
+            pids.add(pid)
+    return pids
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _cleanup_stale_pytest_daemons():
+    """Reap leftover pytest daemons from previous interrupted runs.
+
+    Per-test fixtures own daemon lifecycle for the current session, but a past
+    crashed run can still leave detached processes behind in pytest temp dirs.
+    Clean them up automatically so test startup never requires manual pkill.
+    """
+    tmp_root = Path(tempfile.gettempdir())
+    pytest_roots = [p for p in tmp_root.glob("pytest-of-*") if p.is_dir()]
+    for root in pytest_roots:
+        _cleanup_daemons_under(root)
+    yield
+    for root in pytest_roots:
+        _cleanup_daemons_under(root)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_test_store_and_cleanup_daemons(monkeypatch, tmp_path):
+    """Give each test its own store/config path and reap detached daemons.
+
+    Subprocess CLI tests inherit these env vars, so daemon auto-start stays
+    inside the test's temp tree instead of binding to a shared ~/.keep store.
+    Any detached daemon that writes processor.pid under that tree is terminated
+    during teardown.
+    """
+    store = tmp_path / ".keep-test-store"
+    store.mkdir()
+    monkeypatch.setenv("KEEP_STORE_PATH", str(store))
+    monkeypatch.setenv("KEEP_CONFIG", str(store))
+
+    yield
+
+    deadline = time.monotonic() + 2.0
+    while True:
+        _cleanup_daemons_under(tmp_path)
+        if not any(tmp_path.rglob("processor.pid")) or time.monotonic() >= deadline:
+            break
+        time.sleep(0.05)

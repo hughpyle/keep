@@ -359,3 +359,4 @@ x acp
 . openrouter
 . hermes plugin
 . improve one-line rendering
+. obsidian skills
