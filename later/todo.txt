@@ -1,4 +1,19 @@
 
+* input sanitization, protect against logging keys etc
+
+* input valence (good/bad/neutral) as a fast-path tagger
+    - state workflows for infohazard defense
+
+* better item entries per property block
+
+* better "meta"-scope
+
+    Globally-scoped meta (meta/todo, meta/learnings): these are project-wide standing queries. They're useful when you ask "what's going on?" — i.e. when fetching now or doing session
+    orientation. But when you keep get some random note, having "here are the project's open todos" pasted in is just noise. It's not about the thing you fetched.
+
+    Relationally-scoped meta (album grouping, thread siblings, "other notes tagged with this person"): these are about the item you're looking at. They define structural neighborhoods
+    — "when you see a track, also surface its album-mates." That's meaningful context for any get, because it answers "what is this thing related to?"
+
 * stats rendering
 
 * "look" reconstruction: "around" & "towards"
