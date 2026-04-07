@@ -446,9 +446,13 @@ class TestUserScoping:
 class TestConfigNamespaceKeys:
     """Tests for config-driven namespace keys."""
 
-    def test_reads_from_config(self, mock_providers, tmp_path):
+    def test_reads_from_config(self, mock_providers, tmp_path, monkeypatch):
         """KeepStore picks up namespace_keys from keep.toml config."""
         from keep.config import save_config, StoreConfig
+        # Point KEEP_CONFIG at this test's store so save_config+Keeper agree
+        # on the config location (conftest's autouse fixture otherwise routes
+        # it to a sibling isolation directory).
+        monkeypatch.setenv("KEEP_CONFIG", str(tmp_path))
         config = StoreConfig(path=tmp_path, namespace_keys=["scope", "tenant"])
         save_config(config)
         kp = Keeper(store_path=tmp_path)
@@ -457,9 +461,10 @@ class TestConfigNamespaceKeys:
         # Should use config's keys, not default
         assert store._namespace_keys == ["scope", "tenant"]
 
-    def test_explicit_overrides_config(self, mock_providers, tmp_path):
+    def test_explicit_overrides_config(self, mock_providers, tmp_path, monkeypatch):
         """Explicit namespace_keys param overrides config."""
         from keep.config import save_config, StoreConfig
+        monkeypatch.setenv("KEEP_CONFIG", str(tmp_path))
         config = StoreConfig(path=tmp_path, namespace_keys=["scope", "tenant"])
         save_config(config)
         kp = Keeper(store_path=tmp_path)

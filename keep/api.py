@@ -209,6 +209,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             check_constraints=False,
         )
 
+        # Ensure the store directory exists before any file I/O against it.
+        # Previously this was a side-effect of save_config() mkdir'ing the
+        # config dir when config_dir == store_path; making it explicit avoids
+        # breaking when KEEP_CONFIG points elsewhere (e.g. test isolation).
+        self._store_path.mkdir(parents=True, exist_ok=True)
+
         # --- Persistent operations log ---
         from .logging_config import configure_ops_log
         self._ops_log_handler = configure_ops_log(self._store_path)
