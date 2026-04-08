@@ -10,11 +10,14 @@ Covers the scenarios that actually broke in production:
 
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
 from keep.api import Keeper
+from keep.document_store import PartInfo
 from tests.conftest import MockChromaStore
 
 MAX_SUMMARY_ATTEMPTS = 5  # default; tests use this as the expected value
@@ -467,6 +470,387 @@ class TestProviderTimeouts:
         assert result["failed"] + result["processed"] == 2
         assert result["failed"] >= 1
         kp.close()
+
+
+class TestReindexOptimizations:
+    """Focused tests for reindex correctness and batch behavior."""
+
+    def _make_keeper(self, mock_providers, tmp_path):
+        kp = Keeper(store_path=tmp_path)
+        kp._needs_sysdoc_migration = False
+        kp._pending_queue = PendingSummaryQueue(tmp_path / "pending.db")
+        kp._embedding_provider = mock_providers["embedding"]
+        return kp
+
+    def test_reindex_uses_fresh_main_doc_summary(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            kp._document_store.upsert("default", "doc1", "fresh summary", {"topic": "new"})
+            kp._pending_queue.enqueue(
+                "doc1", "default", "stale summary",
+                task_type="reindex",
+                metadata={"tags": {"topic": "old"}},
+            )
+
+            embed = kp._embedding_provider
+            original_embed = embed.embed
+            seen_texts: list[str] = []
+
+            def tracking_embed(text: str, **kwargs):
+                seen_texts.append(text)
+                return original_embed(text, **kwargs)
+
+            embed.embed = tracking_embed
+
+            result = kp.process_pending(limit=10)
+
+            chroma_coll = kp._resolve_chroma_collection()
+            stored = kp._store.get(chroma_coll, "doc1")
+            assert result["processed"] == 1
+            assert stored is not None
+            assert stored.summary == "fresh summary"
+            assert seen_texts == ["fresh summary"]
+        finally:
+            kp.close()
+
+    def test_single_reindex_path_reuses_donor_embedding(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            chroma_coll = kp._resolve_chroma_collection()
+            donor_embedding = [0.9] * 384
+            kp._document_store.upsert(
+                "default",
+                "donor",
+                "shared summary",
+                {},
+                content_hash="shared-hash",
+            )
+            kp._store.upsert(
+                chroma_coll,
+                "donor",
+                donor_embedding,
+                "shared summary",
+                {},
+            )
+            kp._document_store.upsert(
+                "default",
+                "doc1",
+                "shared summary",
+                {},
+                content_hash="shared-hash",
+            )
+
+            def fail_embed(text: str, **kwargs):
+                raise AssertionError("single reindex path should reuse donor embedding")
+
+            kp._embedding_provider.embed = fail_embed
+
+            kp._process_pending_reindex(
+                SimpleNamespace(
+                    id="doc1",
+                    collection="default",
+                    content="stale summary",
+                    metadata={},
+                ),
+            )
+
+            stored = kp._store.get(chroma_coll, "doc1")
+            assert stored is not None
+            assert kp._store.get_embedding(chroma_coll, "doc1") == donor_embedding
+        finally:
+            kp.close()
+
+    def test_reindex_missing_version_deletes_stale_index_entry(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            chroma_coll = kp._resolve_chroma_collection()
+            kp._store.upsert_version(
+                chroma_coll,
+                "doc1",
+                2,
+                [0.1] * 384,
+                "old version",
+                {"topic": "history"},
+            )
+            kp._pending_queue.enqueue(
+                "doc1@v2", "default", "stale version",
+                task_type="reindex",
+                metadata={"version": 2, "base_id": "doc1", "tags": {"topic": "stale"}},
+            )
+
+            result = kp.process_pending(limit=10)
+
+            assert result["processed"] == 1
+            assert kp._store.get(chroma_coll, "doc1@v2") is None
+        finally:
+            kp.close()
+
+    def test_reindex_missing_part_deletes_stale_index_entry(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            chroma_coll = kp._resolve_chroma_collection()
+            kp._store.upsert_part(
+                chroma_coll,
+                "doc1",
+                3,
+                [0.1] * 384,
+                "old part",
+                {"topic": "history"},
+            )
+            kp._pending_queue.enqueue(
+                "doc1@p3", "default", "stale part",
+                task_type="reindex",
+                metadata={"part_num": 3, "base_id": "doc1", "tags": {"topic": "stale"}},
+            )
+
+            result = kp.process_pending(limit=10)
+
+            assert result["processed"] == 1
+            assert kp._store.get(chroma_coll, "doc1@p3") is None
+        finally:
+            kp.close()
+
+    def test_reindex_batch_sleeps_and_releases_once(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            kp._document_store.upsert("default", "doc1", "summary one", {})
+            kp._document_store.upsert("default", "doc2", "summary two", {})
+            kp._pending_queue.enqueue("doc1", "default", "stale one", task_type="reindex")
+            kp._pending_queue.enqueue("doc2", "default", "stale two", task_type="reindex")
+
+            with (
+                patch.object(kp, "_release_embedding_provider") as release_provider,
+                patch("keep._background_processing.time.sleep") as sleep_mock,
+            ):
+                result = kp.process_pending(limit=10)
+
+            assert result["processed"] == 2
+            release_provider.assert_called_once()
+            sleep_mock.assert_called_once_with(0.1)
+        finally:
+            kp.close()
+
+    def test_enqueue_reindex_bulk_fetches_versions_and_parts(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            kp._document_store.upsert("default", "doc1", "summary", {})
+            kp._document_store._versions[("default", "doc1")] = [{
+                "version": 2,
+                "summary": "archived summary",
+                "tags": {"topic": "history"},
+                "content_hash": None,
+                "created_at": "2026-01-01T00:00:00",
+            }]
+            kp._document_store.upsert_single_part(
+                "default",
+                "doc1",
+                PartInfo(
+                    part_num=3,
+                    summary="part summary",
+                    tags={"topic": "part"},
+                    created_at="2026-01-02T00:00:00",
+                ),
+            )
+
+            original_list_versions_many = kp._document_store.list_versions_many
+            original_list_parts_many = kp._document_store.list_parts_many
+            bulk_version_calls: list[list[str]] = []
+            bulk_part_calls: list[list[str]] = []
+
+            def fail_list_versions(collection: str, id: str, limit: int = 10):
+                raise AssertionError("enqueue_reindex should use list_versions_many")
+
+            def fail_list_parts(collection: str, id: str):
+                raise AssertionError("enqueue_reindex should use list_parts_many")
+
+            def tracking_list_versions_many(collection: str, ids: list[str]):
+                bulk_version_calls.append(list(ids))
+                return original_list_versions_many(collection, ids)
+
+            def tracking_list_parts_many(collection: str, ids: list[str]):
+                bulk_part_calls.append(list(ids))
+                return original_list_parts_many(collection, ids)
+
+            kp._document_store.list_versions = fail_list_versions
+            kp._document_store.list_parts = fail_list_parts
+            kp._document_store.list_versions_many = tracking_list_versions_many
+            kp._document_store.list_parts_many = tracking_list_parts_many
+
+            kp.enqueue_reindex()
+
+            assert bulk_version_calls == [["doc1"]]
+            assert bulk_part_calls == [["doc1"]]
+            queued_ids = [item.id for item in kp._pending_queue.dequeue(limit=10)]
+            assert queued_ids == ["doc1", "doc1@v2", "doc1@p3"]
+        finally:
+            kp.close()
+
+    def test_enqueue_reindex_skips_system_docs(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            kp._document_store.upsert("default", "doc1", "summary", {})
+            kp._document_store.upsert("default", ".cursor/x", "cursor", {})
+
+            kp.enqueue_reindex()
+
+            queued_ids = [item.id for item in kp._pending_queue.dequeue(limit=10)]
+            assert "doc1" in queued_ids
+            assert ".cursor/x" not in queued_ids
+        finally:
+            kp.close()
+
+    def test_edge_tag_auto_vivify_queues_empty_reindex_content(self, mock_providers, tmp_path):
+        kp = Keeper(store_path=tmp_path)
+        try:
+            doc_coll = kp._resolve_doc_collection()
+            kp._document_store.upsert(doc_coll, ".tag/ref", "ref tag", {"_inverse": "backref"})
+            kp._process_edge_tags("source", {"ref": "target"}, {}, doc_coll)
+
+            target_items = [item for item in kp._pending_queue._queue if item["id"] == "target"]
+            assert target_items
+            assert target_items[-1]["content"] == ""
+        finally:
+            kp.close()
+
+    def test_backfill_auto_vivify_queues_empty_reindex_content(self, mock_providers, tmp_path):
+        kp = Keeper(store_path=tmp_path)
+        try:
+            doc_coll = kp._resolve_doc_collection()
+            kp._document_store.upsert(doc_coll, ".tag/ref", "ref tag", {"_inverse": "backref"})
+            kp._document_store.upsert(doc_coll, "source", "source summary", {"ref": "target"})
+
+            item = SimpleNamespace(
+                id="_backfill:ref",
+                collection=doc_coll,
+                metadata={"predicate": "ref", "inverse": "backref"},
+            )
+
+            kp._process_pending_backfill_edges(item)
+
+            target_items = [entry for entry in kp._pending_queue._queue if entry["id"] == "target"]
+            assert target_items
+            assert target_items[-1]["content"] == ""
+        finally:
+            kp.close()
+
+    def test_reindex_fast_path_uses_embed_batch_once_for_unique_summaries(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            kp._document_store.upsert("default", "doc1", "same summary", {})
+            kp._document_store.upsert("default", "doc2", "same summary", {})
+            kp._pending_queue.enqueue("doc1", "default", "stale one", task_type="reindex")
+            kp._pending_queue.enqueue("doc2", "default", "stale two", task_type="reindex")
+
+            seen_batches: list[list[str]] = []
+
+            def fake_embed_batch(texts: list[str], **kwargs):
+                seen_batches.append(list(texts))
+                return [[0.1] * 384 for _ in texts]
+
+            kp._embedding_provider.embed_batch = fake_embed_batch
+
+            result = kp.process_pending(limit=10)
+
+            assert result["processed"] == 2
+            assert seen_batches == [["same summary"]]
+        finally:
+            kp.close()
+
+    def test_reindex_batch_preserves_version_and_part_metadata(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            chroma_coll = kp._resolve_chroma_collection()
+            kp._document_store._versions[("default", "doc1")] = [{
+                "version": 2,
+                "summary": "archived summary",
+                "tags": {"topic": "history"},
+                "content_hash": None,
+                "created_at": "2026-01-01T00:00:00",
+            }]
+            kp._document_store.upsert_single_part(
+                "default",
+                "doc1",
+                PartInfo(
+                    part_num=3,
+                    summary="part summary",
+                    tags={"topic": "part"},
+                    created_at="2026-01-02T00:00:00",
+                ),
+            )
+            kp._pending_queue.enqueue(
+                "doc1@v2", "default", "stale version",
+                task_type="reindex",
+                metadata={"version": 2, "base_id": "doc1"},
+            )
+            kp._pending_queue.enqueue(
+                "doc1@p3", "default", "stale part",
+                task_type="reindex",
+                metadata={"part_num": 3, "base_id": "doc1"},
+            )
+
+            result = kp.process_pending(limit=10)
+
+            assert result["processed"] == 2
+            version_entry = kp._store.get(chroma_coll, "doc1@v2")
+            part_entry = kp._store.get(chroma_coll, "doc1@p3")
+            assert version_entry is not None
+            assert part_entry is not None
+            assert version_entry.tags["_base_id"] == "doc1"
+            assert version_entry.tags["_version"] == "2"
+            assert part_entry.tags["_base_id"] == "doc1"
+            assert part_entry.tags["_part_num"] == "3"
+        finally:
+            kp.close()
+
+    def test_reindex_fast_path_batches_mixed_doc_version_part_in_one_write(self, mock_providers, tmp_path):
+        kp = self._make_keeper(mock_providers, tmp_path)
+        try:
+            kp._document_store.upsert("default", "doc1", "doc summary", {})
+            kp._document_store._versions[("default", "doc1")] = [{
+                "version": 2,
+                "summary": "archived summary",
+                "tags": {"topic": "history"},
+                "content_hash": None,
+                "created_at": "2026-01-01T00:00:00",
+            }]
+            kp._document_store.upsert_single_part(
+                "default",
+                "doc1",
+                PartInfo(
+                    part_num=3,
+                    summary="part summary",
+                    tags={"topic": "part"},
+                    created_at="2026-01-02T00:00:00",
+                ),
+            )
+            kp._pending_queue.enqueue("doc1", "default", "stale doc", task_type="reindex")
+            kp._pending_queue.enqueue(
+                "doc1@v2", "default", "stale version",
+                task_type="reindex",
+                metadata={"version": 2, "base_id": "doc1"},
+            )
+            kp._pending_queue.enqueue(
+                "doc1@p3", "default", "stale part",
+                task_type="reindex",
+                metadata={"part_num": 3, "base_id": "doc1"},
+            )
+
+            original_upsert_batch = kp._store.upsert_batch
+            call_count = 0
+
+            def tracking_upsert_batch(*args, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                return original_upsert_batch(*args, **kwargs)
+
+            kp._store.upsert_batch = tracking_upsert_batch
+
+            result = kp.process_pending(limit=10)
+
+            assert result["processed"] == 3
+            assert call_count == 1
+        finally:
+            kp.close()
 
 
 # ---------------------------------------------------------------------------

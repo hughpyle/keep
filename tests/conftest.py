@@ -569,8 +569,45 @@ class MockDocumentStore:
     def get_version(self, collection: str, id: str, offset: int = 0):
         return None
 
+    def get_version_by_number(self, collection: str, id: str, version: int):
+        from keep.document_store import VersionInfo
+
+        for rec in self._versions.get((collection, id), []):
+            if rec["version"] == version:
+                return VersionInfo(
+                    version=rec["version"],
+                    summary=rec["summary"],
+                    tags=dict(rec["tags"]),
+                    created_at=rec["created_at"],
+                    content_hash=rec.get("content_hash"),
+                )
+        return None
+
     def list_versions(self, collection: str, id: str, limit: int = 10) -> list:
         return []
+
+    def list_versions_many(self, collection: str, ids: list[str]) -> dict:
+        from keep.document_store import VersionInfo
+
+        results = {}
+        for id in ids:
+            versions = [
+                VersionInfo(
+                    version=rec["version"],
+                    summary=rec["summary"],
+                    tags=dict(rec["tags"]),
+                    created_at=rec["created_at"],
+                    content_hash=rec.get("content_hash"),
+                )
+                for rec in sorted(
+                    self._versions.get((collection, id), []),
+                    key=lambda rec: rec["version"],
+                    reverse=True,
+                )
+            ]
+            if versions:
+                results[id] = versions
+        return results
 
     def list_versions_around(self, collection: str, id: str,
                              version: int, radius: int = 2) -> list:
@@ -752,6 +789,15 @@ class MockDocumentStore:
     def list_parts(self, collection: str, id: str) -> list:
         key = f"_parts:{collection}:{id}"
         return sorted(self._parts.get(key, []), key=lambda p: p.part_num)
+
+    def list_parts_many(self, collection: str, ids: list[str]) -> dict:
+        results = {}
+        for id in ids:
+            key = f"_parts:{collection}:{id}"
+            parts = sorted(self._parts.get(key, []), key=lambda p: p.part_num)
+            if parts:
+                results[id] = parts
+        return results
 
     def list_part_doc_ids(self, collection: str, part_num: int) -> list[str]:
         prefix = f"_parts:{collection}:"

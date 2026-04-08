@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from .const import OPS_LOG_FILE, WORK_QUEUE_DB
 from .processors import _content_hash
+from .providers.base import EmbedTask
 from .types import (
     SYSTEM_TAG_PREFIX,
     casefold_tags,
@@ -369,138 +370,173 @@ class BackgroundProcessingMixin:
         items = self._pending_queue.dequeue(limit=limit)
         result = {"processed": 0, "failed": 0, "abandoned": 0, "delegated": 0, "errors": []}
 
-        for item in items:
-            if shutdown_check and shutdown_check():
-                logger.info("Shutdown requested, stopping pending batch")
-                break
+        if items and all(item.task_type == "reindex" for item in items):
+            result = self._process_pending_reindex_items(
+                items,
+                shutdown_check=shutdown_check,
+            )
+            if items:
+                # Yield once per batch so interactive processes can acquire the
+                # model lock without paying the delay per reindex item.
+                time.sleep(0.1)
 
-            # Skip items that have failed too many times
-            # (attempts was already incremented by dequeue, so check >= MAX)
-            if item.attempts >= self._config.max_task_attempts:
-                # Move to dead letter -- preserved for diagnosis
-                self._pending_queue.abandon(
-                    item.id, item.collection, item.task_type,
-                    error=f"Exhausted {item.attempts} attempts",
-                )
-                self._emit_processing_breakdown(
-                    item=item,
-                    error=f"Exhausted {item.attempts} attempts",
-                    failure_class="exhausted_attempts",
-                )
-                result["abandoned"] += 1
-                logger.warning(
-                    "Abandoned pending %s after %d attempts: %s",
-                    item.task_type, item.attempts, item.id
-                )
-                continue
-
-            # Delegate to hosted service if available and appropriate
-            if (
-                self._task_client
-                and item.task_type in DELEGATABLE_TASK_TYPES
-                and not (item.metadata or {}).get("_local_only")
-            ):
+            # Drain planner outbox (bounded)
+            if self._planner_stats:
                 try:
-                    self._delegate_task(item)
-                    result["delegated"] += 1
-                    continue
+                    doc_coll = self._resolve_doc_collection()
+                    planner_result = self._planner_stats.drain_outbox(
+                        self._document_store, doc_coll,
+                        max_items=20, max_ms=200,
+                    )
+                    if planner_result["processed"]:
+                        logger.info(
+                            "Planner stats: processed=%d failed=%d",
+                            planner_result["processed"], planner_result["failed"],
+                        )
                 except Exception as e:
-                    logger.warning(
-                        "Delegation failed for %s %s, falling back to local: %s",
-                        item.task_type, item.id, e,
-                    )
-                    # Fall through to local processing
+                    logger.debug("Planner drain skipped: %s", e)
 
-            try:
-                _task_verbs = {
-                    "backfill-edges": "Backfilling edges",
-                    "embed": "Embedding",
-                    "planner-rebuild": "Rebuilding planner stats",
-                    "reindex": "Re-embedding",
-                }
-                verb = _task_verbs.get(item.task_type, item.task_type)
-                logger.info("%s %s (attempt %d)", verb, item.id, item.attempts)
-                if item.task_type in ("analyze", "ocr", "describe", "tag", "summarize"):
-                    # These tasks belong on the work queue, not here.
-                    # Complete and skip -- they'll be processed via
-                    # process_pending_work / task_workflows.
-                    logger.info(
-                        "Skipping %s/%s on pending queue (handled by work queue)",
-                        item.task_type, item.id,
+            if self._task_client:
+                self._poll_delegated(result)
+            return result
+        used_embedding_provider = False
+
+        try:
+            for item in items:
+                if shutdown_check and shutdown_check():
+                    logger.info("Shutdown requested, stopping pending batch")
+                    break
+
+                # Skip items that have failed too many times
+                # (attempts was already incremented by dequeue, so check >= MAX)
+                if item.attempts >= self._config.max_task_attempts:
+                    # Move to dead letter -- preserved for diagnosis
+                    self._pending_queue.abandon(
+                        item.id, item.collection, item.task_type,
+                        error=f"Exhausted {item.attempts} attempts",
                     )
+                    self._emit_processing_breakdown(
+                        item=item,
+                        error=f"Exhausted {item.attempts} attempts",
+                        failure_class="exhausted_attempts",
+                    )
+                    result["abandoned"] += 1
+                    logger.warning(
+                        "Abandoned pending %s after %d attempts: %s",
+                        item.task_type, item.attempts, item.id
+                    )
+                    continue
+
+                # Delegate to hosted service if available and appropriate
+                if (
+                    self._task_client
+                    and item.task_type in DELEGATABLE_TASK_TYPES
+                    and not (item.metadata or {}).get("_local_only")
+                ):
+                    try:
+                        self._delegate_task(item)
+                        result["delegated"] += 1
+                        continue
+                    except Exception as e:
+                        logger.warning(
+                            "Delegation failed for %s %s, falling back to local: %s",
+                            item.task_type, item.id, e,
+                        )
+                        # Fall through to local processing
+
+                try:
+                    _task_verbs = {
+                        "backfill-edges": "Backfilling edges",
+                        "embed": "Embedding",
+                        "planner-rebuild": "Rebuilding planner stats",
+                        "reindex": "Re-embedding",
+                    }
+                    verb = _task_verbs.get(item.task_type, item.task_type)
+                    logger.info("%s %s (attempt %d)", verb, item.id, item.attempts)
+                    if item.task_type in ("analyze", "ocr", "describe", "tag", "summarize"):
+                        # These tasks belong on the work queue, not here.
+                        # Complete and skip -- they'll be processed via
+                        # process_pending_work / task_workflows.
+                        logger.info(
+                            "Skipping %s/%s on pending queue (handled by work queue)",
+                            item.task_type, item.id,
+                        )
+                        self._pending_queue.complete(
+                            item.id, item.collection, item.task_type
+                        )
+                        result["processed"] += 1
+                        continue
+                    elif item.task_type == "backfill-edges":
+                        self._process_pending_backfill_edges(item)
+                    elif item.task_type == "embed":
+                        used_embedding_provider = True
+                        self._process_pending_embed(item)
+                    elif item.task_type == "planner-rebuild":
+                        if self._planner_stats:
+                            self._planner_stats.rebuild(
+                                self._document_store, item.collection,
+                            )
+                    elif item.task_type == "reindex":
+                        used_embedding_provider = True
+                        self._process_pending_reindex(item)
+                    else:
+                        logger.warning(
+                            "Unknown task type %r for %s, completing",
+                            item.task_type, item.id,
+                        )
+
+                    # Remove from queue
                     self._pending_queue.complete(
                         item.id, item.collection, item.task_type
                     )
                     result["processed"] += 1
-                    continue
-                elif item.task_type == "backfill-edges":
-                    self._process_pending_backfill_edges(item)
-                elif item.task_type == "embed":
-                    self._process_pending_embed(item)
-                    self._release_embedding_provider()
-                elif item.task_type == "planner-rebuild":
-                    if self._planner_stats:
-                        self._planner_stats.rebuild(
-                            self._document_store, item.collection,
+                    logger.info("%s %s done", verb, item.id)
+
+                except Exception as e:
+                    error_msg = f"{type(e).__name__}: {e}"
+
+                    # Permanent failures: content issues that won't resolve
+                    # on retry (e.g. scanned PDF with no text layer).
+                    _permanent = (
+                        "content too short" in str(e).lower()
+                        or "no text extracted" in str(e).lower()
+                        or "no content extractor" in str(e).lower()
+                    )
+                    if _permanent:
+                        self._pending_queue.abandon(
+                            item.id, item.collection, item.task_type,
+                            error=f"Permanent: {error_msg}",
                         )
-                elif item.task_type == "reindex":
-                    self._process_pending_reindex(item)
-                    self._release_embedding_provider()
-                else:
-                    logger.warning(
-                        "Unknown task type %r for %s, completing",
-                        item.task_type, item.id,
-                    )
+                        self._emit_processing_breakdown(
+                            item=item,
+                            error=error_msg,
+                            failure_class="permanent_failure",
+                        )
+                        result["abandoned"] = result.get("abandoned", 0) + 1
+                        logger.info(
+                            "Abandoned %s %s (permanent failure): %s",
+                            item.task_type, item.id, e,
+                        )
+                        continue
 
-                # Remove from queue
-                self._pending_queue.complete(
-                    item.id, item.collection, item.task_type
-                )
-                result["processed"] += 1
-                logger.info("%s %s done", verb, item.id)
-
-                # Brief yield between items so interactive processes
-                # (keep now, keep find) can acquire the model lock
-                # without waiting for the entire batch to finish.
-                time.sleep(0.1)
-
-            except Exception as e:
-                error_msg = f"{type(e).__name__}: {e}"
-
-                # Permanent failures: content issues that won't resolve
-                # on retry (e.g. scanned PDF with no text layer).
-                _permanent = (
-                    "content too short" in str(e).lower()
-                    or "no text extracted" in str(e).lower()
-                    or "no content extractor" in str(e).lower()
-                )
-                if _permanent:
-                    self._pending_queue.abandon(
+                    # Transient failure -- retry on next batch.
+                    # (attempt counter already incremented by dequeue)
+                    self._pending_queue.fail(
                         item.id, item.collection, item.task_type,
-                        error=f"Permanent: {error_msg}",
-                    )
-                    self._emit_processing_breakdown(
-                        item=item,
                         error=error_msg,
-                        failure_class="permanent_failure",
                     )
-                    result["abandoned"] = result.get("abandoned", 0) + 1
-                    logger.info(
-                        "Abandoned %s %s (permanent failure): %s",
-                        item.task_type, item.id, e,
-                    )
-                    continue
+                    result["failed"] += 1
+                    result["errors"].append(f"{item.id}: {error_msg}")
+                    logger.warning("Failed to %s %s (attempt %d): %s",
+                                 item.task_type, item.id, item.attempts, e)
+        finally:
+            if used_embedding_provider:
+                self._release_embedding_provider()
 
-                # Transient failure -- retry on next batch.
-                # (attempt counter already incremented by dequeue)
-                self._pending_queue.fail(
-                    item.id, item.collection, item.task_type,
-                    error=error_msg,
-                )
-                result["failed"] += 1
-                result["errors"].append(f"{item.id}: {error_msg}")
-                logger.warning("Failed to %s %s (attempt %d): %s",
-                             item.task_type, item.id, item.attempts, e)
+        if items:
+            # Yield once per batch so interactive processes can acquire the
+            # model lock without paying the delay per reindex item.
+            time.sleep(0.1)
 
         # Drain planner outbox (bounded)
         if self._planner_stats:
@@ -921,6 +957,265 @@ class BackgroundProcessingMixin:
             tags=casefold_tags_for_index(doc.tags),
         )
 
+    def _process_pending_reindex_items(
+        self,
+        items,
+        shutdown_check=None,
+    ) -> dict:
+        """Fast path for batches containing only reindex work."""
+        result = {"processed": 0, "failed": 0, "abandoned": 0, "delegated": 0, "errors": []}
+        chroma_coll = self._resolve_chroma_collection()
+        prepared: list[dict[str, Any]] = []
+        used_embedding_provider = False
+
+        def _complete_item(item) -> None:
+            self._pending_queue.complete(item.id, item.collection, item.task_type)
+            result["processed"] += 1
+            logger.info("Re-embedding %s done", item.id)
+
+        def _fail_item(item, error_msg: str) -> None:
+            self._pending_queue.fail(
+                item.id, item.collection, item.task_type,
+                error=error_msg,
+            )
+            result["failed"] += 1
+            result["errors"].append(f"{item.id}: {error_msg}")
+            logger.warning("Failed to reindex %s (attempt %d): %s",
+                           item.id, item.attempts, error_msg)
+
+        def _abandon_item(item, error_msg: str) -> None:
+            self._pending_queue.abandon(
+                item.id, item.collection, item.task_type,
+                error=error_msg,
+            )
+            self._emit_processing_breakdown(
+                item=item,
+                error=error_msg,
+                failure_class="exhausted_attempts",
+            )
+            result["abandoned"] += 1
+            logger.warning(
+                "Abandoned pending %s after %d attempts: %s",
+                item.task_type, item.attempts, item.id,
+            )
+
+        def _write_single(entry: dict[str, Any]) -> None:
+            kind = entry["kind"]
+            if kind == "doc":
+                self._store.upsert(
+                    collection=entry["collection"],
+                    id=entry["id"],
+                    embedding=entry["embedding"],
+                    summary=entry["summary"],
+                    tags=entry["tags"],
+                )
+            elif kind == "version":
+                self._store.upsert_version(
+                    collection=entry["collection"],
+                    id=entry["base_id"],
+                    version=entry["version"],
+                    embedding=entry["embedding"],
+                    summary=entry["summary"],
+                    tags=entry["tags"],
+                )
+            else:
+                self._store.upsert_part(
+                    collection=entry["collection"],
+                    id=entry["base_id"],
+                    part_num=entry["part_num"],
+                    embedding=entry["embedding"],
+                    summary=entry["summary"],
+                    tags=entry["tags"],
+                )
+
+        try:
+            for item in items:
+                if shutdown_check and shutdown_check():
+                    logger.info("Shutdown requested, stopping pending reindex batch")
+                    break
+
+                if item.attempts >= self._config.max_task_attempts:
+                    _abandon_item(item, f"Exhausted {item.attempts} attempts")
+                    continue
+
+                logger.info("Re-embedding %s (attempt %d)", item.id, item.attempts)
+                try:
+                    meta = item.metadata or {}
+                    version = meta.get("version")
+                    part_num = meta.get("part_num")
+                    base_id = meta.get("base_id")
+
+                    if is_system_id(item.id):
+                        self._store.delete(chroma_coll, item.id, delete_versions=True)
+                        _complete_item(item)
+                        continue
+
+                    if part_num is not None and base_id is not None:
+                        part = self._document_store.get_part(item.collection, base_id, part_num)
+                        if part is None or not part.summary.strip():
+                            self._store.delete_entries(chroma_coll, [f"{base_id}@p{part_num}"])
+                            _complete_item(item)
+                            continue
+                        tags = dict(part.tags)
+                        tags.setdefault("_created", part.created_at)
+                        tags["_part_num"] = str(part_num)
+                        tags["_base_id"] = base_id
+                        prepared.append({
+                            "item": item,
+                            "kind": "part",
+                            "collection": chroma_coll,
+                            "id": f"{base_id}@p{part_num}",
+                            "base_id": base_id,
+                            "part_num": part_num,
+                            "summary": part.summary,
+                            "tags": casefold_tags_for_index(tags),
+                        })
+                        continue
+
+                    if version is not None and base_id is not None:
+                        archived = self._document_store.get_version_by_number(
+                            item.collection, base_id, version,
+                        )
+                        if archived is None or not archived.summary.strip():
+                            self._store.delete_entries(chroma_coll, [f"{base_id}@v{version}"])
+                            _complete_item(item)
+                            continue
+                        tags = dict(archived.tags)
+                        tags.setdefault("_created", archived.created_at)
+                        tags["_version"] = str(version)
+                        tags["_base_id"] = base_id
+                        prepared.append({
+                            "item": item,
+                            "kind": "version",
+                            "collection": chroma_coll,
+                            "id": f"{base_id}@v{version}",
+                            "base_id": base_id,
+                            "version": version,
+                            "summary": archived.summary,
+                            "tags": casefold_tags_for_index(tags),
+                        })
+                        continue
+
+                    doc = self._document_store.get(item.collection, item.id)
+                    if doc is None or not doc.summary.strip():
+                        self._store.delete_entries(chroma_coll, [item.id])
+                        _complete_item(item)
+                        continue
+                    tags = dict(doc.tags)
+                    tags.setdefault("_created", doc.created_at)
+                    tags.setdefault("_updated", doc.updated_at)
+                    tags["_updated_date"] = tags.get("_updated", doc.updated_at)[:10]
+                    prepared.append({
+                        "item": item,
+                        "kind": "doc",
+                        "collection": chroma_coll,
+                        "source_collection": item.collection,
+                        "id": item.id,
+                        "summary": doc.summary,
+                        "tags": casefold_tags_for_index(tags),
+                        "content_hash": doc.content_hash,
+                    })
+                except Exception as e:
+                    _fail_item(item, f"{type(e).__name__}: {e}")
+
+            if not prepared:
+                return result
+
+            embeddings_by_summary: dict[str, list[float]] = {}
+            pending_texts: list[str] = []
+            text_to_entries: dict[str, list[dict[str, Any]]] = {}
+
+            for entry in prepared:
+                summary = entry["summary"]
+                if summary in embeddings_by_summary:
+                    continue
+                if summary in text_to_entries:
+                    text_to_entries[summary].append(entry)
+                    continue
+                if entry["kind"] == "doc":
+                    donor_embedding = self._try_dedup_embedding(
+                        entry["source_collection"],
+                        chroma_coll,
+                        entry.get("content_hash"),
+                        entry["id"],
+                        summary,
+                    )
+                    if donor_embedding is not None:
+                        embeddings_by_summary[summary] = donor_embedding
+                        continue
+                pending_texts.append(summary)
+                text_to_entries[summary] = [entry]
+
+            if pending_texts:
+                provider = self._get_embedding_provider()
+                used_embedding_provider = True
+                try:
+                    batch_embeddings = provider.embed_batch(
+                        pending_texts,
+                        task=EmbedTask.DOCUMENT,
+                    )
+                    for summary, embedding in zip(pending_texts, batch_embeddings):
+                        embeddings_by_summary[summary] = embedding
+                except Exception as e:
+                    logger.warning(
+                        "Batch reindex embed failed, falling back to per-summary embed: %s",
+                        e,
+                    )
+                    for summary in pending_texts:
+                        try:
+                            embeddings_by_summary[summary] = provider.embed(
+                                summary,
+                                task=EmbedTask.DOCUMENT,
+                            )
+                        except Exception as inner:
+                            error_msg = f"{type(inner).__name__}: {inner}"
+                            for failed_entry in text_to_entries.get(summary, []):
+                                _fail_item(failed_entry["item"], error_msg)
+
+            successful_entries: list[dict[str, Any]] = []
+            for entry in prepared:
+                embedding = embeddings_by_summary.get(entry["summary"])
+                if embedding is None:
+                    continue
+                entry["embedding"] = embedding
+                successful_entries.append(entry)
+
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for entry in successful_entries:
+                grouped.setdefault(entry["collection"], []).append(entry)
+
+            for collection, entries in grouped.items():
+                ids = [entry["id"] for entry in entries]
+                embeddings = [entry["embedding"] for entry in entries]
+                summaries = [entry["summary"] for entry in entries]
+                tags = [entry["tags"] for entry in entries]
+                try:
+                    self._store.upsert_batch(
+                        collection=collection,
+                        ids=ids,
+                        embeddings=embeddings,
+                        summaries=summaries,
+                        tags=tags,
+                    )
+                    for entry in entries:
+                        _complete_item(entry["item"])
+                except Exception as e:
+                    logger.warning(
+                        "Batch reindex write failed for %s (%d items), falling back to single writes: %s",
+                        collection, len(entries), e,
+                    )
+                    for entry in entries:
+                        try:
+                            _write_single(entry)
+                            _complete_item(entry["item"])
+                        except Exception as inner:
+                            _fail_item(entry["item"], f"{type(inner).__name__}: {inner}")
+        finally:
+            if used_embedding_provider:
+                self._release_embedding_provider()
+
+        return result
+
     def _process_pending_reindex(self, item) -> None:
         """Process a reindex task: embed summary and write to vector store.
 
@@ -939,39 +1234,78 @@ class BackgroundProcessingMixin:
         version = meta.get("version")
         part_num = meta.get("part_num")
         base_id = meta.get("base_id")
-
-        embedding = self._get_embedding_provider().embed(item.content)
+        summary = item.content
 
         if part_num is not None and base_id is not None:
-            # Part entry
+            part = self._document_store.get_part(item.collection, base_id, part_num)
+            if part is None or not part.summary.strip():
+                self._store.delete_entries(chroma_coll, [f"{base_id}@p{part_num}"])
+                return
+            summary = part.summary
+            embedding = self._get_embedding_provider().embed(
+                summary,
+                task=EmbedTask.DOCUMENT,
+            )
             self._store.upsert_part(
                 collection=chroma_coll,
                 id=base_id,
                 part_num=part_num,
                 embedding=embedding,
-                summary=item.content,
-                tags=casefold_tags_for_index(meta.get("tags", {})),
+                summary=summary,
+                tags=casefold_tags_for_index(part.tags),
             )
         elif version is not None and base_id is not None:
-            # Versioned entry
+            archived = self._document_store.get_version_by_number(
+                item.collection, base_id, version,
+            )
+            if archived is None or not archived.summary.strip():
+                self._store.delete_entries(chroma_coll, [f"{base_id}@v{version}"])
+                return
+            summary = archived.summary
+            embedding = self._try_dedup_embedding(
+                item.collection,
+                chroma_coll,
+                archived.content_hash,
+                f"{base_id}@v{version}",
+                summary,
+            )
+            if embedding is None:
+                embedding = self._get_embedding_provider().embed(
+                    summary,
+                    task=EmbedTask.DOCUMENT,
+                )
             self._store.upsert_version(
                 collection=chroma_coll,
                 id=base_id,
                 version=version,
                 embedding=embedding,
-                summary=item.content,
-                tags=casefold_tags_for_index(meta.get("tags", {})),
+                summary=summary,
+                tags=casefold_tags_for_index(archived.tags),
             )
         else:
             # Main doc entry -- use fresh tags from doc store
             doc = self._document_store.get(item.collection, item.id)
-            if doc is None:
-                return  # deleted since enqueue
+            if doc is None or not doc.summary.strip():
+                self._store.delete_entries(chroma_coll, [item.id])
+                return
+            summary = doc.summary
+            embedding = self._try_dedup_embedding(
+                item.collection,
+                chroma_coll,
+                doc.content_hash,
+                item.id,
+                summary,
+            )
+            if embedding is None:
+                embedding = self._get_embedding_provider().embed(
+                    summary,
+                    task=EmbedTask.DOCUMENT,
+                )
             self._store.upsert(
                 collection=chroma_coll,
                 id=item.id,
                 embedding=embedding,
-                summary=item.content,
+                summary=summary,
                 tags=casefold_tags_for_index(doc.tags),
             )
 
@@ -1084,7 +1418,7 @@ class BackgroundProcessingMixin:
                             created_at=reference_created,
                         )
                         self._pending_queue.enqueue(
-                            target_id, doc_coll, target_id,
+                            target_id, doc_coll, "",
                             task_type="reindex",
                             metadata={
                                 "tags": {

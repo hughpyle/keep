@@ -431,6 +431,10 @@ class DocumentStoreProtocol(Protocol):
         self, collection: str, id: str
     ) -> list[PartInfo]: ...
 
+    def list_parts_many(
+        self, collection: str, ids: list[str]
+    ) -> dict[str, list[PartInfo]]: ...
+
     def part_count(self, collection: str, id: str) -> int: ...
 
     def delete_parts(self, collection: str, id: str) -> int: ...
@@ -459,9 +463,17 @@ class DocumentStoreProtocol(Protocol):
         self, collection: str, id: str, offset: int = 0
     ) -> Optional[VersionInfo]: ...
 
+    def get_version_by_number(
+        self, collection: str, id: str, version: int
+    ) -> Optional[VersionInfo]: ...
+
     def list_versions(
         self, collection: str, id: str, limit: int = 10
     ) -> list[VersionInfo]: ...
+
+    def list_versions_many(
+        self, collection: str, ids: list[str]
+    ) -> dict[str, list[VersionInfo]]: ...
 
     def list_versions_around(
         self, collection: str, id: str, version: int, radius: int = 2,

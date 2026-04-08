@@ -1127,35 +1127,42 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         batch: list[tuple[str, str, str, str, dict | None]] = []
         BATCH_SIZE = 200
 
-        for doc_id in doc_ids:
-            record = self._document_store.get(doc_coll, doc_id)
-            if record is None:
-                continue
-            batch.append((doc_id, doc_coll, record.summary, "reindex",
-                          {"tags": dict(record.tags)}))
-            enqueued += 1
+        doc_ids = [doc_id for doc_id in doc_ids if not doc_id.startswith(".")]
+        for i in range(0, len(doc_ids), BATCH_SIZE):
+            chunk_ids = doc_ids[i:i + BATCH_SIZE]
+            records = self._document_store.get_many(doc_coll, chunk_ids)
+            versions_by_id = self._document_store.list_versions_many(doc_coll, chunk_ids)
+            parts_by_id = self._document_store.list_parts_many(doc_coll, chunk_ids)
 
-            # Enqueue version reindex
-            for vi in self._document_store.list_versions(doc_coll, doc_id, limit=100):
-                version_id = f"{doc_id}@v{vi.version}"
-                batch.append((version_id, doc_coll, vi.summary, "reindex",
-                              {"version": vi.version, "base_id": doc_id,
-                               "tags": dict(vi.tags)}))
-                versions += 1
-
-            # Enqueue part reindex
-            for pi in self._document_store.list_parts(doc_coll, doc_id):
-                if not pi.summary:
+            for doc_id in chunk_ids:
+                record = records.get(doc_id)
+                if record is None:
                     continue
-                part_id = f"{doc_id}@p{pi.part_num}"
-                batch.append((part_id, doc_coll, pi.summary, "reindex",
-                              {"part_num": pi.part_num, "base_id": doc_id,
-                               "tags": dict(pi.tags)}))
-                parts += 1
+                batch.append((doc_id, doc_coll, record.summary, "reindex",
+                              {"tags": dict(record.tags)}))
+                enqueued += 1
 
-            if len(batch) >= BATCH_SIZE:
-                self._pending_queue.enqueue_batch(batch)
-                batch.clear()
+                # Enqueue version reindex
+                for vi in versions_by_id.get(doc_id, []):
+                    version_id = f"{doc_id}@v{vi.version}"
+                    batch.append((version_id, doc_coll, vi.summary, "reindex",
+                                  {"version": vi.version, "base_id": doc_id,
+                                   "tags": dict(vi.tags)}))
+                    versions += 1
+
+                # Enqueue part reindex
+                for pi in parts_by_id.get(doc_id, []):
+                    if not pi.summary:
+                        continue
+                    part_id = f"{doc_id}@p{pi.part_num}"
+                    batch.append((part_id, doc_coll, pi.summary, "reindex",
+                                  {"part_num": pi.part_num, "base_id": doc_id,
+                                   "tags": dict(pi.tags)}))
+                    parts += 1
+
+                if len(batch) >= BATCH_SIZE:
+                    self._pending_queue.enqueue_batch(batch)
+                    batch.clear()
 
         if batch:
             self._pending_queue.enqueue_batch(batch)
@@ -1859,7 +1866,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 )
                 if inserted:
                     self._pending_queue.enqueue(
-                        target_id, doc_coll, target_id,
+                        target_id, doc_coll, "",
                         task_type="reindex",
                         metadata={
                             "tags": target_tags,

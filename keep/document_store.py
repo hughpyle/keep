@@ -1982,6 +1982,31 @@ class DocumentStore:
             content_hash=row["content_hash"],
         )
 
+    def get_version_by_number(
+        self,
+        collection: str,
+        id: str,
+        version: int,
+    ) -> Optional[VersionInfo]:
+        """Get a specific archived version by version number."""
+        cursor = self._execute("""
+            SELECT version, summary, tags_json, content_hash, created_at
+            FROM document_versions
+            WHERE id = ? AND collection = ? AND version = ?
+        """, (id, collection, version))
+
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        return VersionInfo(
+            version=row["version"],
+            summary=row["summary"],
+            tags=json.loads(row["tags_json"]),
+            created_at=row["created_at"],
+            content_hash=row["content_hash"],
+        )
+
     def list_versions(
         self,
         collection: str,
@@ -2019,6 +2044,39 @@ class DocumentStore:
             ))
 
         return versions
+
+    def list_versions_many(
+        self,
+        collection: str,
+        ids: list[str],
+    ) -> dict[str, list[VersionInfo]]:
+        """List all archived versions for multiple documents.
+
+        Returns versions grouped by document ID, newest archived first within
+        each document.
+        """
+        if not ids:
+            return {}
+
+        placeholders = ",".join("?" * len(ids))
+        cursor = self._execute(f"""
+            SELECT id, version, summary, tags_json, content_hash, created_at
+            FROM document_versions
+            WHERE collection = ? AND id IN ({placeholders})
+            ORDER BY id, version DESC
+        """, (collection, *ids))
+
+        versions_by_id: dict[str, list[VersionInfo]] = {}
+        for row in cursor:
+            versions_by_id.setdefault(row["id"], []).append(VersionInfo(
+                version=row["version"],
+                summary=row["summary"],
+                tags=json.loads(row["tags_json"]),
+                created_at=row["created_at"],
+                content_hash=row["content_hash"],
+            ))
+
+        return versions_by_id
 
     def list_versions_around(
         self,
@@ -3111,6 +3169,34 @@ class DocumentStore:
             )
             for row in cursor
         ]
+
+    def list_parts_many(
+        self,
+        collection: str,
+        ids: list[str],
+    ) -> dict[str, list[PartInfo]]:
+        """List all parts for multiple documents, ordered by part number."""
+        if not ids:
+            return {}
+
+        placeholders = ",".join("?" * len(ids))
+        cursor = self._execute(f"""
+            SELECT id, part_num, summary, tags_json, created_at
+            FROM document_parts
+            WHERE collection = ? AND id IN ({placeholders})
+            ORDER BY id, part_num
+        """, (collection, *ids))
+
+        parts_by_id: dict[str, list[PartInfo]] = {}
+        for row in cursor:
+            parts_by_id.setdefault(row["id"], []).append(PartInfo(
+                part_num=row["part_num"],
+                summary=row["summary"],
+                tags=json.loads(row["tags_json"]),
+                created_at=row["created_at"],
+            ))
+
+        return parts_by_id
 
     def part_count(self, collection: str, id: str) -> int:
         """Count parts for a document."""

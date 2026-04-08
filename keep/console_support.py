@@ -1409,6 +1409,7 @@ def run_pending_daemon(kp) -> None:
     _PRUNE_INTERVAL = 86400
     _REPLENISH_INTERVAL = 1800
     _last_replenish_ts = _load_daemon_replenish_timestamp(kp._store_path)
+    _pending_batch_limit = 64
 
     _version_file = kp._store_path / ".processor.version"
 
@@ -1425,7 +1426,7 @@ def run_pending_daemon(kp) -> None:
                 break
             _daemon_logger.debug("Tick: process_pending")
             result = kp.process_pending(
-                limit=1,
+                limit=_pending_batch_limit,
                 shutdown_check=lambda: bool(shutdown_state["requested"]),
             )
             delegated = result.get("delegated", 0)
@@ -1489,7 +1490,7 @@ def run_pending_daemon(kp) -> None:
                     lease_seconds=180, shutdown_check=lambda: bool(shutdown_state["requested"]),
                 )
                 result = kp.process_pending(
-                    limit=1,
+                    limit=_pending_batch_limit,
                     shutdown_check=lambda: bool(shutdown_state["requested"]),
                 )
                 flow_activity = _daemon_has_flow_activity(flow_result)
