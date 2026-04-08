@@ -63,6 +63,13 @@ class TestLifecycle:
         p.shutdown()
 
 
+@pytest.fixture(autouse=True)
+def _stub_keep_daemon_port():
+    """Avoid real daemon startup in Hermes provider tests by default."""
+    with patch("keep.daemon_client.get_port", return_value=9999):
+        yield
+
+
 class TestSystemPrompt:
     """system_prompt_block() rendering."""
 
@@ -513,7 +520,12 @@ class TestConfigSchema:
 
     def test_config_schema_returns_list(self, mock_providers):
         p = KeepMemoryProvider()
-        schema = p.get_config_schema()
+        with patch.object(
+            KeepMemoryProvider,
+            "_setup_choices",
+            return_value=([{"name": "Embed", "hint": "-- fast", "value": "mock"}], []),
+        ):
+            schema = p.get_config_schema()
         assert isinstance(schema, list)
 
     def test_config_schema_empty_without_keep(self):
@@ -521,7 +533,12 @@ class TestConfigSchema:
         p = KeepMemoryProvider()
         # This should work even if the wizard imports fail
         # (gracefully returns [])
-        schema = p.get_config_schema()
+        with patch.object(
+            KeepMemoryProvider,
+            "_setup_choices",
+            return_value=([], []),
+        ):
+            schema = p.get_config_schema()
         assert isinstance(schema, list)
 
 

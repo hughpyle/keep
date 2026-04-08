@@ -1097,9 +1097,17 @@ def _cleanup_daemons_under(root: Path) -> None:
         try:
             pid = int(pid_file.read_text().strip())
         except (ValueError, OSError):
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
             continue
         killed.add(pid)
         _terminate_pid(pid)
+        try:
+            pid_file.unlink()
+        except OSError:
+            pass
     for pid in _find_pytest_daemon_pids(root):
         if pid not in killed:
             _terminate_pid(pid)

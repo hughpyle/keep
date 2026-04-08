@@ -8,6 +8,7 @@ Tests verify:
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,22 +16,68 @@ from pathlib import Path
 import pytest
 
 from keep.state_doc_runtime import FlowResult
+from tests.conftest import _cleanup_daemons_under
 
 
 # -----------------------------------------------------------------------------
 # Fixtures
 # -----------------------------------------------------------------------------
 
+@pytest.fixture(scope="module")
+def _shared_e2e_cli_env(tmp_path_factory):
+    """Shared store/env for read-only daemon-backed CLI e2e tests."""
+    root = tmp_path_factory.mktemp("cli-e2e-shared")
+    store = root / ".keep-test-store"
+    store.mkdir()
+    (store / "keep.toml").write_text(
+        """[store]
+version = 3
+
+[embedding]
+name = "ollama"
+model = "nomic-embed-text:latest"
+
+[summarization]
+name = "truncate"
+
+[document]
+name = "composite"
+""",
+    )
+    env = os.environ.copy()
+    env["KEEP_STORE_PATH"] = str(store)
+    env["KEEP_CONFIG"] = str(store)
+
+    # Pre-start the daemon once so the individual e2e tests do not each pay
+    # a full daemon bootstrap and readiness wait.
+    result = subprocess.run(
+        [sys.executable, "-m", "keep", "get", ".meta/todo"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).parent.parent,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+
+    yield env
+
+    _cleanup_daemons_under(root)
+
+
 @pytest.fixture
-def cli():
+def cli(request, _shared_e2e_cli_env):
     """Run CLI command and return result."""
     def run(*args: str, input: str | None = None) -> subprocess.CompletedProcess:
+        env = None
+        if request.node.get_closest_marker("e2e") is not None:
+            env = _shared_e2e_cli_env
         return subprocess.run(
             [sys.executable, "-m", "keep", *args],
             capture_output=True,
             text=True,
             input=input,
             cwd=Path(__file__).parent.parent,
+            env=env,
         )
     return run
 
