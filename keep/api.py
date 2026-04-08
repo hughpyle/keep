@@ -63,7 +63,7 @@ from .types import (
     iter_tag_pairs, note_display_name, normalize_edge_value, set_tag_values, tag_values, parse_ref,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
-    is_system_id,
+    is_system_id, file_uri_to_path,
     MAX_TAG_VALUE_LENGTH,
     repair_surrogate_text,
 )
@@ -2484,7 +2484,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             is_file_uri = uri.startswith("file://") or uri.startswith("/")
             if is_file_uri and summary is None and not force:
                 try:
-                    fpath = Path(uri.removeprefix("file://")).resolve()
+                    fpath = Path(file_uri_to_path(uri)).resolve()
                     st = fpath.stat()
                     doc_coll = self._resolve_doc_collection()
                     existing = self._document_store.get(doc_coll, doc_id)
@@ -2553,7 +2553,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             # Store file stat for fast-path change detection on next put
             if is_file_uri and doc.metadata:
                 try:
-                    fpath = Path(uri.removeprefix("file://")).resolve()
+                    fpath = Path(file_uri_to_path(uri)).resolve()
                     st = fpath.stat()
                     system_tags["_file_mtime_ns"] = str(st.st_mtime_ns)
                     system_tags["_file_size"] = str(st.st_size)
@@ -3196,7 +3196,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 if not item.id.startswith("file://"):
                     continue
 
-                fpath = Path(item.id.removeprefix("file://"))
+                fpath = Path(file_uri_to_path(item.id))
                 try:
                     content = fpath.read_text(encoding="utf-8", errors="replace")
                 except OSError:

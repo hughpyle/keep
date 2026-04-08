@@ -877,6 +877,65 @@ class TestPutDirectory:
         assert result.returncode == 1
         assert "no eligible files" in result.stderr
 
+    def test_put_directory_watch_sends_directory_kind(self, tmp_path, monkeypatch):
+        """`keep put <dir> --watch` posts watch_kind=directory to the daemon."""
+        from keep import cli_app
+
+        (tmp_path / "a.txt").write_text("hello")
+        captured: list[tuple[str, str, dict | None]] = []
+
+        def fake_request(method, port, path, body=None):
+            captured.append((method, path, body))
+            if method == "GET":
+                return 404, {}
+            return 200, {"id": body.get("uri", ""),
+                         "watch": {"source": str(tmp_path), "interval": "PT30S"}}
+
+        monkeypatch.setattr(cli_app, "_daemon_request", fake_request)
+        cli_app._put_directory(
+            port=0, resolved_path=tmp_path, parsed_tags={},
+            recurse=False, exclude=None,
+            watch=True, unwatch=False, interval=None,
+            force=False, json_output=False,
+        )
+        watch_calls = [c for c in captured if c[1] == "/v1/notes" and c[2] and (c[2].get("watch") or c[2].get("unwatch"))]
+        assert len(watch_calls) == 1
+        body = watch_calls[0][2]
+        assert body["watch"] is True
+        assert body["watch_kind"] == "directory"
+
+    def test_put_directory_unwatch_sends_directory_kind(self, tmp_path, monkeypatch):
+        """Unwatching a directory must post watch_kind=directory.
+
+        Otherwise the daemon routes the request to flow_put_item, which
+        fails on a directory URI.
+        """
+        from keep import cli_app
+
+        (tmp_path / "a.txt").write_text("hello")
+        captured: list[tuple[str, str, dict | None]] = []
+
+        def fake_request(method, port, path, body=None):
+            captured.append((method, path, body))
+            if method == "GET":
+                return 404, {}
+            if body and body.get("unwatch"):
+                return 200, {"unwatch": True}
+            return 200, {"id": body.get("uri", "")}
+
+        monkeypatch.setattr(cli_app, "_daemon_request", fake_request)
+        cli_app._put_directory(
+            port=0, resolved_path=tmp_path, parsed_tags={},
+            recurse=False, exclude=None,
+            watch=False, unwatch=True, interval=None,
+            force=False, json_output=False,
+        )
+        unwatch_calls = [c for c in captured if c[1] == "/v1/notes" and c[2] and c[2].get("unwatch")]
+        assert len(unwatch_calls) == 1
+        body = unwatch_calls[0][2]
+        assert body["unwatch"] is True
+        assert body["watch_kind"] == "directory"
+
     def test_put_directory_only_hidden(self, cli, tmp_path):
         """Directory mode errors when only hidden files exist."""
         (tmp_path / ".DS_Store").write_text("junk")

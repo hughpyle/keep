@@ -8,6 +8,7 @@ from typing import Any
 
 from ..paths import validate_path_within_home
 from ..processors import ocr_image, ocr_pdf
+from ..types import file_uri_to_path
 from . import action
 from ._item_scope import resolve_item
 
@@ -55,7 +56,7 @@ class Ocr:
         if not pages:
             pages = _coerce_pages(tags.get("_ocr_pages"))
 
-        path = Path(uri.removeprefix("file://")).resolve()
+        path = Path(file_uri_to_path(uri)).resolve()
         if not path.exists():
             logger.warning("File no longer exists for OCR: %s", path)
             return {"text": "", "skipped": True, "reason": "missing_file"}

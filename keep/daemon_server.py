@@ -295,7 +295,9 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         # registration, otherwise the put would blow up on "Not a file".
         if (watch or unwatch) and watch_kind == "directory":
             # Directory watch entries store a bare filesystem path, not a URI.
-            source = (body.get("uri") or "").removeprefix("file://")
+            from .types import file_uri_to_path
+            raw_uri = body.get("uri") or ""
+            source = file_uri_to_path(raw_uri) if raw_uri.startswith("file://") else raw_uri
             if not source:
                 self._json(400, {"error": "directory watch requires a uri"})
                 return

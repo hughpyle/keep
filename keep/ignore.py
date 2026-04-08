@@ -11,6 +11,8 @@ import fnmatch
 from pathlib import PurePosixPath
 from typing import Optional
 
+from .types import file_uri_to_path
+
 
 def parse_ignore_patterns(text: str) -> list[str]:
     """Parse ``.ignore`` doc content into a list of glob patterns.
@@ -121,7 +123,7 @@ def match_file_uri(uri: str, patterns: list[str]) -> bool:
     if not patterns:
         return False
 
-    path = uri.removeprefix("file://")
+    path = file_uri_to_path(uri)
     parts = PurePosixPath(path).parts  # ('/', 'a', 'b', 'dist', 'bundle.js')
 
     # Test every suffix window: basename first, then progressively longer

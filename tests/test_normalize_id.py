@@ -249,6 +249,28 @@ class TestNormalizeId:
         once = normalize_id("file:///vault/'a'/b.md")
         assert normalize_id(once) == once
 
+    def test_file_uri_literal_percent_distinct_from_quote(self):
+        # A file literally named %27x%27.md must not collide with 'x'.md.
+        # Per URI semantics, the literal-percent path is written %25 in the
+        # URI, and the canonical form must round-trip back to it via
+        # file_uri_to_path().
+        from keep.types import file_uri_to_path
+        quoted = normalize_id("file:///vault/'x'.md")
+        literal = normalize_id("file:///vault/%2527x%2527.md")
+        assert quoted != literal
+        assert file_uri_to_path(quoted) == "/vault/'x'.md"
+        assert file_uri_to_path(literal) == "/vault/%27x%27.md"
+        # Both inputs are still idempotent.
+        assert normalize_id(quoted) == quoted
+        assert normalize_id(literal) == literal
+
+    def test_file_uri_decodes_then_reencodes(self):
+        # Pre-encoded blocked chars round-trip through canonical form
+        # without double-encoding.
+        assert normalize_id(
+            "file:///vault/%27a%27.md"
+        ) == "file:///vault/%27a%27.md"
+
     def test_file_uri_mixed_scheme_case(self):
         assert normalize_id("FILE:///vault/'a'.md") == "FILE:///vault/%27a%27.md"
 

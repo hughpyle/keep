@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from .types import file_uri_to_path
+
 if TYPE_CHECKING:
     from .api import Keeper
 
@@ -340,7 +342,7 @@ def _update_file_fingerprint(entry: WatchEntry) -> None:
     """Update a file entry's mtime_ns and file_size from disk."""
     try:
         uri = entry.source
-        path = Path(uri.removeprefix("file://")) if uri.startswith("file://") else Path(uri)
+        path = Path(file_uri_to_path(uri)) if uri.startswith("file://") else Path(uri)
         st = path.stat()
         entry.mtime_ns = str(st.st_mtime_ns)
         entry.file_size = str(st.st_size)
@@ -352,7 +354,7 @@ def _update_file_fingerprint(entry: WatchEntry) -> None:
 def check_file(entry: WatchEntry) -> bool:
     """Check if a watched file has changed. Returns True if changed."""
     uri = entry.source
-    path = Path(uri.removeprefix("file://")) if uri.startswith("file://") else Path(uri)
+    path = Path(file_uri_to_path(uri)) if uri.startswith("file://") else Path(uri)
     try:
         st = path.stat()
     except OSError:

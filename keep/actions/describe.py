@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..paths import validate_path_within_home
+from ..types import file_uri_to_path
 from . import action
 from ._item_scope import resolve_item
 
@@ -39,7 +40,7 @@ class Describe:
             return {"description": "", "skipped": True}
 
         # Resolve file path
-        file_path = uri.removeprefix("file://") if uri.startswith("file://") else uri
+        file_path = file_uri_to_path(uri) if uri.startswith("file://") else uri
         path = Path(file_path).resolve()
         if not path.exists():
             logger.warning("File no longer exists for describe: %s", path)

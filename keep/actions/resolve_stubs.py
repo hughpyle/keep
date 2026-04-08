@@ -11,6 +11,7 @@ import logging
 from pathlib import PurePosixPath
 from typing import Any
 
+from ..types import file_uri_to_path
 from . import action
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ def _file_stem(item_id: str) -> str | None:
     """Extract the bare filename stem from a file:// URI."""
     if not item_id.startswith("file://"):
         return None
-    path = PurePosixPath(item_id.removeprefix("file://"))
+    path = PurePosixPath(file_uri_to_path(item_id))
     return path.stem or None
 
 

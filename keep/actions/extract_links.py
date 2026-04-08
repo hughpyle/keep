@@ -7,6 +7,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from ..types import file_uri_to_path
 from . import action
 from ._item_scope import resolve_item_content
 
@@ -103,7 +104,8 @@ def _get_vault_root(source_id: str, context: Any) -> str | None:
     if not source_id.startswith("file://"):
         return None
 
-    file_path = source_id.removeprefix("file://")
+    # _detect_vault_root walks the actual filesystem, so decode percent-escapes.
+    file_path = file_uri_to_path(source_id)
 
     # Fast path: check known vault roots from store
     try:

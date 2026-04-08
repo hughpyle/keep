@@ -91,6 +91,10 @@ TagMap = dict[str, TagValue]
 #   pipe (shell), semicolon (shell/SQL), double quote, single quote
 _ID_BLOCKED_RE = re.compile(r'[\x00-\x1f\x7f\\`<>|;"\']')
 
+# Same as _ID_BLOCKED_RE plus '%', used for file:// path encoding so that
+# literal '%' in filenames round-trips as '%25' through file_uri_to_path().
+_FILE_URI_ENCODE_RE = re.compile(r'[\x00-\x1f\x7f\\`<>|;"\'%]')
+
 # Part ID suffix: @p or @P followed by optional braces and digits
 _PART_ID_RE = re.compile(r'@[pP]\{?\d+\}?$')
 
@@ -228,18 +232,25 @@ def _encode_blocked_char(m: "re.Match[str]") -> str:
 
 
 def _normalize_file_uri(uri: str) -> str:
-    """Percent-encode ``file://`` URI characters that fail :data:`_ID_BLOCKED_RE`.
+    """Canonicalize a ``file://`` URI to a one-to-one, idempotent form.
 
-    Quotes, backticks, control bytes, etc. are encoded. Other characters —
-    including spaces and non-ASCII letters — are preserved so existing stored
-    IDs aren't disturbed. Idempotent.
+    Decodes any percent-escapes back to raw form (per URI semantics), then
+    re-encodes characters that fail :data:`_ID_BLOCKED_RE` plus ``%`` itself.
+    Encoding ``%`` is what makes the mapping one-to-one with on-disk paths:
+    a literal ``%`` in a filename round-trips as ``%25`` through
+    :func:`file_uri_to_path`, so a file literally named ``%27x%27.md`` no
+    longer collides with the file ``'x'.md``.
+
+    Spaces and non-ASCII letters are preserved as-is for backward compat
+    with existing stored IDs. Idempotent.
     """
     if uri[:7].lower() != "file://":
         return uri
     rest = uri[7:]
-    if not _ID_BLOCKED_RE.search(rest):
-        return uri
-    return uri[:7] + _ID_BLOCKED_RE.sub(_encode_blocked_char, rest)
+    decoded = unquote(rest)
+    if not _FILE_URI_ENCODE_RE.search(decoded):
+        return uri[:7] + decoded
+    return uri[:7] + _FILE_URI_ENCODE_RE.sub(_encode_blocked_char, decoded)
 
 
 def _normalize_http_uri(uri: str) -> str:

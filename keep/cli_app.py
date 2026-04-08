@@ -833,9 +833,9 @@ def _put_directory(
             "tags": parsed_tags or None,
             "force": None,
         }
+        watch_body["watch_kind"] = "directory"
         if watch:
             watch_body["watch"] = True
-            watch_body["watch_kind"] = "directory"
             watch_body["recurse"] = recurse
             watch_body["exclude"] = exclude
             if interval:

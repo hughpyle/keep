@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import requests
 
 from ..paths import validate_path_within_home
+from ..types import file_uri_to_path
 from .base import Document, DocumentProvider, get_registry
 from . import http as _http_mod
 from .model_files import extract_3d_metadata
@@ -211,7 +212,6 @@ class FileDocumentProvider:
         # normalized for validation (e.g. %27 for ') map back to the real
         # on-disk path.
         if uri.startswith("file://"):
-            from ..types import file_uri_to_path
             path_str = file_uri_to_path(uri)
         else:
             path_str = uri
