@@ -47,6 +47,7 @@ User-facing terminology: "notes" (not "items" or "documents" or whatever).
 - Feature work should be on its own branch.
 - Do not commit to main, tag, push, or release without explicit user instruction.
 - Major version is zero.  Minor version is updated with feature releases.  Patch version for maintenance.
+- Before any release: if recent work was implementing a written design doc (`later/design/`), ensure that doc reflects the current status.
 - Before any release: review all `docs/` for completeness and accuracy.
 - Before any release: run `ruff check` (on all files) and fix all issues.
 - Use `scripts/release.sh` to release.

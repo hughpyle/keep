@@ -2,6 +2,28 @@
 
 Design / refactoring plan — 2026-04-07, updated 2026-04-08
 
+Status: Implemented
+
+## Current status
+
+This refactor has landed.
+
+Current implementation state:
+
+- analyzed parts are numbered `1..N`
+- no analysis path writes a synthetic `@P{0}` part
+- `get_part()` and projection rendering do not special-case overview parts
+- the `_part_type: overview` marker is no longer part of the runtime model
+- legacy `part_num = 0` rows are cleaned up at Keeper startup
+
+Post-implementation note:
+
+- the startup cleanup is now persisted as a one-shot store flag
+  (`legacy_overview_parts_cleaned`) so the legacy overview scan does not stay
+  on the hot path forever
+
+The remaining sections below are kept as implementation history and rationale.
+
 ## Decision
 
 Remove the `@P{0}` overview-part feature entirely.
@@ -79,9 +101,15 @@ The implementation is complete only when all of the following are true:
   Chroma
 - tests and docs no longer model `_part_num = 0` as a special overview
 
+Implemented outcome:
+
+- complete
+
 ## Current implementation map
 
 ### Writers
+
+Historical note: this section describes the pre-removal implementation surface.
 
 - `keep/api.py`
   - `analyze_item()` phase-4 overview generation
@@ -143,7 +171,11 @@ Implementation shape:
 
 This helper may run during Keeper startup migration/maintenance, or via a
 Keeper-owned explicit repair path, but it must live above `DocumentStore`.
-The plan assumes startup-time idempotent cleanup so stores heal automatically.
+Implemented as a Keeper-owned startup cleanup.
+
+Current implementation note:
+
+- the cleanup is idempotent and persisted with a store-level completion flag
 
 ### Stage 2: Remove the write paths
 
@@ -222,6 +254,10 @@ The migration test must prove:
 - FTS no longer returns it
 - Chroma no longer contains `<id>@p0`
 - repeated runs are safe and leave the store unchanged
+
+Implemented outcome:
+
+- tests cover both legacy row cleanup and the persisted one-shot behavior
 
 ## Concrete file plan
 

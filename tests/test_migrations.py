@@ -9,12 +9,20 @@ import json
 import os
 import sqlite3
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from keep.api import Keeper
 from keep.document_store import DocumentStore, PartInfo, SCHEMA_VERSION
 from keep.types import utc_now
+from tests.conftest import (
+    MockChromaStore,
+    MockDocumentProvider,
+    MockEmbeddingProvider,
+    MockPendingSummaryQueue,
+    MockSummarizationProvider,
+)
 
 
 def _create_v0_db(path: Path, docs: list[tuple] = None):
@@ -376,6 +384,47 @@ class TestMigrationV13ToV14:
             assert "content" not in _get_columns(db2._conn, "document_parts")
         finally:
             db2.close()
+
+    def test_keeper_startup_queues_reindex_for_migrated_parts(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.delenv("KEEP_CONFIG", raising=False)
+        store_path = tmp_path / "store"
+        store_path.mkdir()
+        db_path = store_path / "documents.db"
+        _create_v13_parts_db(
+            db_path,
+            summary="Short prefix",
+            content="Full migrated part text",
+            tags={"topic": "pdf"},
+        )
+
+        mock_reg = MagicMock()
+        mock_reg.create_document.return_value = MockDocumentProvider()
+        mock_reg.create_embedding.return_value = MockEmbeddingProvider()
+        mock_reg.create_summarization.return_value = MockSummarizationProvider()
+
+        with (
+            patch("keep.api.get_registry", return_value=mock_reg),
+            patch("keep._provider_lifecycle.get_registry", return_value=mock_reg),
+            patch("keep.api.CachingEmbeddingProvider", side_effect=lambda p, **kw: p),
+            patch("keep._provider_lifecycle.CachingEmbeddingProvider", side_effect=lambda p, **kw: p),
+            patch("keep.store.ChromaStore", MockChromaStore),
+            patch("keep.pending_summaries.PendingSummaryQueue", MockPendingSummaryQueue),
+            patch("keep.api.Keeper._spawn_processor", return_value=False),
+            patch.object(Keeper, "_enqueue_embed_task_reindex", return_value=None),
+        ):
+            kp = Keeper(store_path=store_path)
+            try:
+                part = kp._document_store.get_part("default", "doc1", 1)
+                assert part is not None
+                assert part.summary == "Full migrated part text"
+
+                queued_ids = [item["id"] for item in kp._pending_queue._queue]
+                assert "doc1@p1" in queued_ids
+                assert kp._document_store.migrated_parts_for_reindex == []
+            finally:
+                kp.close()
 
 
 def test_enqueue_migrated_part_reindex_clears_pending_migration_list(

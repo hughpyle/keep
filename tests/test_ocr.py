@@ -408,6 +408,33 @@ class TestImageOcr:
 
         mock_ocr.assert_called_once()
 
+    def test_ocr_mutation_requests_reembedding(self, tmp_path, mock_providers):
+        """OCR updates canonical text and requests a fresh embedding."""
+        from keep.actions.ocr import Ocr
+
+        pdf_path = tmp_path / "doc.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+
+        ctx = MagicMock()
+        ctx.get.return_value = MagicMock(
+            content="placeholder", summary="", tags={},
+            uri=f"file://{pdf_path}",
+        )
+        ctx.resolve_provider.return_value = MagicMock(summarize=MagicMock(return_value="short"))
+
+        with (
+            patch("keep.actions.ocr.validate_path_within_home"),
+            patch("keep.actions.ocr.ocr_pdf", return_value="Extracted OCR text"),
+        ):
+            result = Ocr().run(
+                {"item_id": f"file://{pdf_path}", "ocr_pages": [0], "content_type": "application/pdf"},
+                ctx,
+            )
+
+        mutation = result["mutations"][0]
+        assert mutation["op"] == "set_summary"
+        assert mutation["embed"] is True
+
 
 # ---------------------------------------------------------------------------
 # ContentExtractor protocol + registry

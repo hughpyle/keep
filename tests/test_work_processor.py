@@ -463,11 +463,15 @@ class TestApplyMutations:
         _apply_mutations(kp, "coll", {"mutations": None})
         assert kp.method_calls == []
 
-    def test_set_summary_updates_hashes_when_present(self):
+    def test_set_summary_reembeds_when_requested_with_hashes(self):
         kp = MagicMock()
+        kp._resolve_chroma_collection.return_value = "default"
+        kp._get_embedding_provider.return_value.embed.return_value = [0.1, 0.2]
+        kp._document_store.get.return_value = MagicMock(tags={"Topic": "OCR"})
         output = {"mutations": [{
             "op": "set_summary", "target": "d1",
             "summary": "short",
+            "embed": True,
             "content_hash": "abc123", "content_hash_full": "abc123full",
         }]}
         _apply_mutations(kp, "coll", output)
@@ -475,4 +479,5 @@ class TestApplyMutations:
         kp._document_store.update_content_hash.assert_called_once_with(
             "coll", "d1", content_hash="abc123", content_hash_full="abc123full",
         )
-        kp._store.update_summary.assert_called_once_with("coll", "d1", "short")
+        kp._store.upsert.assert_called_once()
+        kp._store.update_summary.assert_not_called()

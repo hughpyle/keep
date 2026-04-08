@@ -337,6 +337,35 @@ class TestAnalyzeDelegation:
         queue.close()
         kp.close()
 
+    def test_delegated_analyze_drops_legacy_part_content_field(
+        self, mock_providers, tmp_path,
+    ):
+        """Hosted analyze normalization emits summary-only part mutations."""
+        from keep import Keeper
+
+        kp = Keeper(store_path=tmp_path)
+        try:
+            kp.put(content="Original content", id="doc1")
+            output = kp._task_result_to_output(
+                "doc1",
+                "default",
+                "analyze",
+                {
+                    "parts": [
+                        {"summary": "Part 1", "content": "legacy full text", "tags": {"topic": "x"}},
+                    ],
+                },
+            )
+
+            assert output is not None
+            put_item = next(
+                m for m in output["mutations"] if m["op"] == "put_item"
+            )
+            assert "content" not in put_item
+            assert put_item["summary"] == "Part 1"
+        finally:
+            kp.close()
+
     def test_analyze_fallback_to_local(self, mock_providers, tmp_path):
         """When analyze delegation fails, falls back to local processing."""
         from keep import Keeper

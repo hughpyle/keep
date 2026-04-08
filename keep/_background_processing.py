@@ -737,6 +737,7 @@ class BackgroundProcessingMixin:
                 "op": "set_summary",
                 "target": item_id,
                 "summary": summary,
+                "embed": True,
                 "content_hash": str(result.get("content_hash") or ""),
                 "content_hash_full": str(result.get("content_hash_full") or ""),
             })
@@ -776,7 +777,6 @@ class BackgroundProcessingMixin:
                 mutations.append({
                     "op": "put_item",
                     "id": f"{item_id}@p{i}",
-                    "content": raw.get("content", ""),
                     "summary": raw.get("summary", ""),
                     "tags": part_tags,
                     "queue_background_tasks": False,

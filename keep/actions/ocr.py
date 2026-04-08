@@ -128,6 +128,7 @@ class Ocr:
                     "op": "set_summary",
                     "target": item_id,
                     "summary": summary,
+                    "embed": True,
                     "content_hash": content_hash,
                     "content_hash_full": content_hash_full,
                 }

@@ -2,7 +2,33 @@
 
 Date: 2026-04-07
 Updated: 2026-04-08
-Status: Draft
+Status: Implemented
+
+## Current status
+
+This refactor has landed.
+
+Current implementation state:
+
+- `summary` is the single stored text field for notes and parts
+- `PartInfo` has no `content`
+- `document_parts` has no `content` column
+- `parts_fts` indexes only `summary`
+- `get_part()` returns part `summary` directly
+- analyze output and part mutations are summary-only
+- `set_content` no longer exists
+- export writes format version `2` without `parts[].content`
+- import still accepts old exports containing `parts[].content`
+
+Follow-up fixes that are now part of the current branch state:
+
+- OCR `set_summary` mutations explicitly request re-embedding
+- delegated analyze normalization no longer emits a dead part `content` field
+- migrated-part reindex handoff clears its in-memory list after enqueue
+- migration coverage includes the Keeper-startup migration-to-pending-queue seam
+
+The remaining sections below are preserved as implementation history and
+rationale.
 
 ## Goal
 
@@ -56,6 +82,9 @@ The user-visible model should be simpler:
 
 ## Current State
 
+Historical note: this section describes the pre-implementation state that the
+refactor removed.
+
 ### Notes
 
 Notes already mostly follow the target model.
@@ -80,7 +109,7 @@ So the note model is already close to the desired final state.
 
 Parts are where the semantic split still exists.
 
-The split currently appears in:
+The split originally appeared in:
 
 - `PartInfo.content` in
   [keep/document_store.py](/Users/hugh/play/keep/keep/document_store.py#L48)
@@ -99,17 +128,14 @@ The split currently appears in:
 
 ### OCR / processing
 
-The OCR mutation name still models a split, but the implementation is already
-closer to the final state than the name suggests.
+Before implementation, the OCR mutation name still modeled a split, but the
+runtime behavior was already closer to the final state than the name suggested.
 
-- `ocr` emits `set_content` in
-  [keep/actions/ocr.py](/Users/hugh/play/keep/keep/actions/ocr.py#L122)
-- `_apply_mutations()` handles `set_content` in
-  [keep/task_workflows.py](/Users/hugh/play/keep/keep/task_workflows.py#L314)
-- delegated task normalization also emits `set_content` in
-  [keep/_background_processing.py](/Users/hugh/play/keep/keep/_background_processing.py#L729)
+- `ocr` emitted `set_content`
+- `_apply_mutations()` handled `set_content`
+- delegated task normalization also emitted `set_content`
 
-Important factual correction:
+Historical factual correction:
 
 - the `set_content` consumer already discards the mutation's `content` field
 - it only writes `documents.summary`, updates hashes, and embeds the summary
@@ -119,8 +145,8 @@ change.
 
 ### Item-scoped actions
 
-[keep/actions/_item_scope.py](/Users/hugh/play/keep/keep/actions/_item_scope.py#L86)
-contains:
+[keep/actions/_item_scope.py](/Users/hugh/play/keep/keep/actions/_item_scope.py)
+formerly contained:
 
 - `content = getattr(item, "content", None)`
 
@@ -132,11 +158,8 @@ and flatten the fallback logic.
 
 ### Export / import / docs
 
-JSON export still writes `parts[].content` in
-[keep/api.py](/Users/hugh/play/keep/keep/api.py#L1230). Import still accepts
-and persists that same shape in
-[keep/api.py](/Users/hugh/play/keep/keep/api.py#L1260) and
-[keep/document_store.py](/Users/hugh/play/keep/keep/document_store.py#L3353).
+Before implementation, JSON export still wrote `parts[].content`. Import still
+accepted and persisted that same shape.
 
 The markdown export path already treats `parts.content` as vestigial in
 [keep/cli_app.py](/Users/hugh/play/keep/keep/cli_app.py#L1988), which is a
@@ -189,6 +212,12 @@ They must land in the same commit, or at least within the same daemon-restart
 boundary. Otherwise a daemon running old code will try to write `content` into
 a migrated schema that no longer has that column.
 
+Implemented note:
+
+- this landed as one schema-and-writer change, and the deferred-startup path
+  was adjusted so migrated-part reindex enqueueing does not regress daemon
+  startup
+
 ### 5. Stored text changes require embedding coordination
 
 If migration changes canonical part text, the corresponding vector embedding
@@ -211,6 +240,10 @@ The end state of this work is:
 - export format version is bumped
 - docs and tests no longer describe note or part semantics as `summary` vs
   `content`
+
+Implemented outcome:
+
+- complete, with old-export import compatibility retained at the import boundary
 
 One compatibility path may remain longer:
 
@@ -260,14 +293,13 @@ Required outcome:
 - parts persist only `summary`
 - FTS indexes only that one text
 
-Implementation note:
+Historical implementation note:
 
-- the current schema version is
-  [SCHEMA_VERSION = 13](/Users/hugh/play/keep/keep/document_store.py#L32)
+- the schema version at planning time was `13`
 - the migration ladder lives in
   [DocumentStore._migrate_schema()](/Users/hugh/play/keep/keep/document_store.py#L319)
-- this change should slot in as the next migration step, i.e.
-  `if current_version < 14: ...`, with `SCHEMA_VERSION = 14`
+- this change was implemented as `if current_version < 14: ...` with
+  `SCHEMA_VERSION = 14`
 - if another branch lands a schema bump first, use the next free version, but
   follow the same pattern
 
@@ -297,10 +329,10 @@ Change:
 - keep optional hash fields on that mutation
 - normalize part writes to `summary` only
 
-Important note:
+Historical note:
 
 - this is not a behavior change in the consumer
-- the current `set_content` consumer already stores only `summary + hashes`
+- the old `set_content` consumer already stored only `summary + hashes`
 
 #### [keep/_background_processing.py](/Users/hugh/play/keep/keep/_background_processing.py)
 
