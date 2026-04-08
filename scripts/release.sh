@@ -106,8 +106,24 @@ echo "--- Committing ---"
 LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 COMMIT_SUBJECT="$TAG — $(git log --oneline -1 --format='%s' | sed "s/^v[0-9.]* — //")"
 
-# For the commit, use the short subject line
-git add -A
+# Stage only the files that bump_version.py touches (plus uv.lock, which
+# bump_version.py regenerates via `uv lock`). Using `git add -A` here would
+# silently sweep any unrelated working-tree changes into the release commit —
+# keep this list in sync with TARGETS in scripts/bump_version.py.
+#
+# Note: keep/data/openclaw-plugin/dist/index.js is a build artifact, gitignored
+# via the nested .gitignore, and force-included in the wheel by pyproject.toml
+# — deliberately not staged here.
+git add \
+    pyproject.toml \
+    uv.lock \
+    SKILL.md \
+    keep/data/openclaw-plugin/openclaw.plugin.json \
+    keep/data/openclaw-plugin/package.json \
+    keep/data/openclaw-plugin/src/index.ts \
+    keep/data/openclaw-plugin/src/mcp-transport.ts \
+    claude-code-plugin/.claude-plugin/plugin.json
+
 git commit -m "$COMMIT_SUBJECT"
 git tag "$TAG"
 
