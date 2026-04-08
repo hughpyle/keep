@@ -2411,30 +2411,31 @@ def _write_markdown_export(
     Cross-reference links from inverse edges resolve through the same
     map so they land on the actual on-disk filename.
 
-    The export does two passes: a planning pass that buffers every
-    yielded doc and resolves its final on-disk path, then a writing
-    pass that uses those resolved paths to render and write.  Memory
-    cost scales linearly with note count (~5–10 KB per note).
+    The export does two passes over ``export_iter``: a planning pass
+    that resolves every doc's final on-disk path, then a writing pass
+    that renders and writes.  Pass 1 only keeps ``{doc_id → rel_path}``
+    in memory between passes (a few dozen bytes per note); the
+    intermediate slot index is dropped once planning completes.  Pass
+    2 streams the iterator again, so doc bodies are never buffered.
 
     If ``progress`` is given it is invoked as ``progress(current, total, label)``
     after each document is written.
     """
     current_inverse, version_inverse = _get_edge_data(keeper)
 
-    # Pass 1: stream the iterator into memory and plan disambiguated
-    # paths.  We need to know every doc's final path before we render
-    # any inverse-edge link, because a backlink from one doc to another
-    # has to point at the disambiguated filename of the target — and
-    # that target might be processed after the source in the iterator.
+    # Pass 1: stream the iterator and plan disambiguated paths.  We
+    # need every doc's final path before we render any inverse-edge
+    # link, because a backlink from one doc to another has to point at
+    # the disambiguated filename of the target — and the target might
+    # be processed after the source in the iterator.
     it = keeper.export_iter(include_system=include_system)
     header = next(it)
-    docs = list(it)
     total = header["store_info"]["document_count"]
 
     slots: dict[str, tuple[str, str, Path]] = {}
     final_paths: dict[str, Path] = {}
 
-    for doc in docs:
+    for doc in it:
         doc_id = doc["id"]
         canonical = _id_to_rel_path(doc_id)
         sorted_parts = sorted(
@@ -2467,6 +2468,9 @@ def _write_markdown_export(
         _claim_planned(planned, doc_id, slots)
         final_paths[doc_id] = final_path
 
+    # Drop the slot index — only ``final_paths`` is needed in pass 2.
+    del slots
+
     def resolve_path(target_id: str) -> Path:
         """Return the on-disk rel-path for a doc id (canonical or hashed).
 
@@ -2483,11 +2487,14 @@ def _write_markdown_export(
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
 
-    # Pass 2: write each doc using its resolved final path.  Chain
-    # links use the doc's own final path; inverse-edge links use the
-    # resolver to find disambiguated targets.
+    # Pass 2: stream the iterator a second time and write each doc
+    # using its resolved final path.  Chain links use the doc's own
+    # final path; inverse-edge links use the resolver to find
+    # disambiguated targets.
+    it2 = keeper.export_iter(include_system=include_system)
+    next(it2)  # discard header
     count = 0
-    for doc in docs:
+    for doc in it2:
         doc_id = doc["id"]
         rel_path = final_paths[doc_id]
         # Sidecar dir is the parent path with the trailing ``.md``
