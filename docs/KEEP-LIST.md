@@ -22,7 +22,6 @@ keep list .tag/act                    # Items under ".tag/act/"
 | `-n`, `--limit N` | Maximum results (default 20) |
 | `--since DURATION` | Only notes updated since (ISO duration or date) |
 | `--until DURATION` | Only notes updated before (ISO duration or date) |
-| `--with-parts` | Only show notes that have been analyzed into parts |
 | `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
 
 ## Prefix filtering
@@ -53,12 +52,6 @@ keep list --since PT1H               # Last hour
 keep list --since 2026-01-15         # Since specific date
 keep list --until 2026-02-01         # Before specific date
 keep list --since P30D --until P7D   # Between 30 and 7 days ago
-```
-
-## Filtering by parts
-
-```bash
-keep list --with-parts                # Only notes analyzed into parts
 ```
 
 ## Pipe composition

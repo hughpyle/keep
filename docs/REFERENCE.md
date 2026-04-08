@@ -122,7 +122,6 @@ keep list                            # Recent notes
 keep list -t project=myapp           # Filter by tag
 keep list --sort created              # Sort order
 keep list --since P7D --until now    # Date range
-keep list --with-parts               # Only notes with parts
 keep list -a                         # Include system notes
 keep list "file:///"                 # Filter by ID prefix
 

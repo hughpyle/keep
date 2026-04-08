@@ -1195,9 +1195,6 @@ def list_cmd(
     limit: LimitOption = 20,
     since: Annotated[Optional[str], typer.Option("--since")] = None,
     until: Annotated[Optional[str], typer.Option("--until")] = None,
-    with_parts: Annotated[bool, typer.Option(
-        "--with-parts", help="Only show notes that have been analyzed into parts"
-    )] = False,
     show_all: Annotated[bool, typer.Option(
         "--all", "-a", help="Include hidden system notes (IDs starting with '.')"
     )] = False,
@@ -1235,11 +1232,6 @@ def list_cmd(
     resp = _post(port, "/v1/flow", {"state": "list", "params": flow_params})
     results = _flow_items(resp)
     data: dict = {"notes": results}
-
-    # Filter to notes with parts if requested
-    if with_parts:
-        notes = [n for n in results if n.get("tags", {}).get("_has_parts")]
-        data = {"notes": notes}
 
     if _is_json(json_output):
         typer.echo(json.dumps(data, indent=2))
