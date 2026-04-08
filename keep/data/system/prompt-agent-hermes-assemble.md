@@ -11,15 +11,13 @@ for retrieval — search results, meta, edges — keyed on the user's
 message as a similarity query.
 
 ## Prompt
----
-Context in `keep` includes:
-  Similar:
+Similar:
   {find_results|(none)}
 
-  Groups:
+Groups:
   {meta|(none)}
 
-  Links:
+Links:
   {edges|(none)}
 
 無常迅速
