@@ -2,17 +2,18 @@
 
 Keep provides a memory provider plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent). Once configured, Hermes gets persistent reflective memory across sessions — semantic search, conversation versioning, and agent prompts.
 
+Currently requires [this branch](https://github.com/NousResearch/hermes-agent/pull/5172).  Check out the branch and run.
+
+If you have Ollama running locally, it will be auto-detected.  For other providers, put the appropriate API keys in your Hermes environment first.  Supports multiple independent profiles.
+
 ## Setup
 
 ```bash
-# 1. Install keep-skill into the Hermes environment
-uv pip install --python ~/.hermes/hermes-agent/venv/bin/python3 keep-skill
-
-# 2. Run the setup wizard
+# 1. Run the setup wizard
 hermes memory setup
 # Select "keep", choose embedding/summarization providers
 
-# 3. Start a new Hermes session
+# 2. Start a new Hermes session
 hermes
 ```
 

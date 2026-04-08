@@ -14,6 +14,10 @@
     Relationally-scoped meta (album grouping, thread siblings, "other notes tagged with this person"): these are about the item you're looking at. They define structural neighborhoods
     — "when you see a track, also surface its album-mates." That's meaningful context for any get, because it answers "what is this thing related to?"
 
+    Don't perform speech-act analysis for items that were not from interactive conversations
+    - tag session-based work as conversational
+    - this will also focus the analysis prompt appropriately
+
 * stats rendering
 
 * "look" reconstruction: "around" & "towards"

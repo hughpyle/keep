@@ -1,14 +1,14 @@
 # keep
 
-An agent-skill: memory that pays attention.
+Agent memory that pays attention.  The foundation of skillful action.
 
 It includes [skill instructions](SKILL.md) for reflective practice, and a powerful semantic memory system with [command-line](docs/QUICKSTART.md) and [MCP](docs/KEEP-MCP.md) interfaces. Fully local, or use API keys for model providers, or [cloud-hosted](https://keepnotes.ai) for multi-agent use.
 
 ```bash
 uv tool install keep-skill       # or: pip install keep-skill
-export OPENAI_API_KEY=...        # Or GEMINI_API_KEY (both do embeddings + summarization)
+keep                              # interactive first-run setup (providers + agent hooks)
 
-# Index content (store auto-initializes on first use)
+# Index content
 keep put https://inguz.substack.com/p/keep -t topic=practice
 keep put "Rate limit is 100 req/min" -t topic=api
 
@@ -29,9 +29,11 @@ keep prompt reflect
 
 ## What It Does
 
-Store anything — notes, files, URLs — and `keep` summarizes, embeds, and tags each note. You search by meaning, by keyword, and by graph traversal. Content goes in as text, PDF, HTML, Office documents, audio, or images; what comes back is a summary with tags and semantic neighbors. Audio and image files auto-extract metadata tags (artist, album, camera, date, etc.).
+Store anything — notes, files, URLs — and `keep` summarizes, embeds, and tags each note. You search by meaning, by keyword, and by graph traversal.
 
-What makes this more than a vector store: tags become edges. Define a tag like `author` or `git_commit` and keep creates bidirectional links — a user-defined graph model where every tag can be a navigable relationship. When you retrieve any note, keep follows these edges and fires standing queries — surfacing open commitments, past learnings, referenced files, commit history. The right things appear at the right time, without manual graph construction.
+Content goes in as conversation, text, PDF, HTML, Office documents, audio, or images; what comes back is a summary with tags and semantic neighbors. Audio files auto-extract metadata (artist, album, year); image files auto-extract EXIF (camera, date, dimensions). Optional vision/transcription enrichment runs when a media provider is configured, and scanned PDFs and images get background OCR when an OCR provider is available.
+
+This is more than a vector store: selected tags become **edges**. A tag becomes an edge when its tagdoc declares an `_inverse` — for example, `.tag/speaker` declares `_inverse: said`, so `speaker: Deborah` on a note makes `keep get Deborah` show every note where Deborah spoke. Ordinary tags stay as labels; you opt into navigability per tag key. Bundled edges include `speaker`, `author`, `references`, `cites`, `from`/`to`/`cc`, and `git_commit`; you can define your own. When you retrieve any note, keep follows its edges and fires standing queries (`.meta/*`) — surfacing open commitments, past learnings, related files, commit history. The right things appear at the right time. See [docs/EDGE-TAGS.md](docs/EDGE-TAGS.md).
 
 - **Summarize, embed, tag** — URLs, files, and text are summarized and indexed on ingest
 - **Contextual feedback** — Open commitments and past learnings surface automatically
@@ -43,9 +45,7 @@ What makes this more than a vector store: tags become edges. Define a tag like `
 - **Parts** — `analyze` decomposes documents into searchable sections, each with its own embedding and tags
 - **Strings** — Every note is a string of versions; reorganize history by meaning with `keep move`
 - **Watches** — Daemon-driven directory and file monitoring; re-indexes on change
-- **Works offline** — Local models (MLX, Ollama), or API providers (Voyage, OpenAI, Gemini, Anthropic, Mistral)
-
-Backed by ChromaDB for vectors, SQLite for metadata and versions.
+- **Works offline** — Local models (MLX, Ollama, etc.), or API providers (Voyage, OpenAI, Gemini, Anthropic, Mistral)
 
 > **[keepnotes.ai](https://keepnotes.ai)** — Hosted service. No local setup, no API keys to manage. Same SDK, managed infrastructure.
 
@@ -59,16 +59,18 @@ This works because the tool and the skill reinforce each other. The tool stores 
 
 ### Integration
 
-The skill instructions and hooks install into your agent's configuration automatically on first use. The CLI alone is enough to start; the hooks make it automatic.
+Run `keep` (or `keep config --setup`) and the interactive wizard offers to install hooks for the coding-tool integrations it detects on your system. The other rows below have their own setup commands.
 
-| Tool | Integration |
+| Tool | How to install |
 |------|-------------|
-| **[OpenClaw](docs/OPENCLAW-INTEGRATION.md)** | Context engine plugin — full memory assembly, session archival, reflection triggers |
-| **Claude Desktop** | `keep config mcpb` ([details](docs/CLAUDE-DESKTOP.md)) |
-| **Claude Code** | Plugin: `/plugin install keep@keepnotes-ai` |
-| **VS Code Copilot** | MCP: `code --add-mcp '{"name":"keep","command":"keep","args":["mcp"]}'` |
-| **Kiro** | MCP + practice prompt: `kiro-cli mcp add --name keep --scope global -- keep mcp` |
-| **OpenAI Codex** | MCP: `codex mcp add keep -- keep mcp` |
+| **[Hermes Agent](docs/HERMES-INTEGRATION.md)** | `hermes memory setup` (currently requires [this branch](https://github.com/NousResearch/hermes-agent/pull/5172)). Fully integrated, with [additional skills](https://github.com/keepnotes-ai/hermes-skills) available. |
+| **[OpenClaw](docs/OPENCLAW-INTEGRATION.md)** | `openclaw plugins install clawhub:keep` (or `-l $(keep config openclaw-plugin)` from a local checkout). After that, `keep config --setup` keeps the plugin upgraded. Context engine plugin — full memory assembly, session archival, reflection triggers. |
+| **Claude Desktop** | `keep config --setup`, then `keep config mcpb` to generate and open the .mcpb bundle ([details](docs/CLAUDE-DESKTOP.md)) |
+| **Claude Code** | `/plugin marketplace add https://github.com/keepnotes-ai/keep.git` then `/plugin install keep@keepnotes-ai` |
+| **VS Code Copilot** | `code --add-mcp '{"name":"keep","command":"keep","args":["mcp"]}'` |
+| **GitHub Copilot CLI** | Auto-installed by `keep config --setup` when `~/.config/github-copilot/` is present. |
+| **Kiro** | `kiro-cli mcp add --name keep --scope global -- keep mcp` |
+| **OpenAI Codex** | `codex mcp add keep -- keep mcp` |
 | **LangChain** | [LangGraph BaseStore](docs/LANGCHAIN-INTEGRATION.md), retriever, tools, and middleware |
 | **Any MCP client** | [Stdio server](docs/KEEP-MCP.md) with 3 tools (`keep_flow`, `keep_prompt`, `keep_help`) |
 
@@ -78,29 +80,31 @@ After install, just tell your agent: *Please read all the keep_help documentatio
 
 ## Installation
 
-**Python 3.11–3.13 required.** Use [uv](https://docs.astral.sh/uv/) (recommended) or pip:
+**Python 3.11–3.13.** Use [uv](https://docs.astral.sh/uv/) (recommended) or pip:
 
 ```bash
-uv tool install keep-skill
+uv tool install keep-skill        # or: pip install keep-skill
+keep                               # interactive first-run setup
 ```
 
-**Hosted** (simplest — no local setup needed):
+The first run launches an interactive wizard: it picks up any API keys you have in the environment, detects [Ollama](https://ollama.com/) if it's running locally, lets you pick embedding and summarization providers, and offers to install hooks for any agent tools it finds. Re-run anytime with `keep config --setup`.
+
+**Skip the wizard** by setting one of:
+
 ```bash
-export KEEPNOTES_API_KEY=...   # Sign up at https://keepnotes.ai
+export KEEPNOTES_API_KEY=kn_...    # Hosted at https://keepnotes.ai — no local setup needed
+export OPENAI_API_KEY=...          # Or GEMINI_API_KEY, OPENROUTER_API_KEY — each does both embeddings + summarization
+export VOYAGE_API_KEY=...          # Or MISTRAL_API_KEY — embeddings only; pair with ANTHROPIC_API_KEY etc. for summarization
+export GOOGLE_CLOUD_PROJECT=...    # Vertex AI via Workload Identity / ADC
 ```
 
-**Self-hosted** with API providers:
-```bash
-export OPENAI_API_KEY=...      # Simplest (handles both embeddings + summarization)
-# Or: GEMINI_API_KEY=...       # Also does both
-# Or: VOYAGE_API_KEY=... and ANTHROPIC_API_KEY=...  # Separate services
-```
+Local option without API keys: install Ollama (auto-detected), or on macOS Apple Silicon `uv tool install 'keep-skill[local]'` for MLX models.
 
-**Local** (offline, no API keys): If [Ollama](https://ollama.com/) is running, keep auto-detects it. Or on macOS Apple Silicon: `uv tool install 'keep-skill[local]'`
+Or use a local OpenAI-API server (llama-server, vLLM, LM Studio, LocalAI) by setting `[embedding] name = "openai"` with `base_url = "http://localhost:8801/v1"` in `keep.toml` — see [docs/KEEP-CONFIG.md](docs/KEEP-CONFIG.md).
 
-**LangChain/LangGraph** integration: `pip install keep-skill[langchain]` or `pip install langchain-keep`
+**LangChain/LangGraph** integration: `pip install keep-skill[langchain]` or `pip install langchain-keep`.
 
-See [docs/QUICKSTART.md](docs/QUICKSTART.md) for all provider options.
+See [docs/QUICKSTART.md](docs/QUICKSTART.md) and [docs/KEEP-CONFIG.md](docs/KEEP-CONFIG.md) for the full provider matrix and configuration options.
 
 ---
 

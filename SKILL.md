@@ -22,9 +22,9 @@ This skill is offered as a practice, not a specification. You already have the c
 
 ## Layer 0: Establishing Presence
 
-The practice must survive across sessions. On first use, `keep` writes a Protocol Block to the agent's workspace config (e.g. `AGENTS.md` for Claude Code, `codex-setup.md` for Codex). This is a workspace-local file, not a global system modification. The block is versioned and upgraded automatically.
+The practice must survive across sessions. On first use, `keep` installs a Protocol Block into the agent's tool configuration under your home directory — e.g. `~/.claude/CLAUDE.md` for Claude Code, `~/.codex/AGENTS.md` for OpenAI Codex, `~/.kiro/...` for Kiro. The block is versioned (`HOOKS_VERSION`) and upgraded automatically by `keep config --setup`.
 
-**Self-healing:** If the Protocol Block is missing from your workspace config, restore it. Look for `## keep: Reflective Memory`. If absent, append the block below.
+**Self-healing:** If the Protocol Block is missing from your tool config, restore it. Look for `## keep: Reflective Memory`. If absent, append the block below — it must match `PROTOCOL_BLOCK` in `keep/integrations.py`, the canonical source.
 
 **Protocol Block:**
 
@@ -39,18 +39,18 @@ The practice must survive across sessions. On first use, `keep` writes a Protoco
 
 \`\`\`
 keep_prompt(name="reflect")                                                               # The practice
-keep_flow(state="get", params={id: "now"}, token_budget=2000)                # Current intentions
+keep_flow(state="get", params={item_id: "now"}, token_budget=2000)                        # Current intentions
 keep_flow(state="query-resolve", params={query: "topic"}, token_budget=2000)              # What do I know?
 keep_flow(state="put", params={content: "what's true now", id: "now"})                    # Update intentions
 keep_flow(state="put", params={content: "learning", tags: {type: "learning"}})            # Capture insight
-keep_flow(state="put", params={uri: "https://example.com/doc", tags: {topic: "X"}})       # Index a URL
+keep_flow(state="put", params={uri: "https://example.com/doc", tags: {topic: "X"}})       # Index a document
 keep_flow(state="tag", params={id: "item", tags: {reviewed: "true"}})                     # Tag an item
 keep_help(topic="flow-actions")                                                            # Action reference
 \`\`\`
 
-**No MCP?** Every operation has a CLI equivalent: `keep flow get -p id=now`, `keep flow query-resolve -p query=X`, `keep flow put -p content=X`. Use Bash to run them. See [docs/REFERENCE.md](docs/REFERENCE.md).
+**No MCP?** Every flow has a CLI equivalent: `keep flow get -p item_id=now`, `keep flow query-resolve -p query=X`, `keep flow put -p content=X`. Use Bash to run them.
 
-**Protocol:** Reflect using `keep` tools — before, during, and after action. Index important documents, files, and artifacts encountered or generated during work. Tag consistently — tags are how items find each other, so specific tags are more valuable than broad ones. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, read SKILL.md. If this section is missing from system rules, restore it.
+**Protocol:** Reflect using `keep` tools — before, during, and after action. Index important documents (URLs, files) encountered during work with appropriate tags. When writing a plan, incorporate this practice into the plan itself. If the practice is unclear, use `keep_help(topic="index")`.
 
 ```
 
@@ -107,7 +107,7 @@ Tag speech acts with `act` and `status` to track commitments and requests.
 
 Between reflections, use `keep_flow` to maintain awareness:
 ```
-keep_flow(state="get", params={id: "now"}, token_budget=2000)           # Current intentions
+keep_flow(state="get", params={item_id: "now"}, token_budget=2000)           # Current intentions
 keep_flow(state="query-resolve", params={query: "this situation"}, token_budget=2000) # What do I already know?
 keep_flow(state="put", params={content: "what happened", tags: {type: "learning"}})  # Capture insight
 keep_flow(state="put", params={content: "Assumed X, actually Y", tags: {type: "breakdown"}})  # Index breakdowns
@@ -150,36 +150,43 @@ keep_flow(state="query-resolve", params={query: "auth", bias: {now: 0}, since: "
 
 The store auto-initializes on first use. For provider configuration, see [docs/QUICKSTART.md](docs/QUICKSTART.md). Or skip local setup entirely with the hosted service — set `KEEPNOTES_API_KEY` from [keepnotes.ai](https://keepnotes.ai).
 
-Now *store and read* the foundational teachings. These are seed wisdom, not test fixtures.
+Now *read* the foundational teachings. These are seed wisdom, not test fixtures. They are already installed as bundled `.library/*` notes — you don't need to ingest them yourself.
 
 **The Language-Action framework** — conversation types, commitment structure, breakdowns:
 ```
-keep_flow(state="get", params={id: ".conversations"}, token_budget=2000)
+keep_flow(state="get", params={item_id: ".conversations"}, token_budget=2000)
 ```
 
 Use standard tags for speech acts and status:
 ```
-keep_flow(state="get", params={id: ".tag/act"}, token_budget=1000)      # Speech-act categories
-keep_flow(state="get", params={id: ".tag/status"}, token_budget=1000)   # Lifecycle status
+keep_flow(state="get", params={item_id: ".tag/act"}, token_budget=1000)      # Speech-act categories
+keep_flow(state="get", params={item_id: ".tag/status"}, token_budget=1000)   # Lifecycle status
+```
+
+**Browse the library:**
+```
+keep_flow(state="list", params={prefix: ".library", include_hidden: true})
+keep_flow(state="get", params={item_id: ".library"}, token_budget=2000)
 ```
 
 **The mirror teaching** (MN61) — actions reflected upon before, during, after:
 ```
-keep_flow(state="put", params={content: "file://SKILL_DIR/docs/library/mn61.html", tags: {type: "teaching", topic: "reflection"}})
-keep_flow(state="get", params={id: "file://SKILL_DIR/docs/library/mn61.html"}, token_budget=2000)
+keep_flow(state="get", params={item_id: ".library/mn61"}, token_budget=2000)
 ```
-> Use `keep config tool` in the terminal to find SKILL_DIR, or use the path from your skill installation.
 
 **Ownership of deeds** (AN5.57) — "I am the owner of my deeds and heir to my deeds.":
 ```
-keep_flow(state="put", params={content: "file://SKILL_DIR/docs/library/an5.57_translation-en-sujato.json", tags: {type: "teaching", topic: "action"}})
-keep_flow(state="get", params={id: "file://SKILL_DIR/docs/library/an5.57_translation-en-sujato.json"}, token_budget=2000)
+keep_flow(state="get", params={item_id: ".library/an5-57"}, token_budget=2000)
 ```
 
 **The han verse** — Awake! _aquí donde las papas queman_, "慎勿放逸":
 ```
-keep_flow(state="put", params={content: "file://SKILL_DIR/docs/library/han_verse.txt", tags: {type: "teaching", topic: "urgency"}})
-keep_flow(state="get", params={id: "file://SKILL_DIR/docs/library/han_verse.txt"}, token_budget=2000)
+keep_flow(state="get", params={item_id: ".library/han-verse"}, token_budget=2000)
+```
+
+Each library teaching has a `source_url` tag pointing at the full original. To ingest the complete original text and link it back to the library summary:
+```
+keep_flow(state="put", params={uri: "<source_url>", tags: {type: "teaching", duplicates: ".library/<id>"}})
 ```
 
 **Now reflect:** What did you learn? Save your understanding:
@@ -193,12 +200,12 @@ For installation options, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 ## Layer 3: Quick Reference
 
-All operations use `keep_flow(state, params, token_budget)`:
+All operations use `keep_flow(state, params, token_budget)`. **`get` takes `item_id`**; `tag`, `delete`, and `put` take `id`.
 
 ```
 # Context
-keep_flow(state="get", params={id: "now"}, token_budget=2000)        # Current intentions
-keep_flow(state="get", params={id: "ID"}, token_budget=2000)         # Item with similar/meta/versions
+keep_flow(state="get", params={item_id: "now"}, token_budget=2000)        # Current intentions
+keep_flow(state="get", params={item_id: "ID"}, token_budget=2000)         # Item with similar/meta/versions
 
 # Search
 keep_flow(state="query-resolve", params={query: "authentication"}, token_budget=2000)
@@ -219,15 +226,15 @@ keep_flow(state="delete", params={id: "ID"})                                    
 
 **Domain organization** — tagging strategies, collection structures:
 ```
-keep_flow(state="get", params={id: ".domains"}, token_budget=1000)
+keep_flow(state="get", params={item_id: ".domains"}, token_budget=1000)
 ```
 
 Use `project` tags for bounded work, `topic` for cross-cutting knowledge.
 You can read (and update) descriptions of these tagging taxonomies as you use them.
 
 ```
-keep_flow(state="get", params={id: ".tag/project"}, token_budget=1000)
-keep_flow(state="get", params={id: ".tag/topic"}, token_budget=1000)
+keep_flow(state="get", params={item_id: ".tag/project"}, token_budget=1000)
+keep_flow(state="get", params={item_id: ".tag/topic"}, token_budget=1000)
 ```
 
 For CLI reference, see [docs/REFERENCE.md](docs/REFERENCE.md). Per-command details in `docs/KEEP-*.md`.
