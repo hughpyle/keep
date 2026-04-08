@@ -10,6 +10,7 @@ from keep.cli_app import (
     _MAX_FILENAME_BYTES,
     _ExportCollisionError,
     _id_to_rel_path,
+    _md_link_target,
     _render_doc_markdown,
     _render_part_markdown,
     _render_version_markdown,
@@ -832,13 +833,18 @@ class TestMarkdownExport:
         # Non-existent part numbers don't get files.
         assert not (sidecar / "@P{3}.md").exists()
 
-        # Each part file's body is the part summary (the part's text);
-        # the parent id is in frontmatter; tags are preserved.
+        # Each part file's body has the part summary, plus chain
+        # navigation links to its parent and to the next part_num
+        # neighbour so wiki tools can walk the chain.
         meta, body = _parse_markdown(sidecar / "@P{1}.md")
         assert meta["id"] == "with-parts"
         assert meta["part_num"] == 1
         assert meta["tags"] == {"section": "intro"}
-        assert body.strip() == "Introduction analysis text."
+        assert "Introduction analysis text." in body
+        # Previous link points back to the parent doc.
+        assert "**Previous part:** [with-parts](../with-parts.md)" in body
+        # Next link points to the next-higher part_num sidecar.
+        assert "**Next part:** [@P{2}](@P%7B2%7D.md)" in body
 
     def test_write_markdown_export_versions_sidecar_offsets(self, keeper, tmp_path):
         # `versions` in the seed represents archived (non-current) versions.
@@ -879,19 +885,31 @@ class TestMarkdownExport:
         assert meta1["id"] == "with-history"
         assert meta1["version_offset"] == 1
         assert meta1["version"] == 4  # absolute db version number for reference
-        assert body1.strip() == "Three steps back"
+        assert "Three steps back" in body1
+        # @V{1} is the chain entry from the parent: prev points to the
+        # next-older version, next points back to the parent doc.
+        assert "**Previous version:** [@V{2}](@V%7B2%7D.md)" in body1
+        assert "**Next version:** [with-history](../with-history.md)" in body1
 
         # Sanity check the deepest archived version maps correctly.
         meta4, body4 = _parse_markdown(sidecar / "@V{4}.md")
         assert meta4["version_offset"] == 4
         assert meta4["version"] == 1
-        assert body4.strip() == "Oldest"
+        assert "Oldest" in body4
+        # The chain tail has only a "next" link (no older version).
+        assert "**Previous version:**" not in body4
+        assert "**Next version:** [@V{3}](@V%7B3%7D.md)" in body4
 
         # The current (latest) version stays in the parent file, NOT in
         # the sidecar — there is no @V{0}.md.
         assert not (sidecar / "@V{0}.md").exists()
         parent_meta, parent_body = _parse_markdown(out / "with-history.md")
-        assert parent_body.strip() == "Latest summary"
+        assert "Latest summary" in parent_body
+        # Parent doc gets a chain-entry link to @V{1}.
+        assert (
+            "**Previous version:** [@V{1}](with-history/@V%7B1%7D.md)"
+            in parent_body
+        )
 
     def test_write_markdown_export_parts_and_versions_combined(self, keeper, tmp_path):
         _seed(keeper, [
@@ -1073,3 +1091,378 @@ class TestMarkdownExport:
         assert {e[1] for e in events} == {3}
         # Labels are note ids that were just written.
         assert {e[2] for e in events} == {"a", "b", "c"}
+
+    # ------------------------------------------------------------------
+    # Linear-chain navigation between parent and sidecars
+    # ------------------------------------------------------------------
+
+    def test_md_link_target_same_dir(self):
+        # note.md → other.md (root to root): no '..' prefix.
+        assert _md_link_target(Path("other.md"), Path("note.md")) == "other.md"
+
+    def test_md_link_target_into_subdir(self):
+        # note.md → note/@P{1}.md: relative descend, '{}' percent-encoded.
+        assert (
+            _md_link_target(
+                Path("note") / "@P{1}.md",
+                Path("note.md"),
+            )
+            == "note/@P%7B1%7D.md"
+        )
+
+    def test_md_link_target_back_to_parent(self):
+        # note/@P{1}.md → note.md: one '..' segment.
+        assert (
+            _md_link_target(
+                Path("note.md"),
+                Path("note") / "@P{1}.md",
+            )
+            == "../note.md"
+        )
+
+    def test_md_link_target_sibling_in_same_subdir(self):
+        # note/@P{1}.md → note/@P{2}.md: same dir, no traversal.
+        assert (
+            _md_link_target(
+                Path("note") / "@P{2}.md",
+                Path("note") / "@P{1}.md",
+            )
+            == "@P%7B2%7D.md"
+        )
+
+    def test_md_link_target_nested_root(self):
+        # notes/2024/jan.md → notes/2024/jan/@P{1}.md.
+        assert (
+            _md_link_target(
+                Path("notes") / "2024" / "jan" / "@P{1}.md",
+                Path("notes") / "2024" / "jan.md",
+            )
+            == "jan/@P%7B1%7D.md"
+        )
+
+    def test_md_link_target_nested_back_to_root(self):
+        # notes/2024/jan/@P{1}.md → notes/2024/jan.md: '../jan.md'.
+        assert (
+            _md_link_target(
+                Path("notes") / "2024" / "jan.md",
+                Path("notes") / "2024" / "jan" / "@P{1}.md",
+            )
+            == "../jan.md"
+        )
+
+    def test_md_link_target_across_dirs(self):
+        # nested → root sibling: traversal up + down.
+        assert (
+            _md_link_target(
+                Path("Deborah.md"),
+                Path("notes") / "2024" / "jan.md",
+            )
+            == "../../Deborah.md"
+        )
+
+    def test_md_link_target_url_encodes_parens(self):
+        # On-disk component with '()' must percent-encode in the link
+        # target — bare parens would otherwise unbalance markdown's
+        # link-URL syntax.
+        assert (
+            _md_link_target(
+                Path("foo(bar).md"),
+                Path("here.md"),
+            )
+            == "foo%28bar%29.md"
+        )
+
+    def test_md_link_target_double_encodes_literal_percent(self):
+        # `_id_to_rel_path` already percent-encodes filesystem-unsafe
+        # chars inside each path component, so '#' lands on disk as
+        # the LITERAL bytes '%23' inside the filename.  For a wiki
+        # tool to URL-decode a markdown link target back to that
+        # literal filename, every '%' has to be re-encoded as '%25'
+        # — otherwise '%23' in the link decodes to '#' and resolves
+        # to nothing on disk.
+        rel = _id_to_rel_path("thread:abc@host#frag")
+        # Sanity: the on-disk component carries the percent-escape.
+        assert "%23frag" in rel.parts[-1]
+        link = _md_link_target(rel, Path("anchor.md"))
+        # '%23' must be re-encoded as '%2523' so URL-decoding it gives
+        # back the literal '%23' that exists on disk.
+        assert "%2523frag" in link
+
+    def test_md_link_target_round_trips_to_on_disk_filename(self):
+        # End-to-end check of the encode/decode round trip: the URL
+        # produced by _md_link_target must, after URL-decoding,
+        # exactly match the on-disk relative path.
+        from urllib.parse import unquote
+        for doc_id in (
+            "auth-notes",
+            "notes/2024/jan",
+            "file:///Users/x/README.md",
+            "thread:abc@host#frag",
+            "%9f86d081884c",
+        ):
+            rel = _id_to_rel_path(doc_id)
+            link = _md_link_target(rel, Path("anchor.md"))
+            assert unquote(link) == rel.as_posix(), (
+                f"round-trip failed for {doc_id!r}: "
+                f"link={link!r} decoded={unquote(link)!r} "
+                f"on-disk={rel.as_posix()!r}"
+            )
+
+    def test_parts_chain_links_non_contiguous(self, keeper, tmp_path):
+        """Parts chain follows part_num order even with gaps."""
+        _seed(keeper, [
+            _make_doc("doc", "Parent body", parts=[
+                {"part_num": 1, "summary": "first part",
+                 "tags": {}, "created_at": "2026-01-01T00:00:00"},
+                {"part_num": 2, "summary": "second part",
+                 "tags": {}, "created_at": "2026-01-02T00:00:00"},
+                {"part_num": 5, "summary": "fifth part",
+                 "tags": {}, "created_at": "2026-01-03T00:00:00"},
+            ]),
+        ])
+        out = tmp_path / "md-parts-chain"
+        out.mkdir()
+        _write_markdown_export(
+            keeper, out, include_system=False, include_parts=True,
+        )
+
+        # Parent links forward to the first part in the chain.
+        _meta, parent_body = _parse_markdown(out / "doc.md")
+        assert "**Next part:** [@P{1}](doc/@P%7B1%7D.md)" in parent_body
+        # Parent doesn't have any "previous part" line.
+        assert "**Previous part:**" not in parent_body
+
+        # Chain head: prev → parent, next → @P{2}
+        _m, b1 = _parse_markdown(out / "doc" / "@P{1}.md")
+        assert "**Previous part:** [doc](../doc.md)" in b1
+        assert "**Next part:** [@P{2}](@P%7B2%7D.md)" in b1
+        assert "first part" in b1
+
+        # Chain middle: prev → @P{1}, next → @P{5}
+        _m, b2 = _parse_markdown(out / "doc" / "@P{2}.md")
+        assert "**Previous part:** [@P{1}](@P%7B1%7D.md)" in b2
+        assert "**Next part:** [@P{5}](@P%7B5%7D.md)" in b2
+        assert "second part" in b2
+
+        # Chain tail: prev → @P{2}, no next link.
+        _m, b5 = _parse_markdown(out / "doc" / "@P{5}.md")
+        assert "**Previous part:** [@P{2}](@P%7B2%7D.md)" in b5
+        assert "**Next part:**" not in b5
+        assert "fifth part" in b5
+
+    def test_versions_chain_links(self, keeper, tmp_path):
+        """Versions chain follows @V{N} offset order."""
+        _seed(keeper, [
+            _make_doc("doc", "current", versions=[
+                {"version": 4, "summary": "v4 (one back)",
+                 "tags": {}, "content_hash": "h4",
+                 "created_at": "2025-12-04T00:00:00"},
+                {"version": 3, "summary": "v3 (two back)",
+                 "tags": {}, "content_hash": "h3",
+                 "created_at": "2025-12-03T00:00:00"},
+                {"version": 2, "summary": "v2 (three back)",
+                 "tags": {}, "content_hash": "h2",
+                 "created_at": "2025-12-02T00:00:00"},
+                {"version": 1, "summary": "v1 (four back)",
+                 "tags": {}, "content_hash": "h1",
+                 "created_at": "2025-12-01T00:00:00"},
+            ]),
+        ])
+        out = tmp_path / "md-versions-chain"
+        out.mkdir()
+        _write_markdown_export(
+            keeper, out, include_system=False, include_versions=True,
+        )
+
+        # Parent links back to its most-recent prior version (@V{1}).
+        _m, parent_body = _parse_markdown(out / "doc.md")
+        assert "**Previous version:** [@V{1}](doc/@V%7B1%7D.md)" in parent_body
+        assert "**Next version:**" not in parent_body
+        assert "current" in parent_body
+
+        # Chain head: prev → @V{2}, next → parent
+        _m, b1 = _parse_markdown(out / "doc" / "@V{1}.md")
+        assert "**Previous version:** [@V{2}](@V%7B2%7D.md)" in b1
+        assert "**Next version:** [doc](../doc.md)" in b1
+
+        # Middle: prev → @V{3}, next → @V{1}
+        _m, b2 = _parse_markdown(out / "doc" / "@V{2}.md")
+        assert "**Previous version:** [@V{3}](@V%7B3%7D.md)" in b2
+        assert "**Next version:** [@V{1}](@V%7B1%7D.md)" in b2
+
+        # Chain tail (oldest): no prev, next → @V{3}
+        _m, b4 = _parse_markdown(out / "doc" / "@V{4}.md")
+        assert "**Previous version:**" not in b4
+        assert "**Next version:** [@V{3}](@V%7B3%7D.md)" in b4
+
+    def test_parent_doc_chain_entries_for_both_parts_and_versions(
+        self, keeper, tmp_path,
+    ):
+        """A doc with parts AND versions has two chain-entry links."""
+        _seed(keeper, [
+            _make_doc("doc", "current", parts=[
+                {"part_num": 1, "summary": "p1",
+                 "tags": {}, "created_at": "2026-01-01T00:00:00"},
+            ], versions=[
+                {"version": 1, "summary": "older",
+                 "tags": {}, "content_hash": "h1",
+                 "created_at": "2025-12-01T00:00:00"},
+            ]),
+        ])
+        out = tmp_path / "md-both"
+        out.mkdir()
+        _write_markdown_export(
+            keeper, out, include_system=False,
+            include_parts=True, include_versions=True,
+        )
+        _m, parent_body = _parse_markdown(out / "doc.md")
+        assert "**Previous version:** [@V{1}](doc/@V%7B1%7D.md)" in parent_body
+        assert "**Next part:** [@P{1}](doc/@P%7B1%7D.md)" in parent_body
+
+    def test_doc_with_no_sidecars_has_no_chain_links(self, keeper, tmp_path):
+        """A plain doc gets no chain navigation in its body."""
+        _seed(keeper, [_make_doc("plain", "Just a summary")])
+        out = tmp_path / "md-plain-nav"
+        out.mkdir()
+        _write_markdown_export(keeper, out, include_system=False)
+        _m, body = _parse_markdown(out / "plain.md")
+        assert "**Previous version:**" not in body
+        assert "**Next part:**" not in body
+
+    def test_chain_links_omitted_when_flags_off(self, keeper, tmp_path):
+        """Sidecars must not be linked from the parent when their flag is off."""
+        _seed(keeper, [
+            _make_doc("doc", "current", parts=[
+                {"part_num": 1, "summary": "p1",
+                 "tags": {}, "created_at": "2026-01-01T00:00:00"},
+            ], versions=[
+                {"version": 1, "summary": "old",
+                 "tags": {}, "content_hash": None,
+                 "created_at": "2025-12-01T00:00:00"},
+            ]),
+        ])
+        out = tmp_path / "md-flags-off"
+        out.mkdir()
+        _write_markdown_export(keeper, out, include_system=False)
+        _m, body = _parse_markdown(out / "doc.md")
+        assert "**Previous version:**" not in body
+        assert "**Next part:**" not in body
+
+    # ------------------------------------------------------------------
+    # Inverse-edge "Referenced By" sections
+    # ------------------------------------------------------------------
+
+    def test_parent_inverse_edges_section(self, keeper, tmp_path):
+        """Parent doc gets a Referenced By section from current edges."""
+        _seed(keeper, [
+            _make_doc("conv1", "First conversation"),
+            _make_doc("conv2", "Second conversation"),
+            _make_doc("Deborah", "About Deborah"),
+        ])
+        # Insert two inverse edges pointing at "Deborah" — both with
+        # the inverse predicate "said" (the bundled `speaker` tag's
+        # _inverse).  Bypassing the tagdoc machinery is fine here:
+        # the markdown export queries the edges table directly.
+        ds = keeper._document_store
+        coll = keeper._resolve_doc_collection()
+        ds.upsert_edge(
+            coll, "conv1", "speaker", "Deborah", "said",
+            "2026-01-15T10:00:00",
+        )
+        ds.upsert_edge(
+            coll, "conv2", "speaker", "Deborah", "said",
+            "2026-01-16T10:00:00",
+        )
+
+        out = tmp_path / "md-inverse"
+        out.mkdir()
+        _write_markdown_export(keeper, out, include_system=False)
+
+        _meta, body = _parse_markdown(out / "Deborah.md")
+        # Section header
+        assert "## Referenced By" in body
+        # Inverse predicate label
+        assert "- **said:**" in body
+        # Both source links present, with relative paths back to the
+        # source notes (in the same root dir, so no '..' traversal).
+        assert "[conv1](conv1.md)" in body
+        assert "[conv2](conv2.md)" in body
+
+        # Source docs themselves don't have a Referenced By section
+        # (nothing points at them).
+        _m, conv1_body = _parse_markdown(out / "conv1.md")
+        assert "## Referenced By" not in conv1_body
+
+    def test_parent_inverse_edges_skips_system_sources(self, keeper, tmp_path):
+        """When include_system=False, system-id edge sources are filtered out."""
+        _seed(keeper, [_make_doc("target", "Target body")])
+        ds = keeper._document_store
+        coll = keeper._resolve_doc_collection()
+        ds.upsert_edge(
+            coll, ".meta/something", "speaker", "target", "said",
+            "2026-01-15T10:00:00",
+        )
+        ds.upsert_edge(
+            coll, "real-source", "speaker", "target", "said",
+            "2026-01-16T10:00:00",
+        )
+
+        out = tmp_path / "md-sys-filter"
+        out.mkdir()
+        _write_markdown_export(keeper, out, include_system=False)
+
+        _m, body = _parse_markdown(out / "target.md")
+        assert "[real-source](real-source.md)" in body
+        # System-id source is not rendered as a link.
+        assert ".meta/something" not in body
+
+    def test_version_sidecar_inverse_edges(self, keeper, tmp_path):
+        """Version sidecars expose inverse edges from version_edges."""
+        # Seed both the target doc (with archived versions) and a
+        # source doc with versions whose tags reference the target.
+        # `import_batch` calls _rebuild_version_edges_for_source so
+        # version_edges gets populated automatically — but only if a
+        # tagdoc with _inverse exists at import time, so include one
+        # in the same batch.
+        _seed(keeper, [
+            {
+                "id": ".tag/speaker",
+                "summary": "speaker tagdoc",
+                "tags": {"_inverse": "said"},
+                "created_at": "2025-01-01T00:00:00",
+                "updated_at": "2025-01-01T00:00:00",
+                "accessed_at": "2025-01-01T00:00:00",
+            },
+            _make_doc("target", "Target body", versions=[
+                {"version": 1, "summary": "older target body",
+                 "tags": {}, "content_hash": "ht1",
+                 "created_at": "2025-12-01T00:00:00"},
+            ]),
+            _make_doc(
+                "src",
+                "current source",
+                tags={"speaker": "target"},
+                versions=[
+                    {"version": 1,
+                     "summary": "older source body",
+                     "tags": {"speaker": "target"},
+                     "content_hash": "hs1",
+                     "created_at": "2025-12-01T00:00:00"},
+                ],
+            ),
+        ])
+
+        out = tmp_path / "md-version-inverse"
+        out.mkdir()
+        _write_markdown_export(
+            keeper, out, include_system=False, include_versions=True,
+        )
+
+        # The single archived version sidecar of `target` should
+        # surface the historical reference from `src` (through
+        # version_edges).  The link points back from inside the
+        # sidecar dir to the source doc at the export root.
+        _meta, body = _parse_markdown(out / "target" / "@V{1}.md")
+        assert "## Referenced By" in body
+        assert "- **said:**" in body
+        assert "[src](../src.md)" in body

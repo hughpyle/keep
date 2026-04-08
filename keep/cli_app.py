@@ -8,6 +8,7 @@ data import/export.
 import hashlib
 import json
 import os
+import posixpath
 import shutil
 import sys
 import http.client
@@ -1941,6 +1942,135 @@ def _id_to_rel_path(doc_id: str) -> Path:
     return Path(*out)
 
 
+def _md_link_target(target_rel: Path, src_rel: Path) -> str:
+    """Build a relative markdown-link URL from one rel-path to another.
+
+    Both paths are relative to the export root.  Path components are
+    URL-encoded so the link is valid markdown link syntax even when the
+    on-disk filename contains characters like ``{}`` or ``()``.  ``@``,
+    ``+``, ``=``, ``,`` stay literal for readability; everything else
+    that isn't an RFC 3986 unreserved char (``A-Z a-z 0-9 - _ . ~``)
+    is percent-encoded so the URL is unambiguous in markdown link
+    syntax across parsers.
+
+    ``%`` is NOT in the safe set: ``_id_to_rel_path`` already produces
+    a literal filename whose on-disk bytes contain ``%23`` for an
+    encoded ``#`` (so the file is literally called ``foo%23bar.md``).
+    For a wiki tool to URL-decode the link back to that literal name,
+    every ``%`` here must be re-encoded to ``%25``.  Otherwise the
+    link decodes to ``foo#bar.md`` and resolves to nothing.
+    """
+    src_dir = posixpath.dirname(src_rel.as_posix())
+    target = target_rel.as_posix()
+    rel = posixpath.relpath(target, src_dir or ".")
+    parts: list[str] = []
+    for comp in rel.split("/"):
+        if comp in ("..", "."):
+            parts.append(comp)
+        else:
+            parts.append(quote(comp, safe="@+=,"))
+    return "/".join(parts)
+
+
+def _get_edge_data(keeper) -> tuple[
+    Callable[[str], list[tuple[str, str]]],
+    Callable[[str], list[tuple[str, str]]],
+]:
+    """Return ``(current_inverse, version_inverse)`` lookup functions.
+
+    Each function takes a doc id and returns a list of
+    ``(inverse_predicate, source_id)`` pairs ordered as the underlying
+    store returns them.
+
+    If ``keeper`` doesn't expose the internal hooks the markdown export
+    needs (e.g. test fakes), the fallback returns no-op lookups so the
+    rest of the export still runs.
+    """
+    try:
+        doc_coll = keeper._resolve_doc_collection()
+        ds = keeper._document_store
+    except AttributeError:
+        empty: Callable[[str], list[tuple[str, str]]] = lambda _id: []
+        return empty, empty
+
+    def current_inverse(doc_id: str) -> list[tuple[str, str]]:
+        return [
+            (inverse, source_id)
+            for inverse, source_id, _created
+            in ds.get_inverse_edges(doc_coll, doc_id)
+        ]
+
+    def version_inverse(doc_id: str) -> list[tuple[str, str]]:
+        return [
+            (inverse, source_id)
+            for inverse, source_id, _created
+            in ds.get_inverse_version_edges(doc_coll, doc_id)
+        ]
+
+    return current_inverse, version_inverse
+
+
+def _render_inverse_edges_section(
+    src_rel: Path,
+    inverse_edges: list[tuple[str, str]],
+    *,
+    include_system: bool,
+) -> str:
+    """Render a ``## Referenced By`` body section for an inverse-edge list.
+
+    Groups by inverse-predicate name and emits one bullet per source,
+    with a markdown link relative to ``src_rel``.  Returns ``""`` if
+    there are no edges to show.  Sources whose ids start with ``.`` are
+    dropped when ``include_system`` is False.
+    """
+    if not inverse_edges:
+        return ""
+    groups: dict[str, list[str]] = {}
+    seen: set[tuple[str, str]] = set()
+    for inverse, source_id in inverse_edges:
+        if not source_id:
+            continue
+        if not include_system and source_id.startswith("."):
+            continue
+        key = (inverse, source_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        groups.setdefault(inverse, []).append(source_id)
+    if not groups:
+        return ""
+    lines: list[str] = ["## Referenced By", ""]
+    for inverse, source_ids in groups.items():
+        lines.append(f"- **{inverse}:**")
+        for source_id in source_ids:
+            link = _md_link_target(_id_to_rel_path(source_id), src_rel)
+            lines.append(f"  - [{source_id}]({link})")
+    return "\n".join(lines)
+
+
+def _render_chain_nav(
+    *,
+    prev_label: Optional[str] = None,
+    prev_link: Optional[str] = None,
+    prev_target_id: Optional[str] = None,
+    next_label: Optional[str] = None,
+    next_link: Optional[str] = None,
+    next_target_id: Optional[str] = None,
+) -> str:
+    """Render the prev/next chain link lines for a sidecar.
+
+    Each direction is independent — chain endpoints (parent, last
+    sidecar) only emit one side.  Returns the joined lines or ``""``
+    when neither side is set.
+    """
+    lines: list[str] = []
+    if prev_label and prev_link and prev_target_id:
+        lines.append(f"**{prev_label}:** [{prev_target_id}]({prev_link})")
+    if next_label and next_link and next_target_id:
+        lines.append(f"**{next_label}:** [{next_target_id}]({next_link})")
+    return "\n".join(lines)
+
+
 def _render_frontmatter_markdown(meta: dict, body: str) -> str:
     """Wrap a meta dict and body string in YAML frontmatter + markdown body."""
     fm = yaml.safe_dump(
@@ -1955,12 +2085,31 @@ def _render_frontmatter_markdown(meta: dict, body: str) -> str:
     return text
 
 
-def _render_doc_markdown(doc: dict) -> str:
+def _render_doc_markdown(
+    doc: dict,
+    *,
+    src_rel: Optional[Path] = None,
+    first_part_link: Optional[str] = None,
+    first_part_target_id: Optional[str] = None,
+    first_version_link: Optional[str] = None,
+    first_version_target_id: Optional[str] = None,
+    inverse_edges: Optional[list[tuple[str, str]]] = None,
+    include_system: bool = True,
+) -> str:
     """Render a single exported document dict as markdown with YAML frontmatter.
 
     Frontmatter contains the same fields as the JSON export except
     ``versions`` and ``parts`` (which are emitted as separate sidecar
     files); the note body is the document ``summary``.
+
+    When sidecars are being exported alongside, the parent doc gets
+    chain-entry navigation links appended to its body — one to the
+    most-recent prior version (``@V{1}``) and/or to the first analysis
+    part (``@P{first}``).  Inverse edges (when present) are appended
+    as a ``## Referenced By`` section so wiki tools see backlinks that
+    aren't visible from stored tags alone.  All these are no-ops when
+    the corresponding kwargs are ``None`` — direct callers (unit tests)
+    that pass only ``doc`` get the historical body shape.
     """
     meta: dict = {"id": doc["id"]}
     for key in (
@@ -1974,10 +2123,41 @@ def _render_doc_markdown(doc: dict) -> str:
             meta[key] = doc[key]
     if doc.get("tags"):
         meta["tags"] = dict(doc["tags"])
-    return _render_frontmatter_markdown(meta, doc.get("summary", "") or "")
+
+    body = doc.get("summary", "") or ""
+
+    nav = _render_chain_nav(
+        prev_label="Previous version" if first_version_link else None,
+        prev_link=first_version_link,
+        prev_target_id=first_version_target_id,
+        next_label="Next part" if first_part_link else None,
+        next_link=first_part_link,
+        next_target_id=first_part_target_id,
+    )
+    if nav:
+        body = f"{body}\n\n{nav}" if body else nav
+
+    if src_rel is not None and inverse_edges:
+        section = _render_inverse_edges_section(
+            src_rel, inverse_edges, include_system=include_system,
+        )
+        if section:
+            body = f"{body}\n\n{section}" if body else section
+
+    return _render_frontmatter_markdown(meta, body)
 
 
-def _render_part_markdown(parent_id: str, part: dict) -> str:
+def _render_part_markdown(
+    parent_id: str,
+    part: dict,
+    *,
+    prev_label: Optional[str] = None,
+    prev_link: Optional[str] = None,
+    prev_target_id: Optional[str] = None,
+    next_label: Optional[str] = None,
+    next_link: Optional[str] = None,
+    next_target_id: Optional[str] = None,
+) -> str:
     """Render a single analysis part as markdown with YAML frontmatter.
 
     The body is the part ``summary`` — that's the part's text, the
@@ -1987,6 +2167,13 @@ def _render_part_markdown(parent_id: str, part: dict) -> str:
     of ``summary``); a future model cleanup will remove it.  The
     export deliberately ignores ``content`` so that one logical text
     per part is the only thing that lands on disk.
+
+    When chain-navigation kwargs are supplied, prev/next links are
+    prepended above the body so wiki tools can walk the part chain in
+    either direction.  ``prev`` points back toward the parent (or the
+    next-lower ``part_num``); ``next`` points to the next-higher
+    ``part_num``.  Both are optional — chain endpoints have one side
+    only.
     """
     meta: dict = {
         "id": parent_id,
@@ -1996,15 +2183,48 @@ def _render_part_markdown(parent_id: str, part: dict) -> str:
         meta["created_at"] = part["created_at"]
     if part.get("tags"):
         meta["tags"] = dict(part["tags"])
-    return _render_frontmatter_markdown(meta, part.get("summary", "") or "")
+
+    body = part.get("summary", "") or ""
+    nav = _render_chain_nav(
+        prev_label=prev_label,
+        prev_link=prev_link,
+        prev_target_id=prev_target_id,
+        next_label=next_label,
+        next_link=next_link,
+        next_target_id=next_target_id,
+    )
+    if nav:
+        body = f"{nav}\n\n{body}" if body else nav
+    return _render_frontmatter_markdown(meta, body)
 
 
-def _render_version_markdown(parent_id: str, version: dict, offset: int) -> str:
+def _render_version_markdown(
+    parent_id: str,
+    version: dict,
+    offset: int,
+    *,
+    prev_label: Optional[str] = None,
+    prev_link: Optional[str] = None,
+    prev_target_id: Optional[str] = None,
+    next_label: Optional[str] = None,
+    next_link: Optional[str] = None,
+    next_target_id: Optional[str] = None,
+    src_rel: Optional[Path] = None,
+    inverse_edges: Optional[list[tuple[str, str]]] = None,
+    include_system: bool = True,
+) -> str:
     """Render an archived version as markdown with YAML frontmatter.
 
     ``offset`` is the ``@V{N}`` offset from the current version (1 = the
     most recent prior version).  The absolute database ``version`` number
     is also recorded for reference.
+
+    When chain-navigation kwargs are supplied, prev/next links are
+    prepended above the body — ``prev`` points to an older version
+    (higher ``@V{N}``), ``next`` points to a newer version (lower
+    ``@V{N}``) or to the parent doc.  When ``inverse_edges`` is given,
+    a ``## Referenced By`` section is appended so historical archived
+    references are visible to wiki tools.
     """
     meta: dict = {
         "id": parent_id,
@@ -2017,7 +2237,27 @@ def _render_version_markdown(parent_id: str, version: dict, offset: int) -> str:
         meta["content_hash"] = version["content_hash"]
     if version.get("tags"):
         meta["tags"] = dict(version["tags"])
-    return _render_frontmatter_markdown(meta, version.get("summary", "") or "")
+
+    body = version.get("summary", "") or ""
+    nav = _render_chain_nav(
+        prev_label=prev_label,
+        prev_link=prev_link,
+        prev_target_id=prev_target_id,
+        next_label=next_label,
+        next_link=next_link,
+        next_target_id=next_target_id,
+    )
+    if nav:
+        body = f"{nav}\n\n{body}" if body else nav
+
+    if src_rel is not None and inverse_edges:
+        section = _render_inverse_edges_section(
+            src_rel, inverse_edges, include_system=include_system,
+        )
+        if section:
+            body = f"{body}\n\n{section}" if body else section
+
+    return _render_frontmatter_markdown(meta, body)
 
 
 class _ExportCollisionError(Exception):
@@ -2061,6 +2301,8 @@ def _write_markdown_export(
     If ``progress`` is given it is invoked as ``progress(current, total, label)``
     after each document is written.
     """
+    current_inverse, version_inverse = _get_edge_data(keeper)
+
     it = keeper.export_iter(include_system=include_system)
     header = next(it)
     total = header["store_info"]["document_count"]
@@ -2078,29 +2320,150 @@ def _write_markdown_export(
     for doc in it:
         doc_id = doc["id"]
         rel_path = _id_to_rel_path(doc_id)
-        write(rel_path, _render_doc_markdown(doc), doc_id)
+        # Sidecar dir is the parent path with the trailing ``.md``
+        # stripped.  ``foo.md`` → ``foo/``;  ``Users/x/README.md.md``
+        # → ``Users/x/README.md/``.  The directory and the parent
+        # file have distinct names so they coexist on the filesystem.
+        sidecar_dir = rel_path.with_suffix("")
 
-        if include_parts or include_versions:
-            # Sidecar dir is the parent path with the trailing ``.md``
-            # stripped.  ``foo.md`` → ``foo/``;  ``Users/x/README.md.md``
-            # → ``Users/x/README.md/``.  The directory and the parent
-            # file have distinct names so they coexist on the filesystem.
-            sidecar_dir = rel_path.with_suffix("")
+        # Build the parts chain (sorted by part_num) and versions chain
+        # (already in offset order from the iterator).  These drive both
+        # the parent's chain-entry links and the sidecars' prev/next
+        # neighbours.  Each entry is (label, target_id, sidecar_rel_path).
+        parts_chain: list[tuple[int, str, Path]] = []
+        if include_parts and doc.get("parts"):
+            sorted_parts = sorted(
+                doc.get("parts") or [], key=lambda p: p["part_num"],
+            )
+            for part in sorted_parts:
+                pnum = part["part_num"]
+                parts_chain.append(
+                    (pnum, f"@P{{{pnum}}}", sidecar_dir / f"@P{{{pnum}}}.md")
+                )
+        else:
+            sorted_parts = []
 
-        if include_parts:
-            for part in doc.get("parts", []) or []:
-                part_path = sidecar_dir / f"@P{{{part['part_num']}}}.md"
-                write(part_path, _render_part_markdown(doc_id, part), doc_id)
+        versions_chain: list[tuple[int, str, Path]] = []
+        if include_versions and doc.get("versions"):
+            for offset, _version in enumerate(doc.get("versions") or [], start=1):
+                versions_chain.append(
+                    (offset, f"@V{{{offset}}}", sidecar_dir / f"@V{{{offset}}}.md")
+                )
 
-        if include_versions:
-            # ``list_versions`` (and therefore the export iterator) yields
-            # versions in DESC order (newest first).  Number them as
-            # offsets from the current version: first archived → @V{1},
-            # next → @V{2}, etc.  This matches the @V{N} navigation
-            # semantics where 0 = current and N = N steps back.
-            for offset, version in enumerate(doc.get("versions", []) or [], start=1):
-                version_path = sidecar_dir / f"@V{{{offset}}}.md"
-                write(version_path, _render_version_markdown(doc_id, version, offset), doc_id)
+        # Parent doc: chain-entry links (first part / first archived
+        # version) plus current inverse edges from the edges table.
+        first_part_link: Optional[str] = None
+        first_part_target_id: Optional[str] = None
+        if parts_chain:
+            _pnum, first_part_target_id, first_part_path = parts_chain[0]
+            first_part_link = _md_link_target(first_part_path, rel_path)
+
+        first_version_link: Optional[str] = None
+        first_version_target_id: Optional[str] = None
+        if versions_chain:
+            _voff, first_version_target_id, first_version_path = versions_chain[0]
+            first_version_link = _md_link_target(first_version_path, rel_path)
+
+        doc_inverse = current_inverse(doc_id)
+
+        write(
+            rel_path,
+            _render_doc_markdown(
+                doc,
+                src_rel=rel_path,
+                first_part_link=first_part_link,
+                first_part_target_id=first_part_target_id,
+                first_version_link=first_version_link,
+                first_version_target_id=first_version_target_id,
+                inverse_edges=doc_inverse,
+                include_system=include_system,
+            ),
+            doc_id,
+        )
+
+        if include_parts and sorted_parts:
+            n = len(parts_chain)
+            for idx, part in enumerate(sorted_parts):
+                _pnum, _label, part_path = parts_chain[idx]
+
+                # Previous: parent (for the first part) or the
+                # next-lower-part_num sidecar.
+                if idx == 0:
+                    prev_target_id = doc_id
+                    prev_path = rel_path
+                else:
+                    _ppnum, prev_target_id, prev_path = parts_chain[idx - 1]
+                prev_link = _md_link_target(prev_path, part_path)
+
+                # Next: the next-higher-part_num sidecar, or nothing
+                # at the chain tail.
+                next_label: Optional[str] = None
+                next_link: Optional[str] = None
+                next_target_id: Optional[str] = None
+                if idx + 1 < n:
+                    _npnum, next_target_id, next_path = parts_chain[idx + 1]
+                    next_link = _md_link_target(next_path, part_path)
+                    next_label = "Next part"
+
+                write(
+                    part_path,
+                    _render_part_markdown(
+                        doc_id, part,
+                        prev_label="Previous part",
+                        prev_link=prev_link,
+                        prev_target_id=prev_target_id,
+                        next_label=next_label,
+                        next_link=next_link,
+                        next_target_id=next_target_id,
+                    ),
+                    doc_id,
+                )
+
+        if include_versions and versions_chain:
+            # Same set of historical archived references is shown on
+            # every version sidecar (the underlying table is keyed only
+            # by target_id, not by version).  Fetch once and reuse.
+            versions = doc.get("versions") or []
+            historical_inverse = version_inverse(doc_id)
+            n = len(versions_chain)
+            for idx, version in enumerate(versions):
+                offset, _label, version_path = versions_chain[idx]
+
+                # Next: parent (newer than @V{1}) or the lower-offset
+                # sidecar (one step toward "current").
+                if idx == 0:
+                    next_target_id = doc_id
+                    next_path = rel_path
+                else:
+                    _noff, next_target_id, next_path = versions_chain[idx - 1]
+                next_link = _md_link_target(next_path, version_path)
+
+                # Previous: the next-older archived version, or nothing
+                # at the chain tail (oldest version).
+                prev_label: Optional[str] = None
+                prev_link: Optional[str] = None
+                prev_target_id: Optional[str] = None
+                if idx + 1 < n:
+                    _poff, prev_target_id, prev_path = versions_chain[idx + 1]
+                    prev_link = _md_link_target(prev_path, version_path)
+                    prev_label = "Previous version"
+
+                write(
+                    version_path,
+                    _render_version_markdown(
+                        doc_id, version, offset,
+                        prev_label=prev_label,
+                        prev_link=prev_link,
+                        prev_target_id=prev_target_id,
+                        next_label="Next version",
+                        next_link=next_link,
+                        next_target_id=next_target_id,
+                        src_rel=version_path,
+                        inverse_edges=historical_inverse,
+                        include_system=include_system,
+                    ),
+                    doc_id,
+                )
 
         count += 1
         if progress is not None:
