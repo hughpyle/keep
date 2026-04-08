@@ -33,6 +33,8 @@ Store anything — notes, files, URLs — and `keep` summarizes, embeds, and tag
 
 Content goes in as conversation, text, PDF, HTML, Office documents, audio, or images; what comes back is a summary with tags and semantic neighbors. Audio files auto-extract metadata (artist, album, year); image files auto-extract EXIF (camera, date, dimensions). Optional vision/transcription enrichment runs when a media provider is configured, and scanned PDFs and images get background OCR when an OCR provider is available.
 
+Full content is only stored if it's short (~3kB, configurable) - everything else gets summarized. Chunked analysis and summarization produces a focused searchable index that references original files or URLs without filling your disk with duplicated data.
+
 This is more than a vector store: selected tags become **edges**. A tag becomes an edge when its tagdoc declares an `_inverse` — for example, `.tag/speaker` declares `_inverse: said`, so `speaker: Deborah` on a note makes `keep get Deborah` show every note where Deborah spoke. Ordinary tags stay as labels; you opt into navigability per tag key. Bundled edges include `speaker`, `author`, `references`, `cites`, `from`/`to`/`cc`, and `git_commit`; you can define your own. When you retrieve any note, keep follows its edges and fires standing queries (`.meta/*`) — surfacing open commitments, past learnings, related files, commit history. The right things appear at the right time. See [docs/EDGE-TAGS.md](docs/EDGE-TAGS.md).
 
 - **Summarize, embed, tag** — URLs, files, and text are summarized and indexed on ingest
