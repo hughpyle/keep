@@ -22,7 +22,7 @@ import yaml
 from .daemon_client import get_port as _daemon_get_port
 from .daemon_client import http_request as _http
 from .const import DAEMON_PORT_FILE, DAEMON_TOKEN_FILE, STATE_PROMPT
-from .types import note_display_name
+from .types import note_display_name, parse_ref
 
 app = typer.Typer(
     name="keep",
@@ -1979,8 +1979,15 @@ def _get_edge_data(keeper) -> tuple[
     """Return ``(current_inverse, version_inverse)`` lookup functions.
 
     Each function takes a doc id and returns a list of
-    ``(inverse_predicate, source_id)`` pairs ordered as the underlying
-    store returns them.
+    ``(inverse_predicate, formatted_source)`` pairs ordered as the
+    underlying store returns them.  ``formatted_source`` is the
+    canonical edge-tag value: just the source id when no display name
+    is available, or ``id[[display name]]`` (the system's wikilink
+    form) when the source doc has a resolvable display name.
+
+    Source-doc display names are looked up lazily and cached, so a
+    typical export pays one ``DocumentStore.get`` per *unique* source
+    rather than per inverse edge.
 
     If ``keeper`` doesn't expose the internal hooks the markdown export
     needs (e.g. test fakes), the fallback returns no-op lookups so the
@@ -1993,16 +2000,38 @@ def _get_edge_data(keeper) -> tuple[
         empty: Callable[[str], list[tuple[str, str]]] = lambda _id: []
         return empty, empty
 
+    formatted_cache: dict[str, str] = {}
+
+    def _format_source(source_id: str) -> str:
+        cached = formatted_cache.get(source_id)
+        if cached is not None:
+            return cached
+        try:
+            record = ds.get(doc_coll, source_id)
+        except Exception:
+            formatted_cache[source_id] = source_id
+            return source_id
+        if record is None:
+            formatted_cache[source_id] = source_id
+            return source_id
+        display = note_display_name(record.tags, record.summary or "")
+        if display and display != source_id:
+            formatted = f"{source_id}[[{display}]]"
+        else:
+            formatted = source_id
+        formatted_cache[source_id] = formatted
+        return formatted
+
     def current_inverse(doc_id: str) -> list[tuple[str, str]]:
         return [
-            (inverse, source_id)
+            (inverse, _format_source(source_id))
             for inverse, source_id, _created
             in ds.get_inverse_edges(doc_coll, doc_id)
         ]
 
     def version_inverse(doc_id: str) -> list[tuple[str, str]]:
         return [
-            (inverse, source_id)
+            (inverse, _format_source(source_id))
             for inverse, source_id, _created
             in ds.get_inverse_version_edges(doc_coll, doc_id)
         ]
@@ -2010,80 +2039,101 @@ def _get_edge_data(keeper) -> tuple[
     return current_inverse, version_inverse
 
 
-def _render_inverse_edges_section(
-    src_rel: Path,
+def _group_inverse_edges_to_tags(
     inverse_edges: list[tuple[str, str]],
     *,
     include_system: bool,
-    resolve_path: Optional[Callable[[str], Path]] = None,
-) -> str:
-    """Render a ``## Referenced By`` body section for an inverse-edge list.
+) -> dict[str, list[str]]:
+    """Group inverse edges by predicate for frontmatter rendering.
 
-    Groups by inverse-predicate name and emits one bullet per source,
-    with a markdown link relative to ``src_rel``.  Returns ``""`` if
-    there are no edges to show.  Sources whose ids start with ``.`` are
-    dropped when ``include_system`` is False.
-
-    ``resolve_path`` maps a source id to its on-disk relative path,
-    accounting for hash-suffix disambiguation made by the writer.  When
-    not supplied, falls back to the canonical ``_id_to_rel_path`` —
-    safe for unit-test callers but the writer always passes a real
-    resolver so links land on the actual disambiguated files.
+    Returns ``{inverse_predicate: [formatted_source, ...]}``.  Each
+    formatted source is whatever ``_get_edge_data`` already produced
+    (just the id, or ``id[[display]]`` when an alias was available).
+    Duplicate ``(inverse, source)`` pairs are suppressed.  When
+    ``include_system`` is False, sources whose canonical id starts
+    with ``.`` are dropped — this matches the writer's
+    ``--include-system`` filter for the rest of the export.
     """
-    if not inverse_edges:
-        return ""
-    if resolve_path is None:
-        resolve_path = _id_to_rel_path
     groups: dict[str, list[str]] = {}
     seen: set[tuple[str, str]] = set()
-    for inverse, source_id in inverse_edges:
-        if not source_id:
+    for inverse, source in inverse_edges:
+        if not source:
             continue
-        if not include_system and source_id.startswith("."):
+        # Strip an optional ``[[alias]]`` suffix to get the bare id
+        # for the system-doc check.
+        bare_id, _alias = parse_ref(source)
+        if not include_system and bare_id.startswith("."):
             continue
-        key = (inverse, source_id)
+        key = (inverse, source)
         if key in seen:
             continue
         seen.add(key)
-        groups.setdefault(inverse, []).append(source_id)
-    if not groups:
-        return ""
-    lines: list[str] = ["## Referenced By", ""]
-    for inverse, source_ids in groups.items():
-        lines.append(f"- **{inverse}:**")
-        for source_id in source_ids:
-            link = _md_link_target(resolve_path(source_id), src_rel)
-            lines.append(f"  - [{source_id}]({link})")
-    return "\n".join(lines)
+        groups.setdefault(inverse, []).append(source)
+    return groups
 
 
-def _render_chain_nav(
+def _merge_inverse_edges_into_tags(
+    tags: dict[str, object],
+    inverse_edges: Optional[list[tuple[str, str]]],
     *,
-    prev_label: Optional[str] = None,
-    prev_link: Optional[str] = None,
-    prev_target_id: Optional[str] = None,
-    next_label: Optional[str] = None,
-    next_link: Optional[str] = None,
-    next_target_id: Optional[str] = None,
-) -> str:
-    """Render the prev/next chain link lines for a sidecar.
+    include_system: bool,
+) -> dict[str, object]:
+    """Merge inverse-edge values into a flat tag map.
 
-    Each direction is independent — chain endpoints (parent, last
-    sidecar) only emit one side.  Returns the joined lines or ``""``
-    when neither side is set.
+    Existing scalar values are promoted to lists when an inverse-edge
+    predicate collides with a stored tag of the same name; duplicates
+    are suppressed.  Inverse predicates that don't collide append a
+    fresh list of formatted source values.
     """
-    lines: list[str] = []
-    if prev_label and prev_link and prev_target_id:
-        lines.append(f"**{prev_label}:** [{prev_target_id}]({prev_link})")
-    if next_label and next_link and next_target_id:
-        lines.append(f"**{next_label}:** [{next_target_id}]({next_link})")
-    return "\n".join(lines)
+    if not inverse_edges:
+        return tags
+    groups = _group_inverse_edges_to_tags(
+        inverse_edges, include_system=include_system,
+    )
+    if not groups:
+        return tags
+    merged: dict[str, object] = dict(tags)
+    for predicate, sources in groups.items():
+        existing = merged.get(predicate)
+        if existing is None:
+            merged[predicate] = sources
+        elif isinstance(existing, list):
+            seen = set(existing)
+            extra = [s for s in sources if s not in seen]
+            merged[predicate] = existing + extra
+        else:
+            extras = [s for s in sources if s != existing]
+            merged[predicate] = [existing, *extras]
+    return merged
+
+
+class _ExportYamlDumper(yaml.SafeDumper):
+    """SafeDumper variant that double-quotes wikilink-format strings.
+
+    Strings containing ``[[`` get rendered with ``style='"'`` so YAML
+    parsers don't have to guess at the meaning of the brackets and the
+    canonical edge-tag link form ``id[[alias]]`` always lands as an
+    unambiguous double-quoted scalar.  Other strings use PyYAML's
+    default scalar style.
+    """
+
+
+def _wikilink_str_representer(dumper: yaml.SafeDumper, data: str):
+    if "[[" in data:
+        return dumper.represent_scalar(
+            "tag:yaml.org,2002:str", data, style='"',
+        )
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+_ExportYamlDumper.add_representer(str, _wikilink_str_representer)
 
 
 def _render_frontmatter_markdown(meta: dict, body: str) -> str:
     """Wrap a meta dict and body string in YAML frontmatter + markdown body."""
-    fm = yaml.safe_dump(
+    fm = yaml.dump(
         meta,
+        Dumper=_ExportYamlDumper,
         sort_keys=False,
         allow_unicode=True,
         default_flow_style=False,
@@ -2097,65 +2147,49 @@ def _render_frontmatter_markdown(meta: dict, body: str) -> str:
 def _render_doc_markdown(
     doc: dict,
     *,
-    src_rel: Optional[Path] = None,
-    first_part_link: Optional[str] = None,
-    first_part_target_id: Optional[str] = None,
-    first_version_link: Optional[str] = None,
-    first_version_target_id: Optional[str] = None,
+    next_part_id: Optional[str] = None,
+    prev_version_id: Optional[str] = None,
     inverse_edges: Optional[list[tuple[str, str]]] = None,
     include_system: bool = True,
-    resolve_path: Optional[Callable[[str], Path]] = None,
 ) -> str:
     """Render a single exported document dict as markdown with YAML frontmatter.
 
-    Frontmatter contains the same fields as the JSON export except
-    ``versions`` and ``parts`` (which are emitted as separate sidecar
-    files); the note body is the document ``summary``.
+    The frontmatter is a flat top-level map: ``id`` first, then any
+    content-hash columns, then chain-navigation system keys
+    (``_next_part`` / ``_prev_version`` for the parent's entry into
+    each sidecar chain), then every stored tag (user + system) as
+    its own top-level key.  Inverse-edge predicates (computed from
+    the edges table) are folded into that same flat namespace as
+    multi-value entries — the export treats them as ordinary tags
+    whose values happen to be in canonical ``id[[alias]]`` form.
 
-    When sidecars are being exported alongside, the parent doc gets
-    chain-entry navigation links appended to its body — one to the
-    most-recent prior version (``@V{1}``) and/or to the first analysis
-    part (``@P{first}``).  Inverse edges (when present) are appended
-    as a ``## Referenced By`` section so wiki tools see backlinks that
-    aren't visible from stored tags alone.  All these are no-ops when
-    the corresponding kwargs are ``None`` — direct callers (unit tests)
-    that pass only ``doc`` get the historical body shape.
+    The duplicated ``created_at``/``updated_at``/``accessed_at``
+    columns are intentionally dropped because the same values
+    already live in the ``_created``/``_updated``/``_accessed``
+    system tags that get promoted to the top level.
+
+    The body is just the document summary — chain navigation lives
+    in the frontmatter, not in markdown links inside the content.
+    Forward edge tags pass through verbatim as flat keys.
     """
     meta: dict = {"id": doc["id"]}
-    for key in (
-        "created_at",
-        "updated_at",
-        "accessed_at",
-        "content_hash",
-        "content_hash_full",
-    ):
+    for key in ("content_hash", "content_hash_full"):
         if doc.get(key) is not None:
             meta[key] = doc[key]
-    if doc.get("tags"):
-        meta["tags"] = dict(doc["tags"])
+
+    if prev_version_id is not None:
+        meta["_prev_version"] = prev_version_id
+    if next_part_id is not None:
+        meta["_next_part"] = next_part_id
+
+    tags = dict(doc.get("tags") or {})
+    tags = _merge_inverse_edges_into_tags(
+        tags, inverse_edges, include_system=include_system,
+    )
+    for tag_key, tag_value in tags.items():
+        meta[tag_key] = tag_value
 
     body = doc.get("summary", "") or ""
-
-    nav = _render_chain_nav(
-        prev_label="Previous version" if first_version_link else None,
-        prev_link=first_version_link,
-        prev_target_id=first_version_target_id,
-        next_label="Next part" if first_part_link else None,
-        next_link=first_part_link,
-        next_target_id=first_part_target_id,
-    )
-    if nav:
-        body = f"{body}\n\n{nav}" if body else nav
-
-    if src_rel is not None and inverse_edges:
-        section = _render_inverse_edges_section(
-            src_rel, inverse_edges,
-            include_system=include_system,
-            resolve_path=resolve_path,
-        )
-        if section:
-            body = f"{body}\n\n{section}" if body else section
-
     return _render_frontmatter_markdown(meta, body)
 
 
@@ -2163,14 +2197,17 @@ def _render_part_markdown(
     parent_id: str,
     part: dict,
     *,
-    prev_label: Optional[str] = None,
-    prev_link: Optional[str] = None,
-    prev_target_id: Optional[str] = None,
-    next_label: Optional[str] = None,
-    next_link: Optional[str] = None,
-    next_target_id: Optional[str] = None,
+    prev_part_id: Optional[str] = None,
+    next_part_id: Optional[str] = None,
 ) -> str:
     """Render a single analysis part as markdown with YAML frontmatter.
+
+    Frontmatter is flat: ``id`` (parent), ``part_num``, optional
+    chain-nav keys (``_prev_part`` / ``_next_part``), then every
+    stored part tag promoted to a top-level key.  Parts don't carry
+    their own auto-managed ``_created``/``_updated`` system tags, so
+    the schema's ``created_at`` column lands at the top level too
+    when present (no duplication to worry about for parts).
 
     The body is the part ``summary`` — that's the part's text, the
     same as for notes.  The ``parts.content`` column in the schema is
@@ -2180,33 +2217,27 @@ def _render_part_markdown(
     export deliberately ignores ``content`` so that one logical text
     per part is the only thing that lands on disk.
 
-    When chain-navigation kwargs are supplied, prev/next links are
-    prepended above the body so wiki tools can walk the part chain in
-    either direction.  ``prev`` points back toward the parent (or the
-    next-lower ``part_num``); ``next`` points to the next-higher
-    ``part_num``.  Both are optional — chain endpoints have one side
-    only.
+    Chain navigation lives in ``_prev_part`` / ``_next_part``
+    frontmatter keys, not in body markdown links.  ``_prev_part``
+    points back toward the parent (or the next-lower ``part_num``);
+    ``_next_part`` points to the next-higher ``part_num``.  Both are
+    optional — chain endpoints carry only one side.
     """
     meta: dict = {
         "id": parent_id,
         "part_num": part["part_num"],
     }
-    if part.get("created_at"):
+    if prev_part_id is not None:
+        meta["_prev_part"] = prev_part_id
+    if next_part_id is not None:
+        meta["_next_part"] = next_part_id
+    part_tags = dict(part.get("tags") or {})
+    if part.get("created_at") and "_created" not in part_tags:
         meta["created_at"] = part["created_at"]
-    if part.get("tags"):
-        meta["tags"] = dict(part["tags"])
+    for tag_key, tag_value in part_tags.items():
+        meta[tag_key] = tag_value
 
     body = part.get("summary", "") or ""
-    nav = _render_chain_nav(
-        prev_label=prev_label,
-        prev_link=prev_link,
-        prev_target_id=prev_target_id,
-        next_label=next_label,
-        next_link=next_link,
-        next_target_id=next_target_id,
-    )
-    if nav:
-        body = f"{nav}\n\n{body}" if body else nav
     return _render_frontmatter_markdown(meta, body)
 
 
@@ -2215,16 +2246,10 @@ def _render_version_markdown(
     version: dict,
     offset: int,
     *,
-    prev_label: Optional[str] = None,
-    prev_link: Optional[str] = None,
-    prev_target_id: Optional[str] = None,
-    next_label: Optional[str] = None,
-    next_link: Optional[str] = None,
-    next_target_id: Optional[str] = None,
-    src_rel: Optional[Path] = None,
+    prev_version_id: Optional[str] = None,
+    next_version_id: Optional[str] = None,
     inverse_edges: Optional[list[tuple[str, str]]] = None,
     include_system: bool = True,
-    resolve_path: Optional[Callable[[str], Path]] = None,
 ) -> str:
     """Render an archived version as markdown with YAML frontmatter.
 
@@ -2232,46 +2257,46 @@ def _render_version_markdown(
     most recent prior version).  The absolute database ``version`` number
     is also recorded for reference.
 
-    When chain-navigation kwargs are supplied, prev/next links are
-    prepended above the body — ``prev`` points to an older version
-    (higher ``@V{N}``), ``next`` points to a newer version (lower
-    ``@V{N}``) or to the parent doc.  When ``inverse_edges`` is given,
-    a ``## Referenced By`` section is appended so historical archived
-    references are visible to wiki tools.
+    Frontmatter is flat: ``id`` (parent), ``version_offset``,
+    ``version``, optional ``content_hash``, optional chain-nav keys
+    (``_prev_version`` / ``_next_version``), then all version tags
+    promoted to top-level keys.  Inverse edges (from the materialized
+    ``version_edges`` table) merge into the same flat namespace just
+    like on the parent doc.  Versions don't auto-tag with ``_created``
+    so the column ``created_at`` is preserved at the top level when
+    present.
+
+    Chain navigation lives in ``_prev_version`` / ``_next_version``
+    frontmatter keys, not in body markdown links.  ``_prev_version``
+    points to the next-older archived version (higher offset);
+    ``_next_version`` points to the next-newer archived version (or
+    to the parent doc itself when this is ``@V{1}``).  The body is
+    just the version's summary text.
     """
     meta: dict = {
         "id": parent_id,
         "version_offset": offset,
         "version": version["version"],
     }
-    if version.get("created_at"):
-        meta["created_at"] = version["created_at"]
     if version.get("content_hash") is not None:
         meta["content_hash"] = version["content_hash"]
-    if version.get("tags"):
-        meta["tags"] = dict(version["tags"])
+
+    if prev_version_id is not None:
+        meta["_prev_version"] = prev_version_id
+    if next_version_id is not None:
+        meta["_next_version"] = next_version_id
+
+    version_tags = dict(version.get("tags") or {})
+    if version.get("created_at") and "_created" not in version_tags:
+        meta["created_at"] = version["created_at"]
+
+    version_tags = _merge_inverse_edges_into_tags(
+        version_tags, inverse_edges, include_system=include_system,
+    )
+    for tag_key, tag_value in version_tags.items():
+        meta[tag_key] = tag_value
 
     body = version.get("summary", "") or ""
-    nav = _render_chain_nav(
-        prev_label=prev_label,
-        prev_link=prev_link,
-        prev_target_id=prev_target_id,
-        next_label=next_label,
-        next_link=next_link,
-        next_target_id=next_target_id,
-    )
-    if nav:
-        body = f"{nav}\n\n{body}" if body else nav
-
-    if src_rel is not None and inverse_edges:
-        section = _render_inverse_edges_section(
-            src_rel, inverse_edges,
-            include_system=include_system,
-            resolve_path=resolve_path,
-        )
-        if section:
-            body = f"{body}\n\n{section}" if body else section
-
     return _render_frontmatter_markdown(meta, body)
 
 
@@ -2471,17 +2496,6 @@ def _write_markdown_export(
     # Drop the slot index — only ``final_paths`` is needed in pass 2.
     del slots
 
-    def resolve_path(target_id: str) -> Path:
-        """Return the on-disk rel-path for a doc id (canonical or hashed).
-
-        Used by the inverse-edge renderer so cross-reference links
-        target the actual disambiguated filename.  Falls back to the
-        canonical encoding for ids that aren't in this export (e.g.
-        an inverse-edge source that's a system doc filtered out by
-        ``include_system=False``).
-        """
-        return final_paths.get(target_id, _id_to_rel_path(target_id))
-
     def write(rel_path: Path, text: str) -> None:
         dest = out_dir / rel_path
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -2489,8 +2503,8 @@ def _write_markdown_export(
 
     # Pass 2: stream the iterator a second time and write each doc
     # using its resolved final path.  Chain links use the doc's own
-    # final path; inverse-edge links use the resolver to find
-    # disambiguated targets.
+    # final path; inverse edges go straight into the frontmatter as
+    # multi-value tags, no link rewriting needed.
     it2 = keeper.export_iter(include_system=include_system)
     next(it2)  # discard header
     count = 0
@@ -2527,19 +2541,19 @@ def _write_markdown_export(
                     (offset, f"@V{{{offset}}}", sidecar_dir / f"@V{{{offset}}}.md")
                 )
 
-        # Parent doc: chain-entry links (first part / first archived
-        # version) plus current inverse edges from the edges table.
-        first_part_link: Optional[str] = None
-        first_part_target_id: Optional[str] = None
+        # Compute the canonical chain ids — these go into the
+        # ``_prev_*``/``_next_*`` frontmatter keys for navigation.
+        # Part ref: ``parent_id@P{N}``;  version ref: ``parent_id@V{N}``.
+        # The parent itself has a ``_next_part`` (into the part chain)
+        # and a ``_prev_version`` (into the version chain).
+        first_part_id: Optional[str] = None
         if parts_chain:
-            _pnum, first_part_target_id, first_part_path = parts_chain[0]
-            first_part_link = _md_link_target(first_part_path, rel_path)
+            first_pnum = parts_chain[0][0]
+            first_part_id = f"{doc_id}@P{{{first_pnum}}}"
 
-        first_version_link: Optional[str] = None
-        first_version_target_id: Optional[str] = None
+        first_version_id: Optional[str] = None
         if versions_chain:
-            _voff, first_version_target_id, first_version_path = versions_chain[0]
-            first_version_link = _md_link_target(first_version_path, rel_path)
+            first_version_id = f"{doc_id}@V{{1}}"
 
         doc_inverse = current_inverse(doc_id)
 
@@ -2547,51 +2561,39 @@ def _write_markdown_export(
             rel_path,
             _render_doc_markdown(
                 doc,
-                src_rel=rel_path,
-                first_part_link=first_part_link,
-                first_part_target_id=first_part_target_id,
-                first_version_link=first_version_link,
-                first_version_target_id=first_version_target_id,
+                next_part_id=first_part_id,
+                prev_version_id=first_version_id,
                 inverse_edges=doc_inverse,
                 include_system=include_system,
-                resolve_path=resolve_path,
             ),
         )
 
         if include_parts and sorted_parts:
             n = len(parts_chain)
             for idx, part in enumerate(sorted_parts):
-                _pnum, _label, part_path = parts_chain[idx]
+                pnum = parts_chain[idx][0]
 
                 # Previous: parent (for the first part) or the
                 # next-lower-part_num sidecar.
                 if idx == 0:
-                    prev_target_id = doc_id
-                    prev_path = rel_path
+                    prev_part_id = doc_id
                 else:
-                    _ppnum, prev_target_id, prev_path = parts_chain[idx - 1]
-                prev_link = _md_link_target(prev_path, part_path)
+                    prev_pnum = parts_chain[idx - 1][0]
+                    prev_part_id = f"{doc_id}@P{{{prev_pnum}}}"
 
                 # Next: the next-higher-part_num sidecar, or nothing
                 # at the chain tail.
-                next_label: Optional[str] = None
-                next_link: Optional[str] = None
-                next_target_id: Optional[str] = None
+                next_part_id: Optional[str] = None
                 if idx + 1 < n:
-                    _npnum, next_target_id, next_path = parts_chain[idx + 1]
-                    next_link = _md_link_target(next_path, part_path)
-                    next_label = "Next part"
+                    next_pnum = parts_chain[idx + 1][0]
+                    next_part_id = f"{doc_id}@P{{{next_pnum}}}"
 
                 write(
-                    part_path,
+                    parts_chain[idx][2],
                     _render_part_markdown(
                         doc_id, part,
-                        prev_label="Previous part",
-                        prev_link=prev_link,
-                        prev_target_id=prev_target_id,
-                        next_label=next_label,
-                        next_link=next_link,
-                        next_target_id=next_target_id,
+                        prev_part_id=prev_part_id,
+                        next_part_id=next_part_id,
                     ),
                 )
 
@@ -2603,41 +2605,31 @@ def _write_markdown_export(
             historical_inverse = version_inverse(doc_id)
             n = len(versions_chain)
             for idx, version in enumerate(versions):
-                offset, _label, version_path = versions_chain[idx]
+                offset = versions_chain[idx][0]
 
                 # Next: parent (newer than @V{1}) or the lower-offset
                 # sidecar (one step toward "current").
                 if idx == 0:
-                    next_target_id = doc_id
-                    next_path = rel_path
+                    next_version_id = doc_id
                 else:
-                    _noff, next_target_id, next_path = versions_chain[idx - 1]
-                next_link = _md_link_target(next_path, version_path)
+                    next_offset = versions_chain[idx - 1][0]
+                    next_version_id = f"{doc_id}@V{{{next_offset}}}"
 
                 # Previous: the next-older archived version, or nothing
                 # at the chain tail (oldest version).
-                prev_label: Optional[str] = None
-                prev_link: Optional[str] = None
-                prev_target_id: Optional[str] = None
+                prev_version_id: Optional[str] = None
                 if idx + 1 < n:
-                    _poff, prev_target_id, prev_path = versions_chain[idx + 1]
-                    prev_link = _md_link_target(prev_path, version_path)
-                    prev_label = "Previous version"
+                    prev_offset = versions_chain[idx + 1][0]
+                    prev_version_id = f"{doc_id}@V{{{prev_offset}}}"
 
                 write(
-                    version_path,
+                    versions_chain[idx][2],
                     _render_version_markdown(
                         doc_id, version, offset,
-                        prev_label=prev_label,
-                        prev_link=prev_link,
-                        prev_target_id=prev_target_id,
-                        next_label="Next version",
-                        next_link=next_link,
-                        next_target_id=next_target_id,
-                        src_rel=version_path,
+                        prev_version_id=prev_version_id,
+                        next_version_id=next_version_id,
                         inverse_edges=historical_inverse,
                         include_system=include_system,
-                        resolve_path=resolve_path,
                     ),
                 )
 
