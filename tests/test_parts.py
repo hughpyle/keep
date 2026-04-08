@@ -98,6 +98,22 @@ class TestDocumentStoreParts:
         assert deleted == 1
         assert store.part_count("default", "doc:1") == 0
 
+    def test_delete_single_part(self, store):
+        """A single part can be deleted without touching siblings."""
+        now = utc_now()
+        parts = [
+            PartInfo(1, "Part 1", {}, "Content 1", now),
+            PartInfo(2, "Part 2", {}, "Content 2", now),
+        ]
+        store.upsert_parts("default", "doc:1", parts)
+
+        deleted = store.delete_part("default", "doc:1", 1)
+        assert deleted == 1
+        assert store.get_part("default", "doc:1", 1) is None
+        remaining = store.get_part("default", "doc:1", 2)
+        assert remaining is not None
+        assert remaining.summary == "Part 2"
+
     def test_upsert_replaces_atomically(self, store):
         """Re-upsert replaces all parts atomically."""
         now = utc_now()
@@ -410,6 +426,37 @@ class TestKeeperAnalyze:
         parts = kp.list_parts("test-doc")
         assert len(parts) == 3
         assert [p.part_num for p in parts] == [1, 2, 3]
+
+    def test_startup_removes_legacy_overview_part(self, mock_providers, tmp_path):
+        """Keeper startup deletes legacy @P{0} rows and vector entries."""
+        kp = Keeper(store_path=tmp_path)
+        kp.put("Content for analysis testing with enough length. " * 12, id="test-doc")
+        doc_coll = kp._resolve_doc_collection()
+        chroma_coll = kp._resolve_chroma_collection()
+        now = utc_now()
+        kp._document_store.upsert_single_part(
+            doc_coll,
+            "test-doc",
+            PartInfo(0, "Legacy overview", {"_part_type": "overview"}, "", now),
+        )
+        embedding = kp._get_embedding_provider().embed("Legacy overview")
+        kp._store.upsert_part(
+            chroma_coll,
+            "test-doc",
+            0,
+            embedding,
+            "Legacy overview",
+            {"_part_type": "overview"},
+        )
+        assert kp._document_store.get_part(doc_coll, "test-doc", 0) is not None
+        assert kp._store.get(chroma_coll, "test-doc@p0") is not None
+        kp.close()
+
+        kp2 = Keeper(store_path=tmp_path)
+        doc_coll2 = kp2._resolve_doc_collection()
+        chroma_coll2 = kp2._resolve_chroma_collection()
+        assert kp2._document_store.get_part(doc_coll2, "test-doc", 0) is None
+        assert kp2._store.get(chroma_coll2, "test-doc@p0") is None
 
     def test_analyze_nonexistent_raises(self, mock_providers, tmp_path):
         """analyze() raises ValueError for nonexistent document."""

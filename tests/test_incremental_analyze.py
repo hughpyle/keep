@@ -85,7 +85,7 @@ class TestIncrementalAnalyze:
             mock_llm.return_value = _mock_parts("Part A", "Part B")
             parts = kp.analyze("doc1", force=True)
 
-        assert len([p for p in parts if p.part_num > 0]) == 2
+        assert len(parts) == 2
 
         # Add more versions
         kp.put(_V4, id="doc1")
@@ -100,7 +100,7 @@ class TestIncrementalAnalyze:
             with patch.object(kp, "_get_summarization_provider", return_value=mock_provider):
                 parts = kp.analyze("doc1")
 
-        part_nums = sorted(p.part_num for p in parts if p.part_num > 0)
+        part_nums = sorted(p.part_num for p in parts)
         # Should have old parts (1, 2) + new parts (3, 4)
         assert 1 in part_nums
         assert 2 in part_nums
@@ -160,9 +160,8 @@ class TestIncrementalAnalyze:
             parts = kp.analyze("doc1", force=True)
 
         # Should have replaced all parts
-        non_overview = [p for p in parts if p.part_num > 0]
-        assert len(non_overview) == 3
-        assert non_overview[0].summary == "Part X"
+        assert len(parts) == 3
+        assert parts[0].summary == "Part X"
 
     def test_incremental_updates_analyzed_version(self, mock_providers, tmp_path):
         """Incremental analysis updates _analyzed_version to highest version."""

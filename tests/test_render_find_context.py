@@ -257,8 +257,8 @@ class TestDeepPrimaryCap:
         from keep.api import FindResults
 
         parts = [
-            PartRef(part_num=0, summary="Overview of the topic"),
             PartRef(part_num=1, summary="Details and analysis"),
+            PartRef(part_num=2, summary="Conclusions drawn"),
         ]
         keeper = MagicMock()
         keeper.list_parts.return_value = parts
@@ -367,8 +367,8 @@ class TestDeepPrimaryCap:
 
         keeper = MagicMock()
         keeper.list_parts.return_value = [
-            PartRef(part_num=0, summary="Overview"),
             PartRef(part_num=1, summary="Details"),
+            PartRef(part_num=2, summary="Evidence"),
         ]
         keeper.list_versions_around.return_value = [
             VersionInfo(version=4, summary="Before", tags={}, created_at="2026-01-01", content_hash="a"),
@@ -566,7 +566,7 @@ class TestDeepPrimaryCap:
 
         keeper = MagicMock()
         keeper.list_parts.side_effect = lambda _id: [
-            PartRef(part_num=0, summary="S" * 186),
+            PartRef(part_num=1, summary="S" * 186),
         ]
         keeper.list_versions_around.side_effect = lambda _id, _v, radius=1: [
             VersionInfo(version=1, summary="V" * 145, tags={}, created_at="2026-01-01", content_hash="a"),
@@ -614,16 +614,16 @@ class TestRenderFindContextDetail:
         """With >=2 items and a keeper, parts are rendered."""
         from keep.console_support import render_find_context
         parts = [
-            PartRef(part_num=0, summary="Overview of the topic"),
             PartRef(part_num=1, summary="Details and analysis"),
             PartRef(part_num=2, summary="Conclusions drawn"),
+            PartRef(part_num=3, summary="Supporting evidence"),
         ]
         keeper = self._mock_keeper(parts=parts)
         items = [_item(id=f"doc-{i}", summary=f"Doc {i}") for i in range(3)]
         result = render_find_context(items, keeper=keeper, token_budget=5000)
         assert "Key topics:" in result
-        assert "Overview of the topic" in result
         assert "Conclusions drawn" in result
+        assert "Supporting evidence" in result
 
     def test_pass2_renders_versions(self):
         """With >=2 items and a keeper, version history is rendered."""

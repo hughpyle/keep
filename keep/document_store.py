@@ -2950,8 +2950,6 @@ class DocumentStore:
     ) -> None:
         """Insert or replace a single part without affecting other parts.
 
-        Used for adding @P{0} overview after bulk parts are already stored.
-
         Args:
             collection: Collection name
             id: Document identifier
@@ -2968,6 +2966,16 @@ class DocumentStore:
                 part.content, part.created_at,
             ))
             self._conn.commit()
+
+    def list_part_doc_ids(self, collection: str, part_num: int) -> list[str]:
+        """List document IDs that have a part with the given part number."""
+        cursor = self._execute("""
+            SELECT id
+            FROM document_parts
+            WHERE collection = ? AND part_num = ?
+            ORDER BY id
+        """, (collection, part_num))
+        return [row["id"] for row in cursor]
 
     def get_part(
         self,
@@ -3067,7 +3075,17 @@ class DocumentStore:
                 WHERE id = ? AND collection = ?
             """, (id, collection))
             self._conn.commit()
-        return cursor.rowcount
+            return cursor.rowcount
+
+    def delete_part(self, collection: str, id: str, part_num: int) -> int:
+        """Delete a single part row."""
+        with self._lock:
+            cursor = self._execute("""
+                DELETE FROM document_parts
+                WHERE id = ? AND collection = ? AND part_num = ?
+            """, (id, collection, part_num))
+            self._conn.commit()
+            return cursor.rowcount
 
     def update_part_tags(
         self,

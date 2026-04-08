@@ -129,7 +129,7 @@ keep analyze doc:1 --force            # Re-analyze regardless
 Parts do **not** inherit tags from their parent document. Each part carries only:
 
 - `_base_id` — the parent document's ID (for navigation and join queries)
-- `_part_num` — the 1-based part number (`0` for the optional vstring overview)
+- `_part_num` — the 1-based part number
 - `_start_line` / `_end_line` — line ranges when the analyzer tracks source spans
 - Any tags the analyzer assigned to that specific part (e.g., classifier output)
 
@@ -159,7 +159,7 @@ They are treated as derived data — immutable except for tag corrections.
 - `del` on individual parts — use re-analyze or delete the parent
 - `move` to a part ID — parts belong to their parent
 
-If a part's summary or content is wrong, re-analyze (with `--force` or better
+If a part's summary is wrong, re-analyze (with `--force` or better
 guidance tags). The right fix is a better prompt, not manual editing.
 
 ## Re-analysis

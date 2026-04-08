@@ -38,10 +38,10 @@ class TestQueryFtsScoped:
                      summary="Dave plays guitar and drums",
                      tags={"speaker": "Dave"})
             s.upsert_parts("c", "doc-a", [
-                PartInfo(part_num=0,
-                           summary="Overview of Melanie's reading habits",
-                           tags={}, content="", created_at="2024-01-01"),
                 PartInfo(part_num=1,
+                           summary="Melanie's reading habits",
+                           tags={}, content="", created_at="2024-01-01"),
+                PartInfo(part_num=2,
                            summary="Melanie read Charlotte's Web",
                            tags={}, content="", created_at="2024-01-01"),
             ])

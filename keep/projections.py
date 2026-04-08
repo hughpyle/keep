@@ -477,16 +477,10 @@ def plan_find_context_render(
             selected = []
             if focus_parts:
                 part_map = {part.part_num: part for part in parts}
-                if 0 in part_map:
-                    selected.append(part_map[0])
                 for fp in focus_parts:
                     for pn in (fp - 1, fp, fp + 1):
                         if pn in part_map and part_map[pn] not in selected:
                             selected.append(part_map[pn])
-            else:
-                part0 = next((part for part in parts if part.part_num == 0), None)
-                if part0:
-                    selected.append(part0)
 
             story_lines = [f"      - @P{{{part.part_num}}} {part.summary}" for part in selected]
             _append_section(block, "story", "      Story:", story_lines)

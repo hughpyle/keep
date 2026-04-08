@@ -753,6 +753,16 @@ class MockDocumentStore:
         key = f"_parts:{collection}:{id}"
         return sorted(self._parts.get(key, []), key=lambda p: p.part_num)
 
+    def list_part_doc_ids(self, collection: str, part_num: int) -> list[str]:
+        prefix = f"_parts:{collection}:"
+        matches: list[str] = []
+        for key, parts in self._parts.items():
+            if not key.startswith(prefix):
+                continue
+            if any(p.part_num == part_num for p in parts):
+                matches.append(key[len(prefix):])
+        return sorted(matches)
+
     def part_count(self, collection: str, id: str) -> int:
         key = f"_parts:{collection}:{id}"
         return len(self._parts.get(key, []))
@@ -766,6 +776,18 @@ class MockDocumentStore:
         key = f"_parts:{collection}:{id}"
         parts = self._parts.pop(key, [])
         return len(parts)
+
+    def delete_part(self, collection: str, id: str, part_num: int) -> int:
+        key = f"_parts:{collection}:{id}"
+        parts = self._parts.get(key, [])
+        kept = [p for p in parts if p.part_num != part_num]
+        deleted = len(parts) - len(kept)
+        if deleted:
+            if kept:
+                self._parts[key] = kept
+            else:
+                self._parts.pop(key, None)
+        return deleted
 
     def update_part_tags(self, collection: str, id: str, part_num: int, tags: dict) -> bool:
         key = f"_parts:{collection}:{id}"

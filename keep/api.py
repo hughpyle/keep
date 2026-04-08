@@ -276,6 +276,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
 
+        self._cleanup_legacy_overview_parts(chroma_coll, doc_coll)
+
         # Check store consistency and reconcile in background if needed
         # (safe for all backends — uses abstract store interface)
         needs_reconcile = False
@@ -4654,7 +4656,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 # Append new parts (don't delete old ones)
                 if new_parts:
                     self._append_incremental_parts(
-                        id, doc_coll, new_parts, doc_record, analyzer_provider,
+                        id, doc_coll, new_parts,
                     )
 
                 self._record_analyzed_tags(doc_coll, id, doc_record)
@@ -4721,36 +4723,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if output and output.get("mutations"):
             _apply_mutations(self, doc_coll, output)
 
-        # Phase 4: Generate vstring overview as @P{0}
-        if len(chunk_dicts) >= 2 and raw_parts:
-            overview_provider = analyzer_provider or self._get_summarization_provider()
-            overview = self._generate_vstring_overview(
-                chunk_dicts, overview_provider,
-            )
-            if overview:
-                self._upsert_overview_part(id, doc_coll, overview, doc_record)
-
         return self.list_parts(id)
-
-    def _generate_vstring_overview(self, chunk_dicts, provider):
-        """Summarize assembled version chunks into a one-sentence overview."""
-        from .processors import _llm_summarize
-
-        full_text = "\n".join(c["content"] for c in chunk_dicts)
-        system = (
-            "Summarize the following in one sentence. "
-            "Focus on the most specific, distinctive content — "
-            "names, topics, facts, decisions, or events. "
-            "Avoid generic descriptions."
-        )
-        result = _llm_summarize(full_text, provider, system_prompt_override=system)
-        if result is None and hasattr(provider, "summarize"):
-            # Non-LLM fallback: use summarize() for truncation-based summary
-            try:
-                result = provider.summarize(full_text, max_length=200)
-            except TypeError:
-                result = provider.summarize(full_text)
-        return result
 
     def _record_analyzed_tags(self, doc_coll: str, id: str, doc_record) -> None:
         """Update _analyzed_hash and _analyzed_version tags after analysis."""
@@ -4765,8 +4738,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._store.update_tags(chroma_coll, id, casefold_tags_for_index(updated_tags))
 
     def _append_incremental_parts(
-        self, id: str, doc_coll: str, new_parts: list[dict],
-        doc_record, provider,
+        self,
+        id: str,
+        doc_coll: str,
+        new_parts: list[dict],
     ) -> None:
         """Append new analysis parts without deleting existing ones."""
         from .document_store import PartInfo
@@ -4804,57 +4779,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     casefold_tags_for_index(part_tags),
                 )
 
-        # Regenerate overview from all part summaries
-        all_parts = self._document_store.list_parts(doc_coll, id)
-        overview_chunks = [
-            {"content": p.summary, "tags": {}, "index": i}
-            for i, p in enumerate(all_parts)
-            if p.part_num > 0 and p.summary
-        ]
-        if len(overview_chunks) >= 2:
-            overview_provider = provider or self._get_summarization_provider()
-            overview = self._generate_vstring_overview(overview_chunks, overview_provider)
-            if overview:
-                self._upsert_overview_part(id, doc_coll, overview, doc_record)
-
-    def _upsert_overview_part(
-        self, id: str, doc_coll: str, overview: str, doc_record,
-    ) -> None:
-        """Write or replace the @P{0} overview part."""
-        from .document_store import PartInfo
-
-        # The overview part follows the same no-inheritance rule as
-        # decomposed parts: it carries only its own marker tag plus
-        # _base_id/_part_num bookkeeping.
-        now = utc_now()
-        overview_part = PartInfo(
-            part_num=0,
-            summary=overview,
-            tags={"_part_type": "overview"},
-            content="",
-            created_at=now,
-        )
-        self._document_store.upsert_single_part(doc_coll, id, overview_part)
-        chroma_coll = self._resolve_chroma_collection()
-        embed = self._get_embedding_provider()
-        embedding = embed.embed(overview)
-        self._store.upsert_part(
-            chroma_coll, id, 0,
-            embedding, overview,
-            casefold_tags_for_index(overview_part.tags),
-        )
 
     def get_part(self, id: str, part_num: int) -> Optional[Item]:
         """Get a specific part of a document.
 
         Returns the part as an Item with _part_num, _base_id, and
-        _total_parts metadata tags.  Part 0 is the overview summary
-        (when present); decomposed parts are numbered 1..N.
-        _total_parts counts only decomposed parts (excludes @P{0}).
+        _total_parts metadata tags. Parts are numbered 1..N.
 
         Args:
             id: Document identifier
-            part_num: Part number (0 for overview, 1+ for decomposed parts)
+            part_num: Part number (1+ for decomposed parts)
 
         Returns:
             Item if found, None otherwise
@@ -4864,11 +4798,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if part is None:
             return None
 
-        # _total_parts counts decomposed parts only (excludes @P{0} overview)
         total = self._document_store.part_count(doc_coll, id)
-        has_overview = self._document_store.get_part(doc_coll, id, 0) is not None
-        if has_overview:
-            total -= 1
         tags = dict(part.tags)
         tags["_part_num"] = str(part.part_num)
         tags["_base_id"] = id
@@ -4891,6 +4821,26 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         """
         doc_coll = self._resolve_doc_collection()
         return self._document_store.list_parts(doc_coll, id)
+
+    def _cleanup_legacy_overview_parts(
+        self,
+        chroma_coll: str,
+        doc_coll: str,
+    ) -> int:
+        """Delete legacy @P{0} overview parts from both stores."""
+        overview_ids = self._document_store.list_part_doc_ids(doc_coll, part_num=0)
+        if not overview_ids:
+            return 0
+
+        self._store.delete_entries(
+            chroma_coll,
+            [f"{doc_id}@p0" for doc_id in overview_ids],
+        )
+        deleted = 0
+        for doc_id in overview_ids:
+            deleted += self._document_store.delete_part(doc_coll, doc_id, 0)
+        logger.info("Removed %d legacy overview part(s)", deleted)
+        return deleted
 
     # -------------------------------------------------------------------------
     # Collection Management

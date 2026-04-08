@@ -37,8 +37,8 @@ class TestFindContextProjectionPlan:
 
         keeper = MagicMock()
         keeper.list_parts.return_value = [
-            PartRef(part_num=0, summary="Overview of the topic"),
             PartRef(part_num=1, summary="Details and analysis"),
+            PartRef(part_num=2, summary="Conclusions drawn"),
         ]
         keeper.list_versions.return_value = []
         keeper.list_versions_around.return_value = []
@@ -54,16 +54,16 @@ class TestFindContextProjectionPlan:
         first_block = plan.blocks[0]
         section_kinds = [section.kind for section in first_block.sections]
         assert section_kinds[:2] == ["summary", "deep-anchor"]
-        assert "story" in section_kinds
-        assert section_kinds.index("story") < section_kinds.index("parts")
+        assert "story" not in section_kinds
+        assert section_kinds.index("parts") > section_kinds.index("deep-anchor")
 
     def test_compact_mode_skips_thread_and_story_sections(self):
         from keep.api import FindResults
 
         keeper = MagicMock()
         keeper.list_parts.return_value = [
-            PartRef(part_num=0, summary="Overview"),
             PartRef(part_num=1, summary="Details"),
+            PartRef(part_num=2, summary="Evidence"),
         ]
         keeper.list_versions_around.return_value = [
             VersionInfo(version=4, summary="Before", tags={}, created_at="2026-01-01", content_hash="a"),
