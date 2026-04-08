@@ -11,19 +11,21 @@ __pycache__/
 *.so
 .Python
 
-# Distribution / packaging
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+# Distribution / packaging (anchor to project root so nested node_modules/
+# and bundled plugin dist/ aren't caught — hatchling loads only the root
+# .gitignore, so broad patterns here silently drop packaged files).
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
 *.egg-info/
 .installed.cfg
 *.egg

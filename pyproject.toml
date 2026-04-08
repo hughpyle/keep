@@ -93,11 +93,22 @@ path = "hatch_build.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["keep"]
+# Node dev dependencies are build-time only. The wheel needs only the
+# bundled dist/index.js (force-included below); node_modules would add
+# ~12 MB of binaries we never ship.
+exclude = [
+    "keep/data/openclaw-plugin/node_modules",
+    "keep/data/openclaw-plugin/node_modules/**",
+]
 
 [tool.hatch.build.targets.wheel.force-include]
 "SKILL.md" = "keep/SKILL.md"
 "README.md" = "keep/README.md"
 "docs" = "keep/docs"
+# Ensure the pre-built OpenClaw plugin entry point ships in the wheel even
+# if .gitignore rules change. `bump_version.py` rebuilds this file before
+# `uv build` runs; the hatch hook (hatch_build.py) verifies its presence.
+"keep/data/openclaw-plugin/dist/index.js" = "keep/data/openclaw-plugin/dist/index.js"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -106,6 +117,9 @@ include = [
     "/SKILL.md",
     "/README.md",
     "/LICENSE",
+]
+exclude = [
+    "keep/data/openclaw-plugin/node_modules",
 ]
 
 [tool.ruff]

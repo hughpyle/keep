@@ -1,19 +1,18 @@
-"""Hatch build hook: builds the OpenClaw plugin before packaging.
+"""Hatch build hook: verify the OpenClaw plugin bundle is present.
 
-Runs `npm install && npm run build` in keep/data/openclaw-plugin/
-to produce dist/index.js (bundled MCP SDK + plugin code).
+`scripts/bump_version.py` rebuilds `keep/data/openclaw-plugin/dist/index.js`
+before `uv build` runs, and `pyproject.toml` force-includes that file in
+the wheel. This hook is a safety check: if the bundled artifact is missing,
+fail the build loudly rather than shipping a broken plugin.
 """
 
-import os
-import subprocess
-import shutil
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 
 class OpenClawPluginBuildHook(BuildHookInterface):
-    """Build hook that bundles the OpenClaw plugin for packaged releases."""
+    """Verify the pre-built OpenClaw plugin entry point is present."""
 
     PLUGIN_NAME = "openclaw-plugin-build"
 
@@ -21,57 +20,11 @@ class OpenClawPluginBuildHook(BuildHookInterface):
         plugin_dir = Path(self.root) / "keep" / "data" / "openclaw-plugin"
         dist_file = plugin_dir / "dist" / "index.js"
 
-        # Skip if already built (e.g., running in CI with pre-built artifacts)
-        if dist_file.exists():
-            self.app.display_info(
-                f"OpenClaw plugin already built: {dist_file}"
+        if not dist_file.exists():
+            raise RuntimeError(
+                f"OpenClaw plugin not built: {dist_file} is missing. "
+                f"Run `node build.mjs` in {plugin_dir}, or release via "
+                "`scripts/release.sh` which rebuilds it automatically."
             )
-            return
 
-        # Check for npm/node
-        npm = shutil.which("npm")
-        if not npm:
-            self.app.display_warning(
-                "npm not found — skipping OpenClaw plugin build. "
-                "The plugin will fall back to legacy CLI mode."
-            )
-            return
-
-        node = shutil.which("node")
-        if not node:
-            self.app.display_warning(
-                "node not found — skipping OpenClaw plugin build."
-            )
-            return
-
-        self.app.display_info("Building OpenClaw plugin (npm install + build)...")
-
-        try:
-            subprocess.run(
-                [npm, "install", "--ignore-scripts"],
-                cwd=str(plugin_dir),
-                check=True,
-                capture_output=True,
-                timeout=60,
-            )
-            subprocess.run(
-                [npm, "run", "build"],
-                cwd=str(plugin_dir),
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
-            self.app.display_info(f"OpenClaw plugin built: {dist_file}")
-        except subprocess.CalledProcessError as exc:
-            stderr = exc.stderr.decode() if exc.stderr else ""
-            self.app.display_warning(
-                f"OpenClaw plugin build failed (non-fatal): {stderr[:200]}"
-            )
-        except FileNotFoundError:
-            self.app.display_warning(
-                "npm/node not available — skipping OpenClaw plugin build."
-            )
-        except subprocess.TimeoutExpired:
-            self.app.display_warning(
-                "OpenClaw plugin build timed out — skipping."
-            )
+        self.app.display_info(f"OpenClaw plugin present: {dist_file}")
