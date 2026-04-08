@@ -27,7 +27,7 @@ note, and run a semantic search.
 ## Concepts
 
 - **[Tagging](TAGGING.md)** — Structured key-value tags for organizing notes by domain, thread, and facet. Combine with semantic search for precise retrieval.
-- **[System Tags](SYSTEM-TAGS.md)** — Automatic tags managed by keep: `_created`, `_updated`, `_source`, `_accessed`, and more. Understand what's tracked and when.
+- **[System Tags](SYSTEM-TAGS.md)** — Automatic tags managed by keep: `_created`, `_updated`, `_accessed`, `_source`, `_content_type`, plus internal pipeline and projection tags. Understand what's tracked and when.
 - **[Meta-Tags](META-TAGS.md)** — Automatic cross-note relationships. Similar items, extracted learnings, and version history surface as structured metadata, giving agents longitudinal awareness.
 - **[Edge Tags](EDGE-TAGS.md)** — Turn tags into navigable relationships. Tag a turn with `speaker: Deborah` and `get Deborah` shows everything she said — auto-vivification, backfill, and inverse listings.
 - **[Prompts](PROMPTS.md)** — How prompts work: template rendering, context injection, built-in vs custom prompts.
@@ -42,10 +42,10 @@ note, and run a semantic search.
 
 - **[CLI Reference](REFERENCE.md)** — Complete reference for all keep commands, flags, and options. Every subcommand with usage examples.
 - **[API Schema](API-SCHEMA.md)** — Concise reference for all keep tools, the data model, tags, time filters, and parameters.
-- **[Architecture](ARCHITECTURE.md)** — Technical design: SQLite + FTS5 storage, embedding pipeline, similarity engine, meta-tag resolution, background workers, and cloud backends (PostgreSQL + pgvector).
+- **[Architecture](ARCHITECTURE.md)** — Technical design: surface clients (CLI, MCP, LangChain) over a daemon HTTP layer; Keeper core with provider/storage/background mixins; state-doc flow runtime; pluggable storage backends (local SQLite + ChromaDB, hosted PostgreSQL + pgvector); pluggable providers for embedding, summarization, documents, OCR, media, and analysis.
 - **[Agent Guide](AGENT-GUIDE.md)** — Best practices for AI agents: when to store notes, what context to surface, how to use `now` for reflection, and patterns for effective memory management.
 - **[MCP (keep CLI)](KEEP-MCP.md)** — Local MCP stdio server for AI agent integration. Connect Claude Code, Cursor, and other MCP-compatible clients to keep.
-- **[OpenClaw Integration](OPENCLAW-INTEGRATION.md)** — Three-layer integration: real-time context injection via skill prompt, automatic memory indexing on session compaction, and daily reflection cron for pattern review.
+- **[OpenClaw Integration](OPENCLAW-INTEGRATION.md)** — Context-engine plugin: keep participates in every stage of the agent lifecycle (assemble per-turn context, ingest messages as session versions, detect inflection points, manage subagent lineage). Also provides `memory_search`/`memory_get` tools and daemon-driven workspace watches.
 
 ## All Guides
 
@@ -67,7 +67,7 @@ Complete listing with summaries:
 | [keep data](KEEP-DATA.md) | Export and import keep stores for backup and migration. Move data between local SQLite and cloud PostgreSQL backends. |
 | [keep config](KEEP-CONFIG.md) | Configure storage backend (SQLite local, PostgreSQL cloud), embedding provider and model, OpenAI vs OpenRouter vs local `base_url` choices, similarity thresholds, and other settings via environment variables or `~/.keep/keep.toml`. |
 | [Tagging](TAGGING.md) | Structured key-value tags: `domain: healthcare`, `thread: margaret`, `facet: metabolic`. Tags enable precise filtering alongside semantic search. Thread-level tags provide hard links that similarity alone can't maintain. |
-| [System Tags](SYSTEM-TAGS.md) | Automatic tags managed by keep: `_created` (ISO timestamp), `_updated` (last modification), `_accessed` (last read), `_source` (inline, file, url, stdin). Cannot be manually set. |
+| [System Tags](SYSTEM-TAGS.md) | Automatic tags managed by keep: `_created`, `_updated`, `_accessed` (UTC `YYYY-MM-DDTHH:MM:SS`), `_source` (`inline`, `uri`, `langchain`, `auto-vivify`), `_content_type`, plus internal pipeline and projection tags. Cannot be manually set. |
 | [Meta-Tags](META-TAGS.md) | Metaschema rules define how notes relate. `similar` surfaces semantically close notes. `meta/learnings` extracts insights tagged as learnings. `prev` shows version history. Meta-tags give agents longitudinal awareness — context compounds over time. |
 | [Edge Tags](EDGE-TAGS.md) | Turn tags into navigable relationship edges. When a tagdoc declares `_inverse`, tagged documents become links — and targets get automatic inverse listings. Tag a conversation with `speaker: Deborah` and `get Deborah` shows everything she said. Targets auto-vivify on first reference. |
 | [Prompts](PROMPTS.md) | How prompts work: template rendering, context injection, built-in vs custom prompts. |
@@ -77,8 +77,8 @@ Complete listing with summaries:
 | [Versioning](VERSIONING.md) | Every `keep put` to an existing ID creates a new version. List versions, retrieve any version by number, compare across versions. Content-hash deduplication skips unchanged updates. |
 | [Analysis](ANALYSIS.md) | How document analysis decomposes long content into individually searchable structural parts. Each part gets its own embedding and tags, improving retrieval for large documents. |
 | [Output Format](OUTPUT.md) | Keep outputs YAML frontmatter (tags, metadata, meta-tags) followed by content body. Supports `--format json` for machine parsing, `--compact` for single-line summaries, and full (default) for human reading. |
-| [CLI Reference](REFERENCE.md) | Complete command reference: `put`, `get`, `find`, `list`, `now`, `move`, `analyze`, `config`, `save`, `remember`. Every flag, option, and environment variable documented with examples. |
-| [Architecture](ARCHITECTURE.md) | Technical internals: SQLite + FTS5 for local storage, PostgreSQL + pgvector for cloud. Embedding pipeline (Voyage, OpenAI, OpenRouter, Gemini, Mistral, Ollama, MLX). Background worker for async tasks. Content-hash deduplication. Meta-tag resolution engine. |
+| [CLI Reference](REFERENCE.md) | Complete command reference: `put`, `get`, `find`, `list`, `now`, `move`, `analyze`, `tag`, `del`, `flow`, `prompt`, `data`, `config`, `pending`, `mcp`. Every flag, option, and environment variable documented with examples. |
+| [Architecture](ARCHITECTURE.md) | Technical internals: surface clients (CLI, MCP, LangChain) over the daemon HTTP layer; Keeper composed of provider/storage/background mixins; state-doc flow runtime; pluggable storage backends (local SQLite + ChromaDB, hosted PostgreSQL + pgvector); pluggable providers for embedding, summarization, documents, OCR, media, and analysis. |
 | [Agent Guide](AGENT-GUIDE.md) | Patterns for AI agents using keep effectively: store decisions and learnings (not raw logs), use `now` for session continuity, let meta-tags surface context automatically, reflect before and after significant actions. |
 | [MCP (keep CLI)](KEEP-MCP.md) | Local MCP stdio server for AI agent integration. Connect Claude Code, Cursor, and other MCP-compatible clients directly to your local keep store. |
-| [OpenClaw Integration](OPENCLAW-INTEGRATION.md) | Three-layer integration pattern: (1) Skill prompt injects `keep now` context every agent turn, (2) `after_compaction` hook auto-indexes memory files, (3) Daily cron runs `keep put memory/ --analyze` for deep reflection. Turns keep from a tool into a continuous practice. |
+| [OpenClaw Integration](OPENCLAW-INTEGRATION.md) | Context-engine plugin: keep participates in every stage of the agent lifecycle (`bootstrap`, `assemble`, `afterTurn`, `compact`, `prepareSubagentSpawn`, `onSubagentEnded`). Auto-assembles per-turn context from `now`, similar items, meta sections, and edges; ingests messages as versioned session items; detects inflection points and triggers background reflection. Also exposes `memory_search`/`memory_get` MCP tools and sets up daemon-driven workspace watches. |

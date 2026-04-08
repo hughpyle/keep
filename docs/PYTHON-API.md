@@ -209,6 +209,7 @@ kp.get_part(id, part_num) → PartInfo | None
 # Run a state-doc flow (same as keep_flow MCP tool)
 result = kp.run_flow("query-resolve", params={"query": "auth"})
 # result.status, result.data, result.bindings, result.cursor
+# (run_flow_command is an alias from the protocol — same call)
 
 # Render an agent prompt with context injection
 result = kp.render_prompt("reflect", "auth flow")
@@ -368,13 +369,16 @@ See [TAGGING.md](TAGGING.md#organizing-by-project-and-topic) for details on:
 ### System Tags (Read-Only)
 
 Protected tags (prefix `_`) managed automatically:
-- `_created` — ISO timestamp
-- `_updated` — ISO timestamp  
+- `_created` — UTC timestamp `YYYY-MM-DDTHH:MM:SS`
+- `_updated` — UTC timestamp `YYYY-MM-DDTHH:MM:SS`
 - `_updated_date` — Date only (YYYY-MM-DD)
-- `_accessed` — ISO timestamp
+- `_accessed` — UTC timestamp `YYYY-MM-DDTHH:MM:SS`
 - `_accessed_date` — Date only (YYYY-MM-DD)
 - `_content_type` — MIME type
-- `_source` — Origin (inline, file, http)
+- `_source` — Origin: `inline`, `uri`, `langchain`, or `auto-vivify`
+
+Plus a set of internal/derived tags (`_summarized_hash`, `_analyzed_version`,
+`_focus_*`, `_anchor_*`, etc.) hidden from default display.
 
 Query system tags:
 ```python

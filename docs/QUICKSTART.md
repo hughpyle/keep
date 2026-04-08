@@ -155,7 +155,7 @@ Query by tag:
 ```bash
 keep list --tag project=acme-deal
 keep list --tag person=kate
-keep list --tags=                      # List all tag keys
+keep list --tag project                # Any note with a 'project' tag
 ```
 
 Tags are exact-match filters. Search is fuzzy. Use both: tag for structure, search for discovery.

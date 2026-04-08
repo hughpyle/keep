@@ -65,9 +65,18 @@ keep now -t project=myapp                 # Find now version with tag
 
 ## Listing tags
 
+The Python API exposes `list_tags()` directly:
+
+```python
+kp.list_tags()           # All distinct tag keys
+kp.list_tags("project")  # All values for the 'project' tag
+```
+
+From the CLI, list notes that have a tag key set:
+
 ```bash
-keep list --tags=                    # List all distinct tag keys
-keep list --tags=project             # List all values for 'project' tag
+keep list -t project       # Any note with a 'project' tag
+keep list -t project=myapp # Notes with project=myapp
 ```
 
 ## Organizing by project and topic

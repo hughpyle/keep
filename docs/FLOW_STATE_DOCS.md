@@ -1,10 +1,34 @@
 # Built-in State Docs
 
-State docs are YAML documents stored as `.state/*` notes that drive keep's processing flows. Eleven ship by default: five simple operation wrappers (`put`, `tag`, `delete`, `move`, `stats`) and six processing/query flows. Each is loaded from disk on first use and can be edited in the store.
+State docs are YAML documents stored as `.state/*` notes that drive keep's
+processing flows. Fifteen ship by default: simple operation wrappers, the
+processing pipeline, the iterative query state machine, and a few specialized
+flows for memory tools and supernode review. Each is loaded from disk on
+first use and can be edited in the store.
 
 To view the current state docs: `keep list .state --all`
 To reset to defaults: `keep config --reset-system-docs`
 To view the state diagram: `keep config --state-diagram`
+
+The bundled set:
+
+| State doc | Mode | Path | Purpose |
+|-----------|------|------|---------|
+| `.state/after-write` | `match: all` | background | Post-write processing pipeline |
+| `.state/get` | `match: all` | sync | Display-context assembly |
+| `.state/find-deep` | `match: sequence` | sync | Search + edge traversal |
+| `.state/list` | `match: sequence` | sync | Plain enumeration with filters |
+| `.state/list_versions` | `match: sequence` | sync | Version history listing |
+| `.state/memory-search` | `match: all` | sync | Scoped search for memory tools |
+| `.state/query-resolve` | `match: sequence` | sync | Iterative query entry point |
+| `.state/query-branch` | `match: all` | sync | Faceted search disambiguation |
+| `.state/query-explore` | `match: sequence` | sync | Wider exploratory search |
+| `.state/put` | wrapper | sync | Wraps `put` action |
+| `.state/tag` | wrapper | sync | Wraps `tag` action |
+| `.state/delete` | wrapper | sync | Wraps `delete` action |
+| `.state/move` | wrapper | sync | Wraps `move` action |
+| `.state/stats` | wrapper | sync | Store profiling for query planning |
+| `.state/review-supernodes` | `match: sequence` | background | Supernode factsheet review |
 
 ---
 
@@ -14,7 +38,9 @@ To view the state diagram: `keep config --state-diagram`
 **Mode:** `match: all` — all matching rules fire in parallel.
 **Path:** Background (returns immediately, work runs async).
 
-Runs post-write processing on new or updated items. The base doc defines core rules; additional rules are loaded from builtin fragments at `.state/after-write/*`.
+Runs post-write processing on new or updated items. The base doc defines
+core rules; additional rules are loaded from builtin fragments at
+`.state/after-write/*` (see [Fragments](#fragments) below).
 
 **Base rules:**
 
@@ -23,16 +49,29 @@ Runs post-write processing on new or updated items. The base doc defines core ru
 | `summary` | Content exceeds max summary length and no summary exists | `summarize` |
 | `described` | Item has a URI, media content, and a media provider configured | `describe` |
 
-**Builtin fragments:**
+**Builtin fragments** (`keep/data/system/state-after-write/`):
 
-| Fragment | Rule | Condition | Action |
-|----------|------|-----------|--------|
-| `ocr` | `extracted` | Item has `_ocr_pages` tag and a URI | `ocr` |
-| `analyze` | `analyzed` | Non-system item | `analyze` (decompose into parts) |
-| `tag` | `tagged` | Non-system item with content | `tag` (classify against `.tag/*` specs) |
-| `links` | `linked` | Non-system markdown item with content | `extract_links` (wiki/markdown links → `references` edges) |
+| Fragment | Rule id | Condition (CEL) | Action |
+|----------|---------|-----------------|--------|
+| `analyze` | `analyzed` | `!item.is_system_note` | `analyze` (decompose into parts) |
+| `duplicates` | `find-duplicates` | `!item.is_system_note && item.has_content` | `resolve_duplicates` (link identical content via edges) |
+| `links` | `linked` | `!item.is_system_note && item.has_content && content_type ∈ {markdown, html, message/rfc822, pdf, docx, pptx}` | `extract_links` (wiki/markdown links → `references` edges) |
+| `ocr` | `extracted` | `'_ocr_pages' in item.tags && item.has_uri` | `ocr` |
+| `resolve-stubs` | `resolve_stubs` | `item.has_uri && !item.is_system_note && item.tags._source != 'link'` | `resolve_stubs` (fetch URI for stub items) |
+| `tag` | `tagged` | `!item.is_system_note && item.has_content` | `auto_tag` (classify against `.tag/*` specs) |
 
-System notes (IDs starting with `.`) skip analysis, tagging, and link extraction to avoid recursive processing. Fragments can be disabled individually (see [Extending state docs](#extending-state-docs) below).
+System notes (IDs starting with `.`) skip every fragment that gates on
+`!item.is_system_note`, which keeps the pipeline from recursively processing
+its own state docs, prompt docs, and tag descriptions. Fragments can be
+disabled individually (see [Extending state docs](#extending-state-docs)
+below).
+
+The `links` fragment handles every text-bearing content type, not just
+markdown — it covers HTML, RFC 822 email, PDF, DOCX, and PPTX as well, so
+link extraction works on indexed documents from many sources. The
+`resolve-stubs` fragment runs for any URI-backed item that isn't a `link`-
+sourced stub, which includes both auto-vivified edge targets and other
+URI items that came in as placeholders.
 
 ---
 
@@ -42,13 +81,20 @@ System notes (IDs starting with `.`) skip analysis, tagging, and link extraction
 **Mode:** `match: all` — all queries run in parallel.
 **Path:** Synchronous (completes before returning to caller).
 
-Assembles the display context shown when you retrieve a note. Three parallel queries:
+Assembles the display context shown when you retrieve a note. Three parallel
+queries:
 
 | Rule | Action | Purpose |
 |------|--------|---------|
 | `similar` | `find` (by similarity) | Semantically related items |
 | `parts` | `find` (by prefix) | Structural parts from `analyze` |
 | `meta` | `resolve_meta` | Meta-doc sections (learnings, todos, etc.) |
+
+**Fragments:** `state-get/openclaw.md` adds two extra rules used by the
+OpenClaw integration — a query-based `search` rule (replaces `similar` when
+the agent prompt is present) and a `session` rule that fetches the current
+session item. Inserted before the base `similar` rule with complementary
+`when` guards so exactly one of `search`/`similar` fires.
 
 ---
 
@@ -67,6 +113,66 @@ Searches, then follows edges from results to discover related items.
 
 ---
 
+## .state/list
+
+**Trigger:** `keep list` CLI, `kp.list_items()` Python API.
+**Mode:** `match: sequence`.
+**Path:** Synchronous.
+
+Plain enumeration of items by prefix, tags, or date range. Distinct from
+`query-resolve` — no semantic search, no scoring, just listing in tag order.
+
+| Param | Description |
+|-------|-------------|
+| `prefix` | ID prefix or glob (e.g. `.tag/`, `session-*`) |
+| `tags` | Tag key=value filter (AND across keys) |
+| `tag_keys` | Filter by presence of tag keys (any value) |
+| `since` / `until` | Time filters |
+| `order_by` | `updated`, `accessed`, `created`, or `id` |
+| `include_hidden` | Include system notes (dot-prefix IDs) |
+| `limit` | Maximum results |
+
+**Output:** `{"results": [...], "count": N}`
+
+---
+
+## .state/list_versions
+
+**Trigger:** `keep get --history`, `kp.list_versions()`.
+**Mode:** `match: sequence`.
+**Path:** Synchronous.
+
+Returns the version history for a single item.
+
+| Param | Description |
+|-------|-------------|
+| `id` (or `item_id`) | Item to list versions for |
+| `limit` | Maximum versions to return |
+
+**Output:** `{"versions": [...]}`
+
+---
+
+## .state/memory-search
+
+**Trigger:** OpenClaw `memory_search` tool.
+**Mode:** `match: all`.
+**Path:** Synchronous.
+
+Scope-constrained semantic search used by the OpenClaw integration's
+`memory_search` MCP tool. Wraps `find` with a forced `scope` parameter so
+results are constrained to memory-file paths (`MEMORY.md`, `memory/*.md`).
+
+| Param | Description |
+|-------|-------------|
+| `query` | Search query |
+| `scope` | ID glob pattern to constrain results |
+| `limit` | Maximum results |
+
+**Output:** `{"results": [...]}`
+
+---
+
 ## .state/query-resolve
 
 > Thresholds for query resolution are configurable but not yet tuned
@@ -77,7 +183,8 @@ Searches, then follows edges from results to discover related items.
 **Mode:** `match: sequence` — first matching rule wins.
 **Path:** Synchronous, with tick budget.
 
-The entry point for iterative query refinement. Searches, evaluates result quality, and routes:
+The entry point for iterative query refinement. Searches, evaluates result
+quality, and routes:
 
 | Condition | Action |
 |-----------|--------|
@@ -87,7 +194,8 @@ The entry point for iterative query refinement. Searches, evaluates result quali
 | Low entropy (tight cluster) | Widen search, loop back |
 | No strong signal (fall-through) | Transition to `query-explore` |
 
-**Signals used:** `search.margin`, `search.entropy`, `search.lineage_strong`, `search.dominant_lineage_tags`, `search.top_facet_tags`
+**Signals used:** `search.margin`, `search.entropy`, `search.lineage_strong`,
+`search.dominant_lineage_tags`, `search.top_facet_tags`
 
 ---
 
@@ -117,7 +225,8 @@ After both complete:
 **Mode:** `match: sequence`.
 **Path:** Synchronous, shares tick budget with caller.
 
-Wider exploratory search when resolve and branch haven't produced high-confidence results.
+Wider exploratory search when resolve and branch haven't produced
+high-confidence results.
 
 1. Broad search with expanded limit
 2. If high margin → return done
@@ -126,72 +235,34 @@ Wider exploratory search when resolve and branch haven't produced high-confidenc
 
 ---
 
-## Extending state docs
+## .state/review-supernodes
 
-You can add processing steps to any state doc without editing the original. Create a child note under the state doc's path:
+**Trigger:** Daemon-enqueued review of one supernode candidate.
+**Mode:** `match: sequence`.
+**Path:** Background (`foreground: false`), so async actions run inline.
 
-```bash
-# Add a custom step to after-write
-keep put --id .state/after-write/obsidian-links 'rules:
-  - when: "item.content_type == '\''text/markdown'\''"
-    id: obsidian-links
-    do: extract_links
-    with:
-      tag: references
-      create_targets: "true"'
-```
+Reviews a single supernode (a high-cardinality entity like an email address,
+URL, or file path with many inbound references). Synthesizes a factsheet
+from the inbound evidence and writes it as a new version of the target item,
+marking it `_supernode_reviewed`.
 
-Child fragments are discovered automatically and merged into the base doc. Each fragment has a `rules:` list (same syntax as a full state doc) and an optional `order:` field.
+Steps:
 
-### Ordering
+1. `get` the target item (current content/summary)
+2. `traverse` inbound references (evidence for the factsheet)
+3. `generate` a new factsheet via LLM using a `.prompt/supernode/*` doc
+4. `put` the factsheet as a new version, marking `_supernode_reviewed`
 
-The `order` field controls where fragment rules are inserted:
-
-| Value | Effect |
-|-------|--------|
-| `after` (default) | Appended after all base rules |
-| `before` | Prepended before all base rules |
-| `after:{rule_id}` | Inserted after the named base rule |
-| `before:{rule_id}` | Inserted before the named base rule |
-
-For `match: all` pipelines (like `after-write`), order rarely matters — all rules run in parallel. For `match: sequence` pipelines, order determines execution position.
-
-### Enabling and disabling
-
-Fragments are active by default. To disable one without deleting it:
-
-```bash
-keep tag .state/after-write/obsidian-links active=false    # disable
-keep tag .state/after-write/obsidian-links -r active        # re-enable
-```
-
-### Listing fragments
-
-```bash
-keep list --prefix .state/after-write/ --all
-```
-
-Shows all fragments with their tags, so active/inactive status is visible at a glance.
-
----
-
-## Editing state docs
-
-State docs are regular keep notes. To edit one:
-
-```bash
-keep get .state/after-write          # View current content
-keep put ".state/after-write" ...    # Replace with new content
-keep config --reset-system-docs      # Restore all defaults
-```
-
-Changes take effect on the next flow invocation. The built-in versions are compiled into keep as a fallback — if a state doc is missing from the store, the bundled version is used automatically.
+The new version triggers the normal `after-write` flow for summarization
+and tagging. See `.meta/supernodes` for how reviewed supernodes get surfaced
+back into context.
 
 ---
 
 ## Simple operation wrappers
 
-These are thin state docs that wrap a single action, providing named flow access to every store operation.
+These are thin state docs that wrap a single action, providing named flow
+access to every store operation.
 
 ### .state/put
 
@@ -213,9 +284,13 @@ These are thin state docs that wrap a single action, providing named flow access
 
 ### .state/move
 
-**Params:** `name` (target ID), `source` (default: "now"), `tags` (filter), `only_current`
+**Params:** `name` (target ID), `source` (default: `"now"`), `tags` (filter), `only_current`
 **Action:** `move` — extracts matching versions from source into target.
 **Output:** `{"id": "...", "summary": "..."}`
+
+The wrapper forwards `params.source` (not `params.source_id`) — see
+`keep/data/system/state-move.md`. The Python API method `kp.move()` keeps
+the historical `source_id=` keyword for the same field.
 
 ### .state/stats
 
@@ -223,10 +298,87 @@ These are thin state docs that wrap a single action, providing named flow access
 **Action:** `stats` — computes store profile for query planning.
 **Output:** `{"total": N, "tags": {...}, "all_tags": [...], "dates": {...}, "structure": {...}}`
 
-See [FLOW-ACTIONS.md](use keep_help with topic="flow-actions") for detailed output shapes.
+See [FLOW-ACTIONS.md](FLOW-ACTIONS.md) for detailed output shapes.
+
+---
+
+## Extending state docs
+
+### Fragments
+
+You can add processing steps to any state doc without editing the original.
+Create a child note under the state doc's path:
+
+```bash
+# Add a custom step to after-write
+keep put --id .state/after-write/obsidian-links 'rules:
+  - when: "item.content_type == '\''text/markdown'\''"
+    id: obsidian-links
+    do: extract_links
+    with:
+      tag: references
+      create_targets: "true"'
+```
+
+Child fragments are discovered automatically and merged into the base doc.
+Each fragment has a `rules:` list (same syntax as a full state doc) and an
+optional `order:` field.
+
+The base doc and the fragments under its path are loaded together — for
+example, `state-after-write.md` plus everything under `state-after-write/`.
+
+### Ordering
+
+The `order` field controls where fragment rules are inserted:
+
+| Value | Effect |
+|-------|--------|
+| `after` (default) | Appended after all base rules |
+| `before` | Prepended before all base rules |
+| `after:{rule_id}` | Inserted after the named base rule |
+| `before:{rule_id}` | Inserted before the named base rule |
+
+For `match: all` pipelines (like `after-write`), order rarely matters — all
+rules run in parallel. For `match: sequence` pipelines, order determines
+execution position.
+
+### Enabling and disabling
+
+Fragments are active by default. To disable one without deleting it:
+
+```bash
+keep tag .state/after-write/obsidian-links -t active=false   # disable
+keep tag .state/after-write/obsidian-links -r active         # re-enable
+```
+
+### Listing fragments
+
+```bash
+keep list .state/after-write/ --all
+```
+
+Shows all fragments with their tags, so active/inactive status is visible
+at a glance.
+
+---
+
+## Editing state docs
+
+State docs are regular keep notes. To edit one:
+
+```bash
+keep get .state/after-write          # View current content
+keep edit .state/after-write         # Edit in $EDITOR
+keep put ".state/after-write" ...    # Replace with new content
+keep config --reset-system-docs      # Restore all defaults
+```
+
+Changes take effect on the next flow invocation. The built-in versions are
+compiled into keep as a fallback — if a state doc is missing from the store,
+the bundled version is used automatically.
 
 ## See also
 
-- [FLOWS.md](use keep_help with topic="flows") — How flows work, with narrative and diagram
-- [KEEP-FLOW.md](use keep_help with topic="keep-flow") — Running, resuming, and steering flows
-- [FLOW-ACTIONS.md](use keep_help with topic="flow-actions") — Available actions reference
+- [FLOWS.md](FLOWS.md) — How flows work, with narrative and diagram
+- [KEEP-FLOW.md](KEEP-FLOW.md) — Running, resuming, and steering flows
+- [FLOW-ACTIONS.md](FLOW-ACTIONS.md) — Available actions reference

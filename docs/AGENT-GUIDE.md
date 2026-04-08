@@ -16,9 +16,9 @@ This guide assumes familiarity with the reflective practice in [SKILL.md](../SKI
 **Reflect before acting:** Check your current work context and intentions.
 - What kind of conversation is this? (Action? Possibility? Clarification?)
 - What do I already know?
-```
-keep_flow(state="get", params={id: "now"}, token_budget=2000)
-keep_flow(state="query-resolve", params={query: "this situation"}, token_budget=2000)
+```json
+keep_flow(state="get", params={"item_id": "now"})
+keep_flow(state="query-resolve", params={"query": "this situation"})
 ```
 
 `keep_flow(state="get", ...)` returns the requested note first, including its tags, with any relevant attached context such as similar notes, meta sections, parts, linked notes, and version navigation. Read it as "show me this note and what surrounds it", not as a bare exact fetch.
@@ -26,8 +26,8 @@ keep_flow(state="query-resolve", params={query: "this situation"}, token_budget=
 **While acting:** Is this leading to harm? If yes: give it up.
 
 **Reflect after acting:** What happened? What did I learn?
-```
-keep_flow(state="put", params={content: "what I learned", tags: {type: "learning"}})
+```json
+keep_flow(state="put", params={"content": "what I learned", "tags": {"type": "learning"}})
 ```
 
 **Periodically:** Run a full structured reflection ([details](KEEP-PROMPT.md)):
@@ -43,16 +43,16 @@ This cycle — reflect, act, reflect — is the mirror teaching. Memory isn't st
 
 Use the nowdoc as a scratchpad to track where you are in the work. This isn't enforced structure — it's a convention that helps you (and future agents) maintain perspective.
 
-```
-# 1. Starting work — check context and intentions
-keep_flow(state="get", params={id: "now"}, token_budget=2000)
+```json
+// 1. Starting work — check context and intentions
+keep_flow(state="get", params={"item_id": "now"})
 
-# 2. Update context as work evolves
-keep_flow(state="put", params={content: "Diagnosing flaky test in auth module", id: "now", tags: {project: "myapp", topic: "testing"}})
-keep_flow(state="put", params={content: "Found timing issue", id: "now", tags: {project: "myapp"}})
+// 2. Update context as work evolves
+keep_flow(state="put", params={"id": "now", "content": "Diagnosing flaky test in auth module", "tags": {"project": "myapp", "topic": "testing"}})
+keep_flow(state="put", params={"id": "now", "content": "Found timing issue", "tags": {"project": "myapp"}})
 
-# 3. Record learnings
-keep_flow(state="put", params={content: "Flaky timing fix: mock time instead of real assertions", tags: {topic: "testing", type: "learning"}})
+// 3. Record learnings
+keep_flow(state="put", params={"content": "Flaky timing fix: mock time instead of real assertions", "tags": {"topic": "testing", "type": "learning"}})
 ```
 
 **Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first. All updates create version history automatically.
@@ -62,15 +62,15 @@ keep_flow(state="put", params={content: "Flaky timing fix: mock time instead of 
 ## Agent Handoff
 
 **Starting a session:**
-```
-keep_flow(state="get", params={id: "now"}, token_budget=2000)
-keep_flow(state="query-resolve", params={query: "recent work", since: "P1D"}, token_budget=1500)
+```json
+keep_flow(state="get", params={"item_id": "now"})
+keep_flow(state="query-resolve", params={"query": "recent work", "since": "P1D"})
 ```
 
 **Ending a session:**
-```
-keep_flow(state="put", params={content: "Completed OAuth2 flow. Token refresh working. Next: add tests.", id: "now", tags: {topic: "auth"}})
-keep_flow(state="move", params={name: "auth-string", tags: {project: "myapp"}})
+```json
+keep_flow(state="put", params={"id": "now", "content": "Completed OAuth2 flow. Token refresh working. Next: add tests.", "tags": {"topic": "auth"}})
+keep_flow(state="move", params={"name": "auth-string", "tags": {"project": "myapp"}})
 ```
 
 ---
@@ -80,19 +80,19 @@ keep_flow(state="move", params={name: "auth-string", tags: {project: "myapp"}})
 As you work, `now` accumulates a string of versions — a trace of how intentions evolved. The `move` flow lets you name and archive that string, making room for what's next.
 
 **Snapshot before pivoting.** When the conversation shifts topic:
-```
-keep_flow(state="move", params={name: "auth-string", tags: {project: "myapp"}})
-keep_flow(state="put", params={content: "Starting on database migration", id: "now"})
+```json
+keep_flow(state="move", params={"name": "auth-string", "tags": {"project": "myapp"}})
+keep_flow(state="put", params={"id": "now", "content": "Starting on database migration"})
 ```
 
 **Incremental archival.** Move to the same name repeatedly — versions append:
-```
-keep_flow(state="move", params={name: "design-log", tags: {project: "myapp"}})
+```json
+keep_flow(state="move", params={"name": "design-log", "tags": {"project": "myapp"}})
 ```
 
 **Tag-filtered extraction.** When a session mixes projects:
-```
-keep_flow(state="move", params={name: "frontend-work", tags: {project: "frontend"}})
+```json
+keep_flow(state="move", params={"name": "frontend-work", "tags": {"project": "frontend"}})
 ```
 
 ---
@@ -101,9 +101,9 @@ keep_flow(state="move", params={name: "frontend-work", tags: {project: "frontend
 
 Whenever you encounter documents important to the task, index them:
 
-```
-keep_flow(state="put", params={uri: "https://docs.example.com/auth", tags: {topic: "auth", project: "myapp"}})
-keep_flow(state="put", params={uri: "file:///path/to/design.pdf", tags: {type: "reference", topic: "architecture"}})
+```json
+keep_flow(state="put", params={"uri": "https://docs.example.com/auth", "tags": {"topic": "auth", "project": "myapp"}})
+keep_flow(state="put", params={"uri": "file:///path/to/design.pdf", "tags": {"type": "reference", "topic": "architecture"}})
 ```
 
 Ask: what is this? Why is it important? Tag appropriately.
@@ -118,8 +118,8 @@ The ability to index, version, cross-reference and link external sources allows 
 
 When the normal flow is interrupted — an assumption has been revealed. **First:** complete the immediate conversation. **Then record:**
 
-```
-keep_flow(state="put", params={content: "Assumed user wanted full rewrite. Actually: minimal patch.", tags: {type: "breakdown"}})
+```json
+keep_flow(state="put", params={"content": "Assumed user wanted full rewrite. Actually: minimal patch.", "tags": {"type": "breakdown"}})
 ```
 
 Breakdowns are how agents learn.
@@ -130,18 +130,18 @@ Breakdowns are how agents learn.
 
 Use speech-act tags to make the commitment structure visible:
 
-```
-# Track promises
-keep_flow(state="put", params={content: "I'll fix the auth bug", tags: {act: "commitment", status: "open", project: "myapp"}})
+```json
+// Track promises
+keep_flow(state="put", params={"content": "I'll fix the auth bug", "tags": {"act": "commitment", "status": "open", "project": "myapp"}})
 
-# Track requests
-keep_flow(state="put", params={content: "Please review the PR", tags: {act: "request", status: "open"}})
+// Track requests
+keep_flow(state="put", params={"content": "Please review the PR", "tags": {"act": "request", "status": "open"}})
 
-# Query open work
-keep_flow(state="query-resolve", params={query: "open commitments", tags: {act: "commitment", status: "open"}}, token_budget=1000)
+// Query open work
+keep_flow(state="list", params={"tags": {"act": "commitment", "status": "open"}})
 
-# Close the loop
-keep_flow(state="tag", params={id: "ID", tags: {status: "fulfilled"}})
+// Close the loop
+keep_flow(state="tag", params={"id": "ID", "tags": {"status": "fulfilled"}})
 ```
 
 You should actively manage the list of open commitments. Fulfilled? Tag them.

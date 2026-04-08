@@ -62,7 +62,7 @@ In practice:
 
 ## Bundled contextual queries
 
-keep ships with five `.meta/*` documents:
+keep ships with six `.meta/*` documents:
 
 ### `.meta/todo` — Open Loops
 
@@ -71,6 +71,10 @@ Surfaces unresolved commitments, requests, offers, and blocked work. Uses `match
 ### `.meta/learnings` — Experiential Priming
 
 Surfaces past learnings, breakdowns, and gotchas before you start work. Uses `match: all` with three `find` rules for each type.
+
+### `.meta/supernodes` — Hub Items
+
+Surfaces reviewed supernodes — dense factsheets synthesized from inbound references for high-cardinality entities (email addresses, URLs, files). Filters on `_supernode_reviewed` so only items that have been through the review pipeline are shown, not unreviewed stubs. See the `.state/review-supernodes` flow for how factsheets are produced.
 
 ### `.meta/genre` — Same Genre
 
@@ -150,8 +154,10 @@ rules:
       similar_to: "{params.item_id}"
       tags: {type: bug, status: open}
       limit: "{params.limit}"
-' -t category=system -t context=meta --id .meta/bugs
+' --id .meta/bugs -t category=system -t context=meta
 ```
+
+The `category=system` and `context=meta` tags match the bundled meta-doc convention so the doc shows up alongside the others under `keep list .meta`.
 
 This creates a meta-doc that surfaces open bugs relevant to whatever you're looking at.
 
