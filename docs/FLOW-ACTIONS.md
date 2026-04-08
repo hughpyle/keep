@@ -288,7 +288,7 @@ Decompose a target item into structural parts.
     item_id: "{params.item_id}"
 ```
 
-**Output:** `{"parts": [{summary, content, tags, part_num}, ...]}`
+**Output:** `{"parts": [{summary, tags, part_num}, ...]}`
 **Mutations:** `[{"op": "put_item", "id": "item@p1", ...}, ...]`
 
 ### describe

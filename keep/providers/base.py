@@ -458,7 +458,7 @@ class AnalyzerProvider(Protocol):
             guide_context: Optional tag descriptions for guided decomposition
 
         Returns:
-            List of dicts with "summary", "content", and optionally "tags" keys.
+            List of dicts with "summary" and optionally "tags" keys.
             Empty list on failure.
         """
         ...

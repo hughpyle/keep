@@ -40,10 +40,18 @@ class TestDocumentStoreParts:
         """Parts can be stored and retrieved."""
         now = utc_now()
         parts = [
-            PartInfo(part_num=1, summary="Intro", tags={"topic": "overview"},
-                     content="The introduction...", created_at=now),
-            PartInfo(part_num=2, summary="Main body", tags={"topic": "detail"},
-                     content="The main body...", created_at=now),
+            PartInfo(
+                part_num=1,
+                summary="Intro",
+                tags={"topic": "overview"},
+                created_at=now,
+            ),
+            PartInfo(
+                part_num=2,
+                summary="Main body",
+                tags={"topic": "detail"},
+                created_at=now,
+            ),
         ]
         count = store.upsert_parts("default", "doc:1", parts)
         assert count == 2
@@ -53,17 +61,14 @@ class TestDocumentStoreParts:
         assert result[0].part_num == 1
         assert result[0].summary == "Intro"
         assert result[0].tags == {"topic": "overview"}
-        assert result[0].content == "The introduction..."
         assert result[1].part_num == 2
 
     def test_get_part(self, store):
         """Individual parts can be retrieved by number."""
         now = utc_now()
         parts = [
-            PartInfo(part_num=1, summary="Part 1", tags={},
-                     content="Content 1", created_at=now),
-            PartInfo(part_num=2, summary="Part 2", tags={},
-                     content="Content 2", created_at=now),
+            PartInfo(part_num=1, summary="Part 1", tags={}, created_at=now),
+            PartInfo(part_num=2, summary="Part 2", tags={}, created_at=now),
         ]
         store.upsert_parts("default", "doc:1", parts)
 
@@ -83,14 +88,14 @@ class TestDocumentStoreParts:
         assert store.part_count("default", "doc:1") == 0
 
         now = utc_now()
-        parts = [PartInfo(i, f"Part {i}", {}, f"Content {i}", now) for i in range(1, 4)]
+        parts = [PartInfo(i, f"Part {i}", {}, now) for i in range(1, 4)]
         store.upsert_parts("default", "doc:1", parts)
         assert store.part_count("default", "doc:1") == 3
 
     def test_delete_parts(self, store):
         """Parts can be deleted."""
         now = utc_now()
-        parts = [PartInfo(1, "Part 1", {}, "Content", now)]
+        parts = [PartInfo(1, "Part 1", {}, now)]
         store.upsert_parts("default", "doc:1", parts)
         assert store.part_count("default", "doc:1") == 1
 
@@ -102,8 +107,8 @@ class TestDocumentStoreParts:
         """A single part can be deleted without touching siblings."""
         now = utc_now()
         parts = [
-            PartInfo(1, "Part 1", {}, "Content 1", now),
-            PartInfo(2, "Part 2", {}, "Content 2", now),
+            PartInfo(1, "Part 1", {}, now),
+            PartInfo(2, "Part 2", {}, now),
         ]
         store.upsert_parts("default", "doc:1", parts)
 
@@ -120,17 +125,17 @@ class TestDocumentStoreParts:
 
         # Initial parts
         parts_v1 = [
-            PartInfo(1, "Old part 1", {}, "Old 1", now),
-            PartInfo(2, "Old part 2", {}, "Old 2", now),
-            PartInfo(3, "Old part 3", {}, "Old 3", now),
+            PartInfo(1, "Old part 1", {}, now),
+            PartInfo(2, "Old part 2", {}, now),
+            PartInfo(3, "Old part 3", {}, now),
         ]
         store.upsert_parts("default", "doc:1", parts_v1)
         assert store.part_count("default", "doc:1") == 3
 
         # Replace with fewer parts
         parts_v2 = [
-            PartInfo(1, "New part 1", {"topic": "new"}, "New 1", now),
-            PartInfo(2, "New part 2", {}, "New 2", now),
+            PartInfo(1, "New part 1", {"topic": "new"}, now),
+            PartInfo(2, "New part 2", {}, now),
         ]
         store.upsert_parts("default", "doc:1", parts_v2)
         assert store.part_count("default", "doc:1") == 2
@@ -142,8 +147,8 @@ class TestDocumentStoreParts:
     def test_parts_isolated_by_id(self, store):
         """Parts for different documents are independent."""
         now = utc_now()
-        store.upsert_parts("default", "doc:1", [PartInfo(1, "A", {}, "a", now)])
-        store.upsert_parts("default", "doc:2", [PartInfo(1, "B", {}, "b", now)])
+        store.upsert_parts("default", "doc:1", [PartInfo(1, "A", {}, now)])
+        store.upsert_parts("default", "doc:2", [PartInfo(1, "B", {}, now)])
 
         assert store.part_count("default", "doc:1") == 1
         assert store.part_count("default", "doc:2") == 1
@@ -158,7 +163,7 @@ class TestDocumentStoreParts:
         store.upsert_parts(
             "default",
             "doc:1",
-            [PartInfo(1, "Part", {"k": ["a", "a", "b"]}, "Body", now)],
+            [PartInfo(1, "Part", {"k": ["a", "a", "b"]}, now)],
         )
 
         part = store.get_part("default", "doc:1", 1)
@@ -171,7 +176,7 @@ class TestDocumentStoreParts:
         store.upsert_single_part(
             "default",
             "doc:1",
-            PartInfo(1, "Part", {"k": ["a", "a", "b"]}, "Body", now),
+            PartInfo(1, "Part", {"k": ["a", "a", "b"]}, now),
         )
 
         part = store.get_part("default", "doc:1", 1)
@@ -184,7 +189,7 @@ class TestDocumentStoreParts:
         store.upsert_parts(
             "default",
             "doc:1",
-            [PartInfo(1, "Part", {"k": "a"}, "Body", now)],
+            [PartInfo(1, "Part", {"k": "a"}, now)],
         )
 
         updated = store.update_part_tags("default", "doc:1", 1, {"k": ["a", "a", "b"]})
@@ -201,7 +206,7 @@ class TestDocumentStoreParts:
 
 
 class TestSchemaMigration:
-    """Test that schema v3→v4 migration creates the parts table."""
+    """Test that the current schema supports part storage."""
 
     def test_migration_creates_parts_table(self, tmp_path):
         """New databases get the document_parts table."""
@@ -210,7 +215,7 @@ class TestSchemaMigration:
 
         # Check table exists by inserting a part
         now = utc_now()
-        parts = [PartInfo(1, "Test", {}, "Content", now)]
+        parts = [PartInfo(1, "Test", {}, now)]
         store.upsert_parts("default", "test", parts)
         assert store.part_count("default", "test") == 1
         store.close()
@@ -226,8 +231,8 @@ class TestDecompositionParsing:
 
     def test_parse_json_array(self):
         text = json.dumps([
-            {"summary": "Intro", "content": "The intro text"},
-            {"summary": "Body", "content": "The body text", "tags": {"topic": "main"}},
+            {"summary": "Intro"},
+            {"summary": "Body", "tags": {"topic": "main"}},
         ])
         result = _parse_decomposition_json(text)
         assert len(result) == 2
@@ -235,14 +240,14 @@ class TestDecompositionParsing:
         assert result[1]["tags"] == {"topic": "main"}
 
     def test_parse_code_fenced(self):
-        text = '```json\n[{"summary": "Test", "content": "Content"}]\n```'
+        text = '```json\n[{"summary": "Test"}]\n```'
         result = _parse_decomposition_json(text)
         assert len(result) == 1
         assert result[0]["summary"] == "Test"
 
     def test_parse_wrapper_object(self):
         text = json.dumps({"sections": [
-            {"summary": "Part 1", "content": "Text 1"},
+            {"summary": "Part 1"},
         ]})
         result = _parse_decomposition_json(text)
         assert len(result) == 1
@@ -257,9 +262,9 @@ class TestDecompositionParsing:
 
     def test_parse_skips_empty_entries(self):
         text = json.dumps([
-            {"summary": "Good", "content": "Text"},
-            {},  # No summary or content
-            {"summary": "", "content": ""},  # Empty strings
+            {"summary": "Good"},
+            {},  # No summary
+            {"summary": ""},  # Empty string
         ])
         result = _parse_decomposition_json(text)
         assert len(result) == 1
@@ -281,20 +286,10 @@ class TestKeeperAnalyze:
         kp.put("A long document about many topics. " * 20,
                      id="test-doc", tags={"project": "test"})
 
-        # Mock the LLM call
-        mock_response = json.dumps([
-            {"summary": "Introduction", "content": "First section text",
-             "tags": {"topic": "intro"}},
-            {"summary": "Main body", "content": "Second section text",
-             "tags": {"topic": "analysis"}},
-        ])
-
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
-                {"summary": "Introduction", "content": "First section text",
-                 "tags": {"topic": "intro"}},
-                {"summary": "Main body", "content": "Second section text",
-                 "tags": {"topic": "analysis"}},
+                {"summary": "Introduction", "tags": {"topic": "intro"}},
+                {"summary": "Main body", "tags": {"topic": "analysis"}},
             ]
             parts = kp.analyze("test-doc", force=True)
 
@@ -346,8 +341,8 @@ class TestKeeperAnalyze:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
-                {"summary": "Section 1", "content": "Body 1"},
-                {"summary": "Section 2", "content": "Body 2"},
+                {"summary": "Section 1"},
+                {"summary": "Section 2"},
             ]
             parts = kp.analyze("paper-A", force=True)
 
@@ -369,17 +364,17 @@ class TestKeeperAnalyze:
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             # First analysis (force to bypass single-version-untruncated skip)
             mock_llm.return_value = [
-                {"summary": "Part A", "content": "A text"},
-                {"summary": "Part B", "content": "B text"},
-                {"summary": "Part C", "content": "C text"},
+                {"summary": "Part A"},
+                {"summary": "Part B"},
+                {"summary": "Part C"},
             ]
             parts1 = kp.analyze("test-doc", force=True)
             assert len(parts1) == 3
 
             # Re-analysis with different decomposition (force=True since content unchanged)
             mock_llm.return_value = [
-                {"summary": "New Part 1", "content": "New text 1"},
-                {"summary": "New Part 2", "content": "New text 2"},
+                {"summary": "New Part 1"},
+                {"summary": "New Part 2"},
             ]
             parts2 = kp.analyze("test-doc", force=True)
             assert len(parts2) == 2
@@ -396,14 +391,14 @@ class TestKeeperAnalyze:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
-                {"summary": "Part 1", "content": "Text 1"},
-                {"summary": "Part 2", "content": "Text 2"},
+                {"summary": "Text 1"},
+                {"summary": "Text 2"},
             ]
             kp.analyze("test-doc", force=True)
 
         item = kp.get_part("test-doc", 1)
         assert item is not None
-        assert item.summary == "Text 1"  # Returns content, not short summary
+        assert item.summary == "Text 1"
         assert item.tags["_part_num"] == "1"
         assert item.tags["_base_id"] == "test-doc"
         assert item.tags["_total_parts"] == "2"
@@ -418,7 +413,7 @@ class TestKeeperAnalyze:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
-                {"summary": f"Part {i}", "content": f"Text {i}"}
+                {"summary": f"Text {i}"}
                 for i in range(1, 4)
             ]
             kp.analyze("test-doc", force=True)
@@ -437,7 +432,7 @@ class TestKeeperAnalyze:
         kp._document_store.upsert_single_part(
             doc_coll,
             "test-doc",
-            PartInfo(0, "Legacy overview", {"_part_type": "overview"}, "", now),
+            PartInfo(0, "Legacy overview", {"_part_type": "overview"}, now),
         )
         embedding = kp._get_embedding_provider().embed("Legacy overview")
         kp._store.upsert_part(
@@ -474,8 +469,8 @@ class TestAnalyzeSkip:
     """Test _analyzed_hash skip logic in analyze() and enqueue_analyze()."""
 
     MOCK_PARTS = [
-        {"summary": "Part A", "content": "Text A", "tags": {"topic": "a"}},
-        {"summary": "Part B", "content": "Text B", "tags": {"topic": "b"}},
+        {"summary": "Text A", "tags": {"topic": "a"}},
+        {"summary": "Text B", "tags": {"topic": "b"}},
     ]
 
     def test_analyze_sets_analyzed_hash(self, mock_providers, tmp_path):
@@ -525,12 +520,12 @@ class TestAnalyzeSkip:
             # Should re-analyze (content_hash changed)
             mock_llm.reset_mock()
             mock_llm.return_value = [
-                {"summary": "New A", "content": "New text A"},
-                {"summary": "New B", "content": "New text B"},
+                {"summary": "New text A"},
+                {"summary": "New text B"},
             ]
             parts = kp.analyze("test-doc", force=True)
             mock_llm.assert_called_once()
-            assert parts[0].summary == "New A"
+            assert parts[0].summary == "New text A"
 
     def test_analyze_force_overrides_skip(self, mock_providers, tmp_path):
         """analyze(force=True) re-analyzes even when parts are current."""
@@ -606,7 +601,7 @@ class TestAnalyzeSkip:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
-                {"summary": "Part A", "content": "Text A"},
+                {"summary": "Text A"},
             ]
             parts = kp.analyze("test-doc")
             mock_llm.assert_not_called()  # LLM should never be invoked
@@ -627,7 +622,7 @@ class TestAnalyzeSkip:
 
         with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_llm:
             mock_llm.return_value = [
-                {"summary": "Part A", "content": "Text A"},
+                {"summary": "Text A"},
             ]
             parts = kp.analyze("test-doc", force=True)
             mock_llm.assert_called_once()
@@ -642,11 +637,11 @@ class TestFindPartUplift:
     """find() replaces part hits with their parent document."""
 
     MOCK_PARTS = [
-        {"summary": "Trip to Miami", "content": "Went to Miami in January",
+        {"summary": "Went to Miami in January",
          "tags": {"topic": "travel"}},
-        {"summary": "Planning next trip", "content": "Looking at flights to NYC",
+        {"summary": "Looking at flights to NYC",
          "tags": {"topic": "travel"}},
-        {"summary": "Work update", "content": "Finished the project report",
+        {"summary": "Finished the project report",
          "tags": {"topic": "work"}},
     ]
 
@@ -702,7 +697,7 @@ class TestFindPartUplift:
         assert part is not None
         assert "project" not in part.tags
 
-        # Query text hits a part's content ("Miami" is in the first part),
+        # Query text hits a part summary ("Miami" is in the first part),
         # and the tag filter matches the parent. The part must still
         # reach the result set so it can be uplifted to the parent.
         results = kp.find("Miami trip", tags={"project": "journal"})

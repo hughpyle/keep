@@ -362,7 +362,6 @@ class TestTagDedupOnWritePaths:
                     "part_num": 1,
                     "summary": "P1",
                     "tags": {"k": ["p", "p", "q"]},
-                    "content": "Body",
                     "created_at": "2026-01-02T00:00:00",
                 }],
             }],

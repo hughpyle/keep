@@ -42,7 +42,6 @@ def test_put_restores_archived_summary_tags_but_keeps_current_analysis(
             part_num=1,
             summary="Beta section",
             tags={"topic": "beta-part"},
-            content="Beta body",
             created_at=utc_now(),
         )
     ]

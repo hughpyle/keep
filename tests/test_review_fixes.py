@@ -429,7 +429,6 @@ class TestTagPart:
             part_num=1,
             summary="test part",
             tags={"topic": "original"},
-            content="test content",
             created_at="2026-01-01T00:00:00",
         )
         kp._document_store.upsert_parts(doc_coll, "test-doc", [part])
@@ -451,7 +450,6 @@ class TestTagPart:
             part_num=1,
             summary="test part",
             tags={"topic": "auth", "project": "myapp"},
-            content="test content",
             created_at="2026-01-01T00:00:00",
         )
         kp._document_store.upsert_parts(doc_coll, "test-doc2", [part])
@@ -473,7 +471,6 @@ class TestTagPart:
             part_num=1,
             summary="test part",
             tags={"_part_num": "1", "topic": "auth"},
-            content="test content",
             created_at="2026-01-01T00:00:00",
         )
         kp._document_store.upsert_parts(doc_coll, "test-doc3", [part])
@@ -495,7 +492,6 @@ class TestTagPart:
             part_num=1,
             summary="test part",
             tags={"speaker": ["Alice", "Bob"]},
-            content="test content",
             created_at="2026-01-01T00:00:00",
         )
         kp._document_store.upsert_parts(doc_coll, "test-doc4", [part])
@@ -743,7 +739,6 @@ class TestTagMarkerMigration:
                 part_num=1,
                 summary="part summary",
                 tags={"topic": "auth"},
-                content="part body",
                 created_at=utc_now(),
             )
             kp._document_store.upsert_parts(doc_coll, "doc:history", [part])

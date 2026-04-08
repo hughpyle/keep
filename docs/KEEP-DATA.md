@@ -90,7 +90,7 @@ keep data import -                           # Read from stdin
 
 ### After Import
 
-Imported documents are queued for re-embedding. Run:
+Imported documents, versions, and parts are queued for re-embedding. Run:
 
 ```bash
 keep pending    # Process embeddings in background
@@ -103,7 +103,7 @@ Until embeddings are processed, imported documents are retrievable by ID (`keep 
 ```json
 {
   "format": "keep-export",
-  "version": 1,
+  "version": 2,
   "exported_at": "2026-02-19T12:00:00",
   "store_info": {
     "document_count": 42,
@@ -124,7 +124,7 @@ Until embeddings are processed, imported documents are retrievable by ID (`keep 
         {"version": 1, "summary": "...", "tags": {}, "content_hash": "...", "created_at": "..."}
       ],
       "parts": [
-        {"part_num": 1, "summary": "...", "tags": {}, "content": "...", "created_at": "..."}
+        {"part_num": 1, "summary": "...", "tags": {}, "created_at": "..."}
       ]
     }
   ]

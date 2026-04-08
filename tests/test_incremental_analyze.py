@@ -45,7 +45,7 @@ def _make_versions(n, start=1):
 
 def _mock_parts(*summaries):
     """Build a list of part dicts from summaries."""
-    return [{"summary": s, "content": ""} for s in summaries]
+    return [{"summary": s} for s in summaries]
 
 
 class TestIncrementalAnalyze:
@@ -340,7 +340,7 @@ class TestMaxPartNum:
         for i in [1, 2, 5]:
             part = PartInfo(
                 part_num=i, summary=f"Part {i}", tags={},
-                content="", created_at="2026-03-12T00:00:00",
+                created_at="2026-03-12T00:00:00",
             )
             kp._document_store.upsert_single_part(doc_coll, "doc1", part)
 

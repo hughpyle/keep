@@ -313,9 +313,8 @@ Fields for version history listings:
 
 Fields for structural parts (from `analyze()`):
 - `part_num` (int) — Part number (1-indexed)
-- `summary` (str) — Summary of this part
+- `summary` (str) — Canonical text of this part
 - `tags` (dict[str, str | list[str]]) — Tags on this part
-- `content` (str) — Full text of this part
 - `created_at` (str) — ISO timestamp when this part was created
 
 ## Tags

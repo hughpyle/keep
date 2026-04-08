@@ -276,6 +276,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
 
+        if not self._startup_maintenance_deferred:
+            self._enqueue_migrated_part_reindex()
         self._cleanup_legacy_overview_parts(chroma_coll, doc_coll)
 
         # Check store consistency and reconcile in background if needed
@@ -666,6 +668,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
             chroma_coll = self._resolve_chroma_collection()
             doc_coll = self._resolve_doc_collection()
+            self._enqueue_migrated_part_reindex()
             self._run_tag_marker_startup_check(
                 chroma_coll, doc_coll, _doc_store=startup_doc_store,
             )
@@ -1157,7 +1160,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         **First yield** — header dict::
 
-            {"format": "keep-export", "version": 1, "exported_at": "...",
+            {"format": "keep-export", "version": 2, "exported_at": "...",
              "store_info": {"document_count": N, "version_count": N,
                             "part_count": N, "collection": "..."}}
 
@@ -1184,7 +1187,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # as we stream (header store_info is best-effort for streaming)
         yield {
             "format": "keep-export",
-            "version": 1,
+            "version": 2,
             "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "store_info": {
                 "document_count": len(doc_ids),
@@ -1236,7 +1239,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     "part_num": pi.part_num,
                     "summary": pi.summary,
                     "tags": dict(pi.tags),
-                    "content": pi.content,
                     "created_at": pi.created_at,
                 })
             if parts:
@@ -1252,7 +1254,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         ``export_iter()`` directly to stream documents.
 
         Returns:
-            Dict in keep-export format (version 1) with a ``documents`` list.
+            Dict in keep-export format (version 2) with a ``documents`` list.
         """
         it = self.export_iter(include_system=include_system)
         header = next(it)
@@ -1274,10 +1276,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         """
         if data.get("format") != "keep-export":
             raise ValueError("Invalid export format (expected 'keep-export')")
-        if data.get("version", 0) > 1:
+        if data.get("version", 0) > 2:
             raise ValueError(
                 f"Export format version {data['version']} is not supported "
-                f"(this version supports up to 1)"
+                f"(this version supports up to 2)"
             )
 
         doc_coll = self._resolve_doc_collection()
@@ -1318,6 +1320,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     source=f"Import part tags ({doc_id}@p{part_num})",
                     check_constraints=False,
                 )
+                part["summary"] = str(part.get("content") or part.get("summary") or "")
 
         # Filter to importable documents
         to_import = []
@@ -1354,6 +1357,23 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                         "tags": ver.get("tags", {}),
                     },
                 )
+                queued += 1
+
+            for part in doc.get("parts", []):
+                summary = str(part.get("summary") or "")
+                if not summary:
+                    continue
+                part_id = f"{doc_id}@p{part['part_num']}"
+                self._pending_queue.enqueue(
+                    part_id, doc_coll, summary,
+                    task_type="reindex",
+                    metadata={
+                        "part_num": part["part_num"],
+                        "base_id": doc_id,
+                        "tags": part.get("tags", {}),
+                    },
+                )
+                queued += 1
 
         return {
             "imported": stats["documents"],
@@ -4766,7 +4786,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 part_num=i,
                 summary=summary,
                 tags=part_tags,
-                content=str(raw.get("content") or ""),
                 created_at=now,
             )
             self._document_store.upsert_single_part(doc_coll, id, part)
@@ -4806,7 +4825,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         return Item(
             id=id,
-            summary=part.content if part.content else part.summary,
+            summary=part.summary,
             tags=tags,
         )
 
@@ -4841,6 +4860,27 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             deleted += self._document_store.delete_part(doc_coll, doc_id, 0)
         logger.info("Removed %d legacy overview part(s)", deleted)
         return deleted
+
+    def _enqueue_migrated_part_reindex(self) -> int:
+        """Queue part reindex tasks for rows rewritten by schema migration."""
+        migrated = getattr(self._document_store, "migrated_parts_for_reindex", [])
+        if not migrated:
+            return 0
+
+        for part in migrated:
+            self._pending_queue.enqueue(
+                f"{part['id']}@p{part['part_num']}",
+                part["collection"],
+                part["summary"],
+                task_type="reindex",
+                metadata={
+                    "part_num": part["part_num"],
+                    "base_id": part["id"],
+                    "tags": dict(part.get("tags") or {}),
+                },
+            )
+        logger.info("Queued %d migrated part(s) for reindex", len(migrated))
+        return len(migrated)
 
     # -------------------------------------------------------------------------
     # Collection Management
@@ -5402,7 +5442,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             self.delete(note_id)
         except Exception:
             pass
-        content = getattr(item, "content", None) or getattr(item, "summary", None)
+        content = getattr(item, "summary", None)
         if not content:
             return None
         return decode_cursor(str(content))

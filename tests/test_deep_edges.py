@@ -40,10 +40,10 @@ class TestQueryFtsScoped:
             s.upsert_parts("c", "doc-a", [
                 PartInfo(part_num=1,
                            summary="Melanie's reading habits",
-                           tags={}, content="", created_at="2024-01-01"),
+                           tags={}, created_at="2024-01-01"),
                 PartInfo(part_num=2,
                            summary="Melanie read Charlotte's Web",
-                           tags={}, content="", created_at="2024-01-01"),
+                           tags={}, created_at="2024-01-01"),
             ])
             # Create a version by upserting again (original becomes v1)
             s.upsert("c", "doc-c",
@@ -372,7 +372,6 @@ class TestDeepEdgeFollow:
                 part_num=1,
                 summary="Clarinet practice details",
                 tags={},
-                content="Clarinet scales and rehearsal",
                 created_at="2024-01-01",
             )],
         )

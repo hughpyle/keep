@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from keep.document_store import DocumentStore, SCHEMA_VERSION
+from keep.document_store import DocumentStore, PartInfo, SCHEMA_VERSION
+from keep.types import utc_now
 
 
 def _create_v0_db(path: Path, docs: list[tuple] = None):
@@ -81,6 +82,42 @@ def _create_v2_db(path: Path, docs: list[tuple] = None):
         CREATE INDEX idx_documents_accessed ON documents(accessed_at)
     """)
     conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+
+def _create_v13_parts_db(
+    path: Path,
+    *,
+    summary: str,
+    content: str,
+    tags: dict[str, object] | None = None,
+) -> None:
+    """Create a v13 database with the legacy document_parts.content column."""
+    db = DocumentStore(path)
+    try:
+        db.upsert("default", "doc1", "Doc 1", {})
+        db.upsert_parts(
+            "default",
+            "doc1",
+            [PartInfo(1, summary, tags or {}, utc_now())],
+        )
+    finally:
+        db.close()
+
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        "ALTER TABLE document_parts ADD COLUMN content TEXT NOT NULL DEFAULT ''"
+    )
+    conn.execute(
+        """
+        UPDATE document_parts
+        SET content = ?
+        WHERE id = 'doc1' AND collection = 'default' AND part_num = 1
+        """,
+        (content,),
+    )
+    conn.execute("PRAGMA user_version = 13")
     conn.commit()
     conn.close()
 
@@ -246,3 +283,95 @@ class TestMigrationAlreadyCurrent:
         assert wal_after == wal_before, (
             f"Unexpected writes: WAL grew from {wal_before} to {wal_after}"
         )
+
+
+class TestMigrationV13ToV14:
+    """Legacy part-content stores migrate to summary-only parts."""
+
+    def test_divergent_content_promotes_to_summary_and_queues_reindex(self, tmp_path):
+        db_path = tmp_path / "v13-divergent.db"
+        _create_v13_parts_db(
+            db_path,
+            summary="Short prefix",
+            content="Full migrated part text",
+            tags={"topic": "pdf"},
+        )
+
+        db = DocumentStore(db_path)
+        try:
+            assert db._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+            assert "content" not in _get_columns(db._conn, "document_parts")
+
+            part = db.get_part("default", "doc1", 1)
+            assert part is not None
+            assert part.summary == "Full migrated part text"
+            assert db.migrated_parts_for_reindex == [{
+                "id": "doc1",
+                "collection": "default",
+                "part_num": 1,
+                "summary": "Full migrated part text",
+                "tags": {"topic": "pdf"},
+            }]
+
+            hits = db.query_fts("default", "migrated", limit=10)
+            assert any(hit[0] == "doc1@p1" for hit in hits)
+        finally:
+            db.close()
+
+    def test_empty_legacy_content_preserves_summary_without_reindex(self, tmp_path):
+        db_path = tmp_path / "v13-empty-content.db"
+        _create_v13_parts_db(
+            db_path,
+            summary="Canonical summary text",
+            content="",
+            tags={"topic": "note"},
+        )
+
+        db = DocumentStore(db_path)
+        try:
+            part = db.get_part("default", "doc1", 1)
+            assert part is not None
+            assert part.summary == "Canonical summary text"
+            assert db.migrated_parts_for_reindex == []
+
+            hits = db.query_fts("default", "canonical", limit=10)
+            assert any(hit[0] == "doc1@p1" for hit in hits)
+        finally:
+            db.close()
+
+    def test_both_empty_rows_migrate_without_crashing(self, tmp_path):
+        db_path = tmp_path / "v13-both-empty.db"
+        _create_v13_parts_db(db_path, summary="", content="")
+
+        db = DocumentStore(db_path)
+        try:
+            part = db.get_part("default", "doc1", 1)
+            assert part is not None
+            assert part.summary == ""
+            assert db.migrated_parts_for_reindex == []
+        finally:
+            db.close()
+
+    def test_reopen_after_migration_is_idempotent(self, tmp_path):
+        db_path = tmp_path / "v13-idempotent.db"
+        _create_v13_parts_db(
+            db_path,
+            summary="Short prefix",
+            content="Full migrated part text",
+        )
+
+        db1 = DocumentStore(db_path)
+        try:
+            assert len(db1.migrated_parts_for_reindex) == 1
+        finally:
+            db1.close()
+
+        db2 = DocumentStore(db_path)
+        try:
+            assert db2.migrated_parts_for_reindex == []
+            part = db2.get_part("default", "doc1", 1)
+            assert part is not None
+            assert part.summary == "Full migrated part text"
+            assert "content" not in _get_columns(db2._conn, "document_parts")
+        finally:
+            db2.close()

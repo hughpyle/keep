@@ -22,7 +22,7 @@ EDITOR=code keep edit .ignore        # Use VS Code
 
 ## How it works
 
-1. Reads the current summary/content of the note
+1. Reads the current stored text of the note
 2. Writes it to a temporary file (`.md` by default)
 3. Opens the file in your editor
 4. On save, compares with the original — if changed, calls `put` to update

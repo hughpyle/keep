@@ -734,9 +734,8 @@ class BackgroundProcessingMixin:
                 "summary": summary,
             })
             mutations.append({
-                "op": "set_content",
+                "op": "set_summary",
                 "target": item_id,
-                "content": content,
                 "summary": summary,
                 "content_hash": str(result.get("content_hash") or ""),
                 "content_hash_full": str(result.get("content_hash_full") or ""),

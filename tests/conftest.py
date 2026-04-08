@@ -623,7 +623,7 @@ class MockDocumentStore:
             if not _matches_filter(rec_tags, tags):
                 continue
             results.append((id, rec["summary"], -1.0))
-        # Search parts (summary + content)
+        # Search parts (summary only)
         for key, parts in self._parts.items():
             # key format: _parts:{collection}:{id}
             parts_coll = key.split(":", 2)[1] if ":" in key else ""
@@ -631,7 +631,7 @@ class MockDocumentStore:
             if parts_coll != collection:
                 continue
             for part in parts:
-                text = (part.summary + " " + part.content).lower()
+                text = part.summary.lower()
                 if not any(t in text for t in tokens):
                     continue
                 if tags and not _matches_filter(part.tags, tags):
@@ -799,7 +799,6 @@ class MockDocumentStore:
                     part_num=p.part_num,
                     summary=p.summary,
                     tags=tags,
-                    content=p.content,
                     created_at=p.created_at,
                 )
                 return True

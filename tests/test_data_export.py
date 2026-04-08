@@ -84,7 +84,7 @@ class TestExportImport:
         """Export from empty store produces valid structure."""
         data = keeper.export_data()
         assert data["format"] == "keep-export"
-        assert data["version"] == 1
+        assert data["version"] == 2
         assert data["exported_at"]
         assert data["store_info"]["document_count"] >= 0
         assert isinstance(data["documents"], list)
@@ -321,6 +321,65 @@ class TestExportImport:
         stats = keeper.import_data(data, mode="merge")
         assert stats["queued"] == 2
 
+    def test_import_v1_part_content_normalizes_into_summary(self, keeper):
+        """Legacy v1 part content is promoted into the canonical part summary."""
+        data = {
+            "format": "keep-export",
+            "version": 1,
+            "exported_at": "2026-01-01T00:00:00",
+            "store_info": {"document_count": 1, "version_count": 0,
+                          "part_count": 1, "collection": "default"},
+            "documents": [{
+                "id": "legacy-part-doc",
+                "summary": "Parent summary",
+                "tags": {},
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-01T00:00:00",
+                "accessed_at": "2026-01-01T00:00:00",
+                "parts": [{
+                    "part_num": 1,
+                    "summary": "Old short prefix",
+                    "content": "Full legacy part text",
+                    "tags": {"topic": "legacy"},
+                    "created_at": "2026-01-01T00:00:00",
+                }],
+            }],
+        }
+
+        stats = keeper.import_data(data, mode="merge")
+        assert stats["queued"] == 2
+
+        part = keeper._document_store.get_part(
+            keeper._resolve_doc_collection(),
+            "legacy-part-doc",
+            1,
+        )
+        assert part is not None
+        assert part.summary == "Full legacy part text"
+
+    def test_export_parts_omit_legacy_content_field(self, keeper):
+        """Version 2 exports write summary-only part records."""
+        _seed(keeper, [_make_doc(
+            "summary-only",
+            "Parent summary",
+            parts=[{
+                "part_num": 1,
+                "summary": "Canonical part text",
+                "tags": {"topic": "x"},
+                "created_at": "2026-01-02T00:00:00",
+            }],
+        )])
+
+        data = keeper.export_data()
+        doc = next(d for d in data["documents"] if d["id"] == "summary-only")
+        assert data["version"] == 2
+        assert doc["parts"] == [{
+            "part_num": 1,
+            "summary": "Canonical part text",
+            "tags": {"topic": "x"},
+            "created_at": "2026-01-02T00:00:00",
+        }]
+
 
 class TestDocumentStoreImport:
     """Direct DocumentStore import method tests."""
@@ -348,7 +407,6 @@ class TestDocumentStoreImport:
                 "part_num": 1,
                 "summary": "Part one",
                 "tags": {"section": "intro"},
-                "content": "The introduction text.",
                 "created_at": "2026-01-02T00:00:00",
             }],
         }]
@@ -370,7 +428,6 @@ class TestDocumentStoreImport:
         parts = ds.list_parts(coll, "batch-1")
         assert len(parts) == 1
         assert parts[0].summary == "Part one"
-        assert parts[0].content == "The introduction text."
 
     def test_delete_collection_all(self, keeper):
         """delete_collection_all clears documents, versions, and parts."""
@@ -389,7 +446,7 @@ class TestDocumentStoreImport:
             }],
             "parts": [{
                 "part_num": 1, "summary": "p1", "tags": {},
-                "content": "text", "created_at": "2026-01-01T00:00:00",
+                "created_at": "2026-01-01T00:00:00",
             }],
         }]
         ds.import_batch(coll, docs)
@@ -586,14 +643,13 @@ class TestMarkdownExport:
             }],
             parts=[{
                 "part_num": 1, "summary": "p1", "tags": {},
-                "content": "chunk text", "created_at": "2026-01-01T00:00:00",
+                "created_at": "2026-01-01T00:00:00",
             }],
         )
         text = _render_doc_markdown(doc)
         # Neither versions nor parts should appear anywhere in the markdown.
         assert "versions" not in text
         assert "parts" not in text
-        assert "chunk text" not in text
         meta = yaml.safe_load(text.split("---", 2)[1])
         assert "versions" not in meta
         assert "parts" not in meta
@@ -682,14 +738,10 @@ class TestMarkdownExport:
     # ------------------------------------------------------------------
 
     def test_render_part_markdown_shape(self):
-        # The part's text lives in `summary` (same as for notes); the
-        # `content` field on the parts table is vestigial and the
-        # export deliberately ignores it.
         text = _render_part_markdown("auth-notes", {
             "part_num": 3,
             "summary": "The analysis text for this section.",
             "tags": {"section": "intro"},
-            "content": "ignored vestigial column",
             "created_at": "2026-01-15T10:30:00",
         })
         meta = yaml.safe_load(text.split("---", 2)[1])
@@ -698,21 +750,14 @@ class TestMarkdownExport:
         assert meta["part_num"] == 3
         assert meta["tags"] == {"section": "intro"}
         assert meta["created_at"] == "2026-01-15T10:30:00"
-        # Body comes from `summary`; `content` does NOT appear anywhere.
         assert body == "The analysis text for this section."
         assert "summary" not in meta
-        assert "content" not in meta
-        assert "ignored vestigial column" not in text
 
-    def test_render_part_markdown_ignores_content_when_summary_only(self):
-        # Real-world case: 99.4% of parts in actual stores have
-        # summary populated and content empty.  The body must come
-        # from summary.
+    def test_render_part_markdown_uses_summary_body(self):
         text = _render_part_markdown("notes", {
             "part_num": 1,
             "summary": "Just the analysis text.",
             "tags": {},
-            "content": "",
             "created_at": "2026-02-01T12:00:00",
         })
         body = text.split("---", 2)[2].lstrip("\n").rstrip("\n")
@@ -745,9 +790,9 @@ class TestMarkdownExport:
         _seed(keeper, [
             _make_doc("with-parts", "Parent summary", parts=[
                 {"part_num": 1, "summary": "p1", "tags": {},
-                 "content": "first chunk", "created_at": "2026-01-01T00:00:00"},
+                 "created_at": "2026-01-01T00:00:00"},
                 {"part_num": 2, "summary": "p2", "tags": {},
-                 "content": "second chunk", "created_at": "2026-01-01T00:00:00"},
+                 "created_at": "2026-01-01T00:00:00"},
             ]),
         ])
         out = tmp_path / "md-no-parts"
@@ -762,13 +807,13 @@ class TestMarkdownExport:
         _seed(keeper, [
             _make_doc("with-parts", "Parent summary", parts=[
                 {"part_num": 1, "summary": "Introduction analysis text.",
-                 "tags": {"section": "intro"}, "content": "",
+                 "tags": {"section": "intro"},
                  "created_at": "2026-01-01T00:00:00"},
                 {"part_num": 2, "summary": "Body analysis text.",
-                 "tags": {"section": "body"}, "content": "",
+                 "tags": {"section": "body"},
                  "created_at": "2026-01-02T00:00:00"},
                 {"part_num": 5, "summary": "Non-contiguous part text.",
-                 "tags": {}, "content": "",
+                 "tags": {},
                  "created_at": "2026-01-03T00:00:00"},
             ]),
         ])
@@ -852,7 +897,7 @@ class TestMarkdownExport:
         _seed(keeper, [
             _make_doc("combo", "current", parts=[
                 {"part_num": 1, "summary": "part one text", "tags": {},
-                 "content": "", "created_at": "2026-01-01T00:00:00"},
+                 "created_at": "2026-01-01T00:00:00"},
             ], versions=[
                 {"version": 1, "summary": "old", "tags": {},
                  "content_hash": None, "created_at": "2025-12-01T00:00:00"},
@@ -895,7 +940,7 @@ class TestMarkdownExport:
         class _FakeKeeper:
             def export_iter(self, *, include_system):
                 yield {
-                    "format": "keep-export", "version": 1,
+                    "format": "keep-export", "version": 2,
                     "exported_at": "2026-01-01T00:00:00",
                     "store_info": {"document_count": 2, "version_count": 0,
                                    "part_count": 0, "collection": "default"},
@@ -993,7 +1038,7 @@ class TestMarkdownExport:
                 }],
                 parts=[{
                     "part_num": 1, "summary": "p1", "tags": {},
-                    "content": "part body content", "created_at": "2026-01-01T00:00:00",
+                    "created_at": "2026-01-01T00:00:00",
                 }],
             ),
         ])
@@ -1003,9 +1048,8 @@ class TestMarkdownExport:
 
         text = (out / "with-history.md").read_text(encoding="utf-8")
         assert "Latest summary" in text
-        # Old version content and part content must not leak into the export.
+        # Old version bodies must not leak into the export.
         assert "Old summary" not in text
-        assert "part body content" not in text
 
     def test_write_markdown_export_progress_callback(self, keeper, tmp_path):
         _seed(keeper, [

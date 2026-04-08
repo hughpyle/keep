@@ -297,6 +297,14 @@ def _apply_mutations(
             from keep.providers.base import strip_summary_preamble
             summary = strip_summary_preamble(summary)
             keeper._document_store.update_summary(collection, target, summary)
+            content_hash = str(mut.get("content_hash", ""))
+            content_hash_full = str(mut.get("content_hash_full", ""))
+            if content_hash:
+                keeper._document_store.update_content_hash(
+                    collection, target,
+                    content_hash=content_hash,
+                    content_hash_full=content_hash_full,
+                )
             if mut.get("embed"):
                 chroma_coll = keeper._resolve_chroma_collection()
                 embedding = keeper._get_embedding_provider().embed(summary)
@@ -311,30 +319,6 @@ def _apply_mutations(
             else:
                 keeper._store.update_summary(collection, target, summary)
 
-        elif op == "set_content":
-            target = str(mut["target"])
-            content = str(_resolve_ref(mut["content"], output))
-            content_hash = str(mut.get("content_hash", ""))
-            content_hash_full = str(mut.get("content_hash_full", ""))
-            summary = str(_resolve_ref(mut.get("summary", ""), output))
-            keeper._document_store.update_summary(collection, target, summary)
-            if content_hash:
-                keeper._document_store.update_content_hash(
-                    collection, target,
-                    content_hash=content_hash,
-                    content_hash_full=content_hash_full,
-                )
-            chroma_coll = keeper._resolve_chroma_collection()
-            embedding = keeper._get_embedding_provider().embed(summary)
-            existing = keeper._document_store.get(collection, target)
-            tags = {}
-            if existing:
-                tags = casefold_tags_for_index(existing.tags or {})
-            keeper._store.upsert(
-                collection=chroma_coll, id=target,
-                embedding=embedding, summary=summary, tags=tags,
-            )
-
         elif op == "put_item":
             from .types import is_part_id, parse_part_id
             item_id = mut.get("id", "")
@@ -346,7 +330,6 @@ def _apply_mutations(
                 part = PartInfo(
                     part_num=part_num,
                     summary=str(mut.get("summary", "")),
-                    content=str(mut.get("content", "")),
                     tags=dict(mut.get("tags") or {}),
                     created_at=utc_now(),
                 )

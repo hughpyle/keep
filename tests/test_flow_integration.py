@@ -205,7 +205,6 @@ class TestGetContextFlow:
             part = PartInfo(
                 part_num=i + 1,
                 summary=f"Part {i + 1} about topic {i + 1}",
-                content=f"Content of part {i + 1}",
                 tags={"_base_id": "parts-lim"},
                 created_at=utc_now(),
             )

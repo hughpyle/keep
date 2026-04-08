@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 @dataclass
@@ -56,7 +56,6 @@ class PartInfo:
     part_num: int           # 1-indexed
     summary: str
     tags: dict[str, Any]
-    content: str            # extracted section text
     created_at: str
 
 
@@ -97,6 +96,7 @@ class DocumentStore:
         self._lock = threading.RLock()
         self._fts_available = False
         self._stopwords: Optional[frozenset[str]] = None
+        self.migrated_parts_for_reindex: list[dict[str, Any]] = []
         try:
             self._init_db()
         except sqlite3.DatabaseError as e:
@@ -245,7 +245,7 @@ class DocumentStore:
             self._execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts
                 USING fts5(
-                    summary, content,
+                    summary,
                     content='document_parts',
                     content_rowid='rowid',
                     tokenize='porter unicode61'
@@ -254,24 +254,24 @@ class DocumentStore:
             self._execute("""
                 CREATE TRIGGER IF NOT EXISTS parts_fts_ai
                 AFTER INSERT ON document_parts BEGIN
-                    INSERT INTO parts_fts(rowid, summary, content)
-                    VALUES (new.rowid, new.summary, new.content);
+                    INSERT INTO parts_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
                 END
             """)
             self._execute("""
                 CREATE TRIGGER IF NOT EXISTS parts_fts_ad
                 AFTER DELETE ON document_parts BEGIN
-                    INSERT INTO parts_fts(parts_fts, rowid, summary, content)
-                    VALUES('delete', old.rowid, old.summary, old.content);
+                    INSERT INTO parts_fts(parts_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
                 END
             """)
             self._execute("""
                 CREATE TRIGGER IF NOT EXISTS parts_fts_au
-                AFTER UPDATE OF summary, content ON document_parts BEGIN
-                    INSERT INTO parts_fts(parts_fts, rowid, summary, content)
-                    VALUES('delete', old.rowid, old.summary, old.content);
-                    INSERT INTO parts_fts(rowid, summary, content)
-                    VALUES (new.rowid, new.summary, new.content);
+                AFTER UPDATE OF summary ON document_parts BEGIN
+                    INSERT INTO parts_fts(parts_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                    INSERT INTO parts_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
                 END
             """)
             self._execute("""
@@ -330,6 +330,7 @@ class DocumentStore:
         - Version 6 → 7: FTS5 index + triggers (documents)
         - Version 7 → 8: FTS5 indexes + triggers (parts, versions)
         - Version 10 → 11: edge primary keys include target_id (multivalue)
+        - Version 13 → 14: Collapse part summary/content into summary-only storage
         """
         current_version = self._execute(
             "PRAGMA user_version"
@@ -451,7 +452,6 @@ class DocumentStore:
                         part_num INTEGER NOT NULL,
                         summary TEXT NOT NULL,
                         tags_json TEXT NOT NULL DEFAULT '{}',
-                        content TEXT NOT NULL DEFAULT '',
                         created_at TEXT NOT NULL,
                         PRIMARY KEY (id, collection, part_num)
                     )
@@ -527,13 +527,13 @@ class DocumentStore:
                     logger.info("FTS5 not available, full-text search disabled")
 
             if current_version < 8:
-                # FTS5 indexes for parts (summary + content) and versions
+                # FTS5 indexes for parts and versions
                 try:
                     # --- Parts FTS ---
                     self._execute("""
                         CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts
                         USING fts5(
-                            summary, content,
+                            summary,
                             content='document_parts',
                             content_rowid='rowid',
                             tokenize='porter unicode61'
@@ -542,24 +542,24 @@ class DocumentStore:
                     self._execute("""
                         CREATE TRIGGER IF NOT EXISTS parts_fts_ai
                         AFTER INSERT ON document_parts BEGIN
-                            INSERT INTO parts_fts(rowid, summary, content)
-                            VALUES (new.rowid, new.summary, new.content);
+                            INSERT INTO parts_fts(rowid, summary)
+                            VALUES (new.rowid, new.summary);
                         END
                     """)
                     self._execute("""
                         CREATE TRIGGER IF NOT EXISTS parts_fts_ad
                         AFTER DELETE ON document_parts BEGIN
-                            INSERT INTO parts_fts(parts_fts, rowid, summary, content)
-                            VALUES('delete', old.rowid, old.summary, old.content);
+                            INSERT INTO parts_fts(parts_fts, rowid, summary)
+                            VALUES('delete', old.rowid, old.summary);
                         END
                     """)
                     self._execute("""
                         CREATE TRIGGER IF NOT EXISTS parts_fts_au
-                        AFTER UPDATE OF summary, content ON document_parts BEGIN
-                            INSERT INTO parts_fts(parts_fts, rowid, summary, content)
-                            VALUES('delete', old.rowid, old.summary, old.content);
-                            INSERT INTO parts_fts(rowid, summary, content)
-                            VALUES (new.rowid, new.summary, new.content);
+                        AFTER UPDATE OF summary ON document_parts BEGIN
+                            INSERT INTO parts_fts(parts_fts, rowid, summary)
+                            VALUES('delete', old.rowid, old.summary);
+                            INSERT INTO parts_fts(rowid, summary)
+                            VALUES (new.rowid, new.summary);
                         END
                     """)
                     self._execute(
@@ -823,6 +823,77 @@ class DocumentStore:
                                             'old_target_id', old.target_id));
                     END
                 """)
+
+            if current_version < 14:
+                columns = {
+                    row[1]
+                    for row in self._execute(
+                        "PRAGMA table_info(document_parts)"
+                    ).fetchall()
+                }
+                if "content" in columns:
+                    changed_rows = self._execute("""
+                        SELECT id, collection, part_num, summary, tags_json,
+                               CASE
+                                   WHEN COALESCE(content, '') != '' THEN content
+                                   ELSE summary
+                               END AS migrated_summary
+                        FROM document_parts
+                        WHERE CASE
+                                  WHEN COALESCE(content, '') != '' THEN content
+                                  ELSE summary
+                              END != summary
+                    """).fetchall()
+                    self.migrated_parts_for_reindex = [
+                        {
+                            "id": row["id"],
+                            "collection": row["collection"],
+                            "part_num": row["part_num"],
+                            "summary": row["migrated_summary"],
+                            "tags": json.loads(row["tags_json"]),
+                        }
+                        for row in changed_rows
+                    ]
+
+                    self._execute("DROP TRIGGER IF EXISTS parts_fts_ai")
+                    self._execute("DROP TRIGGER IF EXISTS parts_fts_ad")
+                    self._execute("DROP TRIGGER IF EXISTS parts_fts_au")
+                    self._execute("DROP TABLE IF EXISTS parts_fts")
+
+                    self._execute("""
+                        CREATE TABLE document_parts_new (
+                            id TEXT NOT NULL,
+                            collection TEXT NOT NULL,
+                            part_num INTEGER NOT NULL,
+                            summary TEXT NOT NULL,
+                            tags_json TEXT NOT NULL DEFAULT '{}',
+                            created_at TEXT NOT NULL,
+                            PRIMARY KEY (id, collection, part_num)
+                        )
+                    """)
+                    self._execute("""
+                        INSERT INTO document_parts_new
+                            (id, collection, part_num, summary, tags_json, created_at)
+                        SELECT
+                            id,
+                            collection,
+                            part_num,
+                            CASE
+                                WHEN COALESCE(content, '') != '' THEN content
+                                ELSE summary
+                            END,
+                            tags_json,
+                            created_at
+                        FROM document_parts
+                    """)
+                    self._execute("DROP TABLE document_parts")
+                    self._execute(
+                        "ALTER TABLE document_parts_new RENAME TO document_parts"
+                    )
+                    self._execute("""
+                        CREATE INDEX IF NOT EXISTS idx_parts_doc
+                        ON document_parts(id, collection, part_num)
+                    """)
 
             self._execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
@@ -2506,7 +2577,7 @@ class DocumentStore:
     ) -> list[tuple[str, str, float]]:
         """Full-text search using FTS5 indexes (documents + parts).
 
-        Searches both document summaries and part summaries/content.
+        Searches document summaries and part summaries.
         Part results are returned with ``id@p{N}`` IDs so the caller's
         part-to-parent uplift logic can merge them.
 
@@ -2567,7 +2638,7 @@ class DocumentStore:
             doc_params.append(limit)
             doc_rows = self._execute(doc_sql, doc_params).fetchall()
 
-            # --- Search parts (summary + content) ---
+            # --- Search parts (summary only) ---
             part_sql = """
                 SELECT p.id || '@p' || p.part_num, p.summary, f.rank
                 FROM parts_fts f
@@ -2927,12 +2998,12 @@ class DocumentStore:
                 for part in parts:
                     self._execute("""
                         INSERT INTO document_parts
-                        (id, collection, part_num, summary, tags_json, content, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (id, collection, part_num, summary, tags_json, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
                     """, (
                         id, collection, part.part_num, part.summary,
                         json.dumps(normalize_tag_map(part.tags), ensure_ascii=False),
-                        part.content, part.created_at,
+                        part.created_at,
                     ))
 
                 self._conn.commit()
@@ -2958,12 +3029,12 @@ class DocumentStore:
         with self._lock:
             self._execute("""
                 INSERT OR REPLACE INTO document_parts
-                (id, collection, part_num, summary, tags_json, content, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, collection, part_num, summary, tags_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 id, collection, part.part_num, part.summary,
                 json.dumps(normalize_tag_map(part.tags), ensure_ascii=False),
-                part.content, part.created_at,
+                part.created_at,
             ))
             self._conn.commit()
 
@@ -2994,7 +3065,7 @@ class DocumentStore:
             PartInfo if found, None otherwise
         """
         cursor = self._execute("""
-            SELECT part_num, summary, tags_json, content, created_at
+            SELECT part_num, summary, tags_json, created_at
             FROM document_parts
             WHERE id = ? AND collection = ? AND part_num = ?
         """, (id, collection, part_num))
@@ -3007,7 +3078,6 @@ class DocumentStore:
             part_num=row["part_num"],
             summary=row["summary"],
             tags=json.loads(row["tags_json"]),
-            content=row["content"],
             created_at=row["created_at"],
         )
 
@@ -3026,7 +3096,7 @@ class DocumentStore:
             List of PartInfo, ordered by part_num
         """
         cursor = self._execute("""
-            SELECT part_num, summary, tags_json, content, created_at
+            SELECT part_num, summary, tags_json, created_at
             FROM document_parts
             WHERE id = ? AND collection = ?
             ORDER BY part_num
@@ -3037,7 +3107,6 @@ class DocumentStore:
                 part_num=row["part_num"],
                 summary=row["summary"],
                 tags=json.loads(row["tags_json"]),
-                content=row["content"],
                 created_at=row["created_at"],
             )
             for row in cursor
@@ -3384,7 +3453,7 @@ class DocumentStore:
             versions (list of version dicts), parts (list of part dicts).
 
         Version dicts: version, summary, tags, content_hash, created_at.
-        Part dicts: part_num, summary, tags, content, created_at.
+        Part dicts: part_num, summary, tags, created_at.
 
         Args:
             collection: Target collection name
@@ -3444,13 +3513,12 @@ class DocumentStore:
                         )
                         self._execute("""
                             INSERT OR REPLACE INTO document_parts
-                            (id, collection, part_num, summary, tags_json,
-                             content, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            (id, collection, part_num, summary, tags_json, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?)
                         """, (
                             doc["id"], collection, part["part_num"],
                             part.get("summary", ""), part_tags_json,
-                            part.get("content", ""), part["created_at"],
+                            part["created_at"],
                         ))
                         part_count += 1
 

@@ -64,8 +64,7 @@ class TestCheckContentHash:
 def _make_action_context(content_hash="h1", hash_tag="_analyzed_hash", tag_value="h1"):
     """Build a mock context that resolve_item_content and check_content_hash both work with."""
     item = MagicMock()
-    item.content = "some text content"
-    item.summary = ""
+    item.summary = "some text content"
     item.tags = {hash_tag: tag_value} if tag_value else {}
 
     doc = MagicMock()

@@ -669,21 +669,19 @@ DECOMPOSITION_SYSTEM_PROMPT = """You are a document analysis assistant. Your tas
 
 For each section, provide:
 - "summary": A concise summary of the section (1-3 sentences)
-- "content": The exact text of the section
 - "tags": A dict of relevant tags for this section (optional)
 
 Return a JSON array of section objects. Example:
 ```json
 [
-  {"summary": "Introduction and overview of the topic", "content": "The text of section 1...", "tags": {"topic": "overview"}},
-  {"summary": "Detailed analysis of the main argument", "content": "The text of section 2...", "tags": {"topic": "analysis"}}
+  {"summary": "Introduction and overview of the topic", "tags": {"topic": "overview"}},
+  {"summary": "Detailed analysis of the main argument", "tags": {"topic": "analysis"}}
 ]
 ```
 
 Guidelines:
 - Identify natural section boundaries (headings, topic shifts, structural breaks)
 - Each section should be a coherent unit of meaning
-- Preserve the original text exactly in the "content" field
 - Keep summaries concise but descriptive
 - Tags should capture the essence of each section's subject matter
 - Return valid JSON only, no commentary outside the JSON array"""
@@ -727,11 +725,10 @@ def _parse_decomposition_json(text: str) -> list[dict]:
     for entry in data:
         if not isinstance(entry, dict):
             continue
-        if not entry.get("summary") and not entry.get("content"):
+        if not entry.get("summary"):
             continue
         section = {
             "summary": str(entry.get("summary", "")),
-            "content": str(entry.get("content", "")),
         }
         if entry.get("tags") and isinstance(entry["tags"], dict):
             section["tags"] = {str(k): str(v) for k, v in entry["tags"].items()}

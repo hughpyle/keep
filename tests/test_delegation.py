@@ -258,15 +258,14 @@ class TestAnalyzeDelegation:
             "status": "completed",
             "output": {
                 "parts": [
-                    {"summary": "Part 1: Introduction", "content": "Intro text", "tags": {}},
-                    {"summary": "Part 2: Details", "content": "Detail text", "tags": {"topic": "tech"}},
+                    {"summary": "Part 1: Introduction", "tags": {}},
+                    {"summary": "Part 2: Details", "tags": {"topic": "tech"}},
                 ],
                 "mutations": [
                     {"op": "delete_prefix", "prefix": "doc1@p"},
                     {
                         "op": "put_item",
                         "id": "doc1@p1",
-                        "content": "Intro text",
                         "summary": "Part 1: Introduction",
                         "tags": {"_base_id": "doc1", "_part_num": "1"},
                         "queue_background_tasks": False,
@@ -274,7 +273,6 @@ class TestAnalyzeDelegation:
                     {
                         "op": "put_item",
                         "id": "doc1@p2",
-                        "content": "Detail text",
                         "summary": "Part 2: Details",
                         "tags": {
                             "_base_id": "doc1",

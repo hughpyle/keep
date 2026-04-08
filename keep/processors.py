@@ -184,7 +184,7 @@ def process_analyze(
         prompt_override: Analysis prompt text from .prompt/analyze/* docs.
 
     Returns:
-        Dict with parts=[{"summary": str, "content": str, "tags": dict}, ...]
+        Dict with parts=[{"summary": str, "tags": dict}, ...]
     """
     from .analyzers import SlidingWindowAnalyzer, TagClassifier
     from .providers.base import AnalysisChunk

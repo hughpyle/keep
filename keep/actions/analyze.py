@@ -20,11 +20,10 @@ tracer = get_tracer("flow")
 def _normalize_part(raw: Any) -> dict[str, Any]:
     """Normalize provider output into a stable part shape."""
     if not isinstance(raw, dict):
-        return {"summary": "", "content": "", "tags": {}}
+        return {"summary": "", "tags": {}}
     tags = raw.get("tags")
     return {
         "summary": str(raw.get("summary") or ""),
-        "content": str(raw.get("content") or ""),
         "tags": dict(tags) if isinstance(tags, dict) else {},
     }
 
@@ -235,7 +234,6 @@ class Analyze:
                     {
                         "op": "put_item",
                         "id": part_id,
-                        "content": str(part.get("content") or ""),
                         "summary": str(part.get("summary") or ""),
                         "tags": tags,
                         "queue_background_tasks": False,

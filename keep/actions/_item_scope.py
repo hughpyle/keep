@@ -86,8 +86,8 @@ def check_summary_hash(
 def resolve_item_content(params: dict[str, Any], context: Any) -> tuple[str, Any, str]:
     """Resolve non-empty content text for an item-scoped action."""
     item_id, item = resolve_item(params, context)
-    content = getattr(item, "content", None)
-    if content is None and getattr(context, "item_id", None) == item_id:
+    content = None
+    if getattr(context, "item_id", None) == item_id:
         payload_content = getattr(context, "item_content", None)
         if payload_content is not None:
             content = payload_content

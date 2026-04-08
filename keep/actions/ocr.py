@@ -125,9 +125,8 @@ class Ocr:
             "pages_processed": pages_processed,
             "mutations": [
                 {
-                    "op": "set_content",
+                    "op": "set_summary",
                     "target": item_id,
-                    "content": extracted,
                     "summary": summary,
                     "content_hash": content_hash,
                     "content_hash_full": content_hash_full,

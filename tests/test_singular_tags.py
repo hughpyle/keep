@@ -137,7 +137,7 @@ class TestSingularOnTagPart:
         doc_coll = kp._resolve_doc_collection()
         part = PartInfo(
             part_num=1, summary="part one",
-            tags={"priority": "low"}, content="part one",
+            tags={"priority": "low"},
             created_at=utc_now(),
         )
         kp._document_store.upsert_parts(doc_coll, "tp1", [part])

@@ -230,7 +230,7 @@ class TestRunLocalTask:
         # Mock analyzer to produce parts
         mock_analyzer = MagicMock()
         mock_analyzer.analyze.return_value = [
-            {"summary": "Part 1", "content": "content 1", "tags": {}},
+            {"summary": "Part 1", "tags": {}},
         ]
         kp._get_analyzer.return_value = mock_analyzer
         kp.list_items.return_value = []  # no tag specs
@@ -282,7 +282,7 @@ class TestRunLocalTask:
         kp._document_store.get.return_value = None
         mock_analyzer = MagicMock()
         mock_analyzer.analyze.return_value = [
-            {"summary": "Part 1", "content": "content 1", "tags": {}},
+            {"summary": "Part 1", "tags": {}},
         ]
         kp._get_analyzer.return_value = mock_analyzer
 
@@ -361,7 +361,7 @@ class TestAnalyzeSkipConditions:
         """Analyze returns empty parts when analyzer produces nothing."""
         from keep.actions.analyze import Analyze
         ctx = MagicMock()
-        ctx.get.return_value = MagicMock(content="some text content here", summary="")
+        ctx.get.return_value = MagicMock(summary="some text content here")
         ctx.resolve_provider.return_value = MagicMock(analyze=MagicMock(return_value=[]))
         ctx.list_items.return_value = []
         result = Analyze().run({"item_id": "d1"}, ctx)
@@ -416,7 +416,7 @@ class TestApplyMutations:
     def test_put_item_part_uses_part_storage(self):
         kp = MagicMock()
         output = {"mutations": [
-            {"op": "put_item", "id": "d1@p1", "content": "c", "summary": "s",
+            {"op": "put_item", "id": "d1@p1", "summary": "s",
              "tags": {"_base_id": "d1"}, "queue_background_tasks": False},
         ]}
         _apply_mutations(kp, "coll", output)
@@ -463,12 +463,11 @@ class TestApplyMutations:
         _apply_mutations(kp, "coll", {"mutations": None})
         assert kp.method_calls == []
 
-    def test_set_content(self):
+    def test_set_summary_updates_hashes_when_present(self):
         kp = MagicMock()
-        kp._document_store.get.return_value = MagicMock(tags={})
         output = {"mutations": [{
-            "op": "set_content", "target": "d1",
-            "content": "full text", "summary": "short",
+            "op": "set_summary", "target": "d1",
+            "summary": "short",
             "content_hash": "abc123", "content_hash_full": "abc123full",
         }]}
         _apply_mutations(kp, "coll", output)
@@ -476,4 +475,4 @@ class TestApplyMutations:
         kp._document_store.update_content_hash.assert_called_once_with(
             "coll", "d1", content_hash="abc123", content_hash_full="abc123full",
         )
-        kp._store.upsert.assert_called_once()
+        kp._store.update_summary.assert_called_once_with("coll", "d1", "short")
