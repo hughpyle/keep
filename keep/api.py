@@ -278,7 +278,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         if not self._startup_maintenance_deferred:
             self._enqueue_migrated_part_reindex()
-        self._cleanup_legacy_overview_parts(chroma_coll, doc_coll)
+        self._run_legacy_overview_cleanup(chroma_coll, doc_coll)
 
         # Check store consistency and reconcile in background if needed
         # (safe for all backends — uses abstract store interface)
@@ -402,6 +402,24 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             save_config(self._config)
         except Exception as e:
             logger.debug("Failed to persist chroma_tag_markers_verified: %s", e)
+
+    def _mark_legacy_overview_parts_cleaned(self) -> None:
+        """Persist that legacy @P{0} overview cleanup has run for this store."""
+        if self._config.legacy_overview_parts_cleaned:
+            return
+        self._config.legacy_overview_parts_cleaned = True
+        try:
+            save_config(self._config)
+        except Exception as e:
+            logger.debug("Failed to persist legacy_overview_parts_cleaned: %s", e)
+
+    def _run_legacy_overview_cleanup(self, chroma_coll: str, doc_coll: str) -> int:
+        """Run @P{0} overview cleanup at most once per store."""
+        if self._config.legacy_overview_parts_cleaned:
+            return 0
+        deleted = self._cleanup_legacy_overview_parts(chroma_coll, doc_coll)
+        self._mark_legacy_overview_parts_cleaned()
+        return deleted
 
     # Provider+model combinations known to be symmetric (task param is a no-op).
     # Key: provider name, Value: set of model prefixes that are symmetric,
@@ -4867,6 +4885,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if not migrated:
             return 0
 
+        queued = len(migrated)
         for part in migrated:
             self._pending_queue.enqueue(
                 f"{part['id']}@p{part['part_num']}",
@@ -4879,8 +4898,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     "tags": dict(part.get("tags") or {}),
                 },
             )
-        logger.info("Queued %d migrated part(s) for reindex", len(migrated))
-        return len(migrated)
+        migrated.clear()
+        logger.info("Queued %d migrated part(s) for reindex", queued)
+        return queued
 
     # -------------------------------------------------------------------------
     # Collection Management

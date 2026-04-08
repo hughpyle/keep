@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from keep.api import Keeper
 from keep.document_store import DocumentStore, PartInfo, SCHEMA_VERSION
 from keep.types import utc_now
 
@@ -375,3 +376,26 @@ class TestMigrationV13ToV14:
             assert "content" not in _get_columns(db2._conn, "document_parts")
         finally:
             db2.close()
+
+
+def test_enqueue_migrated_part_reindex_clears_pending_migration_list(
+    mock_providers, tmp_path,
+):
+    kp = Keeper(store_path=tmp_path)
+    try:
+        kp._document_store.migrated_parts_for_reindex = [{
+            "id": "doc1",
+            "collection": "default",
+            "part_num": 1,
+            "summary": "Updated part text",
+            "tags": {"topic": "x"},
+        }]
+        before = kp._pending_queue.count()
+
+        queued = kp._enqueue_migrated_part_reindex()
+
+        assert queued == 1
+        assert kp._document_store.migrated_parts_for_reindex == []
+        assert kp._pending_queue.count() == before + 1
+    finally:
+        kp.close()

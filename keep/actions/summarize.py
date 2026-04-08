@@ -7,7 +7,7 @@ from typing import Any
 from ..tracing import get_tracer
 from ..types import filter_non_system_tags
 from . import action
-from ._item_scope import check_content_hash, resolve_item, resolve_item_content
+from ._item_scope import check_content_hash, resolve_item, resolve_item_text
 
 tracer = get_tracer("flow")
 
@@ -90,7 +90,7 @@ class Summarize:
 
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         """Summarize item content and emit a `set_summary` mutation."""
-        item_id, item, content = resolve_item_content(params, context)
+        item_id, item, content = resolve_item_text(params, context)
 
         if check_content_hash(params, context, item_id, "_summarized_hash"):
             return {"skipped": True, "reason": "content unchanged"}

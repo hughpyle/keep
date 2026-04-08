@@ -534,7 +534,7 @@ class BackgroundProcessingMixin:
             self,
             collection=item.collection,
             item_id=item.id,
-            item_content=item.content or None,
+            item_text=item.content or None,
         )
         params: dict[str, Any] = {"item_id": item.id}
         params.update(item.metadata or {})

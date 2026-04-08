@@ -9,7 +9,7 @@ from ..providers.base import AnalysisChunk
 from ..tracing import get_tracer
 from ..types import SYSTEM_TAG_PREFIX
 from . import action
-from ._item_scope import check_content_hash, resolve_item_content
+from ._item_scope import check_content_hash, resolve_item_text
 from ._tagging import classify_parts_with_specs
 from ._item_scope import resolve_item
 from ._tagging import load_tag_specs
@@ -115,7 +115,7 @@ class Analyze:
         if isinstance(raw_chunks, list) and raw_chunks:
             chunk_dicts = raw_chunks
         else:
-            _item_id, _item_again, content = resolve_item_content(params, context)
+            _item_id, _item_again, content = resolve_item_text(params, context)
             chunk_dicts = [{"content": str(content), "tags": {}, "index": 0}]
 
         with tracer.start_as_current_span(

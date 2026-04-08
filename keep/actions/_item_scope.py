@@ -83,17 +83,25 @@ def check_summary_hash(
     return tags.get(hash_tag) == summary_hash
 
 
-def resolve_item_content(params: dict[str, Any], context: Any) -> tuple[str, Any, str]:
-    """Resolve non-empty content text for an item-scoped action."""
+def resolve_item_text(params: dict[str, Any], context: Any) -> tuple[str, Any, str]:
+    """Resolve non-empty text for an item-scoped action."""
     item_id, item = resolve_item(params, context)
-    content = None
+    text = None
     if getattr(context, "item_id", None) == item_id:
-        payload_content = getattr(context, "item_content", None)
-        if payload_content is not None:
-            content = payload_content
-    if content is None:
-        content = getattr(item, "summary", "")
-    text = str(content or "")
+        context_dict = getattr(context, "__dict__", {})
+        payload_text = context_dict.get("item_text")
+        if payload_text is None:
+            payload_text = context_dict.get("item_content")
+        if payload_text is not None:
+            text = payload_text
+    if text is None:
+        text = getattr(item, "summary", "")
+    text = str(text or "")
     if not text:
         raise ValueError(f"item content unavailable: {item_id}")
     return item_id, item, text
+
+
+def resolve_item_content(params: dict[str, Any], context: Any) -> tuple[str, Any, str]:
+    """Backward-compatible alias for ``resolve_item_text``."""
+    return resolve_item_text(params, context)

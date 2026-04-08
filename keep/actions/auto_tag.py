@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import action
-from ._item_scope import check_content_hash, check_summary_hash, resolve_item_content
+from ._item_scope import check_content_hash, check_summary_hash, resolve_item_text
 from ._tagging import classify_parts_with_specs
 
 
@@ -28,7 +28,7 @@ class AutoTag:
 
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         """Run constrained classification and return normalized tags."""
-        item_id, _item, content = resolve_item_content(params, context)
+        item_id, _item, content = resolve_item_text(params, context)
 
         if check_content_hash(params, context, item_id, "_tagged_hash"):
             return {"skipped": True, "reason": "content unchanged"}

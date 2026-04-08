@@ -528,6 +528,7 @@ def make_action_runner(
     *,
     writable: bool = False,
     item_id: str | None = None,
+    item_text: str | None = None,
     item_content: str | None = None,
     context_cache: Any | None = None,
 ) -> ActionRunner:
@@ -540,16 +541,17 @@ def make_action_runner(
                   resolution raises NotImplementedError.
         item_id: Default item ID for item-scoped actions (used when
             the action's params don't specify ``item_id``).
-        item_content: Full content text for the item (not stored in the
-            document store, so must be passed explicitly for actions
-            like summarize that need it).
+        item_text: Canonical input text for the item during action execution.
+        item_content: Backward-compatible alias for ``item_text``.
         context_cache: Optional action-result cache that deduplicates
             repeated action calls within a single flow execution.
     """
     from .actions import prepare_action_params
 
+    if item_text is None:
+        item_text = item_content
     ctx = _EnvActionContext(
-        env, writable=writable, item_id=item_id, item_content=item_content,
+        env, writable=writable, item_id=item_id, item_text=item_text,
     )
 
     def _run(action_name: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -588,12 +590,13 @@ class _EnvActionContext:
         *,
         writable: bool = False,
         item_id: str | None = None,
-        item_content: str | None = None,
+        item_text: str | None = None,
     ) -> None:
         self._env = env
         self._writable = writable
         self.item_id = item_id
-        self.item_content = item_content
+        self.item_text = item_text
+        self.item_content = item_text
 
     def get(self, id: str) -> Any:
         return self._env.get(id)

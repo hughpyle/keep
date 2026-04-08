@@ -54,12 +54,13 @@ class _KeeperActionContext:
         *,
         collection: str,
         item_id: str | None = None,
-        item_content: str | None = None,
+        item_text: str | None = None,
     ) -> None:
         self._keeper = keeper
         self._collection = collection
         self.item_id = item_id
-        self.item_content = item_content
+        self.item_text = item_text
+        self.item_content = item_text
 
     def get(self, id: str) -> Any:
         return self._keeper.get(id)
@@ -399,7 +400,7 @@ def run_local_task(keeper: "Keeper", req: TaskRequest) -> TaskRunResult:
         keeper,
         collection=req.collection,
         item_id=req.id,
-        item_content=req.content or None,
+        item_text=req.content or None,
     )
 
     params: dict[str, Any] = {"item_id": req.id}

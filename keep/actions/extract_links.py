@@ -9,7 +9,7 @@ from typing import Any
 
 from ..types import file_uri_to_path
 from . import action
-from ._item_scope import resolve_item_content
+from ._item_scope import resolve_item_text
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ class ExtractLinks:
     """
 
     def run(self, params: dict[str, Any], context: Any) -> dict[str, Any]:
-        item_id, item, content = resolve_item_content(params, context)
+        item_id, item, content = resolve_item_text(params, context)
 
         tag_key = str(params.get("tag", "references"))
         create_targets = str(params.get("create_targets", "true")).lower() == "true"

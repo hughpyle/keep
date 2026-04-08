@@ -423,7 +423,7 @@ class TestKeeperAnalyze:
         assert [p.part_num for p in parts] == [1, 2, 3]
 
     def test_startup_removes_legacy_overview_part(self, mock_providers, tmp_path):
-        """Keeper startup deletes legacy @P{0} rows and vector entries."""
+        """Keeper startup deletes legacy @P{0} rows once and persists that cleanup."""
         kp = Keeper(store_path=tmp_path)
         kp.put("Content for analysis testing with enough length. " * 12, id="test-doc")
         doc_coll = kp._resolve_doc_collection()
@@ -432,7 +432,7 @@ class TestKeeperAnalyze:
         kp._document_store.upsert_single_part(
             doc_coll,
             "test-doc",
-            PartInfo(0, "Legacy overview", {"_part_type": "overview"}, now),
+            PartInfo(0, "Legacy overview", {}, now),
         )
         embedding = kp._get_embedding_provider().embed("Legacy overview")
         kp._store.upsert_part(
@@ -441,7 +441,7 @@ class TestKeeperAnalyze:
             0,
             embedding,
             "Legacy overview",
-            {"_part_type": "overview"},
+            {},
         )
         assert kp._document_store.get_part(doc_coll, "test-doc", 0) is not None
         assert kp._store.get(chroma_coll, "test-doc@p0") is not None
@@ -452,6 +452,15 @@ class TestKeeperAnalyze:
         chroma_coll2 = kp2._resolve_chroma_collection()
         assert kp2._document_store.get_part(doc_coll2, "test-doc", 0) is None
         assert kp2._store.get(chroma_coll2, "test-doc@p0") is None
+        assert kp2._config.legacy_overview_parts_cleaned is True
+        kp2.close()
+
+        with patch.object(Keeper, "_cleanup_legacy_overview_parts", autospec=True) as cleanup:
+            kp3 = Keeper(store_path=tmp_path)
+            try:
+                cleanup.assert_not_called()
+            finally:
+                kp3.close()
 
     def test_analyze_nonexistent_raises(self, mock_providers, tmp_path):
         """analyze() raises ValueError for nonexistent document."""

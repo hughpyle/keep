@@ -227,12 +227,12 @@ def _execute_flow_item(
 
     # Extract item context for item-scoped actions (summarize, analyze, etc.)
     item_id = str(input_data.get("item_id") or params.get("item_id") or "").strip() or None
-    content = input_data.get("content")
+    text = input_data.get("content")
 
     env = LocalFlowEnvironment(keeper)
     loader = make_state_doc_loader(env)
     base_runner = make_action_runner(
-        env, writable=True, item_id=item_id, item_content=content,
+        env, writable=True, item_id=item_id, item_text=text,
     )
 
     # Wrap the runner to apply mutations (set_summary, put_item, etc.)
