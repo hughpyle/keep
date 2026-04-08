@@ -154,17 +154,21 @@ topic:  "index"                    # documentation topic (default: index)
 
 ## Agent Workflow
 
-```
-keep_prompt(name="session-start")                                              # 1. Start
-keep_flow(state="query-resolve", params={query: "topic"}, token_budget=2000)   # 2. Search
-keep_flow(state="put", params={content: "insight", tags: {type: "learning"}})  # 3. Capture
-keep_prompt(name="reflect")                                                     # 4. Reflect
-keep_flow(state="put", params={content: "next steps", id: "now"})              # 5. Update
-```
+A typical session: orient, search, capture, reflect, update working
+context. Each step is one tool call:
+
+1. `keep_prompt(name="session-start")`
+2. `keep_flow(state="query-resolve", params={"query": "topic"}, token_budget=2000)`
+3. `keep_flow(state="put", params={"content": "insight", "tags": {"type": "learning"}})`
+4. `keep_prompt(name="reflect")`
+5. `keep_flow(state="put", params={"id": "now", "content": "next steps"})`
 
 ## Concurrency
 
-All Keeper calls are serialized through a single `asyncio.Lock`. This is safe for the local SQLite + ChromaDB stores. Cross-process safety (multiple agents sharing a store) is handled at the store layer.
+The MCP stdio server is a thin HTTP client to the daemon. The daemon uses a
+`ThreadingHTTPServer` (one thread per request) and the underlying SQLite +
+ChromaDB stores handle their own locking. Cross-process safety (multiple
+agents sharing a store) is handled at the store layer.
 
 ## See Also
 

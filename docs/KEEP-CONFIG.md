@@ -30,7 +30,8 @@ keep config providers.embedding       # Embedding provider name
 |--------|-------------|
 | `--setup` | Run the interactive setup wizard |
 | `--reset-system-docs` | Force reload system documents from bundled content |
-| `-s`, `--store PATH` | Override store directory |
+| `--state-diagram` | Print a Mermaid state-transition diagram of the `.state/*` notes currently in the store (reflects any edits or additions) |
+| `-s`, `--store PATH` | Override store directory (global option, available on every subcommand) |
 
 ## Config file location
 

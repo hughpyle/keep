@@ -63,7 +63,7 @@ Part numbers are **1-indexed**: @P{1} = first part, @P{2} = second part, etc.
 
 ```bash
 keep find "auth" --json | ...                        # Process search results
-keep list -n 5 --json | ...                          # Process recent notes
+keep list -l 5 --json | ...                          # Process recent notes
 
 # Version history composition
 diff <(keep get doc:1) <(keep get "doc:1@V{1}")      # Diff current vs previous

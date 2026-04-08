@@ -6,7 +6,7 @@ List recent items or filter by tags and prefix.
 
 ```bash
 keep list                             # Recent items (by update time)
-keep list -n 20                       # Show 20 most recent
+keep list -l 20                       # Show 20 most recent
 keep list --sort accessed             # Sort by last access time
 keep list .tag                        # Items with ID prefix ".tag/"
 keep list .tag/act                    # Items under ".tag/act/"
@@ -19,7 +19,7 @@ keep list .tag/act                    # Items under ".tag/act/"
 | `PREFIX` | Optional positional — filter notes by ID prefix or glob (e.g. `session-*`) |
 | `-t`, `--tag KEY=VALUE` | Filter by tag (repeatable, AND logic) |
 | `--sort ORDER` | Sort by `updated` (default), `accessed`, `created`, or `id` |
-| `-n`, `--limit N` | Maximum results (default 20) |
+| `-l`, `--limit N` | Maximum results (default 20) |
 | `--since DURATION` | Only notes updated since (ISO duration or date) |
 | `--until DURATION` | Only notes updated before (ISO duration or date) |
 | `-a`, `--all` | Include hidden system notes (IDs starting with `.`) |
@@ -57,7 +57,7 @@ keep list --since P30D --until P7D   # Between 30 and 7 days ago
 ## Pipe composition
 
 ```bash
-keep --ids list -n 5 | xargs keep get              # Get details for recent items
+keep --ids list -l 5 | xargs keep get              # Get details for recent items
 keep --ids list --tag project=foo | xargs keep del  # Bulk operations
 ```
 

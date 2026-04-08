@@ -15,7 +15,7 @@ keep find --id ID                     # Find notes similar to an existing note
 |--------|-------------|
 | `--id ID` | Find notes similar to this ID (instead of text query) |
 | `-t`, `--tag KEY=VALUE` | Filter by tag (repeatable, AND logic) |
-| `-n`, `--limit N` | Maximum results (default 10) |
+| `-l`, `--limit N` | Maximum results (default 10) |
 | `--since DURATION` | Only notes updated since (see time filtering below) |
 | `--until DURATION` | Only notes updated before (see time filtering below) |
 | `-D`, `--deep` | Follow tags/edges from results to discover related notes |
@@ -90,7 +90,7 @@ Deep search (`--deep`) follows tags and edges from the primary results to discov
 
 ```bash
 keep find "authentication" --deep      # Primary results + related notes
-keep find "auth" --deep -n 5           # Top 5 with deep groups
+keep find "auth" --deep -l 5           # Top 5 with deep groups
 ```
 
 When edge tags are defined (see [EDGE-TAGS.md](EDGE-TAGS.md)), deep search follows edges to find related notes via graph traversal. Without edges, it falls back to tag-based discovery — finding notes that share tags with the primary results.

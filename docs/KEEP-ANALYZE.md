@@ -33,7 +33,9 @@ Parts are the structural counterpart to versions:
 | `-t`, `--tag KEY` | Guidance tag keys (repeatable). Fetches `.tag/KEY` descriptions to guide decomposition |
 | `--foreground`, `--fg` | Run in foreground and wait for results (default: background) |
 | `--force` | Re-analyze even if parts are already current |
-| `-s`, `--store PATH` | Override store directory |
+
+The global `-s/--store` option (available on every `keep` subcommand) overrides
+the store directory.
 
 ## Background processing
 
@@ -111,12 +113,9 @@ keep put doc:1 "updated content"      # Content changes
 keep analyze doc:1                    # Re-analyzes (content changed)
 ```
 
-This makes `put --analyze` safe for cron jobs — point it at a folder daily
-and only new or changed files get analyzed:
-
-```bash
-keep put /path/to/docs/ --analyze     # Only analyzes what needs it
-```
+Analysis is queued automatically by the `after-write` flow whenever a note
+is stored or updated, so a daily cron that re-runs `keep put /path/to/docs/`
+will only re-analyze files whose content actually changed.
 
 Use `--force` to override the skip:
 

@@ -51,7 +51,7 @@ Document summary here...
 
 ```bash
 keep get doc:1 doc:2 doc:3            # Items separated by ---
-keep --ids list -n 5 | xargs keep get # Pipe from list
+keep --ids list -l 5 | xargs keep get # Pipe from list
 ```
 
 ## Parts

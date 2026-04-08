@@ -22,8 +22,9 @@ keep prompt reflect --tag project=myapp   # Scoped to project
 | `--tag`, `-t` KEY=VALUE | Filter search context by tag (repeatable) |
 | `--since DURATION` | Only items updated since (ISO duration or date) |
 | `--until DURATION` | Only items updated before (ISO duration or date) |
+| `--deep`, `-D` | Follow tags/edges from results to discover related items |
 | `--scope`, `-S` GLOB | Constrain search results to IDs matching glob |
-| `-n`, `--limit N` | Max search results (default: 5) |
+| `--tokens N` | Token budget for `{find}` context rendering (default: template default) |
 
 ## Template placeholders
 

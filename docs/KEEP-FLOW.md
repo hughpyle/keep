@@ -158,7 +158,7 @@ Flows return structured JSON, so they compose with other commands:
 
 ```bash
 # Re-process all project notes
-for id in $(keep list --prefix project/ --json | jq -r '.[].id'); do
+for id in $(keep list project/ --json | jq -r '.notes[].id'); do
   keep flow after-write --target "$id"
 done
 

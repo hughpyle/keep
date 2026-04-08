@@ -46,14 +46,23 @@ Working on auth flow
 
 ## keep move
 
-When a string of work is complete, move the now history into a named note. Requires either `-t` (tag filter) or `--only` (cherry-pick the tip).
+When a string of work is complete, move the now history into a named note.
 
 ```bash
-keep move "auth-string" -t project=myapp   # Move matching versions
-keep move "quick-note" --only              # Move just the current version
+keep move "auth-string"                       # Move all of now's versions
+keep move "auth-string" --source other-note   # Move from a different source
 ```
 
-Moving to an existing name appends incrementally. Use `--from` to reorganize between items. See [KEEP-MOVE.md](KEEP-MOVE.md) for details.
+Moving to an existing name appends incrementally. The CLI itself only takes
+`name` and `--source`; for tag-filtered moves or "only the current version",
+drop down to the underlying flow:
+
+```bash
+keep flow move -p name=auth-string -p tags='{"project":"myapp"}'
+keep flow move -p name=auth-string -p only_current=true
+```
+
+See [KEEP-MOVE.md](KEEP-MOVE.md) for details.
 
 ## keep prompt reflect
 

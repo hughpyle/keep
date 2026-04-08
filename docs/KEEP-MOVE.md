@@ -18,6 +18,16 @@ keep move "target" --source "other-note"       # Move from a different source
 | `NAME` | Required positional — target note name |
 | `--source ID` | Source note to move from (default: `now`) |
 
+The CLI is intentionally minimal. The underlying `.state/move` flow also
+accepts `tags` (filter to versions matching tags) and `only_current` (move
+just the tip version, not the full history). To use those, drop down to
+`keep flow`:
+
+```bash
+keep flow move -p name=auth-string -p tags='{"project":"myapp"}'
+keep flow move -p name=quick-snap -p only_current=true
+```
+
 ## How it works
 
 1. Versions are moved from the source to the named target
