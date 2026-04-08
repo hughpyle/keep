@@ -8,7 +8,6 @@ from pathlib import Path
 from keep.api import Keeper
 from keep.cli_app import (
     _MAX_FILENAME_BYTES,
-    _ExportCollisionError,
     _id_to_rel_path,
     _md_link_target,
     _render_doc_markdown,
@@ -946,36 +945,174 @@ class TestMarkdownExport:
         assert (out / "plain.md").is_file()
         assert not (out / "plain").exists()
 
-    def test_write_markdown_export_collision_detected(self, tmp_path):
-        # The db enforces unique ids, but the encoded-path layer can
-        # in principle collide for ids that differ only in characters
-        # the encoder collapses.  We test the detection logic directly
-        # by feeding a fake iterator that yields two distinct entries
-        # mapping to the same target path.
-        out = tmp_path / "md-collide"
+    def test_write_markdown_export_case_fold_file_vs_sidecar_dir(
+        self, keeper, tmp_path,
+    ):
+        """File from one id auto-disambiguates from sidecar dir of another.
+
+        Reproduces a bug where two file:// ids whose paths case-fold
+        to the same on-disk slot crashed with a raw FileExistsError on
+        case-insensitive filesystems when the sidecar dir creation
+        tried to overwrite an existing file:
+
+            ``file:///abc/def``    → file/abc/def.md       (file)
+            ``file:///abc/DEF.md`` → file/abc/DEF.md.md    (file)
+                                     file/abc/DEF.md/      (sidecar dir)
+
+        On macOS APFS the sidecar dir ``file/abc/DEF.md`` case-folds
+        to ``file/abc/def.md`` — already a regular file from the
+        first id.  The export now appends a hash suffix to the
+        second doc's stem so both notes coexist on disk and the
+        sidecar dir lives at a non-colliding path.
+        """
+        _seed(keeper, [
+            _make_doc("file:///abc/def", "A body"),
+            _make_doc("file:///abc/DEF.md", "B body", parts=[
+                {"part_num": 1, "summary": "p1", "tags": {},
+                 "created_at": "2026-01-01T00:00:00"},
+            ]),
+        ])
+        out = tmp_path / "md-casefold"
         out.mkdir()
+        _write_markdown_export(
+            keeper, out, include_system=False, include_parts=True,
+        )
 
-        class _FakeKeeper:
-            def export_iter(self, *, include_system):
-                yield {
-                    "format": "keep-export", "version": 2,
-                    "exported_at": "2026-01-01T00:00:00",
-                    "store_info": {"document_count": 2, "version_count": 0,
-                                   "part_count": 0, "collection": "default"},
-                }
-                for summary in ("first", "second"):
-                    yield {
-                        "id": "dup", "summary": summary, "tags": {},
-                        "created_at": "2026-01-01T00:00:00",
-                        "updated_at": "2026-01-01T00:00:00",
-                        "accessed_at": "2026-01-01T00:00:00",
-                    }
+        # The first doc landed at the canonical path.
+        canonical_a = out / "file" / "abc" / "def.md"
+        assert canonical_a.is_file()
 
-        with pytest.raises(_ExportCollisionError) as ei:
-            _write_markdown_export(_FakeKeeper(), out, include_system=False)
-        assert ei.value.path == Path("dup.md")
-        assert ei.value.first_id == "dup"
-        assert ei.value.second_id == "dup"
+        # The second doc was disambiguated — its main file is no
+        # longer at ``DEF.md.md`` but at ``DEF.md.<hash>.md``, and
+        # its sidecar dir is at ``DEF.md.<hash>/``.  Find them.
+        b_files = [
+            p for p in (out / "file" / "abc").iterdir()
+            if p.is_file() and p != canonical_a
+        ]
+        assert len(b_files) == 1, f"expected one B file, got {b_files}"
+        b_main = b_files[0]
+        assert b_main.name.startswith("DEF.md.")
+        assert b_main.name.endswith(".md")
+        # The disambiguation hash is 8 hex chars wedged into the stem.
+        # The frontmatter still records the canonical id.
+        meta_b, _ = _parse_markdown(b_main)
+        assert meta_b["id"] == "file:///abc/DEF.md"
+
+        # The sidecar dir matches the disambiguated stem (so its case-
+        # folded name no longer collides with ``def.md``) and the part
+        # file lives inside it.
+        b_sidecar = b_main.with_suffix("")
+        assert b_sidecar.is_dir()
+        assert (b_sidecar / "@P{1}.md").is_file()
+
+    def test_write_markdown_export_case_fold_two_main_files(
+        self, keeper, tmp_path,
+    ):
+        """Two main-file paths that differ only in case auto-disambiguate."""
+        _seed(keeper, [
+            _make_doc("readme", "lower"),
+            _make_doc("README", "upper"),
+        ])
+        out = tmp_path / "md-case-files"
+        out.mkdir()
+        _write_markdown_export(keeper, out, include_system=False)
+
+        files = sorted(p.name for p in out.iterdir() if p.is_file())
+        # Two distinct on-disk files exist — one canonical, one with
+        # an 8-hex-char disambiguation suffix.
+        assert len(files) == 2
+        canonical = {"readme.md", "README.md"}
+        disambiguated = [f for f in files if f not in canonical]
+        canonical_files = [f for f in files if f in canonical]
+        assert len(canonical_files) == 1
+        assert len(disambiguated) == 1
+        # The disambiguated file's stem is `<canonical_stem>.<hash>`.
+        assert disambiguated[0].count(".") == 2
+
+        # Both notes' frontmatter still records the canonical id —
+        # the disambiguation is purely an on-disk detail.
+        ids = set()
+        for f in files:
+            meta, _ = _parse_markdown(out / f)
+            ids.add(meta["id"])
+        assert ids == {"readme", "README"}
+
+    def test_write_markdown_export_disambiguation_in_inverse_edge_links(
+        self, keeper, tmp_path,
+    ):
+        """Inverse-edge links target the disambiguated path, not canonical.
+
+        When a doc with incoming inverse edges is itself disambiguated,
+        the ``## Referenced By`` section on a third doc that points at
+        it must use the disambiguated filename — otherwise wiki tools
+        follow the link to a file that doesn't exist.
+        """
+        _seed(keeper, [
+            _make_doc("readme", "lower"),
+            _make_doc("README", "upper"),
+            _make_doc("source", "Source body"),
+        ])
+        # 'source' has an edge pointing at 'readme' (the lowercase one).
+        ds = keeper._document_store
+        coll = keeper._resolve_doc_collection()
+        ds.upsert_edge(
+            coll, "source", "speaker", "readme", "said",
+            "2026-01-15T10:00:00",
+        )
+
+        out = tmp_path / "md-disambig-link"
+        out.mkdir()
+        _write_markdown_export(keeper, out, include_system=False)
+
+        # Find which file is the canonical 'readme' and which is the
+        # disambiguated 'README'.  The inverse-edge link in source.md
+        # must point to whichever file is the actual on-disk path of
+        # the lowercase 'readme' doc.
+        readme_file: Optional[Path] = None
+        for p in out.iterdir():
+            if not p.is_file() or p.name == "source.md":
+                continue
+            meta, _ = _parse_markdown(p)
+            if meta["id"] == "readme":
+                readme_file = p
+                break
+        assert readme_file is not None
+
+        # The link target in source.md should resolve (after URL-decoding)
+        # to the actual on-disk filename of 'readme'.
+        from urllib.parse import unquote
+        _meta, source_body = _parse_markdown(out / "source.md")
+        assert "## Referenced By" not in source_body  # source has no incoming
+        # 'readme' has the incoming edge — its body has the section.
+        _meta, readme_body = _parse_markdown(readme_file)
+        assert "## Referenced By" in readme_body
+        assert "[source](source.md)" in readme_body
+
+        # Now the more interesting check: source.md does NOT have an
+        # outbound link rendered (forward edges are 'just tags'), but
+        # readme.md's section uses the live edges table.  The hash-
+        # disambiguated 'README' doc shouldn't appear in any section.
+        for p in out.iterdir():
+            if not p.is_file():
+                continue
+            text = p.read_text(encoding="utf-8")
+            # No broken links to the canonical 'README.md' which may
+            # not exist on disk if it got disambiguated.
+            for line in text.split("\n"):
+                if "](" not in line:
+                    continue
+                start = line.index("](") + 2
+                end = line.index(")", start)
+                target = line[start:end]
+                if target.startswith(("http://", "https://")):
+                    continue
+                resolved = unquote(target)
+                # Resolve relative to this file's directory.
+                src_dir = p.parent
+                target_path = (src_dir / resolved).resolve()
+                assert target_path.exists() or target_path.is_symlink(), (
+                    f"broken link in {p.name}: {target} → {target_path}"
+                )
 
     def test_cli_include_parts_and_versions_flags(self, tmp_path):
         from typer.testing import CliRunner

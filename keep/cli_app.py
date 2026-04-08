@@ -2015,6 +2015,7 @@ def _render_inverse_edges_section(
     inverse_edges: list[tuple[str, str]],
     *,
     include_system: bool,
+    resolve_path: Optional[Callable[[str], Path]] = None,
 ) -> str:
     """Render a ``## Referenced By`` body section for an inverse-edge list.
 
@@ -2022,9 +2023,17 @@ def _render_inverse_edges_section(
     with a markdown link relative to ``src_rel``.  Returns ``""`` if
     there are no edges to show.  Sources whose ids start with ``.`` are
     dropped when ``include_system`` is False.
+
+    ``resolve_path`` maps a source id to its on-disk relative path,
+    accounting for hash-suffix disambiguation made by the writer.  When
+    not supplied, falls back to the canonical ``_id_to_rel_path`` —
+    safe for unit-test callers but the writer always passes a real
+    resolver so links land on the actual disambiguated files.
     """
     if not inverse_edges:
         return ""
+    if resolve_path is None:
+        resolve_path = _id_to_rel_path
     groups: dict[str, list[str]] = {}
     seen: set[tuple[str, str]] = set()
     for inverse, source_id in inverse_edges:
@@ -2043,7 +2052,7 @@ def _render_inverse_edges_section(
     for inverse, source_ids in groups.items():
         lines.append(f"- **{inverse}:**")
         for source_id in source_ids:
-            link = _md_link_target(_id_to_rel_path(source_id), src_rel)
+            link = _md_link_target(resolve_path(source_id), src_rel)
             lines.append(f"  - [{source_id}]({link})")
     return "\n".join(lines)
 
@@ -2095,6 +2104,7 @@ def _render_doc_markdown(
     first_version_target_id: Optional[str] = None,
     inverse_edges: Optional[list[tuple[str, str]]] = None,
     include_system: bool = True,
+    resolve_path: Optional[Callable[[str], Path]] = None,
 ) -> str:
     """Render a single exported document dict as markdown with YAML frontmatter.
 
@@ -2139,7 +2149,9 @@ def _render_doc_markdown(
 
     if src_rel is not None and inverse_edges:
         section = _render_inverse_edges_section(
-            src_rel, inverse_edges, include_system=include_system,
+            src_rel, inverse_edges,
+            include_system=include_system,
+            resolve_path=resolve_path,
         )
         if section:
             body = f"{body}\n\n{section}" if body else section
@@ -2212,6 +2224,7 @@ def _render_version_markdown(
     src_rel: Optional[Path] = None,
     inverse_edges: Optional[list[tuple[str, str]]] = None,
     include_system: bool = True,
+    resolve_path: Optional[Callable[[str], Path]] = None,
 ) -> str:
     """Render an archived version as markdown with YAML frontmatter.
 
@@ -2252,7 +2265,9 @@ def _render_version_markdown(
 
     if src_rel is not None and inverse_edges:
         section = _render_inverse_edges_section(
-            src_rel, inverse_edges, include_system=include_system,
+            src_rel, inverse_edges,
+            include_system=include_system,
+            resolve_path=resolve_path,
         )
         if section:
             body = f"{body}\n\n{section}" if body else section
@@ -2261,7 +2276,14 @@ def _render_version_markdown(
 
 
 class _ExportCollisionError(Exception):
-    """Raised when two distinct ids would write to the same export path."""
+    """Raised when two distinct ids would write to the same export path.
+
+    The markdown writer normally auto-disambiguates path collisions by
+    appending a short SHA256 suffix to the second doc's stem, so this
+    error is only raised in the (astronomically rare) case where the
+    disambiguated path also collides — or in tests that drive the
+    writer with synthetic iterators.
+    """
 
     def __init__(self, path: Path, first_id: str, second_id: str) -> None:
         self.path = path
@@ -2270,6 +2292,91 @@ class _ExportCollisionError(Exception):
         super().__init__(
             f"id collision: '{first_id}' and '{second_id}' both map to '{path}'"
         )
+
+
+def _planned_slots(
+    rel_path: Path,
+    sorted_parts: list[dict],
+    version_offsets: list[int],
+) -> list[tuple[Path, str]]:
+    """Return every (path, kind) slot one doc's writes would occupy.
+
+    Includes ancestor directories of the main file (so we detect file
+    vs sidecar-dir collisions across docs), the main file itself, the
+    sidecar dir (if any sidecars), and each sidecar file.
+    """
+    slots_list: list[tuple[Path, str]] = []
+    ancestors = rel_path.parts[:-1]
+    for i in range(1, len(ancestors) + 1):
+        slots_list.append((Path(*ancestors[:i]), "dir"))
+    slots_list.append((rel_path, "file"))
+
+    if sorted_parts or version_offsets:
+        sidecar_dir = rel_path.with_suffix("")
+        slots_list.append((sidecar_dir, "dir"))
+        for p in sorted_parts:
+            pnum = p["part_num"]
+            slots_list.append((sidecar_dir / f"@P{{{pnum}}}.md", "file"))
+        for offset in version_offsets:
+            slots_list.append((sidecar_dir / f"@V{{{offset}}}.md", "file"))
+    return slots_list
+
+
+def _find_slot_conflict(
+    planned: list[tuple[Path, str]],
+    slots: dict[str, tuple[str, str, Path]],
+) -> Optional[tuple[str, Path]]:
+    """Return ``(existing_owner, existing_path)`` of the first conflict, or None.
+
+    Two ``"dir"`` claims at the same case-folded slot share the
+    directory; any real file conflict inside it surfaces as a separate
+    file claim.  All other kind combinations are conflicts.
+    """
+    for path, kind in planned:
+        key = path.as_posix().casefold()
+        existing = slots.get(key)
+        if existing is None:
+            continue
+        existing_kind, existing_owner, existing_path = existing
+        if kind == "dir" and existing_kind == "dir":
+            continue
+        return existing_owner, existing_path
+    return None
+
+
+def _claim_planned(
+    planned: list[tuple[Path, str]],
+    owner_id: str,
+    slots: dict[str, tuple[str, str, Path]],
+) -> None:
+    """Insert all planned slots into ``slots``.
+
+    Caller has already verified no conflicts via
+    :func:`_find_slot_conflict`.
+    """
+    for path, kind in planned:
+        key = path.as_posix().casefold()
+        existing = slots.get(key)
+        if existing is None:
+            slots[key] = (kind, owner_id, path)
+            continue
+        # dir + dir merges silently; the conflict-check pass already
+        # ruled out incompatible kinds.
+        if kind == "dir" and existing[0] == "dir":
+            continue
+
+
+def _disambiguate_rel_path(canonical: Path, doc_id: str) -> Path:
+    """Append a short SHA256 hash to the stem of ``canonical``.
+
+    The hash is derived from the doc id (not the path), so distinct
+    ids that happen to share a canonical path always disambiguate to
+    distinct results.  8 hex chars = 32 bits — ample for any
+    realistic export size.
+    """
+    digest = hashlib.sha256(doc_id.encode("utf-8")).hexdigest()[:8]
+    new_stem = f"{canonical.stem}.{digest}"
+    return canonical.with_name(f"{new_stem}{canonical.suffix}")
 
 
 def _write_markdown_export(
@@ -2281,7 +2388,7 @@ def _write_markdown_export(
     include_versions: bool = False,
     progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> tuple[int, dict]:
-    """Stream-write a markdown-per-note export into ``out_dir``.
+    """Write a markdown-per-note export into ``out_dir``.
 
     Caller is responsible for ensuring ``out_dir`` exists and is empty.
     Returns ``(count, store_info)`` from the export header.
@@ -2295,31 +2402,94 @@ def _write_markdown_export(
     returns versions newest-first, so the first archived version
     becomes ``@V{1}``, the next ``@V{2}``, and so on.
 
-    If two ids would write to the same target path, raises
-    :class:`_ExportCollisionError`.
+    Path collisions are tracked case-foldedly so the export is portable
+    across case-insensitive filesystems (macOS APFS, NTFS, FAT).  When
+    two docs would otherwise share a path slot — e.g. ids
+    ``file:///abc/def`` and ``file:///abc/DEF.md`` collide on the slot
+    ``file/abc/def.md`` once a sidecar dir is involved — the second
+    one is auto-disambiguated with a short SHA256 suffix on its stem.
+    Cross-reference links from inverse edges resolve through the same
+    map so they land on the actual on-disk filename.
+
+    The export does two passes: a planning pass that buffers every
+    yielded doc and resolves its final on-disk path, then a writing
+    pass that uses those resolved paths to render and write.  Memory
+    cost scales linearly with note count (~5–10 KB per note).
 
     If ``progress`` is given it is invoked as ``progress(current, total, label)``
     after each document is written.
     """
     current_inverse, version_inverse = _get_edge_data(keeper)
 
+    # Pass 1: stream the iterator into memory and plan disambiguated
+    # paths.  We need to know every doc's final path before we render
+    # any inverse-edge link, because a backlink from one doc to another
+    # has to point at the disambiguated filename of the target — and
+    # that target might be processed after the source in the iterator.
     it = keeper.export_iter(include_system=include_system)
     header = next(it)
+    docs = list(it)
     total = header["store_info"]["document_count"]
-    seen_paths: dict[Path, str] = {}
 
-    def write(rel_path: Path, text: str, owner_id: str) -> None:
-        if rel_path in seen_paths:
-            raise _ExportCollisionError(rel_path, seen_paths[rel_path], owner_id)
-        seen_paths[rel_path] = owner_id
+    slots: dict[str, tuple[str, str, Path]] = {}
+    final_paths: dict[str, Path] = {}
+
+    for doc in docs:
+        doc_id = doc["id"]
+        canonical = _id_to_rel_path(doc_id)
+        sorted_parts = sorted(
+            doc.get("parts") or [], key=lambda p: p["part_num"],
+        ) if include_parts else []
+        version_offsets = list(
+            range(1, len(doc.get("versions") or []) + 1)
+        ) if include_versions else []
+
+        planned = _planned_slots(canonical, sorted_parts, version_offsets)
+        conflict = _find_slot_conflict(planned, slots)
+        if conflict is not None:
+            disambiguated = _disambiguate_rel_path(canonical, doc_id)
+            planned = _planned_slots(
+                disambiguated, sorted_parts, version_offsets,
+            )
+            second_conflict = _find_slot_conflict(planned, slots)
+            if second_conflict is not None:
+                # Even after appending the hash the path collides with
+                # something else.  Astronomically rare; surface the
+                # original conflict so the user can rename one note.
+                existing_owner, existing_path = conflict
+                raise _ExportCollisionError(
+                    existing_path, existing_owner, doc_id,
+                )
+            final_path = disambiguated
+        else:
+            final_path = canonical
+
+        _claim_planned(planned, doc_id, slots)
+        final_paths[doc_id] = final_path
+
+    def resolve_path(target_id: str) -> Path:
+        """Return the on-disk rel-path for a doc id (canonical or hashed).
+
+        Used by the inverse-edge renderer so cross-reference links
+        target the actual disambiguated filename.  Falls back to the
+        canonical encoding for ids that aren't in this export (e.g.
+        an inverse-edge source that's a system doc filtered out by
+        ``include_system=False``).
+        """
+        return final_paths.get(target_id, _id_to_rel_path(target_id))
+
+    def write(rel_path: Path, text: str) -> None:
         dest = out_dir / rel_path
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
 
+    # Pass 2: write each doc using its resolved final path.  Chain
+    # links use the doc's own final path; inverse-edge links use the
+    # resolver to find disambiguated targets.
     count = 0
-    for doc in it:
+    for doc in docs:
         doc_id = doc["id"]
-        rel_path = _id_to_rel_path(doc_id)
+        rel_path = final_paths[doc_id]
         # Sidecar dir is the parent path with the trailing ``.md``
         # stripped.  ``foo.md`` → ``foo/``;  ``Users/x/README.md.md``
         # → ``Users/x/README.md/``.  The directory and the parent
@@ -2377,8 +2547,8 @@ def _write_markdown_export(
                 first_version_target_id=first_version_target_id,
                 inverse_edges=doc_inverse,
                 include_system=include_system,
+                resolve_path=resolve_path,
             ),
-            doc_id,
         )
 
         if include_parts and sorted_parts:
@@ -2416,7 +2586,6 @@ def _write_markdown_export(
                         next_link=next_link,
                         next_target_id=next_target_id,
                     ),
-                    doc_id,
                 )
 
         if include_versions and versions_chain:
@@ -2461,8 +2630,8 @@ def _write_markdown_export(
                         src_rel=version_path,
                         inverse_edges=historical_inverse,
                         include_system=include_system,
+                        resolve_path=resolve_path,
                     ),
-                    doc_id,
                 )
 
         count += 1
