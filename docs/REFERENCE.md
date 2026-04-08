@@ -22,7 +22,7 @@
 | `keep del` | Remove note or revert to previous version | — |
 | `keep tag` | Add, update, or remove tags | [TAGGING.md](TAGGING.md) |
 | `keep flow` | Run or inspect a state-machine flow | — |
-| `keep data export` | Export store to JSON for backup or migration | [KEEP-DATA.md](KEEP-DATA.md) |
+| `keep data export` | Export store to JSON (default) or markdown directory (`--format md`) | [KEEP-DATA.md](KEEP-DATA.md) |
 | `keep data import` | Import documents from JSON export file | [KEEP-DATA.md](KEEP-DATA.md) |
 | `keep pending` | Process pending tasks (summarize, embed, OCR, analyze, reindex) | — |
 
@@ -145,6 +145,7 @@ keep flow -p key=value               # Pass parameters
 # Data management
 keep data export backup.json         # Export store to JSON
 keep data export - | gzip > bk.gz    # Export to stdout, compress
+keep data export notes/ --format md  # Export as markdown directory (one file per note)
 keep data import backup.json         # Import (merge, skip existing)
 keep data import backup.json -m replace  # Import (replace all)
 

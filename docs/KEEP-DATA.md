@@ -5,12 +5,75 @@ Backup, restore, and migrate keep stores.
 ## Export
 
 ```bash
-keep data export backup.json                 # Export to file
-keep data export backup.json --exclude-system  # Skip system docs (.tag/*, .conversations, etc.)
-keep data export -                           # Write to stdout (for piping)
+keep data export backup.json                          # Export to file (JSON, default)
+keep data export backup.json --include-system         # Also include system docs (.tag/*, .meta/*, .now, etc.)
+keep data export -                                    # Write to stdout (for piping, JSON only)
+keep data export notes/ --format md                   # Markdown mode: one .md file per note in a directory
+keep data export notes/ --format md --include-parts   # ...also write analysis parts as <note>/@P{N}.md sidecars
+keep data export notes/ --format md --include-versions # ...also write archived versions as <note>/@V{N}.md sidecars
 ```
 
-Exports all documents, versions, and parts as JSON. Embeddings are excluded (they are model-dependent and regenerated on import).
+Exports all user documents, versions, and parts as JSON. **System documents (dot-prefix ids like `.tag/*`, `.meta/*`, `.now`) are excluded by default** — pass `--include-system` to include them. Embeddings are excluded (they are model-dependent and regenerated on import).
+
+### Markdown mode (`--format md`)
+
+Markdown mode writes a **directory** (not a file) with one `.md` file per note. Each file has YAML frontmatter (`id`, timestamps, `content_hash`, `tags`) followed by the note summary as the body. By default analysis **parts** and archived **versions** are skipped — use `--include-parts` / `--include-versions` to emit them as sidecar files (see below), or use JSON mode if you need a single self-contained backup.
+
+The output directory must not exist yet, or must be empty. Filenames mirror the id's path structure for easy browsing, using the `wget -m` convention:
+
+| Note id                                | Path in export dir                                            |
+|----------------------------------------|---------------------------------------------------------------|
+| `auth-notes`                           | `auth-notes.md`                                               |
+| `notes/2024/jan-meeting`               | `notes/2024/jan-meeting.md`                                   |
+| `.tag/act/commitment`                  | `.tag/act/commitment.md`                                      |
+| `file:///Users/x/README.md`            | `file/Users/x/README.md.md`                                   |
+| `https://example.com/docs/guide`       | `https/example.com/docs/guide.md`                             |
+| `thread:abc-123@host.com#frag`         | `thread/abc-123@host.com%23frag.md`                           |
+| `mailto:foo@bar.com`                   | `mailto/foo@bar.com.md`                                       |
+
+Any RFC 3986 URI scheme (`scheme:body`, with scheme matching `[A-Za-z][A-Za-z0-9+.-]*`) becomes a top-level directory named after the scheme — so all `file://`, `https://`, `thread:`, `mailto:`, `tel:` notes group under their own folders. Inside each component, filesystem-unsafe characters (`:`, `#`, `?`, `\`, `*`, `<`, `>`, `|`, non-ASCII) are percent-encoded; `@`, `+`, `=`, `,`, `(`, `)`, space stay literal because they are valid on every modern filesystem. `.md` is always appended to the last component, even for ids that already end in `.md`, so the suffix is unambiguous. Any single path component that exceeds the filesystem's per-component limit is truncated and disambiguated with a short SHA256 suffix; the full id is always preserved in the file's frontmatter.
+
+Markdown mode is intended for human browsing, grep-friendly backups, and handoff to tools that consume markdown-with-frontmatter. For round-trip backup/restore, use JSON mode — `keep data import` only reads the JSON format.
+
+Example output file (`auth-notes.md`):
+
+```markdown
+---
+id: auth-notes
+created_at: '2026-01-15T10:30:00'
+updated_at: '2026-02-01T14:22:00'
+accessed_at: '2026-02-19T09:00:00'
+content_hash: abc123
+tags:
+  topic: auth
+  _source: inline
+---
+
+Authentication patterns for OAuth2...
+```
+
+#### Parts and versions sidecars
+
+When `--include-parts` or `--include-versions` is passed, notes that have analysis parts or archived versions get a sidecar **directory** alongside the parent file:
+
+```
+rust-tutorial.md             ← the current note (parent file)
+rust-tutorial/               ← sidecar dir (only created if parts/versions exist)
+  @P{1}.md                   ← analysis part 1
+  @P{2}.md                   ← analysis part 2
+  @V{1}.md                   ← previous version (1 step back from current)
+  @V{2}.md                   ← 2 steps back
+  @V{3}.md                   ← 3 steps back
+```
+
+Filenames mirror the in-app navigation ids:
+
+- **`@P{N}.md`** — analysis part with absolute `part_num = N`. Body is the part's text (the `summary` field, same as for notes); frontmatter has the parent `id`, `part_num`, `created_at`, and `tags`.
+- **`@V{N}.md`** — archived version with offset `N` from the current version (`@V{1}` is the most recent prior, `@V{2}` is two steps back, …). The current version stays in the parent file — there is no `@V{0}.md`. Frontmatter has the parent `id`, `version_offset` (the `N`), `version` (the absolute database version number, for reference), `created_at`, `content_hash`, and `tags`. Body is the historical summary.
+
+Notes with no parts or versions get no sidecar dir — `plain-note.md` stays a single flat file even when both flags are on.
+
+If two distinct ids would write to the same path (rare — only happens with deliberately confusing ids like `combo` with parts and a separate `combo/@P{1}` note that also encodes to the same path), the export aborts with a clear error naming both ids.
 
 ## Import
 

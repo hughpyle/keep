@@ -5,16 +5,18 @@ retained local or delegated commands for setup, daemon control, MCP, and
 data import/export.
 """
 
+import hashlib
 import json
 import os
 import shutil
 import sys
 import http.client
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Callable, Optional
 from urllib.parse import quote
 
 import typer
+import yaml
 
 from .daemon_client import get_port as _daemon_get_port
 from .daemon_client import http_request as _http
@@ -1753,15 +1755,63 @@ app.add_typer(data_app)
 
 @data_app.command("export")
 def data_export(
-    output: Annotated[str, typer.Argument(help="Output file path (use '-' for stdout)")],
-    exclude_system: Annotated[bool, typer.Option("--exclude-system", help="Exclude system documents")] = False,
+    output: Annotated[str, typer.Argument(help="Output file path (JSON) or directory (markdown). Use '-' for stdout in JSON mode.")],
+    include_system: Annotated[bool, typer.Option("--include-system", help="Include system documents (.tag/*, .meta/*, .now, etc.). Excluded by default.")] = False,
+    include_parts: Annotated[bool, typer.Option("--include-parts", help="Markdown mode: emit analysis parts as <note>/@P{N}.md sidecars. Off by default.")] = False,
+    include_versions: Annotated[bool, typer.Option("--include-versions", help="Markdown mode: emit archived versions as <note>/@V{N}.md sidecars. Off by default.")] = False,
+    format: Annotated[str, typer.Option("--format", "-f", help="Export format: 'json' (default) or 'md' (markdown directory, one file per note)")] = "json",
 ):
-    """Export the store to JSON for backup or migration."""
+    """Export the store for backup or migration.
+
+    JSON mode writes a single file with full history (versions, parts).
+    Markdown mode writes a directory with one .md file per note, containing
+    YAML frontmatter (id, timestamps, tags) and the note summary as the body.
+    Analysis parts and archived versions are off by default in markdown mode;
+    pass ``--include-parts`` and/or ``--include-versions`` to emit them as
+    ``<note>/@P{N}.md`` and ``<note>/@V{N}.md`` sidecar files.
+
+    System documents (dot-prefix ids like ``.tag/*``, ``.meta/*``, ``.now``)
+    are excluded by default; pass ``--include-system`` to include them.
+    """
+    fmt = format.lower()
+    if fmt in ("md", "markdown"):
+        _data_export_markdown(
+            output,
+            include_system=include_system,
+            include_parts=include_parts,
+            include_versions=include_versions,
+        )
+        return
+    if fmt != "json":
+        typer.echo(f"Error: --format must be 'json' or 'md', got '{format}'", err=True)
+        raise SystemExit(1)
+
+    if include_parts or include_versions:
+        bad = []
+        if include_parts:
+            bad.append("--include-parts")
+        if include_versions:
+            bad.append("--include-versions")
+        typer.echo(
+            f"Error: {', '.join(bad)} only applies to --format md "
+            f"(JSON exports always include full history)",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    from .console_support import _progress_bar
     from .daemon_client import resolve_store_path
     from .api import Keeper
     kp = Keeper(store_path=resolve_store_path(_global_store))
-    it = kp.export_iter(include_system=not exclude_system)
+    it = kp.export_iter(include_system=include_system)
     header = next(it)
+    info = header["store_info"]
+    total = info["document_count"]
+    # Only show a progress bar when stderr is a real terminal.  Also skip
+    # when writing JSON to stdout ('-') — a user piping the export is
+    # likely capturing the stream and doesn't want decorative output
+    # written to stderr either.
+    show_progress = output != "-" and total > 0 and sys.stderr.isatty()
 
     dest = sys.stdout if output == "-" else open(output, "w", encoding="utf-8")
     try:
@@ -1770,25 +1820,379 @@ def data_export(
             dest.write(f"  {json.dumps(key)}: {json.dumps(header[key], ensure_ascii=False)},\n")
         dest.write('  "documents": [\n')
         first = True
+        count = 0
         for doc in it:
             if not first:
                 dest.write(",\n")
             dest.write("    " + json.dumps(doc, ensure_ascii=False))
             first = False
+            count += 1
+            if show_progress:
+                _progress_bar(count, total, doc.get("id", ""), err=True)
         dest.write("\n  ]\n}\n")
     finally:
         if dest is not sys.stdout:
             dest.close()
     kp.close()
 
+    if show_progress:
+        # Clear the progress bar line before the final summary.
+        cols = shutil.get_terminal_size((80, 24)).columns
+        sys.stderr.write("\r" + " " * (cols - 1) + "\r")
+        sys.stderr.flush()
+
     if output != "-":
-        info = header["store_info"]
         typer.echo(
             f"Exported {info['document_count']} documents "
             f"({info['version_count']} versions, {info['part_count']} parts) "
             f"to {output}",
             err=True,
         )
+
+
+# Conservative filename length limit.  Most filesystems cap a single
+# path component at 255 bytes (ext4, HFS+, APFS, NTFS); we stay under
+# that with headroom for unusual encodings.
+_MAX_FILENAME_BYTES = 200
+
+
+def _encode_path_component(component: str) -> str:
+    """Percent-encode a single path component for filesystem safety.
+
+    Keeps alphanumerics, ``-._~`` and a few other cross-platform-safe
+    characters (space, ``@``, ``+``, ``=``, ``,``, ``(``, ``)``); escapes
+    ``/``, ``\\``, ``:``, ``?``, ``*``, ``#``, ``|``, ``<``, ``>`` and
+    anything non-ASCII.
+    """
+    return quote(component, safe="-._~ @+=,()")
+
+
+def _truncate_component(comp: str, *, budget: int) -> str:
+    """Truncate a single path component to ``budget`` bytes, disambiguating.
+
+    When the component fits, it's returned unchanged.  Otherwise the
+    tail is replaced with ``.{12-char sha256}`` of the untruncated
+    component so distinct components still yield distinct names.
+    """
+    if len(comp.encode("utf-8")) <= budget:
+        return comp
+    digest = hashlib.sha256(comp.encode("utf-8")).hexdigest()[:12]
+    suffix = f".{digest}"
+    comp_budget = budget - len(suffix)
+    truncated = comp.encode("utf-8")[:comp_budget].decode("utf-8", errors="ignore")
+    # Avoid leaving a dangling percent-escape (``...%`` or ``...%X``).
+    while truncated.endswith("%") or (
+        len(truncated) >= 2 and truncated[-2] == "%"
+    ):
+        truncated = truncated[:-1]
+    return truncated + suffix
+
+
+_URI_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):(.*)$", re.DOTALL)
+
+
+def _id_to_rel_path(doc_id: str) -> Path:
+    """Derive a filesystem-safe relative path (with subdirs) from a doc id.
+
+    The layout mirrors ``wget -m`` (website mirroring):
+
+    * URI-scheme ids (RFC 3986: ``scheme = ALPHA *( ALPHA / DIGIT /
+      "+" / "-" / "." )``) get the leading ``scheme:`` peeled off as a
+      top-level directory.  This applies to both authority-based URIs
+      (``file:///Users/x/README.md`` → ``file/Users/x/README.md.md``)
+      and URN-style URIs (``thread:abc@host#frag`` →
+      ``thread/abc%40host%23frag.md``, ``mailto:foo@bar.com`` →
+      ``mailto/foo%40bar.com.md``).  In both cases the body is then
+      parsed as a path: ``/`` becomes a directory separator.
+    * Non-URI ids containing ``/`` become nested directories mirroring
+      the id structure: ``.tag/act/commitment`` → ``.tag/act/commitment.md``.
+    * Simple ids are flat: ``auth-notes`` → ``auth-notes.md``.
+    * Within each path component, filesystem-unsafe characters
+      (``:``, ``#``, ``?``, ``@``, etc.) are percent-encoded.
+    * Any component exceeding ``_MAX_FILENAME_BYTES`` is truncated and
+      disambiguated with a short SHA256 suffix; the full id is always
+      recoverable from the file's frontmatter.
+    * ``.md`` is always appended to the final component — even for ids
+      that already end in ``.md`` — so the suffix is unambiguous.
+    """
+    raw_components: list[str]
+    m = _URI_SCHEME_RE.match(doc_id)
+    if m:
+        scheme = m.group(1)
+        rest = m.group(2)
+        # An authority-style URI starts with "//" right after the colon;
+        # strip it so "file:///Users/x" → "/Users/x" → ["Users", "x"].
+        # URN-style URIs (mailto:, tel:, thread:, urn:) just continue
+        # straight into the body.
+        if rest.startswith("//"):
+            rest = rest[2:]
+        raw_components = [scheme]
+        raw_components.extend(c for c in rest.split("/") if c)
+    elif "/" in doc_id:
+        raw_components = [c for c in doc_id.split("/") if c]
+    else:
+        raw_components = [doc_id]
+
+    if not raw_components:
+        raw_components = [""]
+
+    # Encode each component separately (so ``/`` stays as dir separator)
+    # and enforce the per-component byte budget.  The final component
+    # must also fit a trailing ``.md``, so reserve 3 bytes there.
+    out: list[str] = []
+    last_idx = len(raw_components) - 1
+    for i, comp in enumerate(raw_components):
+        encoded = _encode_path_component(comp)
+        budget = _MAX_FILENAME_BYTES - (3 if i == last_idx else 0)
+        out.append(_truncate_component(encoded, budget=budget))
+    out[-1] += ".md"
+    return Path(*out)
+
+
+def _render_frontmatter_markdown(meta: dict, body: str) -> str:
+    """Wrap a meta dict and body string in YAML frontmatter + markdown body."""
+    fm = yaml.safe_dump(
+        meta,
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=False,
+    )
+    text = f"---\n{fm}---\n\n{body}"
+    if not text.endswith("\n"):
+        text += "\n"
+    return text
+
+
+def _render_doc_markdown(doc: dict) -> str:
+    """Render a single exported document dict as markdown with YAML frontmatter.
+
+    Frontmatter contains the same fields as the JSON export except
+    ``versions`` and ``parts`` (which are emitted as separate sidecar
+    files); the note body is the document ``summary``.
+    """
+    meta: dict = {"id": doc["id"]}
+    for key in (
+        "created_at",
+        "updated_at",
+        "accessed_at",
+        "content_hash",
+        "content_hash_full",
+    ):
+        if doc.get(key) is not None:
+            meta[key] = doc[key]
+    if doc.get("tags"):
+        meta["tags"] = dict(doc["tags"])
+    return _render_frontmatter_markdown(meta, doc.get("summary", "") or "")
+
+
+def _render_part_markdown(parent_id: str, part: dict) -> str:
+    """Render a single analysis part as markdown with YAML frontmatter.
+
+    The body is the part ``summary`` — that's the part's text, the
+    same as for notes.  The ``parts.content`` column in the schema is
+    a vestigial second slot that's almost always empty (only ~0.6% of
+    parts have it populated, and in those cases it's a near-duplicate
+    of ``summary``); a future model cleanup will remove it.  The
+    export deliberately ignores ``content`` so that one logical text
+    per part is the only thing that lands on disk.
+    """
+    meta: dict = {
+        "id": parent_id,
+        "part_num": part["part_num"],
+    }
+    if part.get("created_at"):
+        meta["created_at"] = part["created_at"]
+    if part.get("tags"):
+        meta["tags"] = dict(part["tags"])
+    return _render_frontmatter_markdown(meta, part.get("summary", "") or "")
+
+
+def _render_version_markdown(parent_id: str, version: dict, offset: int) -> str:
+    """Render an archived version as markdown with YAML frontmatter.
+
+    ``offset`` is the ``@V{N}`` offset from the current version (1 = the
+    most recent prior version).  The absolute database ``version`` number
+    is also recorded for reference.
+    """
+    meta: dict = {
+        "id": parent_id,
+        "version_offset": offset,
+        "version": version["version"],
+    }
+    if version.get("created_at"):
+        meta["created_at"] = version["created_at"]
+    if version.get("content_hash") is not None:
+        meta["content_hash"] = version["content_hash"]
+    if version.get("tags"):
+        meta["tags"] = dict(version["tags"])
+    return _render_frontmatter_markdown(meta, version.get("summary", "") or "")
+
+
+class _ExportCollisionError(Exception):
+    """Raised when two distinct ids would write to the same export path."""
+
+    def __init__(self, path: Path, first_id: str, second_id: str) -> None:
+        self.path = path
+        self.first_id = first_id
+        self.second_id = second_id
+        super().__init__(
+            f"id collision: '{first_id}' and '{second_id}' both map to '{path}'"
+        )
+
+
+def _write_markdown_export(
+    keeper,
+    out_dir: Path,
+    *,
+    include_system: bool,
+    include_parts: bool = False,
+    include_versions: bool = False,
+    progress: Optional[Callable[[int, int, str], None]] = None,
+) -> tuple[int, dict]:
+    """Stream-write a markdown-per-note export into ``out_dir``.
+
+    Caller is responsible for ensuring ``out_dir`` exists and is empty.
+    Returns ``(count, store_info)`` from the export header.
+
+    Each note is written to ``<encoded-id>.md``.  When ``include_parts``
+    is True, analysis parts are written to ``<encoded-id>/@P{N}.md``
+    sidecar files (one per part, ``N`` = absolute ``part_num``).  When
+    ``include_versions`` is True, archived versions are written to
+    ``<encoded-id>/@V{N}.md`` sidecar files where ``N`` is the offset
+    from the current version (1 = most recent prior).  ``list_versions``
+    returns versions newest-first, so the first archived version
+    becomes ``@V{1}``, the next ``@V{2}``, and so on.
+
+    If two ids would write to the same target path, raises
+    :class:`_ExportCollisionError`.
+
+    If ``progress`` is given it is invoked as ``progress(current, total, label)``
+    after each document is written.
+    """
+    it = keeper.export_iter(include_system=include_system)
+    header = next(it)
+    total = header["store_info"]["document_count"]
+    seen_paths: dict[Path, str] = {}
+
+    def write(rel_path: Path, text: str, owner_id: str) -> None:
+        if rel_path in seen_paths:
+            raise _ExportCollisionError(rel_path, seen_paths[rel_path], owner_id)
+        seen_paths[rel_path] = owner_id
+        dest = out_dir / rel_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+
+    count = 0
+    for doc in it:
+        doc_id = doc["id"]
+        rel_path = _id_to_rel_path(doc_id)
+        write(rel_path, _render_doc_markdown(doc), doc_id)
+
+        if include_parts or include_versions:
+            # Sidecar dir is the parent path with the trailing ``.md``
+            # stripped.  ``foo.md`` → ``foo/``;  ``Users/x/README.md.md``
+            # → ``Users/x/README.md/``.  The directory and the parent
+            # file have distinct names so they coexist on the filesystem.
+            sidecar_dir = rel_path.with_suffix("")
+
+        if include_parts:
+            for part in doc.get("parts", []) or []:
+                part_path = sidecar_dir / f"@P{{{part['part_num']}}}.md"
+                write(part_path, _render_part_markdown(doc_id, part), doc_id)
+
+        if include_versions:
+            # ``list_versions`` (and therefore the export iterator) yields
+            # versions in DESC order (newest first).  Number them as
+            # offsets from the current version: first archived → @V{1},
+            # next → @V{2}, etc.  This matches the @V{N} navigation
+            # semantics where 0 = current and N = N steps back.
+            for offset, version in enumerate(doc.get("versions", []) or [], start=1):
+                version_path = sidecar_dir / f"@V{{{offset}}}.md"
+                write(version_path, _render_version_markdown(doc_id, version, offset), doc_id)
+
+        count += 1
+        if progress is not None:
+            progress(count, total, doc_id)
+    return count, header["store_info"]
+
+
+def _data_export_markdown(
+    output: str,
+    *,
+    include_system: bool,
+    include_parts: bool = False,
+    include_versions: bool = False,
+) -> None:
+    """Write a markdown-per-note export into ``output`` (a directory)."""
+    if output == "-":
+        typer.echo("Error: markdown export requires a directory path, not '-'", err=True)
+        raise SystemExit(1)
+
+    out_dir = Path(output)
+    if out_dir.exists():
+        if not out_dir.is_dir():
+            typer.echo(f"Error: {output} exists and is not a directory", err=True)
+            raise SystemExit(1)
+        if any(out_dir.iterdir()):
+            typer.echo(f"Error: output directory {output} is not empty", err=True)
+            raise SystemExit(1)
+    else:
+        out_dir.mkdir(parents=True)
+
+    from .console_support import _progress_bar
+    from .daemon_client import resolve_store_path
+    from .api import Keeper
+    kp = Keeper(store_path=resolve_store_path(_global_store))
+
+    is_tty = sys.stderr.isatty()
+    progress = None
+    if is_tty:
+        def progress(current: int, total: int, label: str) -> None:
+            if total > 0:
+                _progress_bar(current, total, label, err=True)
+
+    try:
+        try:
+            count, info = _write_markdown_export(
+                kp, out_dir,
+                include_system=include_system,
+                include_parts=include_parts,
+                include_versions=include_versions,
+                progress=progress,
+            )
+        except _ExportCollisionError as e:
+            if is_tty:
+                cols = shutil.get_terminal_size((80, 24)).columns
+                sys.stderr.write("\r" + " " * (cols - 1) + "\r")
+                sys.stderr.flush()
+            typer.echo(
+                f"Error: id collision — '{e.first_id}' and '{e.second_id}' "
+                f"both map to '{e.path}'. Rename one of these ids before exporting.",
+                err=True,
+            )
+            raise SystemExit(1) from None
+    finally:
+        kp.close()
+
+    if is_tty:
+        # Clear the progress bar line before the final summary.
+        cols = shutil.get_terminal_size((80, 24)).columns
+        sys.stderr.write("\r" + " " * (cols - 1) + "\r")
+        sys.stderr.flush()
+
+    extras = []
+    if include_parts:
+        extras.append(f"{info['part_count']} parts")
+    if include_versions:
+        extras.append(f"{info['version_count']} versions")
+    if extras:
+        suffix = f" with {' and '.join(extras)}"
+    else:
+        suffix = (
+            f" (skipped {info['version_count']} versions, "
+            f"{info['part_count']} parts)"
+        )
+    typer.echo(f"Exported {count} notes to {output}{suffix}", err=True)
 
 
 @data_app.command("import")
