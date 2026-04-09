@@ -296,7 +296,7 @@ class TestFindDeepFlow:
     def test_find_deep_invokes_flow_when_no_edges(self, kp):
         """find(deep=True) dispatches through the flow-host compat path."""
         kp.put("OAuth2 token design for project X", id="a",
-               tags={"project": "x", "topic": "auth"})
+               tags={"project": "x", "domain": "auth"})
         for i in range(35):
             kp.put(f"Filler note {i}", id=f"f-{i}", tags={"filler": "yes"})
         kp.put("Project X performance report", id="b",
@@ -318,7 +318,7 @@ class TestFindDeepFlow:
     def test_find_deep_flow_discovers_bridge_items(self, kp):
         """The flow path discovers bridge items via tag-follow."""
         kp.put("OAuth2 design for project X", id="a",
-               tags={"project": "x", "topic": "auth"})
+               tags={"project": "x", "domain": "auth"})
         for i in range(35):
             kp.put(f"Filler note {i}", id=f"f-{i}", tags={"filler": "yes"})
         kp.put("Project X latency report", id="b",

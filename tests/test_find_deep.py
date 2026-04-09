@@ -17,13 +17,16 @@ def kp(mock_providers, tmp_path):
     kp._get_embedding_provider()
 
     # A: primary match — will be in primary results
+    # Use "domain" (a plain unconstrained tag, not an edge tag) as the
+    # cross-cutting dimension so no concept nodes are auto-vivified.
     kp.put("OAuth2 token design for project X", id="a",
-           tags={"project": "x", "topic": "auth"})
+           tags={"project": "x", "domain": "auth"})
 
     # Filler items to push bridge items past fetch_limit.
     # Deep uses fetch_limit = max(limit*3, 30).  We need >29 fillers
     # so bridge items are beyond index 30 in the mock store.
-    for i in range(35):
+    # Use 40 to give headroom for additional system docs.
+    for i in range(40):
         kp.put(f"Unrelated filler note number {i}", id=f"filler-{i}",
                tags={"filler": "yes"})
 
@@ -31,9 +34,9 @@ def kp(mock_providers, tmp_path):
     kp.put("Project X reduced latency by 40%", id="b",
            tags={"project": "x"})
     kp.put("Alice recommended Redis for project X caching", id="c",
-           tags={"project": "x", "topic": "caching"})
+           tags={"project": "x", "domain": "caching"})
     kp.put("Auth best practices and token rotation", id="d",
-           tags={"topic": "auth"})
+           tags={"domain": "auth"})
 
     # E: unrelated — should NOT be discovered via tag-follow
     kp.put("Weekly standup meeting notes", id="e",
@@ -58,7 +61,7 @@ class TestDeepTagFollow:
         primary_ids = {r.id for r in results}
         deep_ids = _all_deep_ids(results)
         all_found = primary_ids | deep_ids
-        # B, C share project=x with A; D shares topic=auth with A.
+        # B, C share project=x with A; D shares domain=auth with A.
         # D may appear as primary (FTS keyword match on "auth"/"token")
         # or in deep groups — either is correct.
         assert "b" in all_found, "B should be found via project=x"
@@ -123,7 +126,7 @@ class TestDeepTagFollow:
     def test_deep_prefers_rare_tag_overlap(self, kp):
         """IDF weighting ranks rare-tag matches above common-tag matches."""
         # In the fixture: project=x appears on a, b, c (df=3)
-        #                 topic=auth appears on a, d (df=2, rarer)
+        #                 domain=auth appears on a, d (df=2, rarer)
         # d may appear as primary (FTS match on "auth"/"token") rather than
         # in deep groups — both paths are valid ways to surface it.
         results = kp.find("OAuth2 auth token design", deep=True, limit=5)

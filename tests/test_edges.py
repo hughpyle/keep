@@ -656,12 +656,13 @@ class TestEdgeIntegration:
 
     def test_no_edge_without_inverse_tagdoc(self, kp):
         """Tags without _inverse tagdoc don't create edges."""
+        # Use a tag that has no _inverse declaration (not topic, which now has one)
         kp.put(content="Some doc", id="doc1", summary="Doc",
-               tags={"topic": "ai"})
+               tags={"source": "community"})
 
-        # "ai" should not have edges
-        kp.put(content="", id="ai", summary="AI topic")
-        ctx = kp.get_context("ai")
+        # "community" should not have edges (source has no _inverse)
+        kp.put(content="", id="community", summary="Community source")
+        ctx = kp.get_context("community")
         assert ctx.edges == {}
 
     def test_inverse_removal_cleans_edges(self, kp):
