@@ -17,7 +17,7 @@ Exports all user documents, versions, and parts as JSON. **System documents (dot
 
 ### Markdown mode (`--format md`)
 
-Markdown mode writes a **directory** (not a file) with one `.md` file per note. Each file has YAML frontmatter (`id`, timestamps, `content_hash`, `tags`) followed by the note summary as the body. By default analysis **parts** and archived **versions** are skipped — use `--include-parts` / `--include-versions` to emit them as sidecar files (see below), or use JSON mode if you need a single self-contained backup.
+Markdown mode writes a **directory** (not a file) with one `.md` file per note. Each file has flat YAML frontmatter with reserved underscore-prefixed metadata keys (`_id`, `_content_hash`, chain metadata, etc.) plus promoted top-level tags, followed by the note summary as the body. By default analysis **parts** and archived **versions** are skipped — use `--include-parts` / `--include-versions` to emit them as sidecar files (see below), or use JSON mode if you need a single self-contained backup.
 
 The output directory must not exist yet, or must be empty. Filenames mirror the id's path structure for easy browsing, using the `wget -m` convention:
 
@@ -31,7 +31,7 @@ The output directory must not exist yet, or must be empty. Filenames mirror the 
 | `thread:abc-123@host.com#frag`         | `thread/abc-123@host.com%23frag.md`                           |
 | `mailto:foo@bar.com`                   | `mailto/foo@bar.com.md`                                       |
 
-Any RFC 3986 URI scheme (`scheme:body`, with scheme matching `[A-Za-z][A-Za-z0-9+.-]*`) becomes a top-level directory named after the scheme — so all `file://`, `https://`, `thread:`, `mailto:`, `tel:` notes group under their own folders. Inside each component, filesystem-unsafe characters (`:`, `#`, `?`, `\`, `*`, `<`, `>`, `|`, non-ASCII) are percent-encoded; `@`, `+`, `=`, `,`, `(`, `)`, space stay literal because they are valid on every modern filesystem. `.md` is always appended to the last component, even for ids that already end in `.md`, so the suffix is unambiguous. Any single path component that exceeds the filesystem's per-component limit is truncated and disambiguated with a short SHA256 suffix; the full id is always preserved in the file's frontmatter.
+Any RFC 3986 URI scheme (`scheme:body`, with scheme matching `[A-Za-z][A-Za-z0-9+.-]*`) becomes a top-level directory named after the scheme — so all `file://`, `https://`, `thread:`, `mailto:`, `tel:` notes group under their own folders. Inside each component, filesystem-unsafe characters (`:`, `#`, `?`, `\`, `*`, `<`, `>`, `|`, non-ASCII) are percent-encoded; `@`, `+`, `=`, `,`, `(`, `)`, space stay literal because they are valid on every modern filesystem. `.md` is always appended to the last component, even for ids that already end in `.md`, so the suffix is unambiguous. Any single path component that exceeds the filesystem's per-component limit is truncated and disambiguated with a short SHA256 suffix; the full id is always preserved in the file's `_id` frontmatter key.
 
 Markdown mode is intended for human browsing, grep-friendly backups, and handoff to tools that consume markdown-with-frontmatter. For round-trip backup/restore, use JSON mode — `keep data import` only reads the JSON format.
 
@@ -39,14 +39,10 @@ Example output file (`auth-notes.md`):
 
 ```markdown
 ---
-id: auth-notes
-created_at: '2026-01-15T10:30:00'
-updated_at: '2026-02-01T14:22:00'
-accessed_at: '2026-02-19T09:00:00'
-content_hash: abc123
-tags:
-  topic: auth
-  _source: inline
+_id: auth-notes
+_content_hash: abc123
+topic: auth
+_source: inline
 ---
 
 Authentication patterns for OAuth2...
@@ -68,8 +64,8 @@ rust-tutorial/               ← sidecar dir (only created if parts/versions exi
 
 Filenames mirror the in-app navigation ids:
 
-- **`@P{N}.md`** — analysis part with absolute `part_num = N`. Body is the part's text (the `summary` field, same as for notes); frontmatter has the parent `id`, `part_num`, `created_at`, and `tags`.
-- **`@V{N}.md`** — archived version with offset `N` from the current version (`@V{1}` is the most recent prior, `@V{2}` is two steps back, …). The current version stays in the parent file — there is no `@V{0}.md`. Frontmatter has the parent `id`, `version_offset` (the `N`), `version` (the absolute database version number, for reference), `created_at`, `content_hash`, and `tags`. Body is the historical summary.
+- **`@P{N}.md`** — analysis part with absolute `part_num = N`. Body is the part's text (the `summary` field, same as for notes); frontmatter has the parent `_id`, `_part_num`, `_created`, and any promoted top-level part tags.
+- **`@V{N}.md`** — archived version with offset `N` from the current version (`@V{1}` is the most recent prior, `@V{2}` is two steps back, …). The current version stays in the parent file — there is no `@V{0}.md`. Frontmatter has the parent `_id`, `_version_offset` (the `N`), `_version` (the absolute database version number, for reference), `_created`, `_content_hash`, and any promoted top-level version tags. Body is the historical summary.
 
 Notes with no parts or versions get no sidecar dir — `plain-note.md` stays a single flat file even when both flags are on.
 

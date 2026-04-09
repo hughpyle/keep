@@ -1758,7 +1758,8 @@ def data_export(
 
     JSON mode writes a single file with full history (versions, parts).
     Markdown mode writes a directory with one .md file per note, containing
-    YAML frontmatter (id, timestamps, tags) and the note summary as the body.
+    YAML frontmatter (`_id`, reserved `_...` metadata, promoted tags) and the
+    note summary as the body.
     Analysis parts and archived versions are off by default in markdown mode;
     pass ``--include-parts`` and/or ``--include-versions`` to emit them as
     ``<note>/@P{N}.md`` and ``<note>/@V{N}.md`` sidecar files.
@@ -2176,6 +2177,39 @@ def _wikilink_str_representer(dumper: yaml.SafeDumper, data: str):
 _ExportYamlDumper.add_representer(str, _wikilink_str_representer)
 
 
+_EXPORT_META_ID = "_id"
+_EXPORT_META_CONTENT_HASH = "_content_hash"
+_EXPORT_META_CONTENT_HASH_FULL = "_content_hash_full"
+_EXPORT_META_CREATED = "_created"
+_EXPORT_META_PART_NUM = "_part_num"
+_EXPORT_META_VERSION = "_version"
+_EXPORT_META_VERSION_OFFSET = "_version_offset"
+
+# Exporter-owned reserved frontmatter keys. These are not ordinary tags:
+# the exporter decides their spelling and value, and future markdown-sync
+# import should treat them as read-only metadata rather than user-editable
+# tags.
+#
+# ``_created`` / ``_updated`` / ``_accessed`` are intentionally NOT in this
+# set even though they're ``_``-prefixed.  They flow through the stored tag
+# map when present, and the renderers fall back to the schema columns when
+# they aren't — treating them as "exporter-owned" would drop any stored copy,
+# which is the wrong behaviour for parts/versions that may later carry these
+# timestamps in their tag map.
+_EXPORT_RESERVED_KEYS = frozenset({
+    _EXPORT_META_ID,
+    _EXPORT_META_CONTENT_HASH,
+    _EXPORT_META_CONTENT_HASH_FULL,
+    _EXPORT_META_PART_NUM,
+    _EXPORT_META_VERSION,
+    _EXPORT_META_VERSION_OFFSET,
+    "_prev_part",
+    "_next_part",
+    "_prev_version",
+    "_next_version",
+})
+
+
 def _render_frontmatter_markdown(meta: dict, body: str) -> str:
     """Wrap a meta dict and body string in YAML frontmatter + markdown body."""
     fm = yaml.dump(
@@ -2241,29 +2275,35 @@ def _render_doc_markdown(
 ) -> str:
     """Render a single exported document dict as markdown with YAML frontmatter.
 
-    The frontmatter is a flat top-level map: ``id`` first, then any
-    content-hash columns, then chain-navigation system keys
+    The frontmatter is a flat top-level map: ``_id`` first, then any
+    reserved export metadata (content hashes, chain links), then every
+    stored tag (user + system) as its own top-level key. Chain-navigation keys
     (``_next_part`` / ``_prev_version`` for the parent's entry into
-    each sidecar chain), then every stored tag (user + system) as
-    its own top-level key.  Inverse-edge predicates (computed from
+    each sidecar chain) and content-hash keys are exporter-owned metadata.
+    Inverse-edge predicates (computed from
     the edges table) are folded into that same flat namespace as
     multi-value entries. Stored edge-tag values are rewritten from
     canonical keep IDs to the exported vault-local path namespace so
     the resulting wikilinks resolve in tools like Obsidian.
 
-    The duplicated ``created_at``/``updated_at``/``accessed_at``
-    columns are intentionally dropped because the same values
-    already live in the ``_created``/``_updated``/``_accessed``
-    system tags that get promoted to the top level.
+    ``_created``/``_updated``/``_accessed`` land on the frontmatter as
+    promoted system tags when the stored tag map contains them, and
+    otherwise fall back to the ``created_at``/``updated_at``/``accessed_at``
+    schema columns.  Most docs in practice carry the timestamps only in
+    the columns — ``keep get`` synthesises them from the schema at display
+    time, which made the rename's "already in tags" premise look stronger
+    than it really is.  The column fallback keeps export output
+    complete regardless of which write path created the doc.
 
     The body is just the document summary — chain navigation lives
     in the frontmatter, not in markdown links inside the content.
     Forward edge tags pass through verbatim as flat keys.
     """
-    meta: dict = {"id": doc["id"]}
-    for key in ("content_hash", "content_hash_full"):
-        if doc.get(key) is not None:
-            meta[key] = doc[key]
+    meta: dict = {_EXPORT_META_ID: doc["id"]}
+    if doc.get("content_hash") is not None:
+        meta[_EXPORT_META_CONTENT_HASH] = doc["content_hash"]
+    if doc.get("content_hash_full") is not None:
+        meta[_EXPORT_META_CONTENT_HASH_FULL] = doc["content_hash_full"]
 
     if prev_version_id is not None:
         meta["_prev_version"] = _wiki_link_value(prev_version_id)
@@ -2271,6 +2311,17 @@ def _render_doc_markdown(
         meta["_next_part"] = _wiki_link_value(next_part_id)
 
     tags = dict(doc.get("tags") or {})
+    # Schema-column fallback for the timestamp triad.  Only sets the
+    # key when the stored tag map doesn't already carry it, so a
+    # manually-written ``_created`` tag (e.g. from tests or a hand-
+    # crafted import) still wins.
+    if doc.get("created_at") and "_created" not in tags:
+        tags["_created"] = doc["created_at"]
+    if doc.get("updated_at") and "_updated" not in tags:
+        tags["_updated"] = doc["updated_at"]
+    if doc.get("accessed_at") and "_accessed" not in tags:
+        tags["_accessed"] = doc["accessed_at"]
+
     tags = _rewrite_export_refs_in_tags(
         tags,
         export_refs=export_refs or {},
@@ -2297,12 +2348,12 @@ def _render_part_markdown(
 ) -> str:
     """Render a single analysis part as markdown with YAML frontmatter.
 
-    Frontmatter is flat: ``id`` (parent), ``part_num``, optional
+    Frontmatter is flat: ``_id`` (parent), ``_part_num``, optional
     chain-nav keys (``_prev_part`` / ``_next_part``), then every
     stored part tag promoted to a top-level key.  Parts don't carry
     their own auto-managed ``_created``/``_updated`` system tags, so
-    the schema's ``created_at`` column lands at the top level too
-    when present (no duplication to worry about for parts).
+    the schema's ``created_at`` column is exported as ``_created`` when
+    present.
 
     The body is the part ``summary`` — that's the part's text, the
     same as for notes.  The ``parts.content`` column in the schema is
@@ -2318,10 +2369,7 @@ def _render_part_markdown(
     ``_next_part`` points to the next-higher ``part_num``.  Both are
     optional — chain endpoints carry only one side.
     """
-    meta: dict = {
-        "id": parent_id,
-        "part_num": part["part_num"],
-    }
+    meta: dict = {_EXPORT_META_ID: parent_id}
     if prev_part_id is not None:
         meta["_prev_part"] = _wiki_link_value(prev_part_id)
     if next_part_id is not None:
@@ -2332,10 +2380,15 @@ def _render_part_markdown(
         export_refs=export_refs or {},
         is_edge_tag=is_edge_tag,
     )
-    if part.get("created_at") and "_created" not in part_tags:
-        meta["created_at"] = part["created_at"]
+    if part.get("created_at") and _EXPORT_META_CREATED not in part_tags:
+        meta[_EXPORT_META_CREATED] = part["created_at"]
     for tag_key, tag_value in part_tags.items():
+        if tag_key in _EXPORT_RESERVED_KEYS:
+            continue
         meta[tag_key] = tag_value
+    # Exporter-owned keys win over any stored system-tag copies so the on-disk
+    # type is stable even when the store carries stringified bookkeeping tags.
+    meta[_EXPORT_META_PART_NUM] = part["part_num"]
 
     body = part.get("summary", "") or ""
     return _render_frontmatter_markdown(meta, body)
@@ -2359,13 +2412,13 @@ def _render_version_markdown(
     most recent prior version).  The absolute database ``version`` number
     is also recorded for reference.
 
-    Frontmatter is flat: ``id`` (parent), ``version_offset``,
-    ``version``, optional ``content_hash``, optional chain-nav keys
+    Frontmatter is flat: ``_id`` (parent), ``_version_offset``,
+    ``_version``, optional ``_content_hash``, optional chain-nav keys
     (``_prev_version`` / ``_next_version``), then all version tags
     promoted to top-level keys.  Inverse edges (from the materialized
     ``version_edges`` table) merge into the same flat namespace just
     like on the parent doc.  Versions don't auto-tag with ``_created``
-    so the column ``created_at`` is preserved at the top level when
+    so the column ``created_at`` is exported as ``_created`` when
     present.
 
     Chain navigation lives in ``_prev_version`` / ``_next_version``
@@ -2375,13 +2428,9 @@ def _render_version_markdown(
     to the parent doc itself when this is ``@V{1}``).  The body is
     just the version's summary text.
     """
-    meta: dict = {
-        "id": parent_id,
-        "version_offset": offset,
-        "version": version["version"],
-    }
+    meta: dict = {_EXPORT_META_ID: parent_id}
     if version.get("content_hash") is not None:
-        meta["content_hash"] = version["content_hash"]
+        meta[_EXPORT_META_CONTENT_HASH] = version["content_hash"]
 
     if prev_version_id is not None:
         meta["_prev_version"] = _wiki_link_value(prev_version_id)
@@ -2394,14 +2443,18 @@ def _render_version_markdown(
         export_refs=export_refs or {},
         is_edge_tag=is_edge_tag,
     )
-    if version.get("created_at") and "_created" not in version_tags:
-        meta["created_at"] = version["created_at"]
+    if version.get("created_at") and _EXPORT_META_CREATED not in version_tags:
+        meta[_EXPORT_META_CREATED] = version["created_at"]
 
     version_tags = _merge_inverse_edges_into_tags(
         version_tags, inverse_edges, include_system=include_system,
     )
     for tag_key, tag_value in version_tags.items():
+        if tag_key in _EXPORT_RESERVED_KEYS:
+            continue
         meta[tag_key] = tag_value
+    meta[_EXPORT_META_VERSION_OFFSET] = offset
+    meta[_EXPORT_META_VERSION] = version["version"]
 
     body = version.get("summary", "") or ""
     return _render_frontmatter_markdown(meta, body)

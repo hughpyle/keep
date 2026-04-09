@@ -673,13 +673,13 @@ class TestMarkdownExport:
         parts = text.split("---", 2)
         assert len(parts) == 3
         meta = yaml.safe_load(parts[1])
-        # Frontmatter is flat: id first, then content-hash columns,
+        # Frontmatter is flat: _id first, then reserved export metadata,
         # then every stored tag (user + system) promoted to its own
         # top-level key.  No nested ``tags:`` block, and no duplicated
         # created_at/updated_at/accessed_at columns.
-        assert meta["id"] == "auth-notes"
-        assert meta["content_hash"] == "abc123"
-        assert meta["content_hash_full"] == "def456"
+        assert meta["_id"] == "auth-notes"
+        assert meta["_content_hash"] == "abc123"
+        assert meta["_content_hash_full"] == "def456"
         assert meta["topic"] == "auth"
         assert meta["_source"] == "inline"
         assert "tags" not in meta
@@ -688,18 +688,54 @@ class TestMarkdownExport:
         assert "accessed_at" not in meta
         assert parts[2].lstrip("\n").rstrip("\n") == "Body content here."
 
-    def test_render_doc_markdown_skips_empty_tags(self):
+    def test_render_doc_markdown_column_timestamp_fallback(self):
+        # The stored tag map is empty but the schema columns carry the
+        # timestamps — that's the common case in practice because
+        # ``documents.tags_json`` usually doesn't duplicate
+        # ``_created``/``_updated``/``_accessed`` (they're synthesised
+        # at display time by ``keep get``).  The exporter must fall
+        # back to the columns so the exported frontmatter isn't missing
+        # timestamps for the majority of docs.
         doc = {
             "id": "no-tags",
             "summary": "body",
             "tags": {},
             "created_at": "2026-01-01T00:00:00",
-            "updated_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-02-01T00:00:00",
+            "accessed_at": "2026-03-01T00:00:00",
         }
         text = _render_doc_markdown(doc)
         meta = yaml.safe_load(text.split("---", 2)[1])
-        # No tags, no top-level mirrors — only ``id`` survives.
-        assert meta == {"id": "no-tags"}
+        assert meta["_id"] == "no-tags"
+        assert meta["_created"] == "2026-01-01T00:00:00"
+        assert meta["_updated"] == "2026-02-01T00:00:00"
+        assert meta["_accessed"] == "2026-03-01T00:00:00"
+        # No nested ``tags:`` block, no legacy column spellings.
+        assert "tags" not in meta
+        assert "created_at" not in meta
+        assert "updated_at" not in meta
+        assert "accessed_at" not in meta
+
+    def test_render_doc_markdown_stored_timestamp_tags_win(self):
+        # When the stored tag map already carries ``_created`` /
+        # ``_updated`` / ``_accessed``, those values win over the
+        # schema columns.  Guards the "tags are authoritative when
+        # present" half of the fallback.
+        doc = {
+            "id": "stored-ts",
+            "summary": "body",
+            "tags": {
+                "_created": "2020-01-01T00:00:00",
+                "_updated": "2020-02-01T00:00:00",
+            },
+            "created_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-02-01T00:00:00",
+        }
+        text = _render_doc_markdown(doc)
+        meta = yaml.safe_load(text.split("---", 2)[1])
+        # Stored tag values win — columns are only a fallback.
+        assert meta["_created"] == "2020-01-01T00:00:00"
+        assert meta["_updated"] == "2020-02-01T00:00:00"
 
     def test_render_doc_markdown_omits_versions_and_parts(self):
         doc = _make_doc(
@@ -739,7 +775,7 @@ class TestMarkdownExport:
         assert "python-doc.md" in files
 
         meta, body = _parse_markdown(files["python-doc.md"])
-        assert meta["id"] == "python-doc"
+        assert meta["_id"] == "python-doc"
         # Tags are flat top-level keys, not nested under ``tags:``.
         assert meta["topic"] == "python"
         assert "About Python" in body
@@ -784,7 +820,7 @@ class TestMarkdownExport:
         assert expected.is_file(), f"expected {expected}, got {list(out.rglob('*'))}"
 
         meta, body = _parse_markdown(expected)
-        assert meta["id"] == file_id
+        assert meta["_id"] == file_id
         assert "Hello." in body
 
     def test_write_markdown_export_mixed_hierarchy(self, keeper, tmp_path):
@@ -815,14 +851,14 @@ class TestMarkdownExport:
         })
         meta = yaml.safe_load(text.split("---", 2)[1])
         body = text.split("---", 2)[2].lstrip("\n").rstrip("\n")
-        # Part frontmatter is flat: id (parent), part_num, then any
-        # part tags promoted to top-level.  ``created_at`` only lands
-        # at the top level when there's no ``_created`` system tag
+        # Part frontmatter is flat: _id (parent), _part_num, then any
+        # part tags promoted to top-level.  ``_created`` is synthesized
+        # from the column when there's no stored ``_created`` tag
         # (which parts don't carry).
-        assert meta["id"] == "auth-notes"
-        assert meta["part_num"] == 3
+        assert meta["_id"] == "auth-notes"
+        assert meta["_part_num"] == 3
         assert meta["section"] == "intro"
-        assert meta["created_at"] == "2026-01-15T10:30:00"
+        assert meta["_created"] == "2026-01-15T10:30:00"
         assert "tags" not in meta
         assert body == "The analysis text for this section."
         assert "summary" not in meta
@@ -836,6 +872,36 @@ class TestMarkdownExport:
         })
         body = text.split("---", 2)[2].lstrip("\n").rstrip("\n")
         assert body == "Just the analysis text."
+
+    def test_part_frontmatter_wins_over_stored_part_num_tag(self):
+        text = _render_part_markdown("p", {
+            "part_num": 3,
+            "summary": "x",
+            "tags": {"_part_num": "3", "_base_id": "p", "section": "intro"},
+            "created_at": "2026-01-15T10:30:00",
+        })
+        meta = yaml.safe_load(text.split("---", 2)[1])
+        assert meta["_id"] == "p"
+        assert meta["_part_num"] == 3
+        assert isinstance(meta["_part_num"], int)
+        assert meta["section"] == "intro"
+        assert "_base_id" in meta
+
+    def test_part_stored_created_tag_flows_through(self):
+        # ``_created`` is not in ``_EXPORT_RESERVED_KEYS`` — if a part
+        # happens to carry it in its stored tag map, the value should
+        # flow through to the frontmatter instead of being dropped.
+        # The column fallback only kicks in when the tag is absent.
+        text = _render_part_markdown("p", {
+            "part_num": 1,
+            "summary": "x",
+            "tags": {"_created": "2020-06-01T00:00:00", "section": "intro"},
+            "created_at": "2026-01-15T10:30:00",
+        })
+        meta = yaml.safe_load(text.split("---", 2)[1])
+        # Stored tag wins over the column.
+        assert meta["_created"] == "2020-06-01T00:00:00"
+        assert meta["section"] == "intro"
 
     def test_render_version_markdown_shape(self):
         text = _render_version_markdown(
@@ -855,13 +921,33 @@ class TestMarkdownExport:
         # alongside the absolute database version number for reference.
         # Tags are promoted flat onto the version frontmatter, no
         # nested ``tags:`` block.
-        assert meta["id"] == "auth-notes"
-        assert meta["version_offset"] == 2
-        assert meta["version"] == 7
-        assert meta["content_hash"] == "abc123"
+        assert meta["_id"] == "auth-notes"
+        assert meta["_version_offset"] == 2
+        assert meta["_version"] == 7
+        assert meta["_content_hash"] == "abc123"
+        assert meta["_created"] == "2025-12-01T09:00:00"
         assert meta["topic"] == "auth"
         assert "tags" not in meta
         assert body == "Older summary text"
+
+    def test_version_frontmatter_wins_over_stored_version_tag(self):
+        text = _render_version_markdown(
+            "auth-notes",
+            {
+                "version": 7,
+                "summary": "Older summary text",
+                "tags": {"_version": "7", "_base_id": "auth-notes", "topic": "auth"},
+                "content_hash": "abc123",
+                "created_at": "2025-12-01T09:00:00",
+            },
+            offset=2,
+        )
+        meta = yaml.safe_load(text.split("---", 2)[1])
+        assert meta["_version_offset"] == 2
+        assert meta["_version"] == 7
+        assert isinstance(meta["_version"], int)
+        assert meta["topic"] == "auth"
+        assert "_base_id" in meta
 
     def test_write_markdown_export_parts_off_by_default(self, keeper, tmp_path):
         _seed(keeper, [
@@ -913,8 +999,8 @@ class TestMarkdownExport:
         # navigation lives in ``_prev_part`` / ``_next_part``
         # frontmatter keys instead of body markdown links.
         meta, body = _parse_markdown(sidecar / "@P{1}.md")
-        assert meta["id"] == "with-parts"
-        assert meta["part_num"] == 1
+        assert meta["_id"] == "with-parts"
+        assert meta["_part_num"] == 1
         assert meta["section"] == "intro"
         assert "tags" not in meta
         assert body.strip() == "Introduction analysis text."
@@ -959,9 +1045,11 @@ class TestMarkdownExport:
         assert (sidecar / "@V{4}.md").is_file()
 
         meta1, body1 = _parse_markdown(sidecar / "@V{1}.md")
-        assert meta1["id"] == "with-history"
-        assert meta1["version_offset"] == 1
-        assert meta1["version"] == 4  # absolute db version number for reference
+        assert meta1["_id"] == "with-history"
+        assert meta1["_version_offset"] == 1
+        assert meta1["_version"] == 4  # absolute db version number for reference
+        assert meta1["_content_hash"] == "h4"
+        assert meta1["_created"] == "2025-12-04T00:00:00"
         assert body1.strip() == "Three steps back"
         # @V{1} is the chain entry from the parent: _prev_version
         # points to the next-older archived version, _next_version
@@ -971,8 +1059,8 @@ class TestMarkdownExport:
 
         # Sanity check the deepest archived version maps correctly.
         meta4, body4 = _parse_markdown(sidecar / "@V{4}.md")
-        assert meta4["version_offset"] == 4
-        assert meta4["version"] == 1
+        assert meta4["_version_offset"] == 4
+        assert meta4["_version"] == 1
         assert body4.strip() == "Oldest"
         # The chain tail has only a "next" link (no older version).
         assert "_prev_version" not in meta4
@@ -1072,9 +1160,9 @@ class TestMarkdownExport:
         assert b_main.name.startswith("DEF.md.")
         assert b_main.name.endswith(".md")
         # The disambiguation hash is 8 hex chars wedged into the stem.
-        # The frontmatter still records the canonical id.
+        # The frontmatter still records the canonical _id.
         meta_b, _ = _parse_markdown(b_main)
-        assert meta_b["id"] == "file:///abc/DEF.md"
+        assert meta_b["_id"] == "file:///abc/DEF.md"
 
         # The sidecar dir matches the disambiguated stem (so its case-
         # folded name no longer collides with ``def.md``) and the part
@@ -1107,12 +1195,12 @@ class TestMarkdownExport:
         # The disambiguated file's stem is `<canonical_stem>.<hash>`.
         assert disambiguated[0].count(".") == 2
 
-        # Both notes' frontmatter still records the canonical id —
+        # Both notes' frontmatter still records the canonical _id —
         # the disambiguation is purely an on-disk detail.
         ids = set()
         for f in files:
             meta, _ = _parse_markdown(out / f)
-            ids.add(meta["id"])
+            ids.add(meta["_id"])
         assert ids == {"readme", "README"}
 
     def test_write_markdown_export_disambiguated_doc_keeps_inverse_edges(
@@ -1142,14 +1230,14 @@ class TestMarkdownExport:
         _write_markdown_export(keeper, out, include_system=False)
 
         # Find each file by walking the directory and matching the
-        # canonical id from its frontmatter.  One of the readmes will
+        # canonical _id from its frontmatter.  One of the readmes will
         # have been disambiguated with a hash suffix.
         files_by_id: dict[str, Path] = {}
         for p in out.iterdir():
             if not p.is_file():
                 continue
             meta, _ = _parse_markdown(p)
-            files_by_id[meta["id"]] = p
+            files_by_id[meta["_id"]] = p
 
         # All three notes are present.
         assert set(files_by_id) == {"readme", "README", "source"}
@@ -1294,7 +1382,7 @@ class TestMarkdownExport:
             if not p.is_file():
                 continue
             meta, _ = _parse_markdown(p)
-            files_by_id[meta["id"]] = p
+            files_by_id[meta["_id"]] = p
 
         exported_readme_ref = (
             files_by_id["README"].relative_to(out).with_suffix("").as_posix()
