@@ -148,6 +148,31 @@ def test_put_and_get(http):
     r = http.get("/v1/notes/nonexistent")
     assert r.status_code == 404
 
+
+def test_put_surfaces_value_error_message(daemon, http):
+    from unittest.mock import patch
+
+    message = (
+        "Failed to create embedding provider 'ollama': Cannot reach Ollama at "
+        "http://localhost:11434. Is Ollama running? Start it with: ollama serve"
+    )
+    with patch("keep.daemon_server.flow_put_item", side_effect=ValueError(message)):
+        r = http.post("/v1/notes", json={"content": "test note", "id": "test-1"})
+
+    assert r.status_code == 400
+    assert r.json()["error"] == message
+
+
+def test_put_keeps_internal_server_error_for_unexpected_exceptions(daemon, http):
+    from unittest.mock import patch
+
+    with patch("keep.daemon_server.flow_put_item", side_effect=RuntimeError("boom")):
+        r = http.post("/v1/notes", json={"content": "test note", "id": "test-1"})
+
+    assert r.status_code == 500
+    assert r.json()["error"] == "internal server error"
+
+
 def test_delete(http):
     http.post("/v1/notes", json={"content": "to delete", "id": "del-1"})
     r = http.delete("/v1/notes/del-1")
@@ -256,6 +281,77 @@ def test_markdown_sync_registration_exports_and_persists(daemon, http, tmp_path)
     assert entries[0].root == str(root.resolve())
     assert entries[0].last_run
     assert entries[0].pending_since == ""
+    assert kp._document_store.sync_outbox_depth() == 0
+
+
+def test_markdown_sync_list_returns_registered_mirrors(daemon, http, tmp_path):
+    from keep.markdown_mirrors import add_markdown_mirror
+
+    server, kp, port = daemon
+    root = tmp_path / "vault"
+    root.mkdir()
+    add_markdown_mirror(
+        kp,
+        root,
+        include_parts=True,
+        include_versions=True,
+    )
+
+    r = http.post("/v1/admin/markdown-export", json={"list": True})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "mirrors" in body
+    assert len(body["mirrors"]) == 1
+    entry = body["mirrors"][0]
+    assert entry["root"] == str(root.resolve())
+    assert entry["include_parts"] is True
+    assert entry["include_versions"] is True
+    assert entry["enabled"] is True
+
+
+def test_markdown_sync_validate_only_checks_root_without_persisting(daemon, http, tmp_path):
+    from keep.markdown_mirrors import list_markdown_mirrors
+
+    server, kp, port = daemon
+    root = tmp_path / "vault"
+    root.mkdir()
+
+    r = http.post("/v1/admin/markdown-export", json={
+        "root": str(root),
+        "sync": True,
+        "validate_only": True,
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["validated"] is True
+    assert body["root"] == str(root.resolve())
+    assert list_markdown_mirrors(kp) == []
+
+
+def test_markdown_sync_register_only_marks_baseline_complete(daemon, http, tmp_path):
+    from keep.markdown_mirrors import list_markdown_mirrors
+
+    server, kp, port = daemon
+    kp.put("mirror body", id="mirror-doc")
+    assert kp._document_store.sync_outbox_depth() > 0
+    root = tmp_path / "vault"
+    root.mkdir()
+
+    r = http.post("/v1/admin/markdown-export", json={
+        "root": str(root),
+        "sync": True,
+        "register_only": True,
+        "baseline_complete": True,
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sync"]["root"] == str(root.resolve())
+    assert not (root / ".keep-sync" / "map.tsv").exists()
+
+    entries = list_markdown_mirrors(kp)
+    assert len(entries) == 1
+    assert entries[0].root == str(root.resolve())
+    assert entries[0].last_run
     assert kp._document_store.sync_outbox_depth() == 0
 
 

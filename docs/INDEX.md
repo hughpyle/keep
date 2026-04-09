@@ -21,7 +21,8 @@ note, and run a semantic search.
 - **[keep analyze](KEEP-ANALYZE.md)** — Break documents into individually searchable structural parts — themes, sections, relationships — each with its own embedding.
 - **[keep flow](KEEP-FLOW.md)** — Run multi-step workflows that chain keep operations with LLM processing.
 - **[keep prompt](KEEP-PROMPT.md)** — Render agent prompts with context injected from reflective memory. Drive reflection, session starts, and more.
-- **[keep data](KEEP-DATA.md)** — Export and import keep stores for backup and migration between local and cloud backends.
+- **[keep data](KEEP-DATA.md)** — Export, import, and continuously mirror keep stores. Markdown export produces Obsidian-compatible vaults with wikilink-based navigation.
+- **[keep pending](KEEP-PENDING.md)** — Manage the background daemon and its work queues: embedding, summarization, analysis, watches, and markdown sync mirrors.
 - **[keep config](KEEP-CONFIG.md)** — Configure embedding providers, storage backends, similarity thresholds, and environment variables.
 
 ## Concepts
@@ -64,7 +65,8 @@ Complete listing with summaries:
 | [keep analyze](KEEP-ANALYZE.md) | Break long documents into individually searchable structural parts. Each part gets its own embedding. Analyze finds themes, sections, key arguments, and cross-references — making large documents discoverable at the paragraph level. |
 | [keep flow](KEEP-FLOW.md) | Run multi-step workflows that chain keep operations with LLM processing. |
 | [keep prompt](KEEP-PROMPT.md) | Render agent prompts with context injected from reflective memory. Built-in prompts for reflection, session starts, and conversation analysis — or create custom prompts. |
-| [keep data](KEEP-DATA.md) | Export and import keep stores for backup and migration. Move data between local SQLite and cloud PostgreSQL backends. |
+| [keep data](KEEP-DATA.md) | Export, import, and continuously mirror keep stores. Markdown mode produces an Obsidian-compatible vault with wikilink navigation, inverse-edge frontmatter, and chain-linked parts/versions. Supports one-shot export or daemon-driven continuous sync. |
+| [keep pending](KEEP-PENDING.md) | Manage the background daemon and its work queues. Process embeddings, summarization, analysis, OCR. Services file watches and markdown sync mirrors. Flags for reindex, retry, purge, list, and stop. |
 | [keep config](KEEP-CONFIG.md) | Configure storage backend (SQLite local, PostgreSQL cloud), embedding provider and model, OpenAI vs OpenRouter vs local `base_url` choices, similarity thresholds, and other settings via environment variables or `~/.keep/keep.toml`. |
 | [Tagging](TAGGING.md) | Structured key-value tags: `domain: healthcare`, `thread: margaret`, `facet: metabolic`. Tags enable precise filtering alongside semantic search. Thread-level tags provide hard links that similarity alone can't maintain. |
 | [System Tags](SYSTEM-TAGS.md) | Automatic tags managed by keep: `_created`, `_updated`, `_accessed` (UTC `YYYY-MM-DDTHH:MM:SS`), `_source` (`inline`, `uri`, `langchain`, `auto-vivify`), `_content_type`, plus internal pipeline and projection tags. Cannot be manually set. |

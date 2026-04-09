@@ -24,6 +24,11 @@ jobs:
           version: "latest"
       - name: Set up Python
         run: uv python install 3.12
+      - name: Build OpenClaw plugin bundle
+        working-directory: keep/data/openclaw-plugin
+        run: |
+          npm ci
+          node build.mjs
       - name: Install dependencies
         run: |
           uv sync --no-dev

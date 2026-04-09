@@ -21,10 +21,11 @@ from .markdown_export import (
     _get_export_doc,
     _id_to_rel_path,
     _render_doc_bundle,
+    _write_markdown_export,
 )
 from .processors import _content_hash
-from .types import file_uri_to_path
-from .watches import _DEFAULT_INTERVAL, _DOC_COLLECTION, parse_duration
+from .types import file_uri_to_path, utc_now as _utc_now
+from .watches import _DEFAULT_INTERVAL, _DOC_COLLECTION, load_watches, parse_duration
 
 if TYPE_CHECKING:
     from .api import Keeper
@@ -36,6 +37,7 @@ _SYNC_DIR = ".keep-sync"
 _MAP_FILE = "map.tsv"
 _STATE_FILE = "state.json"
 _SYNC_OUTBOX_POLL_SECONDS = 1.0
+_SYNC_OUTBOX_MAX_EVENTS_PER_POLL = 1000
 
 
 @dataclass
@@ -78,9 +80,19 @@ class MarkdownMirrorUpdatePlan:
     note_ids: tuple[str, ...]
 
 
+class _IncrementalExportNeedsFullReplan(RuntimeError):
+    """Raised when bounded export cannot preserve the existing namespace."""
+
+
 def _mirror_to_dict(entry: MarkdownMirrorEntry) -> dict[str, Any]:
     data = asdict(entry)
-    return {k: v for k, v in data.items() if v not in ("", False, _DEFAULT_INTERVAL)}
+    # Drop empty defaults for compact storage, but never drop ``enabled``
+    # — its default is True, so omitting ``enabled=False`` would silently
+    # re-enable a disabled mirror on the next load.
+    return {
+        k: v for k, v in data.items()
+        if k == "enabled" or v not in ("", [], False, _DEFAULT_INTERVAL)
+    }
 
 
 def _dict_to_mirror(data: dict[str, Any]) -> MarkdownMirrorEntry:
@@ -130,7 +142,7 @@ def load_markdown_mirrors(keeper: Keeper) -> list[MarkdownMirrorEntry]:
 
 
 def save_markdown_mirrors(keeper: Keeper, entries: list[MarkdownMirrorEntry]) -> None:
-    from .types import utc_now as _utc_now
+
 
     payload = [_mirror_to_dict(entry) for entry in entries]
     content = yaml.safe_dump(payload, default_flow_style=False) if payload else ""
@@ -185,7 +197,7 @@ def record_markdown_mirror_export_success(
     *,
     error: str = "",
 ) -> bool:
-    from .types import utc_now as _utc_now
+
 
     resolved_root = str(_resolve_root(root))
     entries = load_markdown_mirrors(keeper)
@@ -224,34 +236,24 @@ def add_markdown_mirror(
     include_versions: bool = False,
     interval: str = _DEFAULT_INTERVAL,
 ) -> MarkdownMirrorEntry:
-    from .types import utc_now as _utc_now
-    from .watches import load_watches
 
-    parse_duration(interval)
-    resolved_root = str(_resolve_root(root))
-    entries = load_markdown_mirrors(keeper)
 
-    for watch in load_watches(keeper):
-        if watch.kind not in ("file", "directory"):
-            continue
-        if _paths_overlap(resolved_root, watch.source):
-            raise ValueError(
-                f"Markdown sync root overlaps watched source: {watch.source}"
-            )
+    resolved_root, entries = validate_markdown_mirror(
+        keeper,
+        root,
+        interval=interval,
+    )
 
     for entry in entries:
-        if _paths_overlap(resolved_root, entry.root):
-            if entry.root == resolved_root:
-                entry.include_system = include_system
-                entry.include_parts = include_parts
-                entry.include_versions = include_versions
-                entry.interval = interval
-                entry.enabled = True
-                save_markdown_mirrors(keeper, entries)
-                return entry
-            raise ValueError(
-                f"Markdown sync root overlaps existing mirror root: {entry.root}"
-            )
+        if entry.root != resolved_root:
+            continue
+        entry.include_system = include_system
+        entry.include_parts = include_parts
+        entry.include_versions = include_versions
+        entry.interval = interval
+        entry.enabled = True
+        save_markdown_mirrors(keeper, entries)
+        return entry
 
     entry = MarkdownMirrorEntry(
         root=resolved_root,
@@ -265,6 +267,34 @@ def add_markdown_mirror(
     entries.append(entry)
     save_markdown_mirrors(keeper, entries)
     return entry
+
+
+def validate_markdown_mirror(
+    keeper: Keeper,
+    root: str | Path,
+    *,
+    interval: str = _DEFAULT_INTERVAL,
+) -> tuple[str, list[MarkdownMirrorEntry]]:
+    """Validate mirror registration without mutating store state."""
+    parse_duration(interval)
+    resolved_root = str(_resolve_root(root))
+    entries = load_markdown_mirrors(keeper)
+
+    for watch in load_watches(keeper):
+        if watch.kind not in ("file", "directory"):
+            continue
+        if _paths_overlap(resolved_root, watch.source):
+            raise ValueError(
+                f"Markdown sync root overlaps watched source: {watch.source}"
+            )
+
+    for entry in entries:
+        if _paths_overlap(resolved_root, entry.root) and entry.root != resolved_root:
+            raise ValueError(
+                f"Markdown sync root overlaps existing mirror root: {entry.root}"
+            )
+
+    return resolved_root, entries
 
 
 def remove_markdown_mirror(keeper: Keeper, root: str | Path) -> bool:
@@ -317,7 +347,7 @@ def _write_state(
     count: int,
     info: dict[str, Any],
 ) -> None:
-    from .types import utc_now as _utc_now
+
 
     sync_dir, _map_path, state_path = _sync_paths(root)
     sync_dir.mkdir(parents=True, exist_ok=True)
@@ -344,8 +374,6 @@ def _write_state(
 
 
 def _keep_id_from_exported_file(rel_path: Path, text: str) -> str | None:
-    import yaml
-
     if not text.startswith("---\n"):
         return None
     try:
@@ -387,6 +415,8 @@ def _bundle_map_entries(
     existing_map: dict[str, str],
     doc_id: str,
 ) -> dict[str, str]:
+    # Bundle ids use the reserved `@P{n}` / `@V{n}` suffix syntax, so prefix
+    # matching stays scoped to that note's exported sidecars.
     return {
         export_ref: keep_id
         for export_ref, keep_id in existing_map.items()
@@ -452,6 +482,7 @@ def _plan_markdown_mirror_update(
     doc_coll = keeper._resolve_doc_collection()
     dependencies = NoteDependencyService(keeper._document_store, doc_coll)
     note_ids: set[str] = set()
+    _expanded_targets: set[str] = set()
 
     def _maybe_add(doc_id: str) -> None:
         if not doc_id:
@@ -480,8 +511,10 @@ def _plan_markdown_mirror_update(
 
         if mutation == "doc_update":
             _maybe_add(doc_id)
-            for target_id in dependencies.all_target_ids(doc_id):
-                _maybe_add(target_id)
+            if doc_id not in _expanded_targets:
+                _expanded_targets.add(doc_id)
+                for target_id in dependencies.all_target_ids(doc_id):
+                    _maybe_add(target_id)
             continue
 
         if mutation in {"part_insert", "part_update", "part_delete"}:
@@ -545,11 +578,15 @@ def run_markdown_export_incremental(
     for doc_id in note_ids:
         existing_export_ref = reverse_map.get(doc_id)
         if existing_export_ref is None:
-            raise ValueError(f"incremental export missing namespace mapping for {doc_id}")
+            raise _IncrementalExportNeedsFullReplan(
+                f"incremental export missing namespace mapping for {doc_id}"
+            )
         rel_path = Path(f"{existing_export_ref}.md")
         doc = _get_export_doc(keeper, doc_id)
         if doc is None:
-            raise ValueError(f"incremental export missing note {doc_id}")
+            raise _IncrementalExportNeedsFullReplan(
+                f"incremental export missing note {doc_id}"
+            )
         if not _is_exported_note_id(doc_id, include_system=include_system):
             continue
 
@@ -608,10 +645,9 @@ def run_markdown_export_once(
     include_versions: bool = False,
     allow_existing: bool = False,
     mirror_entry: MarkdownMirrorEntry | None = None,
+    progress: Any | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Run one markdown export pass, optionally preserving an existing mirror."""
-    from .markdown_export import _write_markdown_export
-
     out_dir = _resolve_root(root)
     if out_dir.exists():
         if not out_dir.is_dir():
@@ -625,27 +661,23 @@ def run_markdown_export_once(
 
     with tempfile.TemporaryDirectory(prefix="keep-md-export-", dir=out_dir.parent) as tmp:
         tmpdir = Path(tmp)
+        new_map: dict[str, str] = {}
+        new_paths: set[Path] = set()
         count, info = _write_markdown_export(
             keeper,
             tmpdir,
             include_system=include_system,
             include_parts=include_parts,
             include_versions=include_versions,
-            progress=None,
+            progress=progress,
+            export_map=new_map,
+            written_paths=new_paths,
         )
 
-        new_map: dict[str, str] = {}
-        new_paths: set[Path] = set()
-        for file_path in sorted(tmpdir.rglob("*.md")):
-            rel_path = file_path.relative_to(tmpdir)
-            text = file_path.read_text(encoding="utf-8")
-            keep_id = _keep_id_from_exported_file(rel_path, text)
-            if keep_id:
-                new_map[rel_path.with_suffix("").as_posix()] = keep_id
-            new_paths.add(rel_path)
+        for rel_path in sorted(new_paths):
             dest = out_dir / rel_path
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(file_path, dest)
+            shutil.copy2(tmpdir / rel_path, dest)
 
     if allow_existing:
         old_paths = {Path(f"{export_ref}.md") for export_ref in prev_map}
@@ -661,11 +693,23 @@ def run_markdown_export_once(
     return count, info
 
 
-def _drain_sync_outbox(keeper: Keeper, *, discard: bool) -> tuple[list[dict[str, Any]], int]:
+def _drain_sync_outbox(
+    keeper: Keeper,
+    *,
+    discard: bool,
+    max_rows: int | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    # Bound each poll's outbox work so large mutation bursts do not turn one
+    # daemon tick into an unbounded drain-and-plan pause.
     events: list[dict[str, Any]] = []
     discarded = 0
     while True:
-        rows = keeper._document_store.dequeue_sync_outbox(limit=200)
+        remaining = None if max_rows is None else max_rows - (len(events) + discarded)
+        if remaining is not None and remaining <= 0:
+            break
+        rows = keeper._document_store.dequeue_sync_outbox(
+            limit=200 if remaining is None else min(200, remaining),
+        )
         if not rows:
             break
         outbox_ids = [row["outbox_id"] for row in rows]
@@ -698,7 +742,7 @@ def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
     # handled as bounded incremental rewrites through the shared dependency
     # service.
     entries = load_markdown_mirrors(keeper)
-    from .types import utc_now as _utc_now
+
 
     if not entries:
         _events, discarded = _drain_sync_outbox(keeper, discard=True)
@@ -708,7 +752,11 @@ def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
     now_ts = _utc_now()
     dirty = False
     stats = {"checked": 0, "exported": 0, "errors": 0, "discarded": 0}
-    events, _discarded = _drain_sync_outbox(keeper, discard=False)
+    events, _discarded = _drain_sync_outbox(
+        keeper,
+        discard=False,
+        max_rows=_SYNC_OUTBOX_MAX_EVENTS_PER_POLL,
+    )
     if events:
         for entry in entries:
             if not entry.enabled:
@@ -775,6 +823,22 @@ def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
                     include_versions=entry.include_versions,
                     mirror_entry=entry,
                 )
+            entry.last_run = now_ts
+            entry.pending_since = ""
+            entry.pending_note_ids = []
+            entry.pending_full_replan = False
+            entry.last_error = ""
+            stats["exported"] += 1
+        except _IncrementalExportNeedsFullReplan:
+            run_markdown_export_once(
+                keeper,
+                entry.root,
+                include_system=entry.include_system,
+                include_parts=entry.include_parts,
+                include_versions=entry.include_versions,
+                allow_existing=True,
+                mirror_entry=entry,
+            )
             entry.last_run = now_ts
             entry.pending_since = ""
             entry.pending_note_ids = []

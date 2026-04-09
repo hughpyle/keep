@@ -1,25 +1,34 @@
-# keep data — Export and Import
+# keep data — Export, Import, and Sync
 
-Backup, restore, and migrate keep stores.
+Backup, restore, and continuously mirror keep stores.
 
 ## Export
 
 ```bash
-keep data export backup.json                          # Export to file (JSON, default)
-keep data export backup.json --include-system         # Also include system docs (.tag/*, .meta/*, .now, etc.)
-keep data export -                                    # Write to stdout (for piping, JSON only)
-keep data export notes/ --format md                   # Markdown mode: one .md file per note in a directory
-keep data export notes/ --format md --include-parts   # ...also write analysis parts as <note>/@P{N}.md sidecars
-keep data export notes/ --format md --include-versions # ...also write archived versions as <note>/@V{N}.md sidecars
+keep data export backup.json                           # JSON to file (default)
+keep data export backup.json --include-system          # Include system docs (.tag/*, .meta/*, .now, etc.)
+keep data export -                                     # JSON to stdout (for piping)
+keep data export ~/vault --format md                   # Markdown: one .md per note
+keep data export ~/vault --format md --include-parts   # ...plus analysis parts as sidecars
+keep data export ~/vault --format md --include-versions # ...plus archived versions as sidecars
+keep data export ~/vault --sync                        # Markdown + register continuous mirror
+keep data export ~/vault --sync --stop                 # Stop mirroring (keeps files)
+keep data export --list                                # List active sync directories
 ```
 
 Exports all user documents, versions, and parts as JSON. **System documents (dot-prefix ids like `.tag/*`, `.meta/*`, `.now`) are excluded by default** — pass `--include-system` to include them. Embeddings are excluded (they are model-dependent and regenerated on import).
 
 ### Markdown mode (`--format md`)
 
-Markdown mode writes a **directory** (not a file) with one `.md` file per note. Each file has flat YAML frontmatter with reserved underscore-prefixed metadata keys (`_id`, `_content_hash`, chain metadata, etc.) plus promoted top-level tags, followed by the note summary as the body. By default analysis **parts** and archived **versions** are skipped — use `--include-parts` / `--include-versions` to emit them as sidecar files (see below), or use JSON mode if you need a single self-contained backup.
+Markdown mode writes a **directory** with one `.md` file per note. The directory is created if it doesn't exist; for a one-shot export it must be empty, but `--sync` allows writing into an existing directory.
 
-The output directory must not exist yet, or must be empty. Filenames mirror the id's path structure for easy browsing, using the `wget -m` convention:
+Each file has flat YAML frontmatter followed by the note summary as the body. The frontmatter is one flat map — no nested `tags:` block — with three kinds of keys:
+
+- **Reserved export metadata** (underscore-prefixed, read-only): `_id`, `_content_hash`, `_content_hash_full`, `_created`, `_updated`, `_accessed`, `_part_num`, `_version`, `_version_offset`, `_prev_part`, `_next_part`, `_prev_version`, `_next_version`.
+- **User and system tags** promoted to top-level keys: `topic`, `project`, `_source`, `_analyzed_hash`, etc.
+- **Inverse-edge predicates** as multi-value YAML lists: `said`, `recipient_of`, `cited_by`, etc. Each value is the canonical labeled-ref form `[[source_id|display name]]` when a display name is available, or just the source id otherwise.
+
+Filenames mirror the id's path structure for easy browsing, using the `wget -m` convention:
 
 | Note id                                | Path in export dir                                            |
 |----------------------------------------|---------------------------------------------------------------|
@@ -31,22 +40,60 @@ The output directory must not exist yet, or must be empty. Filenames mirror the 
 | `thread:abc-123@host.com#frag`         | `thread/abc-123@host.com%23frag.md`                           |
 | `mailto:foo@bar.com`                   | `mailto/foo@bar.com.md`                                       |
 
-Any RFC 3986 URI scheme (`scheme:body`, with scheme matching `[A-Za-z][A-Za-z0-9+.-]*`) becomes a top-level directory named after the scheme — so all `file://`, `https://`, `thread:`, `mailto:`, `tel:` notes group under their own folders. Inside each component, filesystem-unsafe characters (`:`, `#`, `?`, `\`, `*`, `<`, `>`, `|`, non-ASCII) are percent-encoded; `@`, `+`, `=`, `,`, `(`, `)`, space stay literal because they are valid on every modern filesystem. `.md` is always appended to the last component, even for ids that already end in `.md`, so the suffix is unambiguous. Any single path component that exceeds the filesystem's per-component limit is truncated and disambiguated with a short SHA256 suffix; the full id is always preserved in the file's `_id` frontmatter key.
+Any RFC 3986 URI scheme becomes a top-level directory. Inside each component, filesystem-unsafe characters (`:`, `#`, `?`, `\`, `*`, `<`, `>`, `|`, non-ASCII) are percent-encoded; `@`, `+`, `=`, `,`, `(`, `)`, space stay literal. `.md` is always appended to the last component, even for ids that already end in `.md`, so the suffix is unambiguous. Components that exceed the filesystem's per-component limit are truncated with a short SHA256 suffix; the full id is always in `_id`.
 
-Markdown mode is intended for human browsing, grep-friendly backups, and handoff to tools that consume markdown-with-frontmatter. For round-trip backup/restore, use JSON mode — `keep data import` only reads the JSON format.
+Two notes whose paths would collide case-insensitively (e.g. `state-actions.md` and `STATE-ACTIONS.md` on macOS APFS) are auto-disambiguated: the second one gets an 8-hex-char hash suffix on its stem. The frontmatter `_id` is unchanged — disambiguation is purely an on-disk detail.
 
-Example output file (`auth-notes.md`):
+#### Example output
 
 ```markdown
 ---
 _id: auth-notes
 _content_hash: abc123
+_content_hash_full: def456
+_prev_version: "[[auth-notes/@V{1}]]"
+_next_part: "[[auth-notes/@P{1}]]"
 topic: auth
+project: security
 _source: inline
+_created: '2026-01-15T10:30:00'
+_updated: '2026-02-01T14:22:00'
+_accessed: '2026-02-19T09:00:00'
+_analyzed_hash: abc123
+said:
+- "[[conv1|First conversation about auth]]"
+- "[[conv2|Follow-up on OAuth design]]"
 ---
 
 Authentication patterns for OAuth2...
 ```
+
+#### Chain navigation
+
+Parent notes link to their sidecars via `_prev_version` and `_next_part` frontmatter keys. Sidecars link back to their parent (or to sibling sidecars) via the same system:
+
+- **Versions** form a linear chain: parent → `@V{1}` → `@V{2}` → ... → oldest. Each version has `_next_version` (toward parent) and `_prev_version` (toward older).
+- **Parts** form a linear chain by `part_num`: parent → `@P{1}` → `@P{2}` → `@P{5}`. Each part has `_prev_part` (toward parent or lower part_num) and `_next_part` (toward higher part_num).
+
+All chain-navigation values are `[[vault-local-ref]]` wikilinks that resolve in tools like Obsidian.
+
+#### Inverse edges
+
+When a note is the target of edge-tag relationships (e.g. `speaker: Deborah` on a conversation note creates an edge to `Deborah`), the inverse predicates appear in the target's frontmatter as multi-value lists:
+
+```yaml
+said:
+- "[[conv1|First conversation]]"
+- "[[conv2|Second conversation]]"
+recipient_of:
+- "[[thread:abc@mail.com|Re: Meeting notes]]"
+```
+
+Values use canonical `[[target|label]]` labeled-ref syntax when the source note has a resolvable display name; otherwise they're plain ids. Forward edge tags (like `speaker: Deborah` on the source note) pass through as ordinary tag values — no special treatment.
+
+#### Edge-tag value rewriting
+
+Edge-tag values in the frontmatter are rewritten from canonical keep ids to the exported vault-local path namespace, so `[[wikilinks]]` in the frontmatter resolve correctly when the vault is opened in Obsidian or similar tools.
 
 #### Parts and versions sidecars
 
@@ -62,14 +109,48 @@ rust-tutorial/               ← sidecar dir (only created if parts/versions exi
   @V{3}.md                   ← 3 steps back
 ```
 
-Filenames mirror the in-app navigation ids:
-
-- **`@P{N}.md`** — analysis part with absolute `part_num = N`. Body is the part's text (the `summary` field, same as for notes); frontmatter has the parent `_id`, `_part_num`, `_created`, and any promoted top-level part tags.
-- **`@V{N}.md`** — archived version with offset `N` from the current version (`@V{1}` is the most recent prior, `@V{2}` is two steps back, …). The current version stays in the parent file — there is no `@V{0}.md`. Frontmatter has the parent `_id`, `_version_offset` (the `N`), `_version` (the absolute database version number, for reference), `_created`, `_content_hash`, and any promoted top-level version tags. Body is the historical summary.
+- **`@P{N}.md`** — analysis part with `_part_num = N`. Body is the part text; frontmatter has `_id` (parent), `_part_num`, `_created`, and promoted part tags.
+- **`@V{N}.md`** — archived version at offset `N` from current (`@V{1}` is the most recent prior). The current version stays in the parent file — there is no `@V{0}.md`. Frontmatter has `_id` (parent), `_version_offset`, `_version` (absolute database version number), `_created`, `_content_hash`, and promoted version tags.
 
 Notes with no parts or versions get no sidecar dir — `plain-note.md` stays a single flat file even when both flags are on.
 
-If two distinct ids would write to the same path (rare — only happens with deliberately confusing ids like `combo` with parts and a separate `combo/@P{1}` note that also encodes to the same path), the export aborts with a clear error naming both ids.
+#### Using with Obsidian
+
+The exported directory can be opened directly as an Obsidian vault. All `[[wikilink]]` values in the frontmatter (chain navigation, inverse edges, forward edge tags) resolve to the exported files. The Obsidian graph view renders the full relationship structure.
+
+### Continuous sync (`--sync`)
+
+```bash
+keep data export ~/vault --sync                        # Export + register mirror
+keep data export ~/vault --sync --include-parts        # ...with parts sidecars
+keep data export ~/vault --sync --stop                 # Stop mirroring
+keep data export --list                                # List active mirrors
+```
+
+`--sync` performs an immediate one-shot markdown export with progress, then registers the directory as a **daemon-owned continuous mirror**. The daemon watches for keep mutations (note creates, updates, deletes, tag changes, edge changes, part/version changes) via a trigger-based sync outbox and automatically re-exports affected notes on a debounced interval.
+
+- **Incremental updates**: ordinary content, tag, and edge changes rewrite only the affected note bundles (the changed note plus any notes whose inverse-edge frontmatter depends on it). A note insert or delete triggers a full re-export pass.
+- **Mirror state**: the exported directory contains a `.keep-sync/` subdirectory with `map.tsv` (vault-path → keep-id mapping, plaintext, diffable) and `state.json` (operational bookkeeping).
+- **Path exclusivity**: a sync directory cannot overlap with a `keep put --watch` directory, and vice versa. `keep put` of files inside a sync root is rejected.
+- **Stop**: `--sync --stop` removes the mirror registration but does not delete the exported files.
+- **List**: `--list` shows all active sync directories with their status (last run, pending, errors).
+
+Check sync status:
+
+```bash
+keep pending                   # Shows "Markdown mirrors active: N" when mirrors are registered
+```
+
+### Markdown mode vs JSON mode
+
+| Feature | JSON (`--format json`) | Markdown (`--format md`) |
+|---|---|---|
+| Output | Single file | Directory of `.md` files |
+| Round-trip import | Yes (`keep data import`) | No (one-way export) |
+| Human browsable | No | Yes (grep, Obsidian, etc.) |
+| Continuous sync | No | Yes (`--sync`) |
+| Parts/versions | Always included | Opt-in (`--include-parts`, `--include-versions`) |
+| Embeddings | Excluded | Excluded |
 
 ## Import
 
@@ -134,6 +215,8 @@ Until embeddings are processed, imported documents are retrievable by ID (`keep 
 ## Use Cases
 
 - **Backup:** `keep data export backup-$(date +%Y%m%d).json`
+- **Browse in Obsidian:** `keep data export ~/vault --format md --include-parts --include-versions`, then open `~/vault` as a vault
+- **Continuous Obsidian mirror:** `keep data export ~/vault --sync --include-parts` — the daemon keeps the vault up to date
 - **Migrate local to cloud:** Export from local store, import into hosted store (when supported)
 - **Transfer between machines:** Export, copy file, import
 - **Merge stores:** Export from one, `keep data import --store /other/path backup.json`

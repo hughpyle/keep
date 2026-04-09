@@ -20,6 +20,7 @@ from keep.cli_app import (
     _display_tags,
     _truncate,
     _date,
+    data_export,
     put,
 )
 
@@ -130,6 +131,75 @@ def test_render_context_with_similar():
     assert "similar:" in output
     assert "sim-1" in output
     assert "(0.91)" in output
+
+
+def test_data_export_list_prints_markdown_mirrors(capsys):
+    with patch("keep.cli_app._get_port", return_value=1234), \
+         patch("keep.cli_app._daemon_request", return_value=(200, {
+             "mirrors": [
+                 {
+                     "root": "/tmp/vault",
+                     "enabled": True,
+                     "include_system": False,
+                     "include_parts": True,
+                     "include_versions": False,
+                     "interval": "PT30S",
+                     "added_at": "2026-04-09T13:00:00",
+                     "pending_since": "",
+                     "last_run": "2026-04-09T13:05:00",
+                     "last_error": "",
+                 },
+             ],
+         })):
+        data_export(output=None, list_sync=True)
+
+    captured = capsys.readouterr()
+    assert "/tmp/vault" in captured.out
+    assert "last run 2026-04-09T13:05:00" in captured.out
+    assert "parts" in captured.out
+
+
+def test_data_export_list_treats_unknown_daemon_endpoint_as_empty(capsys):
+    with patch("keep.cli_app._get_port", return_value=1234), \
+         patch("keep.cli_app._daemon_request", return_value=(404, {"error": "not found"})):
+        data_export(output=None, list_sync=True)
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.strip() == "No markdown sync directories."
+
+
+def test_data_export_sync_implies_markdown_mode(capsys):
+    with patch("keep.api.Keeper"), \
+         patch("keep.daemon_client.resolve_store_path", return_value="/tmp/store"), \
+         patch("keep.markdown_mirrors.run_markdown_export_once", return_value=(12, {})) as run_export, \
+         patch("keep.cli_app._get_port", return_value=1234), \
+         patch("keep.cli_app._daemon_request", side_effect=[
+             (200, {"validated": True, "root": "/tmp/vault"}),
+             (200, {"sync": {"root": "/tmp/vault"}}),
+         ]) as daemon_request:
+        data_export(output="/tmp/vault", sync=True)
+
+    captured = capsys.readouterr()
+    assert "Markdown sync active: /tmp/vault (12 notes exported)" in captured.err
+    assert daemon_request.call_count == 2
+    validate_args = daemon_request.call_args_list[0].args
+    register_args = daemon_request.call_args_list[1].args
+    assert validate_args[0] == "POST"
+    assert validate_args[2] == "/v1/admin/markdown-export"
+    assert validate_args[3]["validate_only"] is True
+    assert register_args[3]["register_only"] is True
+    assert register_args[3]["baseline_complete"] is True
+    run_export.assert_called_once()
+
+
+def test_data_export_stop_implies_markdown_mode(capsys):
+    with patch("keep.cli_app._get_port", return_value=1234), \
+         patch("keep.cli_app._daemon_request", return_value=(200, {"stopped": True})):
+        data_export(output="/tmp/vault", sync=True, stop=True)
+
+    captured = capsys.readouterr()
+    assert "Stopped markdown sync: /tmp/vault" in captured.err
 
 
 def test_render_context_with_version():

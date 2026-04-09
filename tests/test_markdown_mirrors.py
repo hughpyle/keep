@@ -160,6 +160,41 @@ def test_run_markdown_export_once_maps_read_only_sidecars(mock_providers, tmp_pa
         kp.close()
 
 
+def test_run_markdown_export_once_handles_uri_parent_with_md_suffix_sidecars(
+    mock_providers, tmp_path,
+):
+    kp = Keeper(store_path=tmp_path / "store")
+    try:
+        kp.put(
+            "Current body",
+            id="file:///Users/openclaw/keep-uri-test/brief.md",
+        )
+        kp.put(
+            "Older body " + ("x" * 700),
+            id="file:///Users/openclaw/keep-uri-test/brief.md",
+        )
+
+        root = tmp_path / "vault"
+        count, _info = run_markdown_export_once(
+            kp,
+            root,
+            include_system=False,
+            include_versions=True,
+            allow_existing=True,
+        )
+
+        assert count == 1
+        assert (root / "file" / "Users" / "openclaw" / "keep-uri-test" / "brief.md.md").is_file()
+        assert (root / "file" / "Users" / "openclaw" / "keep-uri-test" / "brief.md" / "@V{1}.md").is_file()
+        entries = (root / ".keep-sync" / "map.tsv").read_text(encoding="utf-8")
+        assert (
+            "file/Users/openclaw/keep-uri-test/brief.md/@V{1}\t"
+            "file:///Users/openclaw/keep-uri-test/brief.md@V{1}"
+        ) in entries
+    finally:
+        kp.close()
+
+
 def test_list_markdown_mirrors_returns_saved_entries(mock_providers, tmp_path):
     kp = Keeper(store_path=tmp_path / "store")
     try:
@@ -350,6 +385,84 @@ def test_clear_sync_outbox_discards_pending_rows(mock_providers, tmp_path):
         discarded = clear_sync_outbox(kp)
         assert discarded > 0
         assert kp._document_store.sync_outbox_depth() == 0
+    finally:
+        kp.close()
+
+
+def test_poll_markdown_mirrors_falls_back_to_full_replan_when_map_is_missing_note(
+    mock_providers, tmp_path,
+):
+    kp = Keeper(store_path=tmp_path / "store")
+    try:
+        kp.put("Alpha body", id="alpha")
+        root = tmp_path / "vault"
+        root.mkdir()
+        run_markdown_export_once(
+            kp,
+            root,
+            include_system=False,
+            allow_existing=True,
+        )
+        clear_sync_outbox(kp)
+        add_markdown_mirror(kp, root, interval="PT1S")
+
+        map_path = root / ".keep-sync" / "map.tsv"
+        map_path.write_text("export_ref\tkeep_id\n", encoding="utf-8")
+
+        kp.put("Alpha body updated", id="alpha")
+        stats = poll_markdown_mirrors(kp)
+        assert stats["exported"] == 0
+        entries = list_markdown_mirrors(kp)
+        entries[0].pending_since = "2000-01-01T00:00:00"
+        save_markdown_mirrors(kp, entries)
+
+        stats = poll_markdown_mirrors(kp)
+        assert stats["exported"] == 1
+        assert (root / "alpha.md").read_text(encoding="utf-8").endswith(
+            "Alpha body updated\n"
+        )
+        map_text = map_path.read_text(encoding="utf-8")
+        assert "alpha\talpha" in map_text
+
+        refreshed = list_markdown_mirrors(kp)
+        assert refreshed[0].last_error == ""
+        assert refreshed[0].pending_since == ""
+        assert refreshed[0].pending_note_ids == []
+        assert refreshed[0].pending_full_replan is False
+    finally:
+        kp.close()
+
+
+def test_poll_markdown_mirrors_limits_outbox_drain_per_tick(
+    mock_providers, tmp_path, monkeypatch,
+):
+    kp = Keeper(store_path=tmp_path / "store")
+    try:
+        kp.put("Alpha body", id="alpha")
+        root = tmp_path / "vault"
+        root.mkdir()
+        run_markdown_export_once(
+            kp,
+            root,
+            include_system=False,
+            allow_existing=True,
+        )
+        clear_sync_outbox(kp)
+        add_markdown_mirror(kp, root, interval="PT1S")
+
+        for idx in range(5):
+            kp.put(f"Body {idx}", id=f"doc-{idx}")
+
+        total_rows = kp._document_store.sync_outbox_depth()
+        assert total_rows >= 5
+        monkeypatch.setattr(
+            "keep.markdown_mirrors._SYNC_OUTBOX_MAX_EVENTS_PER_POLL",
+            3,
+        )
+
+        stats = poll_markdown_mirrors(kp)
+        assert stats["exported"] == 0
+        assert kp._document_store.sync_outbox_depth() == total_rows - 3
     finally:
         kp.close()
 

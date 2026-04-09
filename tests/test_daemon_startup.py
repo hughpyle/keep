@@ -2,7 +2,7 @@
 
 import sys
 from runpy import run_path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from keep.api import Keeper
 
@@ -96,3 +96,53 @@ def test_daemon_script_entrypoint_supports_direct_python_execution(tmp_path):
     kwargs = captured["kwargs"]
     assert kwargs["store_path"] == str(tmp_path)
     assert kwargs["defer_startup_maintenance"] is True
+
+
+def test_daemon_startup_logs_markdown_mirror_count(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    logger = MagicMock()
+    try:
+        with patch("keep.markdown_mirrors.list_markdown_mirrors", return_value=[]):
+            from keep.console_support import _log_daemon_startup_state
+
+            _log_daemon_startup_state(kp, logger)
+
+        logger.info.assert_any_call("Markdown mirrors: %d configured", 0)
+    finally:
+        kp.close()
+
+
+def test_log_daemon_batch_result_skips_idle_tick():
+    from keep.console_support import _log_daemon_batch_result
+
+    logger = MagicMock()
+    _log_daemon_batch_result(
+        logger=logger,
+        result={"processed": 0, "failed": 0},
+        delegated=0,
+        flow_result={"processed": 0, "failed": 0, "dead_lettered": 0},
+    )
+
+    logger.info.assert_not_called()
+
+
+def test_log_daemon_batch_result_logs_activity():
+    from keep.console_support import _log_daemon_batch_result
+
+    logger = MagicMock()
+    _log_daemon_batch_result(
+        logger=logger,
+        result={"processed": 1, "failed": 0},
+        delegated=0,
+        flow_result={"processed": 0, "failed": 0, "dead_lettered": 0},
+    )
+
+    logger.info.assert_called_once_with(
+        "%s: processed=%d failed=%d delegated=%d flow_processed=%d flow_failed=%d",
+        "Daemon batch",
+        1,
+        0,
+        0,
+        0,
+        0,
+    )

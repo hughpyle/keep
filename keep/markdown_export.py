@@ -194,6 +194,9 @@ def _get_export_doc(
     doc_id: str,
 ) -> dict | None:
     """Return one export-shaped note dict from the current store."""
+    # Keep this shape aligned with Keeper.export_iter(). Incremental export
+    # needs one-note assembly without rescanning the whole store, so this is a
+    # deliberately duplicated single-note form of that export loop.
     try:
         doc_coll = keeper._resolve_doc_collection()
         record = keeper._document_store.get(doc_coll, doc_id)
@@ -707,6 +710,8 @@ def _write_markdown_export(
     include_parts: bool = False,
     include_versions: bool = False,
     progress: Optional[Callable[[int, int, str], None]] = None,
+    export_map: dict[str, str] | None = None,
+    written_paths: set[Path] | None = None,
 ) -> tuple[int, dict]:
     """Write a markdown-per-note export into ``out_dir``."""
     it = keeper.export_iter(include_system=include_system)
@@ -796,7 +801,13 @@ def _write_markdown_export(
     for doc in it2:
         doc_id = doc["id"]
         rel_path = final_paths[doc_id]
-        for bundle_rel, text in _render_doc_bundle(
+        bundle_refs = _bundle_export_refs(
+            doc,
+            rel_path,
+            include_parts=include_parts,
+            include_versions=include_versions,
+        )
+        bundle_files = _render_doc_bundle(
             keeper,
             doc,
             rel_path,
@@ -807,8 +818,15 @@ def _write_markdown_export(
             current_inverse=current_inverse,
             version_inverse=version_inverse,
             is_edge_tag=is_edge_tag,
-        ).items():
+        )
+        for bundle_rel, text in bundle_files.items():
             write(bundle_rel, text)
+        if written_paths is not None:
+            written_paths.update(bundle_files)
+        if export_map is not None:
+            for keep_id, export_ref in bundle_refs.items():
+                if keep_id == doc_id or "@P{" in keep_id or "@V{" in keep_id:
+                    export_map[export_ref] = keep_id
 
         count += 1
         if progress is not None:

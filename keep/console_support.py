@@ -1619,12 +1619,19 @@ def _prune_work_if_due(kp, *, last_prune_ts: float, prune_interval: float) -> fl
 
 def _log_daemon_startup_state(kp, daemon_logger) -> None:
     """Log initial queue and provider state once the daemon is reachable."""
+    mirror_count = 0
+    try:
+        from .markdown_mirrors import list_markdown_mirrors
+        mirror_count = len(list_markdown_mirrors(kp))
+    except Exception:
+        pass
     daemon_logger.info(
         "Queue: %d pending, %d flow, %d failed",
         kp._pending_queue.count(),
         kp.pending_work_count() if hasattr(kp, "pending_work_count") else 0,
         0,
     )
+    daemon_logger.info("Markdown mirrors: %d configured", mirror_count)
     daemon_logger.info(
         "Embedding: %s/%s",
         kp._config.embedding.name if kp._config.embedding else "none",
@@ -1744,6 +1751,16 @@ def _daemon_has_flow_activity(flow_result: dict[str, Any]) -> bool:
 
 def _log_daemon_batch_result(*, logger, result: dict[str, Any], delegated: int, flow_result: dict[str, Any], drain: bool = False) -> None:
     """Emit a consistent batch-progress log line for daemon work ticks."""
+    flow_processed = int(flow_result.get("processed", 0))
+    flow_failed = int(flow_result.get("failed", 0)) + int(flow_result.get("dead_lettered", 0))
+    if (
+        int(result.get("processed", 0)) == 0
+        and int(result.get("failed", 0)) == 0
+        and int(delegated) == 0
+        and flow_processed == 0
+        and flow_failed == 0
+    ):
+        return
     label = "Daemon batch (drain)" if drain else "Daemon batch"
     logger.info(
         "%s: processed=%d failed=%d delegated=%d flow_processed=%d flow_failed=%d",
@@ -1751,8 +1768,8 @@ def _log_daemon_batch_result(*, logger, result: dict[str, Any], delegated: int, 
         result["processed"],
         result["failed"],
         delegated,
-        int(flow_result.get("processed", 0)),
-        int(flow_result.get("failed", 0)) + int(flow_result.get("dead_lettered", 0)),
+        flow_processed,
+        flow_failed,
     )
 
 
@@ -1793,8 +1810,9 @@ def _maybe_wait_for_daemon_idle(
         return True
 
     has_timers = has_active_watches(kp)
+    mirrors = list_markdown_mirrors(kp) if not has_timers else []
     if not has_timers:
-        has_timers = has_active_markdown_mirrors(kp)
+        has_timers = any(m.enabled for m in mirrors)
     if not has_timers:
         has_timers = (
             last_replenish_ts == 0
@@ -1805,8 +1823,8 @@ def _maybe_wait_for_daemon_idle(
 
     if has_active_watches(kp):
         delay = next_check_delay(load_watches(kp))
-    elif has_active_markdown_mirrors(kp):
-        delay = next_markdown_mirror_delay(list_markdown_mirrors(kp))
+    elif mirrors and any(m.enabled for m in mirrors):
+        delay = next_markdown_mirror_delay(mirrors)
     else:
         time_to_replenish = max(0, replenish_interval - (time.time() - last_replenish_ts))
         delay = min(time_to_replenish, 60.0)
@@ -1902,11 +1920,19 @@ def print_pending_interactive(kp) -> None:
     queue_stats = kp._pending_queue.stats()
     failed_count = queue_stats.get("failed", 0)
     processing_count = queue_stats.get("processing", 0)
+    mirror_count = 0
 
     _has_timer_events = False
     try:
         from .watches import has_active_watches
         _has_timer_events = has_active_watches(kp)
+    except Exception:
+        pass
+    try:
+        from .markdown_mirrors import list_markdown_mirrors
+        mirror_count = len([entry for entry in list_markdown_mirrors(kp) if entry.enabled])
+        if mirror_count:
+            _has_timer_events = True
     except Exception:
         pass
     if not _has_timer_events:
@@ -1940,6 +1966,8 @@ def print_pending_interactive(kp) -> None:
         typer.echo(_queue_status_line(kp, queue_stats), err=True)
     elif _has_timer_events:
         typer.echo("No work queued, but timer events need servicing.", err=True)
+    if mirror_count:
+        typer.echo(f"Markdown mirrors active: {mirror_count}", err=True)
 
     if not kp._is_processor_running():
         kp._spawn_processor()

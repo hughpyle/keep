@@ -113,6 +113,17 @@ When you add `_inverse` to an existing tagdoc, keep automatically backfills edge
 - **System doc targets skipped**: Tag values starting with `.` (like `.meta/todo`) don't create edges.
 - **Removal**: Setting a tag to empty (`-t speaker=`) deletes that edge without affecting other edges on the document.
 
+## When to promote a tag to an edge tag
+
+Edge tags point at real-world entities. The decisive test is not cardinality — it's **referential integrity**: do the tag values already point at things that exist (or that you intend to exist) as first-class notes?
+
+- `speaker: Deborah` → **edge**. Deborah is a person who exists as a note. You want to navigate from Deborah to everything she said.
+- `from: alice@example.com` → **edge**. The email address is a stable identifier for a contact entity.
+- `topic: rust` → **not an edge**. "rust" is a taxonomy label for filtering, not an entity you'd navigate to. There's no "rust" note that accumulates inbound references.
+- `project: keep` → **could be an edge**, if `keep` is a first-class project note that collects all related work. If it's just a filtering label, leave it as a plain tag.
+
+If you find yourself wanting to `keep get <tag-value>` and see everything that references it, you have a latent edge. Promote the tag by adding `_inverse` to its tagdoc. If you only ever use the tag for `keep find -t key=value` filtering, it's a taxonomy label and should stay a plain tag.
+
 ## Edge vs meta: choosing the right tool
 
 Use **edge tags** for explicit graph relationships:

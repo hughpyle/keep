@@ -1451,20 +1451,6 @@ class TestMarkdownExport:
         assert r.exit_code != 0
         assert "--stop requires --sync" in r.output
 
-    def test_cli_rejects_interval_without_sync(self, tmp_path):
-        from typer.testing import CliRunner
-        from keep.cli_app import app
-
-        r = CliRunner().invoke(
-            app,
-            [
-                "--store", str(tmp_path), "data", "export", str(tmp_path / "vault"),
-                "--format", "md", "--interval", "PT30S",
-            ],
-        )
-        assert r.exit_code != 0
-        assert "--interval requires --sync" in r.output
-
     def test_cli_rejects_unknown_format(self, tmp_path):
         from typer.testing import CliRunner
         from keep.cli_app import app

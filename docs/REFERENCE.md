@@ -144,15 +144,20 @@ keep flow -p key=value               # Pass parameters
 # Data management
 keep data export backup.json         # Export store to JSON
 keep data export - | gzip > bk.gz    # Export to stdout, compress
-keep data export notes/ --format md  # Export as markdown directory (one file per note)
+keep data export ~/vault --format md # Export as markdown directory (one file per note)
+keep data export ~/vault --sync      # Markdown export + continuous daemon mirror
+keep data export ~/vault --sync --stop  # Stop mirroring
+keep data export --list              # List active sync directories
 keep data import backup.json         # Import (merge, skip existing)
 keep data import backup.json -m replace  # Import (replace all)
 
 # Maintenance
-keep pending                         # Process pending tasks, tail progress
-keep pending --reindex               # Re-embed all notes + process
-keep pending --retry                 # Reset failed notes back to pending
-keep pending --stop                  # Stop background processor
+keep pending                         # Start daemon, process tasks, tail progress
+keep pending --list                  # Show queue status + active mirrors
+keep pending --reindex               # Enqueue all notes for re-embedding
+keep pending --retry                 # Reset failed items back to pending
+keep pending --purge                 # Delete all pending work items
+keep pending --stop                  # Stop daemon
 
 # Config
 keep config                          # Show configuration

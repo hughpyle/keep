@@ -27,6 +27,12 @@ jobs:
       - name: Check lock file is current
         run: uv lock --check
 
+      - name: Build OpenClaw plugin bundle
+        working-directory: keep/data/openclaw-plugin
+        run: |
+          npm ci
+          node build.mjs
+
       - name: Install dependencies
         run: uv sync --python ${{ matrix.python-version }} --extra dev --extra langchain
 

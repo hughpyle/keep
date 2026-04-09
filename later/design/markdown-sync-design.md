@@ -154,10 +154,26 @@ Reasons:
 - it must coordinate path mapping and atomic rewrites
 - it will later share machinery with bidirectional sync
 
-The CLI should become a thin wrapper:
+The CLI should stay a thin wrapper around daemon-owned mirroring state, but the
+current checkpoint still keeps one-shot export and the initial `--sync` seed
+pass local.
 
-- one-shot export asks the daemon to run one mirror pass
-- `--sync` registers a long-lived markdown mirror owned by the daemon
+Current behavior:
+
+- one-shot markdown export runs locally in the CLI against the current store
+- `--sync` first validates the target root with the daemon
+- the CLI then performs one local full seed export with a progress bar
+- the daemon finally records the mirror registration and owns ongoing updates
+
+This split is intentional for now because the initial seed can take a long time
+and the local CLI path provides better foreground progress feedback.
+
+The daemon remains responsible for:
+
+- mirror registration state
+- overlap validation
+- ongoing outbound change handling
+- future inbound watch/import work
 
 ## 5. Mirror Registrations
 
@@ -293,37 +309,43 @@ each other.
 
 The CLI should expose sync as a daemon registration, not as a foreground loop.
 
-Recommended shape:
+Current shape:
 
 ```bash
-keep data export PATH --format md --sync
-keep data export PATH --format md --sync --stop
-keep data export PATH --format md --sync --interval PT30S
+keep data export PATH --format md
+keep data export PATH --sync
+keep data export PATH --sync --stop
+keep data export --list
 ```
 
 Semantics:
 
 - `keep data export PATH --format md`
   - one-shot markdown export
-- `keep data export PATH --format md --sync`
+- `keep data export PATH --sync`
   - ensure the directory is a registered markdown mirror
-  - perform an immediate export pass
+  - validate the root with the daemon before writing files
+  - perform an immediate local seed export pass with a progress bar
+  - register the mirror with the daemon as already seeded
   - leave the daemon responsible for keeping it updated
-- `keep data export PATH --format md --sync --stop`
+- `keep data export PATH --sync --stop`
   - remove that mirror registration
   - do not delete the exported files
-
-`--interval` should match the existing watch model and use the same ISO 8601
-duration syntax as `keep put --watch --interval`, for example `PT30S`.
+- `keep data export --list`
+  - list registered markdown mirror roots and current status
 
 The CLI should reject invalid combinations:
 
-- `--sync` requires `--format md`
 - `--stop` requires `--sync`
-- `--interval` requires `--sync`
+- `--list` cannot be combined with `--sync` or `--stop`
+- `--list` does not take an output path
 
-This gives sync a familiar control surface and keeps the daemon in charge of
-timers.
+`--sync` and `--stop` currently imply markdown export mode, so `--format md`
+does not need to be spelled out in those cases.
+
+The daemon still stores a per-mirror interval and uses it as the debounce
+window, but that option is currently hidden from the CLI until the operational
+surface is clearer.
 
 The CLI should also reject `put` of files rooted inside a synced mirror
 directory, with a message directing the user to edit the synced markdown file
@@ -571,20 +593,23 @@ not bidirectional sync.
 
 This stage includes:
 
-- moving markdown export code out of the CLI into daemon-owned service code
+- moving markdown render/planning code out of CLI-only helpers and into shared
+  service code used by both CLI export and daemon mirrors
 - registering a markdown mirror rooted at a directory
 - writing `.keep-sync/map.tsv`
 - defining and implementing the outbound dependency graph above
 - updating only affected exported files on keep changes, except when a full
   path replan is required
 
-This milestone is now partially implemented:
+This milestone is now implemented as the current outbound checkpoint:
 
 - dependency traversal is provided by a shared core service rather than export-
   specific edge queries
 - mirror polling performs bounded note-bundle rewrites for non-structural
   mutations
 - note create/delete and other namespace-shaping changes still use full replan
+- the initial `--sync` seed export still runs locally in the CLI, but ongoing
+  mirror ownership and change handling live in the daemon
 
 This should use existing change notifications. The hard part is not detection;
 it is stable namespace planning and file mapping.
@@ -823,7 +848,7 @@ That should be tested for:
 
 ## Sequencing
 
-Recommended implementation order:
+Implementation order:
 
 1. Write and review the companion content-role policy doc:
    [markdown-sync-content-role-policy.md](/Users/hugh/play/keep/later/design/markdown-sync-content-role-policy.md)
@@ -836,14 +861,17 @@ Recommended implementation order:
      note writes
    - the goal is to make sync semantics explicit without destabilizing current
      behavior
-4. Move markdown export into daemon-owned service code.
+4. Move shared markdown rendering/planning into non-CLI service code.
+   - one-shot CLI export may still remain local for UX reasons
 5. Add mirror registration and continuous one-way export with `.keep-sync/map.tsv`
    and minimal `.keep-sync/state.json`.
-6. Add folder watch/import using the new policies and mirror state, with
+6. Add incremental outbound export using the shared dependency model.
+7. Add folder watch/import using the new policies and mirror state, with
    latest-write-wins plus archived older versions.
 
-This keeps the first user-visible sync milestone simple and useful while
-avoiding a premature import path built on unclear semantics.
+Steps 1 through 6 are now complete enough for the current outbound-only
+checkpoint. The main remaining work is step 7: inbound watch/import and
+reconciliation.
 
 ## Consequences
 

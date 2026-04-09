@@ -1753,15 +1753,21 @@ data_app = typer.Typer(
 app.add_typer(data_app)
 
 
+def _clear_progress_line() -> None:
+    cols = shutil.get_terminal_size((80, 24)).columns
+    sys.stderr.write("\r" + " " * (cols - 1) + "\r")
+    sys.stderr.flush()
+
+
 @data_app.command("export")
 def data_export(
-    output: Annotated[str, typer.Argument(help="Output file path (JSON) or directory (markdown). Use '-' for stdout in JSON mode.")],
+    output: Annotated[Optional[str], typer.Argument(help="Output file path (JSON) or directory (markdown). Use '-' for stdout in JSON mode.", show_default=False)] = None,
     include_system: Annotated[bool, typer.Option("--include-system", help="Include system documents (.tag/*, .meta/*, .now, etc.). Excluded by default.")] = False,
     include_parts: Annotated[bool, typer.Option("--include-parts", help="Markdown mode: emit analysis parts as <note>/@P{N}.md sidecars. Off by default.")] = False,
     include_versions: Annotated[bool, typer.Option("--include-versions", help="Markdown mode: emit archived versions as <note>/@V{N}.md sidecars. Off by default.")] = False,
-    sync: Annotated[bool, typer.Option("--sync", help="Markdown mode: register a daemon-owned continuous mirror for this directory.")] = False,
+    list_sync: Annotated[bool, typer.Option("--list", help="List active markdown sync directories.")] = False,
+    sync: Annotated[bool, typer.Option("--sync", help="Markdown mode: continuously mirror from keep for this directory.")] = False,
     stop: Annotated[bool, typer.Option("--stop", help="With --sync, stop mirroring this directory.")] = False,
-    interval: Annotated[str | None, typer.Option("--interval", help="With --sync, mirror poll interval (ISO 8601 duration, e.g. PT30S).")] = None,
     format: Annotated[str, typer.Option("--format", "-f", help="Export format: 'json' (default) or 'md' (markdown directory, one file per note)")] = "json",
 ):
     """Export the store for backup or migration.
@@ -1777,18 +1783,129 @@ def data_export(
     System documents (dot-prefix ids like ``.tag/*``, ``.meta/*``, ``.now``)
     are excluded by default; pass ``--include-system`` to include them.
     """
+    if list_sync:
+        if output is not None:
+            typer.echo("Error: --list does not take an output path", err=True)
+            raise SystemExit(1)
+        if sync or stop:
+            typer.echo("Error: --list cannot be combined with --sync or --stop", err=True)
+            raise SystemExit(1)
+        port = _get_port()
+        status, data = _daemon_request(
+            "POST",
+            port,
+            "/v1/admin/markdown-export",
+            {"list": True},
+        )
+        if status == 404 and data.get("error") == "not found":
+            if _is_json(False):
+                typer.echo(json.dumps({"mirrors": []}, indent=2))
+            else:
+                typer.echo("No markdown sync directories.")
+            return
+        if status >= 400:
+            typer.echo(f"Error: {data.get('error', 'markdown sync list failed')}", err=True)
+            raise SystemExit(1)
+        mirrors = data.get("mirrors", [])
+        if _is_json(False):
+            typer.echo(json.dumps({"mirrors": mirrors}, indent=2))
+            return
+        if not mirrors:
+            typer.echo("No markdown sync directories.")
+            return
+        for entry in mirrors:
+            status_bits = []
+            if entry.get("last_error"):
+                status_bits.append(f"error={entry['last_error']}")
+            elif entry.get("pending_since"):
+                status_bits.append(f"pending since {entry['pending_since']}")
+            elif entry.get("last_run"):
+                status_bits.append(f"last run {entry['last_run']}")
+            else:
+                status_bits.append("idle")
+            if entry.get("include_parts"):
+                status_bits.append("parts")
+            if entry.get("include_versions"):
+                status_bits.append("versions")
+            if entry.get("include_system"):
+                status_bits.append("system")
+            typer.echo(f"{entry.get('root', '')} ({', '.join(status_bits)})")
+        return
+
+    if output is None:
+        typer.echo("Error: missing output path", err=True)
+        raise SystemExit(1)
+
     fmt = format.lower()
+    if (sync or stop) and fmt == "json":
+        fmt = "md"
     if fmt in ("md", "markdown"):
         if stop and not sync:
             typer.echo("Error: --stop requires --sync", err=True)
             raise SystemExit(1)
-        if interval and not sync:
-            typer.echo("Error: --interval requires --sync", err=True)
-            raise SystemExit(1)
         if sync:
-            if output == "-":
-                typer.echo("Error: markdown export requires a directory path, not '-'", err=True)
-                raise SystemExit(1)
+            count = 0
+            if not stop:
+                if output == "-":
+                    typer.echo("Error: markdown export requires a directory path, not '-'", err=True)
+                    raise SystemExit(1)
+                port = _get_port()
+                status, data = _daemon_request(
+                    "POST",
+                    port,
+                    "/v1/admin/markdown-export",
+                    {
+                        "root": output,
+                        "include_system": include_system,
+                        "include_parts": include_parts,
+                        "include_versions": include_versions,
+                        "sync": True,
+                        "validate_only": True,
+                    },
+                )
+                if status >= 400:
+                    typer.echo(f"Error: {data.get('error', 'markdown sync failed')}", err=True)
+                    raise SystemExit(1)
+                from .console_support import _progress_bar
+                from .daemon_client import resolve_store_path
+                from .api import Keeper
+                from .markdown_mirrors import run_markdown_export_once
+
+                kp = Keeper(store_path=resolve_store_path(_global_store))
+                is_tty = sys.stderr.isatty()
+                progress = None
+                if is_tty:
+                    def progress(current: int, total: int, label: str) -> None:
+                        if total > 0:
+                            _progress_bar(current, total, label, err=True)
+
+                try:
+                    try:
+                        count, _info = run_markdown_export_once(
+                            kp,
+                            output,
+                            include_system=include_system,
+                            include_parts=include_parts,
+                            include_versions=include_versions,
+                            allow_existing=True,
+                            mirror_entry=None,
+                            progress=progress,
+                        )
+                    except _ExportCollisionError as e:
+                        if is_tty:
+                            _clear_progress_line()
+                        typer.echo(
+                            f"Error: id collision — '{e.first_id}' and '{e.second_id}' "
+                            f"both map to '{e.path}'. Rename one of these ids before exporting.",
+                            err=True,
+                        )
+                        raise SystemExit(1) from None
+                finally:
+                    kp.close()
+
+                if is_tty:
+                    _clear_progress_line()
+
             port = _get_port()
             status, data = _daemon_request(
                 "POST",
@@ -1801,7 +1918,8 @@ def data_export(
                     "include_versions": include_versions,
                     "sync": True,
                     "stop": stop,
-                    "interval": interval or "PT30S",
+                    "register_only": True,
+                    "baseline_complete": not stop,
                 },
             )
             if status >= 400:
@@ -1814,11 +1932,9 @@ def data_export(
                     typer.echo(f"Not syncing: {output}", err=True)
                 return
             sync_info = data.get("sync", {})
-            exported = data.get("exported", {})
             typer.echo(
                 f"Markdown sync active: {sync_info.get('root', output)} "
-                f"(interval {sync_info.get('interval', interval or 'PT30S')}, "
-                f"{exported.get('count', 0)} notes exported)",
+                f"({count} notes exported)",
                 err=True,
             )
             return
@@ -1831,10 +1947,6 @@ def data_export(
         return
     if fmt != "json":
         typer.echo(f"Error: --format must be 'json' or 'md', got '{format}'", err=True)
-        raise SystemExit(1)
-
-    if sync or stop or interval:
-        typer.echo("Error: --sync, --stop, and --interval require --format md", err=True)
         raise SystemExit(1)
 
     if include_parts or include_versions:
@@ -1961,9 +2073,7 @@ def _data_export_markdown(
 
     if is_tty:
         # Clear the progress bar line before the final summary.
-        cols = shutil.get_terminal_size((80, 24)).columns
-        sys.stderr.write("\r" + " " * (cols - 1) + "\r")
-        sys.stderr.flush()
+        _clear_progress_line()
 
     extras = []
     if include_parts:

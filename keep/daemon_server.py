@@ -45,6 +45,7 @@ from .markdown_mirrors import (
     record_markdown_mirror_export_success,
     remove_markdown_mirror,
     run_markdown_export_once,
+    validate_markdown_mirror,
 )
 from .watches import add_watch, remove_watch
 
@@ -145,6 +146,9 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 ):
                     try:
                         getattr(self, handler_name)(groups)
+                    except ValueError as e:
+                        logger.warning("Handler %s rejected request: %s", handler_name, e)
+                        self._json(400, {"error": str(e)})
                     except Exception as e:
                         logger.warning("Handler %s error: %s", handler_name, e, exc_info=True)
                         self._json(500, {"error": "internal server error"})
@@ -362,6 +366,29 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_markdown_export(self, groups: dict):
         body = self._read_body()
+        if body.get("list"):
+            from .markdown_mirrors import list_markdown_mirrors
+
+            entries = list_markdown_mirrors(self.keeper)
+            self._json(200, {
+                "mirrors": [
+                    {
+                        "root": entry.root,
+                        "enabled": entry.enabled,
+                        "include_system": entry.include_system,
+                        "include_parts": entry.include_parts,
+                        "include_versions": entry.include_versions,
+                        "interval": entry.interval,
+                        "added_at": entry.added_at,
+                        "pending_since": entry.pending_since,
+                        "last_run": entry.last_run,
+                        "last_error": entry.last_error,
+                    }
+                    for entry in entries
+                ],
+            })
+            return
+
         root = body.get("root") or body.get("output")
         if not root:
             self._json(400, {"error": "markdown export requires a root directory"})
@@ -372,12 +399,27 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         include_versions = bool(body.get("include_versions", False))
         sync = bool(body.get("sync", False))
         stop = bool(body.get("stop", False))
+        register_only = bool(body.get("register_only", False))
+        validate_only = bool(body.get("validate_only", False))
+        baseline_complete = bool(body.get("baseline_complete", False))
         interval = str(body.get("interval") or "PT30S")
 
         try:
             if stop:
                 removed = remove_markdown_mirror(self.keeper, root)
                 self._json(200, {"stopped": removed, "root": str(root)})
+                return
+
+            if validate_only:
+                resolved_root, _entries = validate_markdown_mirror(
+                    self.keeper,
+                    root,
+                    interval=interval,
+                )
+                self._json(200, {
+                    "validated": True,
+                    "root": resolved_root,
+                })
                 return
 
             if sync:
@@ -389,6 +431,20 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     include_versions=include_versions,
                     interval=interval,
                 )
+                if register_only:
+                    if baseline_complete:
+                        clear_sync_outbox(self.keeper)
+                        record_markdown_mirror_export_success(self.keeper, entry.root)
+                    self._json(200, {
+                        "sync": {
+                            "root": entry.root,
+                            "interval": entry.interval,
+                            "include_system": entry.include_system,
+                            "include_parts": entry.include_parts,
+                            "include_versions": entry.include_versions,
+                        },
+                    })
+                    return
                 count, info = run_markdown_export_once(
                     self.keeper,
                     entry.root,
