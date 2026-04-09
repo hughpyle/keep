@@ -131,6 +131,7 @@ class Ocr:
                     "embed": True,
                     "content_hash": content_hash,
                     "content_hash_full": content_hash_full,
+                    "intent": "derived_summary_replace",
                 }
             ],
         }

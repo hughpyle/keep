@@ -76,6 +76,7 @@ class Describe:
                     "target": item_id,
                     "summary": enriched,
                     "embed": True,
+                    "intent": "derived_description_append",
                 }
             ],
         }

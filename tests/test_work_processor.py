@@ -400,18 +400,29 @@ class TestApplyMutations:
         kp = MagicMock()
         output = {"mutations": [{"op": "set_summary", "target": "d1", "summary": "hello"}]}
         _apply_mutations(kp, "coll", output)
-        kp._document_store.update_summary.assert_called_once_with("coll", "d1", "hello")
-        kp._store.update_summary.assert_called_once_with("coll", "d1", "hello")
-        kp._resolve_chroma_collection.assert_not_called()
+        kp._apply_summary_mutation.assert_called_once_with(
+            "coll",
+            "d1",
+            "hello",
+            intent="derived_summary_replace",
+            embed=False,
+            content_hash="",
+            content_hash_full="",
+        )
 
     def test_set_summary_with_embed(self):
         kp = MagicMock()
-        kp._document_store.get.return_value = MagicMock(tags={"topic": "test"})
         output = {"mutations": [{"op": "set_summary", "target": "d1", "summary": "hello", "embed": True}]}
         _apply_mutations(kp, "coll", output)
-        kp._document_store.update_summary.assert_called_once()
-        kp._get_embedding_provider.return_value.embed.assert_called_once_with("hello")
-        kp._store.upsert.assert_called_once()
+        kp._apply_summary_mutation.assert_called_once_with(
+            "coll",
+            "d1",
+            "hello",
+            intent="derived_summary_replace",
+            embed=True,
+            content_hash="",
+            content_hash_full="",
+        )
 
     def test_put_item_part_uses_part_storage(self):
         kp = MagicMock()
@@ -465,9 +476,6 @@ class TestApplyMutations:
 
     def test_set_summary_reembeds_when_requested_with_hashes(self):
         kp = MagicMock()
-        kp._resolve_chroma_collection.return_value = "default"
-        kp._get_embedding_provider.return_value.embed.return_value = [0.1, 0.2]
-        kp._document_store.get.return_value = MagicMock(tags={"Topic": "OCR"})
         output = {"mutations": [{
             "op": "set_summary", "target": "d1",
             "summary": "short",
@@ -475,9 +483,31 @@ class TestApplyMutations:
             "content_hash": "abc123", "content_hash_full": "abc123full",
         }]}
         _apply_mutations(kp, "coll", output)
-        kp._document_store.update_summary.assert_called_once_with("coll", "d1", "short")
-        kp._document_store.update_content_hash.assert_called_once_with(
-            "coll", "d1", content_hash="abc123", content_hash_full="abc123full",
+        kp._apply_summary_mutation.assert_called_once_with(
+            "coll",
+            "d1",
+            "short",
+            intent="derived_summary_replace",
+            embed=True,
+            content_hash="abc123",
+            content_hash_full="abc123full",
         )
-        kp._store.upsert.assert_called_once()
-        kp._store.update_summary.assert_not_called()
+
+    def test_set_summary_passes_explicit_intent(self):
+        kp = MagicMock()
+        output = {"mutations": [{
+            "op": "set_summary",
+            "target": "d1",
+            "summary": "hello",
+            "intent": "derived_description_append",
+        }]}
+        _apply_mutations(kp, "coll", output)
+        kp._apply_summary_mutation.assert_called_once_with(
+            "coll",
+            "d1",
+            "hello",
+            intent="derived_description_append",
+            embed=False,
+            content_hash="",
+            content_hash_full="",
+        )

@@ -435,6 +435,51 @@ class TestImageOcr:
         assert mutation["op"] == "set_summary"
         assert mutation["embed"] is True
 
+    def test_ocr_does_not_overwrite_markdown_authored_body(
+        self, tmp_path, mock_providers,
+    ):
+        """OCR leaves markdown-authored note bodies unchanged."""
+        from keep.api import Keeper
+        from keep.task_workflows import TaskRequest, run_local_task
+
+        kp = Keeper(store_path=tmp_path)
+        try:
+            original = "Original authored body"
+            kp._put_direct(
+                content=original,
+                id="scan1",
+                queue_background_tasks=False,
+                _body_authority="markdown",
+            )
+            kp._content_extractor = MagicMock()
+
+            pdf_path = tmp_path / "scan.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4")
+
+            req = TaskRequest(
+                task_type="ocr",
+                id="scan1",
+                collection=kp._resolve_doc_collection(),
+                content="",
+                metadata={
+                    "uri": str(pdf_path),
+                    "content_type": "application/pdf",
+                    "ocr_pages": [0],
+                },
+            )
+            with (
+                patch("keep.actions.ocr.validate_path_within_home"),
+                patch("keep.actions.ocr.ocr_pdf", return_value="Extracted OCR text"),
+            ):
+                result = run_local_task(kp, req)
+
+            assert result.status == "applied"
+            item = kp.get("scan1")
+            assert item.summary == original
+            assert item.tags["_body_authority"] == "markdown"
+        finally:
+            kp.close()
+
 
 # ---------------------------------------------------------------------------
 # ContentExtractor protocol + registry

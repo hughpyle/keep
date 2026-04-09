@@ -760,6 +760,7 @@ class BackgroundProcessingMixin:
                 "op": "set_summary",
                 "target": item_id,
                 "summary": output["summary"],
+                "intent": "derived_summary_replace",
             })
 
         elif task_type == "ocr":
@@ -776,6 +777,7 @@ class BackgroundProcessingMixin:
                 "embed": True,
                 "content_hash": str(result.get("content_hash") or ""),
                 "content_hash_full": str(result.get("content_hash_full") or ""),
+                "intent": "derived_summary_replace",
             })
 
         elif task_type == "describe":
@@ -785,6 +787,7 @@ class BackgroundProcessingMixin:
                 "target": item_id,
                 "summary": output["summary"],
                 "embed": True,
+                "intent": "derived_description_append",
             })
 
         elif task_type == "analyze":

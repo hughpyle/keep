@@ -496,6 +496,47 @@ class TestDescribeTaskWorkflow:
         assert "Description:" not in item.summary
         kp.close()
 
+    def test_describe_does_not_overwrite_markdown_authored_body(
+        self, mock_providers, tmp_path,
+    ):
+        """Describe leaves markdown-authored note bodies unchanged."""
+        from keep.api import Keeper
+        from keep.task_workflows import TaskRequest, run_local_task
+
+        kp = Keeper(store_path=tmp_path)
+        _keeper_bootstrap_sysdocs(kp)
+        original = "Original authored body"
+        kp._put_direct(
+            content=original,
+            id="img1",
+            queue_background_tasks=False,
+            _body_authority="markdown",
+        )
+
+        mock_describer = MagicMock()
+        mock_describer.describe.return_value = "A photo of a sunset"
+        kp._media_describer = mock_describer
+        kp._config.media = ProviderConfig("ollama", {"model": "test"})
+
+        test_file = tmp_path / "test.jpg"
+        test_file.write_bytes(b"fake image data")
+
+        req = TaskRequest(
+            task_type="describe",
+            id="img1",
+            collection=kp._resolve_doc_collection(),
+            content="",
+            metadata={"uri": str(test_file), "content_type": "image/jpeg"},
+        )
+        with patch("keep.actions.describe.validate_path_within_home"):
+            result = run_local_task(kp, req)
+
+        assert result.status == "applied"
+        item = kp.get("img1")
+        assert item.summary == original
+        assert item.tags["_body_authority"] == "markdown"
+        kp.close()
+
 
 # -----------------------------------------------------------------------------
 # MLX Describer Unit Tests (no real models)

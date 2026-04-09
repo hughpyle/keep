@@ -294,31 +294,19 @@ def _apply_mutations(
         if op == "set_summary":
             target = str(mut["target"])
             summary = str(_resolve_ref(mut["summary"], output))
+            intent = str(mut.get("intent") or "derived_summary_replace")
             # Strip LLM preambles ("Here is a summary...") as a safety net
             from keep.providers.base import strip_summary_preamble
             summary = strip_summary_preamble(summary)
-            keeper._document_store.update_summary(collection, target, summary)
-            content_hash = str(mut.get("content_hash", ""))
-            content_hash_full = str(mut.get("content_hash_full", ""))
-            if content_hash:
-                keeper._document_store.update_content_hash(
-                    collection, target,
-                    content_hash=content_hash,
-                    content_hash_full=content_hash_full,
-                )
-            if mut.get("embed"):
-                chroma_coll = keeper._resolve_chroma_collection()
-                embedding = keeper._get_embedding_provider().embed(summary)
-                existing = keeper._document_store.get(collection, target)
-                tags = {}
-                if existing:
-                    tags = casefold_tags_for_index(existing.tags or {})
-                keeper._store.upsert(
-                    collection=chroma_coll, id=target,
-                    embedding=embedding, summary=summary, tags=tags,
-                )
-            else:
-                keeper._store.update_summary(collection, target, summary)
+            keeper._apply_summary_mutation(
+                collection,
+                target,
+                summary,
+                intent=intent,
+                embed=bool(mut.get("embed")),
+                content_hash=str(mut.get("content_hash", "")),
+                content_hash_full=str(mut.get("content_hash_full", "")),
+            )
 
         elif op == "put_item":
             from .types import is_part_id, parse_part_id

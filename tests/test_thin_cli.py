@@ -461,6 +461,30 @@ class TestPutFrontmatter:
         merged = {**fm_tags, **cli_tags}
         assert merged["topic"] == "from-cli"
 
+    def test_frontmatter_reserved_metadata_is_not_imported_as_tags(self):
+        """Reserved markdown metadata keys stay out of the generic tag map."""
+        from keep.utils import _extract_markdown_frontmatter
+
+        # Existing nested ``_...`` filtering behavior is unchanged; this pins
+        # the contract now that the classifier owns the decision.
+        content = """---
+_id: sync/doc
+_content_hash: abc123
+_created: 2026-04-08T12:00:00
+topic: from-frontmatter
+tags:
+  project: sync
+  _updated: ignore-me
+---
+body
+"""
+        body_text, fm_tags = _extract_markdown_frontmatter(content)
+        assert body_text == "body\n"
+        assert fm_tags == {
+            "topic": "from-frontmatter",
+            "project": "sync",
+        }
+
 
 class TestPutMultiValueTags:
     """Tests for multi-value tag parsing in put."""

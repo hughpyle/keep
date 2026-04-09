@@ -162,6 +162,7 @@ class Summarize:
                     "op": "set_summary",
                     "target": item_id,
                     "summary": out_summary,
+                    "intent": "derived_summary_replace",
                 }
             ]
             # Record _summarized_hash so we skip unchanged content next time

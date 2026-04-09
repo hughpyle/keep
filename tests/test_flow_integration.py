@@ -63,6 +63,28 @@ class TestWritePathFlow:
         claimed = queue.claim("test", limit=20)
         assert len(claimed) == 0, f"Expected no work items for system note, got {len(claimed)}"
 
+    def test_markdown_authored_body_stores_full_content_and_persists(self, kp):
+        """Markdown-authored notes keep exact body text across later writes."""
+        first = "a" * min(kp._config.max_inline_length - 10, kp._config.max_summary_length + 50)
+        second = "b" * min(kp._config.max_inline_length - 5, kp._config.max_summary_length + 75)
+
+        item = kp._put_direct(
+            content=first,
+            id="sync/md-note",
+            queue_background_tasks=False,
+            _body_authority="markdown",
+        )
+        assert item.summary == first
+        assert item.tags["_body_authority"] == "markdown"
+
+        updated = kp._put_direct(
+            content=second,
+            id="sync/md-note",
+            queue_background_tasks=False,
+        )
+        assert updated.summary == second
+        assert updated.tags["_body_authority"] == "markdown"
+
 
 # ---------------------------------------------------------------------------
 # Read path: get_context() uses state-doc flow

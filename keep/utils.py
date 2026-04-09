@@ -15,6 +15,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from .markdown_frontmatter import (
+    MARKDOWN_FRONTMATTER_TAGS_KEY,
+    classify_markdown_frontmatter_key,
+    is_writable_markdown_frontmatter_key,
+)
 from .types import (
     Item,
     SYSTEM_TAG_PREFIX,
@@ -234,7 +239,7 @@ def _extract_markdown_frontmatter(content: str) -> tuple[str, dict]:
     - body: content with frontmatter stripped
     - tags: all scalar frontmatter values as string tags, plus
             values from a ``tags`` dict if present.
-            Keys starting with ``_`` are skipped (reserved for system tags).
+            Reserved ``_...`` keys are skipped.
             Non-scalar values (lists, nested dicts) are dropped,
             except for the ``tags`` key which is expected to be a dict.
     """
@@ -259,15 +264,15 @@ def _extract_markdown_frontmatter(content: str) -> tuple[str, dict]:
 
     for key, value in frontmatter.items():
         key_str = str(key)
-        # Skip system-reserved keys
-        if key_str.startswith("_"):
+        kind = classify_markdown_frontmatter_key(key_str)
+        if kind not in ("writable_tag", "tag_namespace"):
             continue
 
-        if key_str == "tags" and isinstance(value, dict):
+        if key_str == MARKDOWN_FRONTMATTER_TAGS_KEY and isinstance(value, dict):
             # Obsidian/keep-style tags dict: {topic: foo, project: bar}
             for tk, tv in value.items():
                 tk_str = str(tk)
-                if tk_str.startswith("_"):
+                if not is_writable_markdown_frontmatter_key(tk_str):
                     continue
                 if isinstance(tv, (str, int, float, bool)):
                     tags[tk_str] = str(tv)

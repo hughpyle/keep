@@ -22,6 +22,10 @@ import yaml
 from .daemon_client import get_port as _daemon_get_port
 from .daemon_client import http_request as _http
 from .const import DAEMON_PORT_FILE, DAEMON_TOKEN_FILE, STATE_PROMPT
+from .markdown_frontmatter import (
+    MARKDOWN_EXPORTER_OWNED_KEYS,
+    MARKDOWN_FRONTMATTER_ID_KEY,
+)
 from .types import format_ref, note_display_name, parse_ref
 
 app = typer.Typer(
@@ -2177,7 +2181,7 @@ def _wikilink_str_representer(dumper: yaml.SafeDumper, data: str):
 _ExportYamlDumper.add_representer(str, _wikilink_str_representer)
 
 
-_EXPORT_META_ID = "_id"
+_EXPORT_META_ID = MARKDOWN_FRONTMATTER_ID_KEY
 _EXPORT_META_CONTENT_HASH = "_content_hash"
 _EXPORT_META_CONTENT_HASH_FULL = "_content_hash_full"
 _EXPORT_META_CREATED = "_created"
@@ -2196,18 +2200,7 @@ _EXPORT_META_VERSION_OFFSET = "_version_offset"
 # they aren't — treating them as "exporter-owned" would drop any stored copy,
 # which is the wrong behaviour for parts/versions that may later carry these
 # timestamps in their tag map.
-_EXPORT_RESERVED_KEYS = frozenset({
-    _EXPORT_META_ID,
-    _EXPORT_META_CONTENT_HASH,
-    _EXPORT_META_CONTENT_HASH_FULL,
-    _EXPORT_META_PART_NUM,
-    _EXPORT_META_VERSION,
-    _EXPORT_META_VERSION_OFFSET,
-    "_prev_part",
-    "_next_part",
-    "_prev_version",
-    "_next_version",
-})
+_EXPORT_RESERVED_KEYS = MARKDOWN_EXPORTER_OWNED_KEYS
 
 
 def _render_frontmatter_markdown(meta: dict, body: str) -> str:
