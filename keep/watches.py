@@ -256,6 +256,15 @@ def add_watch(
     max_watches: int = 100,
 ) -> WatchEntry:
     """Add or update a watch entry. Updates interval/exclude if already watching."""
+    if kind in ("file", "directory"):
+        from .markdown_mirrors import _paths_overlap, list_markdown_mirrors
+
+        for mirror in list_markdown_mirrors(keeper):
+            if mirror.enabled and _paths_overlap(source, mirror.root):
+                raise ValueError(
+                    f"Watch path overlaps markdown sync root: {mirror.root}"
+                )
+
     entries = load_watches(keeper)
 
     # Update existing watch if source already tracked

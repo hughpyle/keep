@@ -39,6 +39,13 @@ from .flow_client import (
     put_item as flow_put_item,
     tag_item as flow_tag_item,
 )
+from .markdown_mirrors import (
+    add_markdown_mirror,
+    clear_sync_outbox,
+    record_markdown_mirror_export_success,
+    remove_markdown_mirror,
+    run_markdown_export_once,
+)
 from .watches import add_watch, remove_watch
 
 
@@ -81,6 +88,7 @@ _ROUTES: list[tuple[str, str, str]] = [
     ("DELETE", r"^/v1/notes/(?P<id>.+)$",             "_handle_delete"),
     ("GET",    r"^/v1/notes/(?P<id>.+)$",             "_handle_get"),
     ("POST",   r"^/v1/admin/reset-system-docs$",     "_handle_reset_system_docs"),
+    ("POST",   r"^/v1/admin/markdown-export$",       "_handle_markdown_export"),
 ]
 
 _COMPILED_ROUTES = [
@@ -351,6 +359,74 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
     def _handle_delete(self, groups: dict):
         deleted = flow_delete_item(self.keeper, groups["id"])
         self._json(200, {"deleted": deleted})
+
+    def _handle_markdown_export(self, groups: dict):
+        body = self._read_body()
+        root = body.get("root") or body.get("output")
+        if not root:
+            self._json(400, {"error": "markdown export requires a root directory"})
+            return
+
+        include_system = bool(body.get("include_system", False))
+        include_parts = bool(body.get("include_parts", False))
+        include_versions = bool(body.get("include_versions", False))
+        sync = bool(body.get("sync", False))
+        stop = bool(body.get("stop", False))
+        interval = str(body.get("interval") or "PT30S")
+
+        try:
+            if stop:
+                removed = remove_markdown_mirror(self.keeper, root)
+                self._json(200, {"stopped": removed, "root": str(root)})
+                return
+
+            if sync:
+                entry = add_markdown_mirror(
+                    self.keeper,
+                    root,
+                    include_system=include_system,
+                    include_parts=include_parts,
+                    include_versions=include_versions,
+                    interval=interval,
+                )
+                count, info = run_markdown_export_once(
+                    self.keeper,
+                    entry.root,
+                    include_system=entry.include_system,
+                    include_parts=entry.include_parts,
+                    include_versions=entry.include_versions,
+                    allow_existing=True,
+                    mirror_entry=entry,
+                )
+                clear_sync_outbox(self.keeper)
+                record_markdown_mirror_export_success(self.keeper, entry.root)
+                self._json(200, {
+                    "sync": {
+                        "root": entry.root,
+                        "interval": entry.interval,
+                        "include_system": entry.include_system,
+                        "include_parts": entry.include_parts,
+                        "include_versions": entry.include_versions,
+                    },
+                    "exported": {"count": count, "store_info": info},
+                })
+                return
+
+            count, info = run_markdown_export_once(
+                self.keeper,
+                root,
+                include_system=include_system,
+                include_parts=include_parts,
+                include_versions=include_versions,
+                allow_existing=False,
+                mirror_entry=None,
+            )
+            self._json(200, {"exported": {"count": count, "store_info": info}})
+        except ValueError as exc:
+            self._json(400, {"error": str(exc)})
+        except Exception as exc:
+            logger.warning("Markdown export failed for %s: %s", root, exc, exc_info=True)
+            self._json(500, {"error": "markdown export failed"})
 
     def _handle_find(self, groups: dict):
         body = self._read_body()

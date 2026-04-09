@@ -229,6 +229,55 @@ def test_put_directory_unwatch(daemon, http, tmp_path):
     assert list_watches(kp) == []
 
 
+def test_markdown_sync_registration_exports_and_persists(daemon, http, tmp_path):
+    from keep.markdown_mirrors import list_markdown_mirrors
+
+    server, kp, port = daemon
+    kp.put("mirror body", id="mirror-doc")
+
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / ".obsidian").mkdir()
+
+    r = http.post("/v1/admin/markdown-export", json={
+        "root": str(root),
+        "sync": True,
+        "interval": "PT45S",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sync"]["root"] == str(root.resolve())
+    assert body["sync"]["interval"] == "PT45S"
+    assert (root / "mirror-doc.md").is_file()
+    assert (root / ".keep-sync" / "map.tsv").is_file()
+
+    entries = list_markdown_mirrors(kp)
+    assert len(entries) == 1
+    assert entries[0].root == str(root.resolve())
+    assert entries[0].last_run
+    assert entries[0].pending_since == ""
+    assert kp._document_store.sync_outbox_depth() == 0
+
+
+def test_markdown_sync_stop_removes_registration(daemon, http, tmp_path):
+    from keep.markdown_mirrors import add_markdown_mirror, list_markdown_mirrors
+
+    server, kp, port = daemon
+    root = tmp_path / "vault"
+    root.mkdir()
+    add_markdown_mirror(kp, root)
+    assert len(list_markdown_mirrors(kp)) == 1
+
+    r = http.post("/v1/admin/markdown-export", json={
+        "root": str(root),
+        "sync": True,
+        "stop": True,
+    })
+    assert r.status_code == 200
+    assert r.json()["stopped"] is True
+    assert list_markdown_mirrors(kp) == []
+
+
 # --- Tag ---
 
 def test_tag(http):

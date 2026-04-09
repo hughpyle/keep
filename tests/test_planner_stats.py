@@ -267,6 +267,58 @@ class TestOutboxTriggers:
         assert payload["predicate"] == "speaker"
 
 
+class TestSyncOutboxTriggers:
+    """Tests for markdown-sync outbox trigger firing."""
+
+    def test_doc_insert_fires_sync_trigger(self, doc_store):
+        doc_store._execute(
+            """INSERT INTO documents (id, collection, summary, tags_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ("doc1", "default", "test", '{"topic": "ai"}',
+             "2025-01-01T00:00:00", "2025-01-01T00:00:00"),
+        )
+        doc_store._conn.commit()
+
+        rows = doc_store._execute(
+            "SELECT mutation, entity_id, collection FROM sync_outbox"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == "doc_insert"
+        assert rows[0][1] == "doc1"
+
+    def test_touch_does_not_fire_sync_trigger(self, doc_store):
+        doc_store._execute(
+            """INSERT INTO documents (id, collection, summary, tags_json, created_at, updated_at, accessed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            ("doc1", "default", "test", '{}',
+             "2025-01-01T00:00:00", "2025-01-01T00:00:00", "2025-01-01T00:00:00"),
+        )
+        doc_store._conn.commit()
+        doc_store._execute("DELETE FROM sync_outbox")
+        doc_store._conn.commit()
+
+        doc_store.touch("default", "doc1")
+
+        count = doc_store._execute(
+            "SELECT COUNT(*) FROM sync_outbox"
+        ).fetchone()[0]
+        assert count == 0
+
+    def test_internal_markdown_mirror_note_is_excluded(self, doc_store):
+        doc_store._execute(
+            """INSERT INTO documents (id, collection, summary, tags_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (".markdown-mirrors", "default", "[]", '{}',
+             "2025-01-01T00:00:00", "2025-01-01T00:00:00"),
+        )
+        doc_store._conn.commit()
+
+        count = doc_store._execute(
+            "SELECT COUNT(*) FROM sync_outbox"
+        ).fetchone()[0]
+        assert count == 0
+
+
 # ---------------------------------------------------------------------------
 # Outbox dequeue / claim
 # ---------------------------------------------------------------------------

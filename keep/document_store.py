@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 @dataclass
@@ -338,6 +338,7 @@ class DocumentStore:
         - Version 7 → 8: FTS5 indexes + triggers (parts, versions)
         - Version 10 → 11: edge primary keys include target_id (multivalue)
         - Version 13 → 14: Collapse part summary/content into summary-only storage
+        - Version 14 → 15: sync outbox table + triggers
         """
         current_version = self._execute(
             "PRAGMA user_version"
@@ -901,6 +902,175 @@ class DocumentStore:
                         CREATE INDEX IF NOT EXISTS idx_parts_doc
                         ON document_parts(id, collection, part_num)
                     """)
+
+            if current_version < 15:
+                self._execute("""
+                    CREATE TABLE IF NOT EXISTS sync_outbox (
+                        outbox_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                        mutation     TEXT NOT NULL,
+                        entity_id    TEXT NOT NULL,
+                        collection   TEXT NOT NULL,
+                        payload_json TEXT NOT NULL DEFAULT '{}',
+                        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+                        claimed_by   TEXT,
+                        claimed_at   TEXT,
+                        attempts     INTEGER DEFAULT 0
+                    )
+                """)
+                self._execute("""
+                    CREATE INDEX IF NOT EXISTS idx_sync_outbox_unclaimed
+                    ON sync_outbox (claimed_by) WHERE claimed_by IS NULL
+                """)
+
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_doc_ai
+                    AFTER INSERT ON documents
+                    WHEN new.id != '.markdown-mirrors'
+                    BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('doc_insert', new.id, new.collection,
+                                json_object('tags_json', new.tags_json));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_doc_au
+                    AFTER UPDATE OF summary, tags_json, content_hash, content_hash_full, updated_at
+                    ON documents
+                    WHEN new.id != '.markdown-mirrors'
+                    BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('doc_update', new.id, new.collection,
+                                json_object('old_tags_json', old.tags_json,
+                                            'new_tags_json', new.tags_json,
+                                            'old_summary', old.summary,
+                                            'new_summary', new.summary,
+                                            'old_content_hash', old.content_hash,
+                                            'new_content_hash', new.content_hash,
+                                            'old_content_hash_full', old.content_hash_full,
+                                            'new_content_hash_full', new.content_hash_full));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_doc_ad
+                    AFTER DELETE ON documents
+                    WHEN old.id != '.markdown-mirrors'
+                    BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('doc_delete', old.id, old.collection,
+                                json_object('tags_json', old.tags_json));
+                    END
+                """)
+
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_part_ai
+                    AFTER INSERT ON document_parts BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('part_insert', new.id, new.collection,
+                                json_object('part_num', new.part_num));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_part_au
+                    AFTER UPDATE OF summary, tags_json ON document_parts BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('part_update', new.id, new.collection,
+                                json_object('part_num', new.part_num));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_part_ad
+                    AFTER DELETE ON document_parts BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('part_delete', old.id, old.collection,
+                                json_object('part_num', old.part_num));
+                    END
+                """)
+
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_ai
+                    AFTER INSERT ON document_versions BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('version_insert', new.id, new.collection,
+                                json_object('version', new.version));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_au
+                    AFTER UPDATE OF summary, tags_json, content_hash ON document_versions BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('version_update', new.id, new.collection,
+                                json_object('version', new.version));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_ad
+                    AFTER DELETE ON document_versions BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('version_delete', old.id, old.collection,
+                                json_object('version', old.version));
+                    END
+                """)
+
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_edge_ai
+                    AFTER INSERT ON edges BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('edge_insert', new.source_id, new.collection,
+                                json_object('predicate', new.predicate,
+                                            'target_id', new.target_id));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_edge_au
+                    AFTER UPDATE ON edges BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('edge_update', new.source_id, new.collection,
+                                json_object('predicate', new.predicate,
+                                            'target_id', new.target_id,
+                                            'old_target_id', old.target_id));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_edge_ad
+                    AFTER DELETE ON edges BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('edge_delete', old.source_id, old.collection,
+                                json_object('predicate', old.predicate,
+                                            'target_id', old.target_id));
+                    END
+                """)
+
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_edge_ai
+                    AFTER INSERT ON version_edges BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('version_edge_insert', new.source_id, new.collection,
+                                json_object('version', new.version,
+                                            'predicate', new.predicate,
+                                            'target_id', new.target_id));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_edge_au
+                    AFTER UPDATE ON version_edges BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('version_edge_update', new.source_id, new.collection,
+                                json_object('version', new.version,
+                                            'predicate', new.predicate,
+                                            'target_id', new.target_id,
+                                            'old_target_id', old.target_id));
+                    END
+                """)
+                self._execute("""
+                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_edge_ad
+                    AFTER DELETE ON version_edges BEGIN
+                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                        VALUES ('version_edge_delete', old.source_id, old.collection,
+                                json_object('version', old.version,
+                                            'predicate', old.predicate,
+                                            'target_id', old.target_id));
+                    END
+                """)
 
             self._execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
@@ -4134,31 +4304,29 @@ class DocumentStore:
 
     _OUTBOX_STALE_SECONDS = 300  # 5 minutes
 
-    def outbox_depth(self) -> int:
-        """Count unclaimed outbox rows."""
+    def _outbox_depth(self, table: str) -> int:
         row = self._execute(
-            "SELECT COUNT(*) FROM planner_outbox WHERE claimed_by IS NULL"
+            f"SELECT COUNT(*) FROM {table} WHERE claimed_by IS NULL"
         ).fetchone()
         return row[0] if row else 0
 
-    def dequeue_outbox(
-        self, limit: int = 50, claim_id: str | None = None,
+    def _dequeue_named_outbox(
+        self,
+        table: str,
+        *,
+        limit: int = 50,
+        claim_id: str | None = None,
     ) -> list[dict]:
-        """Claim and return unclaimed outbox rows.
-
-        Returns list of dicts with keys: outbox_id, mutation, entity_id,
-        collection, payload_json, created_at.
-        """
         import os
+
         if claim_id is None:
             claim_id = str(os.getpid())
         now = utc_now()
 
         with self._lock:
-            # Recover stale claims
             self._execute(
-                """
-                UPDATE planner_outbox
+                f"""
+                UPDATE {table}
                 SET claimed_by = NULL, claimed_at = NULL,
                     attempts = attempts + 1
                 WHERE claimed_by IS NOT NULL
@@ -4169,10 +4337,10 @@ class DocumentStore:
             )
 
             rows = self._execute(
-                """
+                f"""
                 SELECT outbox_id, mutation, entity_id, collection,
                        payload_json, created_at
-                FROM planner_outbox
+                FROM {table}
                 WHERE claimed_by IS NULL
                 ORDER BY outbox_id ASC
                 LIMIT ?
@@ -4188,7 +4356,7 @@ class DocumentStore:
             placeholders = ",".join("?" for _ in ids)
             self._execute(
                 f"""
-                UPDATE planner_outbox
+                UPDATE {table}
                 SET claimed_by = ?, claimed_at = ?
                 WHERE outbox_id IN ({placeholders})
                 """,
@@ -4208,27 +4376,25 @@ class DocumentStore:
             for r in rows
         ]
 
-    def complete_outbox(self, outbox_ids: list[int]) -> None:
-        """Delete completed outbox rows."""
+    def _complete_named_outbox(self, table: str, outbox_ids: list[int]) -> None:
         if not outbox_ids:
             return
         placeholders = ",".join("?" for _ in outbox_ids)
         with self._lock:
             self._execute(
-                f"DELETE FROM planner_outbox WHERE outbox_id IN ({placeholders})",
+                f"DELETE FROM {table} WHERE outbox_id IN ({placeholders})",
                 outbox_ids,
             )
             self._conn.commit()
 
-    def fail_outbox(self, outbox_ids: list[int]) -> None:
-        """Release failed outbox rows for retry."""
+    def _fail_named_outbox(self, table: str, outbox_ids: list[int]) -> None:
         if not outbox_ids:
             return
         placeholders = ",".join("?" for _ in outbox_ids)
         with self._lock:
             self._execute(
                 f"""
-                UPDATE planner_outbox
+                UPDATE {table}
                 SET claimed_by = NULL, claimed_at = NULL,
                     attempts = attempts + 1
                 WHERE outbox_id IN ({placeholders})
@@ -4236,6 +4402,50 @@ class DocumentStore:
                 outbox_ids,
             )
             self._conn.commit()
+
+    def outbox_depth(self) -> int:
+        """Count unclaimed outbox rows."""
+        return self._outbox_depth("planner_outbox")
+
+    def dequeue_outbox(
+        self, limit: int = 50, claim_id: str | None = None,
+    ) -> list[dict]:
+        """Claim and return unclaimed outbox rows.
+
+        Returns list of dicts with keys: outbox_id, mutation, entity_id,
+        collection, payload_json, created_at.
+        """
+        return self._dequeue_named_outbox(
+            "planner_outbox", limit=limit, claim_id=claim_id,
+        )
+
+    def complete_outbox(self, outbox_ids: list[int]) -> None:
+        """Delete completed outbox rows."""
+        self._complete_named_outbox("planner_outbox", outbox_ids)
+
+    def fail_outbox(self, outbox_ids: list[int]) -> None:
+        """Release failed outbox rows for retry."""
+        self._fail_named_outbox("planner_outbox", outbox_ids)
+
+    def sync_outbox_depth(self) -> int:
+        """Count unclaimed markdown-sync outbox rows."""
+        return self._outbox_depth("sync_outbox")
+
+    def dequeue_sync_outbox(
+        self, limit: int = 50, claim_id: str | None = None,
+    ) -> list[dict]:
+        """Claim and return unclaimed markdown-sync outbox rows."""
+        return self._dequeue_named_outbox(
+            "sync_outbox", limit=limit, claim_id=claim_id,
+        )
+
+    def complete_sync_outbox(self, outbox_ids: list[int]) -> None:
+        """Delete completed markdown-sync outbox rows."""
+        self._complete_named_outbox("sync_outbox", outbox_ids)
+
+    def fail_sync_outbox(self, outbox_ids: list[int]) -> None:
+        """Release failed markdown-sync outbox rows for retry."""
+        self._fail_named_outbox("sync_outbox", outbox_ids)
 
     # -------------------------------------------------------------------------
     # Lifecycle

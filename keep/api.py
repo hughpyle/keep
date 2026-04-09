@@ -2894,6 +2894,15 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 "Parts are managed by analyze()."
             )
 
+        if uri is not None and (uri.startswith("file://") or uri.startswith("/")):
+            from .markdown_mirrors import path_inside_markdown_mirror
+
+            file_path = Path(file_uri_to_path(uri)).resolve()
+            if path_inside_markdown_mirror(self, file_path):
+                raise ValueError(
+                    f"Cannot put files from a synced markdown mirror root: {file_path}"
+                )
+
         # Enforce required tags (skip for system docs with dot-prefix IDs)
         if self._config.required_tags and not is_system_id(effective_id):
             user_tags = {k: v for k, v in (tags or {}).items()

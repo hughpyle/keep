@@ -4,6 +4,7 @@ Provides mock providers to avoid loading heavy ML models during testing.
 """
 
 import hashlib
+import json
 import os
 import signal
 import subprocess
@@ -14,7 +15,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from keep.types import SYSTEM_TAG_PREFIX, tag_values
+from keep.types import SYSTEM_TAG_PREFIX, tag_values, utc_now
 
 
 class MockEmbeddingProvider:
@@ -258,6 +259,28 @@ class MockChromaStore:
         versioned_id = f"{id}@v{version}"
         self.upsert(collection, versioned_id, embedding, summary, tags)
 
+    def upsert_with_version(
+        self,
+        collection: str,
+        id: str,
+        embedding: list[float],
+        summary: str,
+        tags: dict[str, str],
+        version_id: str,
+        version: int,
+        version_embedding: list[float],
+        version_summary: str,
+        version_tags: dict[str, str],
+    ) -> None:
+        self.upsert(collection, id, embedding, summary, tags)
+        self.upsert(
+            collection,
+            version_id,
+            version_embedding,
+            version_summary,
+            {**version_tags, "_version": str(version), "_base_id": id},
+        )
+
     def upsert_part(self, collection: str, id: str, part_num: int,
                     embedding: list[float], summary: str,
                     tags: dict[str, str]) -> None:
@@ -330,6 +353,8 @@ class MockDocumentStore:
         self._data: dict[str, dict] = {}  # collection -> {id -> record}
         self._versions: dict[tuple[str, str], list[dict]] = {}
         self._parts: dict[str, list] = {}  # _parts:{collection}:{id} -> [PartInfo]
+        self._sync_outbox: list[dict[str, Any]] = []
+        self._next_sync_outbox_id = 1
 
     def _make_record(self, collection: str, id: str, rec: dict) -> "DocumentRecord":
         from keep.document_store import DocumentRecord
@@ -344,6 +369,25 @@ class MockDocumentStore:
             content_hash_full=rec.get("content_hash_full"),
             accessed_at=rec.get("accessed_at", rec["updated_at"]),
         )
+
+    def _enqueue_sync_outbox(
+        self,
+        mutation: str,
+        collection: str,
+        entity_id: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        if entity_id == ".markdown-mirrors":
+            return
+        self._sync_outbox.append({
+            "outbox_id": self._next_sync_outbox_id,
+            "mutation": mutation,
+            "entity_id": entity_id,
+            "collection": collection,
+            "payload_json": json.dumps(payload or {}, ensure_ascii=False),
+            "created_at": utc_now(),
+        })
+        self._next_sync_outbox_id += 1
 
     def upsert(self, collection: str, id: str, summary: str, tags: dict,
                content_hash: str = None,
@@ -377,6 +421,10 @@ class MockDocumentStore:
                 "content_hash": existing.get("content_hash"),
                 "created_at": existing.get("updated_at", now),
             })
+            self._enqueue_sync_outbox(
+                "version_insert", collection, id,
+                {"version": len(versions)},
+            )
         self._data[collection][id] = {
             "summary": summary,
             "tags": tags,
@@ -385,6 +433,11 @@ class MockDocumentStore:
             "created_at": created_at,
             "updated_at": now,
         }
+        self._enqueue_sync_outbox(
+            "doc_update" if existed else "doc_insert",
+            collection,
+            id,
+        )
         return (self._make_record(collection, id, self._data[collection][id]), content_changed)
 
     def get(self, collection: str, id: str):
@@ -441,6 +494,7 @@ class MockDocumentStore:
     def delete(self, collection: str, id: str, delete_versions: bool = True) -> bool:
         if collection in self._data and id in self._data[collection]:
             del self._data[collection][id]
+            self._enqueue_sync_outbox("doc_delete", collection, id)
             return True
         return False
 
@@ -459,18 +513,21 @@ class MockDocumentStore:
     def update_tags(self, collection: str, id: str, tags: dict) -> bool:
         if collection in self._data and id in self._data[collection]:
             self._data[collection][id]["tags"] = tags
+            self._enqueue_sync_outbox("doc_update", collection, id)
             return True
         return False
 
     def patch_head_tags(self, collection: str, id: str, patch: dict) -> bool:
         if collection in self._data and id in self._data[collection]:
             self._data[collection][id]["tags"].update(patch)
+            self._enqueue_sync_outbox("doc_update", collection, id)
             return True
         return False
 
     def update_summary(self, collection: str, id: str, summary: str) -> bool:
         if collection in self._data and id in self._data[collection]:
             self._data[collection][id]["summary"] = summary
+            self._enqueue_sync_outbox("doc_update", collection, id)
             return True
         return False
 
@@ -479,6 +536,7 @@ class MockDocumentStore:
         if collection in self._data and id in self._data[collection]:
             self._data[collection][id]["content_hash"] = content_hash
             self._data[collection][id]["content_hash_full"] = content_hash_full
+            self._enqueue_sync_outbox("doc_update", collection, id)
             return True
         return False
 
@@ -556,7 +614,8 @@ class MockDocumentStore:
         return counts
 
     def max_version(self, collection: str, id: str) -> int:
-        return 0
+        versions = self._versions.get((collection, id), [])
+        return max((rec["version"] for rec in versions), default=0)
 
     def copy_record(self, collection: str, from_id: str, to_id: str):
         if collection not in self._data or from_id not in self._data[collection]:
@@ -584,7 +643,23 @@ class MockDocumentStore:
         return None
 
     def list_versions(self, collection: str, id: str, limit: int = 10) -> list:
-        return []
+        from keep.document_store import VersionInfo
+
+        versions = [
+            VersionInfo(
+                version=rec["version"],
+                summary=rec["summary"],
+                tags=dict(rec["tags"]),
+                created_at=rec["created_at"],
+                content_hash=rec.get("content_hash"),
+            )
+            for rec in sorted(
+                self._versions.get((collection, id), []),
+                key=lambda rec: rec["version"],
+                reverse=True,
+            )
+        ]
+        return versions[:limit]
 
     def list_versions_many(self, collection: str, ids: list[str]) -> dict:
         from keep.document_store import VersionInfo
@@ -766,6 +841,10 @@ class MockDocumentStore:
     def upsert_parts(self, collection: str, id: str, parts: list) -> int:
         key = f"_parts:{collection}:{id}"
         self._parts[key] = parts
+        for part in parts:
+            self._enqueue_sync_outbox(
+                "part_insert", collection, id, {"part_num": part.part_num},
+            )
         return len(parts)
 
     def upsert_single_part(self, collection: str, id: str, part) -> None:
@@ -775,8 +854,14 @@ class MockDocumentStore:
         for i, p in enumerate(parts):
             if p.part_num == part.part_num:
                 parts[i] = part
+                self._enqueue_sync_outbox(
+                    "part_update", collection, id, {"part_num": part.part_num},
+                )
                 return
         parts.append(part)
+        self._enqueue_sync_outbox(
+            "part_insert", collection, id, {"part_num": part.part_num},
+        )
 
     def get_part(self, collection: str, id: str, part_num: int):
         key = f"_parts:{collection}:{id}"
@@ -957,6 +1042,11 @@ class MockDocumentStore:
             ordered.extend(items)
         return ordered
 
+    def get_inverse_version_edges(
+        self, collection: str, target_id: str, *, limit: int = 200
+    ) -> list[tuple[str, str, str]]:
+        return []
+
     def get_forward_edges(self, collection: str, source_id: str) -> list[tuple[str, str, str]]:
         self.__init_edges()
         results = [
@@ -1017,6 +1107,24 @@ class MockDocumentStore:
     def delete_backfill(self, collection: str, predicate: str) -> None:
         self.__init_edges()
         self._backfills.pop((collection, predicate), None)
+
+    def sync_outbox_depth(self) -> int:
+        return len(self._sync_outbox)
+
+    def dequeue_sync_outbox(
+        self, limit: int = 50, claim_id: str | None = None
+    ) -> list[dict]:
+        return list(self._sync_outbox[:limit])
+
+    def complete_sync_outbox(self, outbox_ids: list[int]) -> None:
+        done = set(outbox_ids)
+        self._sync_outbox = [
+            row for row in self._sync_outbox
+            if row["outbox_id"] not in done
+        ]
+
+    def fail_sync_outbox(self, outbox_ids: list[int]) -> None:
+        pass
 
     def close(self) -> None:
         self._data.clear()

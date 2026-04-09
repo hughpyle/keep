@@ -406,11 +406,100 @@ Outbound mirror updates should trigger on:
 - edge changes that affect inverse-edge frontmatter
 
 The daemon should translate those low-level mutations into affected exported
-objects:
+objects through an explicit dependency model. There are four distinct outbound
+dependency classes.
 
-- the changed current note file
-- the changed note's sidecars, when parts/versions are exported
-- any target notes whose inverse-edge frontmatter depends on the changed edge
+At the implementation level, this means the daemon needs explicit helper
+queries for at least:
+
+- notes directly affected by a mutation
+- current-note targets reached by `edges` from a source note
+- current-note sources that point at a target note via `edges`
+- archived-version targets reached by `version_edges` from a source note
+- archived-version sources that point at a target note via `version_edges`
+
+### Direct surface dependencies
+
+These are the exported files directly attached to one keep note id:
+
+- the current note file
+- its part sidecars, when parts are exported
+- its version sidecars, when archived versions are exported
+
+Examples:
+
+- changing a note body or writable tags rewrites that note's exported file
+- creating `@P{3}` rewrites the parent file and the affected part sidecars to
+  keep `_next_part` / `_prev_part` links correct
+- archiving a new version rewrites the parent file and the affected version
+  sidecars to keep version navigation correct
+
+### Inverse-edge target dependencies
+
+Edges are rendered in both directions in markdown export, but inverse edges are
+not stored on the target note itself. They are reconstructed by querying the
+edge tables.
+
+That means an edge mutation has two outbound surfaces:
+
+- the source note, because its forward edge tags/frontmatter may have changed
+- the target note, because its inverse-edge frontmatter may have changed
+
+This applies to both current-note edges and archived-version edges.
+
+Examples:
+
+- adding a `references` edge rewrites the source note and the target note
+- deleting a `speaker` edge rewrites the source note and the target note
+- adding or deleting a `version_edges` row rewrites the affected target note's
+  archived-version inverse-edge frontmatter
+
+### Inverse-edge source-display dependencies
+
+Inverse-edge rendering includes a formatted source reference, not just a bare
+id. So some mutations on note `A` require rewriting other notes that point to
+`A`, even when no edge rows changed.
+
+At minimum, display-relevant source changes include:
+
+- note summary/body changes when the display name is derived from summary text
+- tag changes that affect `note_display_name(...)`
+
+For these mutations, the daemon must rewrite:
+
+- the changed source note itself
+- any current target notes that have inverse edges from that source
+- any archived-version target notes that have inverse version edges from that
+  source
+
+This fanout is required for correctness. Incremental export cannot be defined
+only in terms of "the note that changed".
+
+### Structural path-planning dependencies
+
+Some mutations can change the export namespace itself rather than only the
+content of already-known files.
+
+These require a broader replan because `map.tsv`, disambiguated filenames, or
+sidecar placement may change:
+
+- first mirror creation
+- mirror option changes affecting layout
+- note creation or deletion
+- note id change / move
+- any change that can introduce or remove a path collision and therefore change
+  a disambiguated filename
+
+These are the cases where full map rebuild is required rather than a bounded
+incremental rewrite.
+
+### Non-dependencies
+
+Not every stored mutation should wake the mirror.
+
+In particular, access-time churn (`touch`, `_accessed` only) should not trigger
+outbound sync. Continuous markdown export is a write mirror, not a live replica
+of read-side metadata changes.
 
 Examples:
 
@@ -425,16 +514,28 @@ Examples:
 The daemon should coalesce repeated changes within the configured interval and
 then perform one bounded mirror update pass per mirror.
 
-Full map rebuilds should be required only when path planning can change, such
-as:
-
-- first mirror creation
-- mirror option changes affecting layout
-- note creation/deletion
-- note moves or any other operation that changes exported path identity
-
 Ordinary content and tag updates should usually reuse the existing map and
-rewrite only affected files.
+rewrite only the notes reached through the dependency graph above.
+
+### Current implementation notes
+
+The current codebase has the correct trigger boundary, but not yet the full
+incremental dependency response.
+
+Specifically:
+
+- `sync_outbox` is currently collection-agnostic at drain time. This is
+  acceptable with today's effectively single-collection runtime, but true
+  multi-collection support will need mirror registrations and outbox handling
+  to become collection-aware.
+- edge and version-edge trigger payloads are currently source-oriented. That is
+  sufficient for whole-mirror export passes, but true incremental export will
+  need explicit target-side dependency resolution rather than assuming the
+  source id is enough.
+- large bulk mutation streams can require multiple outbox-drain ticks before
+  the mirror reaches its debounce/export phase. This is acceptable for the
+  current checkpoint, but throughput behavior should be revisited once
+  incremental export narrows the affected-set rewrite cost.
 
 ## 9. Continuous Export First
 
@@ -446,7 +547,9 @@ This stage includes:
 - moving markdown export code out of the CLI into daemon-owned service code
 - registering a markdown mirror rooted at a directory
 - writing `.keep-sync/map.tsv`
-- updating only affected exported files on keep changes
+- defining and implementing the outbound dependency graph above
+- updating only affected exported files on keep changes, except when a full
+  path replan is required
 
 This should use existing change notifications. The hard part is not detection;
 it is stable namespace planning and file mapping.

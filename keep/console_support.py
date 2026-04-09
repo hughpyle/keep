@@ -1443,6 +1443,17 @@ def run_pending_daemon(kp) -> None:
                     watch_result["stale"], watch_result["errors"],
                 )
 
+            _daemon_logger.debug("Tick: poll_markdown_mirrors")
+            from .markdown_mirrors import poll_markdown_mirrors as _poll_markdown_mirrors
+            mirror_result = _poll_markdown_mirrors(kp)
+            if mirror_result["checked"] > 0:
+                _daemon_logger.info(
+                    "Markdown mirrors: checked=%d exported=%d errors=%d",
+                    mirror_result["checked"],
+                    mirror_result["exported"],
+                    mirror_result["errors"],
+                )
+
             if shutdown_state["requested"]:
                 break
             _last_cleanup_ts = _cleanup_temp_files_if_due(
@@ -1754,6 +1765,11 @@ def _maybe_wait_for_daemon_idle(
     wait_or_shutdown,
 ) -> bool:
     """Sleep when the daemon is idle but has background timers or queued retries."""
+    from .markdown_mirrors import (
+        has_active_markdown_mirrors,
+        list_markdown_mirrors,
+        next_markdown_mirror_delay,
+    )
     from .watches import has_active_watches, load_watches, next_check_delay
 
     delegated_remaining = (
@@ -1778,6 +1794,8 @@ def _maybe_wait_for_daemon_idle(
 
     has_timers = has_active_watches(kp)
     if not has_timers:
+        has_timers = has_active_markdown_mirrors(kp)
+    if not has_timers:
         has_timers = (
             last_replenish_ts == 0
             or (time.time() - last_replenish_ts) < replenish_interval
@@ -1787,6 +1805,8 @@ def _maybe_wait_for_daemon_idle(
 
     if has_active_watches(kp):
         delay = next_check_delay(load_watches(kp))
+    elif has_active_markdown_mirrors(kp):
+        delay = next_markdown_mirror_delay(list_markdown_mirrors(kp))
     else:
         time_to_replenish = max(0, replenish_interval - (time.time() - last_replenish_ts))
         delay = min(time_to_replenish, 60.0)
