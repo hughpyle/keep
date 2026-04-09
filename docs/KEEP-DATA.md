@@ -103,7 +103,7 @@ Until embeddings are processed, imported documents are retrievable by ID (`keep 
 ```json
 {
   "format": "keep-export",
-  "version": 2,
+  "version": 3,
   "exported_at": "2026-02-19T12:00:00",
   "store_info": {
     "document_count": 42,

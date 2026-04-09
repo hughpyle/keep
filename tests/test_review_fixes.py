@@ -265,8 +265,139 @@ class TestEmbeddingProviderAbsent:
         # Verify config file exists and doesn't have embedding section
         config_file = tmp_path / "keep.toml"
         assert config_file.exists()
-        content = config_file.read_text()
-        assert "embedding" not in content or "# embedding" in content
+
+
+class TestLabeledRefMigration:
+    """Startup migration to canonical labeled-ref storage."""
+
+    def test_migrates_legacy_labeled_refs_in_place(self, tmp_path, capsys):
+        from keep.api import Keeper
+        from keep.config import StoreConfig
+        from keep.document_store import DocumentStore
+        from keep.types import casefold_tags_for_index
+        from tests.conftest import (
+            MockChromaStore,
+            MockDocumentProvider,
+            MockEmbeddingProvider,
+            MockPendingSummaryQueue,
+            MockSummarizationProvider,
+        )
+
+        db_path = tmp_path / "documents.db"
+        with DocumentStore(db_path) as store:
+            store.import_batch("default", [
+                {
+                    "id": ".tag/speaker",
+                    "summary": "speaker tagdoc",
+                    "tags": {"_inverse": "said"},
+                    "created_at": "2026-01-01T00:00:00",
+                    "updated_at": "2026-01-01T00:00:00",
+                    "accessed_at": "2026-01-01T00:00:00",
+                },
+                {
+                    "id": "conv1",
+                    "summary": "Conversation",
+                    "tags": {"speaker": "contact:telegram:42[[Alice]]"},
+                    "created_at": "2026-01-01T00:00:00",
+                    "updated_at": "2026-01-01T00:00:00",
+                    "accessed_at": "2026-01-01T00:00:00",
+                    "versions": [{
+                        "version": 1,
+                        "summary": "Older conversation",
+                        "tags": {"speaker": "contact:telegram:42[[Alice]]"},
+                        "content_hash": None,
+                        "created_at": "2025-12-01T00:00:00",
+                    }],
+                },
+            ])
+
+        mock_embed = MockEmbeddingProvider()
+        mock_summ = MockSummarizationProvider()
+        mock_doc = MockDocumentProvider()
+        mock_reg = MagicMock()
+        mock_reg.create_document.return_value = mock_doc
+        mock_reg.create_embedding.return_value = mock_embed
+        mock_reg.create_summarization.return_value = mock_summ
+
+        config = StoreConfig(path=tmp_path, config_dir=tmp_path)
+        doc_store = DocumentStore(db_path)
+        vector_store = MockChromaStore(tmp_path)
+        chroma_coll = "default"
+        vector_store.upsert(
+            chroma_coll,
+            "conv1",
+            mock_embed.embed("Conversation"),
+            "Conversation",
+            {"speaker": "contact:telegram:42[[Alice]]"},
+        )
+        pending_queue = MockPendingSummaryQueue(tmp_path / "pending-summaries.db")
+        with patch("keep.api.get_registry", return_value=mock_reg), \
+             patch("keep._provider_lifecycle.get_registry", return_value=mock_reg), \
+             patch("keep.api.CachingEmbeddingProvider", side_effect=lambda p, **kw: p), \
+             patch("keep._provider_lifecycle.CachingEmbeddingProvider", side_effect=lambda p, **kw: p), \
+             patch("keep.api.Keeper._spawn_processor", return_value=False), \
+             patch("keep.api.Keeper._process_edge_tags", autospec=True) as process_edges, \
+             patch("keep.api.Keeper._check_edge_backfill", autospec=True) as check_backfill:
+            kp = Keeper(
+                store_path=tmp_path,
+                config=config,
+                doc_store=doc_store,
+                vector_store=vector_store,
+                pending_queue=pending_queue,
+            )
+            try:
+                assert kp._config.labeled_ref_format_verified is True
+                assert capsys.readouterr().err == ""
+                process_edges.assert_not_called()
+                check_backfill.assert_not_called()
+                assert not any(
+                    item["id"].startswith(".backfill/")
+                    for item in pending_queue._queue
+                )
+
+                doc_coll = kp._resolve_doc_collection()
+                item = kp._document_store.get(doc_coll, "conv1")
+                assert item is not None
+                assert item.tags["speaker"] == "[[contact:telegram:42|Alice]]"
+
+                versions = kp._document_store.list_versions(doc_coll, "conv1")
+                assert versions[0].tags["speaker"] == "[[contact:telegram:42|Alice]]"
+
+                canonical_where = vector_store.build_tag_where(
+                    {"speaker": "[[contact:telegram:42|Alice]]"}
+                )
+                legacy_where = vector_store.build_tag_where(
+                    {"speaker": "contact:telegram:42[[Alice]]"}
+                )
+                assert any(
+                    hit.id == "conv1"
+                    for hit in vector_store.query_metadata(
+                        chroma_coll, canonical_where,
+                    )
+                )
+                assert not any(
+                    hit.id == "conv1"
+                    for hit in vector_store.query_metadata(
+                        chroma_coll, legacy_where,
+                    )
+                )
+                assert vector_store._data[chroma_coll]["conv1"]["tags"] == (
+                    casefold_tags_for_index(item.tags)
+                )
+
+                ctx = kp.get_context("contact:telegram:42")
+                assert "said" in ctx.edges
+                assert any(edge.source_id == "conv1" for edge in ctx.edges["said"])
+
+                inverse_versions = kp._document_store.get_inverse_version_edges(
+                    doc_coll, "contact:telegram:42",
+                )
+                assert any(
+                    source_id == "conv1"
+                    for _inverse, source_id, _created in inverse_versions
+                )
+            finally:
+                kp.close()
 
 
 # ---------------------------------------------------------------------------

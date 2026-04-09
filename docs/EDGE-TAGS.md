@@ -84,7 +84,7 @@ When you add `_inverse` to an existing tagdoc, keep automatically backfills edge
 | `user_id` | `user_id_of` | `user_id: contact:telegram:42` on a Hermes note | `get contact:telegram:42` → `user_id_of:` entries |
 | `informs` | `informed_by` | `informs: auth-decision` on a URL | `get auth-decision` → `informed_by:` entries |
 | `references` | `referenced_by` | `references: other-note` via link extraction | `get other-note` → `referenced_by:` entries |
-| `cites` | `cited_by` | `cites: arxiv:2403.04782[[Title]]` on a paper | `get arxiv:2403.04782` → `cited_by:` entries |
+| `cites` | `cited_by` | `cites: [[arxiv:2403.04782|Title]]` on a paper | `get arxiv:2403.04782` → `cited_by:` entries |
 | `duplicates` | `duplicates` | `duplicates: notes-v1` on a duplicate | Symmetric: both sides show `duplicates:` |
 | `author` | `authored` | `author: alice@example.com` on a git commit | `get alice@example.com` → `authored:` entries |
 

@@ -18,9 +18,9 @@ to show in UI or prompt context.
 
 Keep already supports labeled refs in tag values:
 
-- `target_id[[Label]]`
+- `[[target_id|Label]]`
 
-This is currently used for wikilink-style references and parsed by `parse_ref()`.
+This is currently used for labeled references and parsed by `parse_ref()`.
 It is safe to reuse for edge tags.
 
 ## Proposal
@@ -29,8 +29,8 @@ Use labeled refs for edge targets that have a canonical ID plus a human label.
 
 Examples:
 
-- `from: contact:telegram:42[[Alice]]`
-- `from: alice@example.com[[Alice Example]]`
+- `from: [[contact:telegram:42|Alice]]`
+- `from: [[alice@example.com|Alice Example]]`
 
 The edge target remains the canonical ID (`contact:telegram:42`,
 `alice@example.com`).  The label is auxiliary metadata.
@@ -64,10 +64,16 @@ When edge processing sees a labeled ref:
 
 This should be generic core behavior, not Hermes-specific.
 
-This must work for both cases:
+Initial implementation only merges observed labels into auto-vivified targets.
+This is deliberate: user-curated existing notes should not accumulate
+machine-observed `name` values automatically.
 
-- the target is newly auto-vivified
-- the target already exists
+So the supported case is:
+
+- the target is newly auto-vivified, or still an auto-vivified stub
+
+Existing non-auto-vivified targets keep their current `name` / `title` tags
+unless a user or higher-level workflow updates them explicitly.
 
 If multiple edge tags on the same source note point at the same target with
 different labels in a single processing pass, labels should be deduplicated

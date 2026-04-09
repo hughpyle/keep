@@ -84,7 +84,7 @@ class TestExportImport:
         """Export from empty store produces valid structure."""
         data = keeper.export_data()
         assert data["format"] == "keep-export"
-        assert data["version"] == 2
+        assert data["version"] == 3
         assert data["exported_at"]
         assert data["store_info"]["document_count"] >= 0
         assert isinstance(data["documents"], list)
@@ -357,8 +357,59 @@ class TestExportImport:
         assert part is not None
         assert part.summary == "Full legacy part text"
 
+    def test_import_legacy_labeled_refs_reexports_canonical_form(self, keeper):
+        """Old export files with legacy labeled refs import into canonical form."""
+        data = {
+            "format": "keep-export",
+            "version": 1,
+            "exported_at": "2026-01-01T00:00:00",
+            "store_info": {"document_count": 2, "version_count": 1,
+                          "part_count": 1, "collection": "default"},
+            "documents": [
+                {
+                    "id": ".tag/speaker",
+                    "summary": "speaker tagdoc",
+                    "tags": {"_inverse": "said"},
+                    "created_at": "2026-01-01T00:00:00",
+                    "updated_at": "2026-01-01T00:00:00",
+                    "accessed_at": "2026-01-01T00:00:00",
+                },
+                {
+                    "id": "conv1",
+                    "summary": "Conversation",
+                    "tags": {"speaker": "contact:telegram:42[[Alice]]"},
+                    "created_at": "2026-01-01T00:00:00",
+                    "updated_at": "2026-01-01T00:00:00",
+                    "accessed_at": "2026-01-01T00:00:00",
+                    "versions": [{
+                        "version": 1,
+                        "summary": "Older conversation",
+                        "tags": {"speaker": "contact:telegram:42[[Alice]]"},
+                        "content_hash": None,
+                        "created_at": "2025-12-01T00:00:00",
+                    }],
+                    "parts": [{
+                        "part_num": 1,
+                        "summary": "Part summary",
+                        "tags": {"speaker": "contact:telegram:42[[Alice]]"},
+                        "created_at": "2026-01-01T00:00:00",
+                    }],
+                },
+            ],
+        }
+
+        keeper.import_data(data, mode="merge")
+        exported = keeper.export_data(include_system=True)
+        docs = {d["id"]: d for d in exported["documents"]}
+        conv = docs["conv1"]
+
+        assert exported["version"] == 3
+        assert conv["tags"]["speaker"] == "[[contact:telegram:42|Alice]]"
+        assert conv["versions"][0]["tags"]["speaker"] == "[[contact:telegram:42|Alice]]"
+        assert conv["parts"][0]["tags"]["speaker"] == "[[contact:telegram:42|Alice]]"
+
     def test_export_parts_omit_legacy_content_field(self, keeper):
-        """Version 2 exports write summary-only part records."""
+        """Version 3 exports write summary-only part records."""
         _seed(keeper, [_make_doc(
             "summary-only",
             "Parent summary",
@@ -372,7 +423,7 @@ class TestExportImport:
 
         data = keeper.export_data()
         doc = next(d for d in data["documents"] if d["id"] == "summary-only")
-        assert data["version"] == 2
+        assert data["version"] == 3
         assert doc["parts"] == [{
             "part_num": 1,
             "summary": "Canonical part text",
@@ -486,6 +537,14 @@ class TestMarkdownExport:
     def test_id_to_rel_path_hierarchical_without_scheme(self):
         assert _id_to_rel_path("notes/2024/jan") == Path("notes/2024/jan.md")
 
+    def test_id_to_rel_path_content_addressed_inline_groups_under_inline(self):
+        rel = _id_to_rel_path("%9f86d081884c")
+        assert rel == Path("_inline") / "9f86d081884c.md"
+
+    def test_id_to_rel_path_bare_email_groups_under_email_domain(self):
+        rel = _id_to_rel_path("alice@example.com")
+        assert rel == Path("_email") / "example.com" / "alice@example.com.md"
+
     def test_id_to_rel_path_encodes_unsafe_chars_within_component(self):
         # ':' and '#' inside a single path component are percent-encoded.
         rel = _id_to_rel_path("file:///a/b:c#d/e")
@@ -593,6 +652,8 @@ class TestMarkdownExport:
         assert _id_to_rel_path(".tag/act/commitment") == Path(".tag/act/commitment.md")
         # A digit-prefixed pseudo-scheme stays flat (encoded).
         assert _id_to_rel_path("2024:01:summary") == Path("2024%3A01%3Asummary.md")
+        # Non-content-addressed `%...` ids should remain flat too.
+        assert _id_to_rel_path("%not-inline") == Path("%25not-inline.md")
 
     def test_render_doc_markdown_frontmatter(self):
         doc = {
@@ -858,10 +919,9 @@ class TestMarkdownExport:
         assert "tags" not in meta
         assert body.strip() == "Introduction analysis text."
         # _prev_part points back to the parent doc id (the chain head).
-        assert meta["_prev_part"] == "with-parts"
-        # _next_part points to the next-higher part_num as a canonical
-        # part reference id.
-        assert meta["_next_part"] == "with-parts@P{2}"
+        assert meta["_prev_part"] == "[[with-parts]]"
+        # _next_part points to the next-higher part_num's exported path.
+        assert meta["_next_part"] == "[[with-parts/@P{2}]]"
 
     def test_write_markdown_export_versions_sidecar_offsets(self, keeper, tmp_path):
         # `versions` in the seed represents archived (non-current) versions.
@@ -906,8 +966,8 @@ class TestMarkdownExport:
         # @V{1} is the chain entry from the parent: _prev_version
         # points to the next-older archived version, _next_version
         # points back to the parent doc.
-        assert meta1["_prev_version"] == "with-history@V{2}"
-        assert meta1["_next_version"] == "with-history"
+        assert meta1["_prev_version"] == "[[with-history/@V{2}]]"
+        assert meta1["_next_version"] == "[[with-history]]"
 
         # Sanity check the deepest archived version maps correctly.
         meta4, body4 = _parse_markdown(sidecar / "@V{4}.md")
@@ -916,7 +976,7 @@ class TestMarkdownExport:
         assert body4.strip() == "Oldest"
         # The chain tail has only a "next" link (no older version).
         assert "_prev_version" not in meta4
-        assert meta4["_next_version"] == "with-history@V{3}"
+        assert meta4["_next_version"] == "[[with-history/@V{3}]]"
 
         # The current (latest) version stays in the parent file, NOT in
         # the sidecar — there is no @V{0}.md.
@@ -925,7 +985,7 @@ class TestMarkdownExport:
         assert parent_body.strip() == "Latest summary"
         # Parent doc records a `_prev_version` chain entry pointing
         # at @V{1}.  No `_next_version` — the parent IS current.
-        assert parent_meta["_prev_version"] == "with-history@V{1}"
+        assert parent_meta["_prev_version"] == "[[with-history/@V{1}]]"
         assert "_next_version" not in parent_meta
 
     def test_write_markdown_export_parts_and_versions_combined(self, keeper, tmp_path):
@@ -1060,11 +1120,9 @@ class TestMarkdownExport:
     ):
         """A disambiguated doc still records its inverse edges in frontmatter.
 
-        Inverse edges are stored as canonical id values in the
-        frontmatter, so disambiguation of the on-disk filename
-        doesn't change the rendered values — but the doc that GOT
-        disambiguated still needs to carry its incoming-edge data
-        through to its (renamed) file.
+        Inverse-edge values are rendered as exported wikilinks, so the
+        doc that got disambiguated still needs to carry its incoming
+        edge data through to its renamed file.
         """
         _seed(keeper, [
             _make_doc("readme", "lower"),
@@ -1098,16 +1156,151 @@ class TestMarkdownExport:
 
         # The lowercase 'readme' has its incoming edge as a flat
         # frontmatter key, regardless of which file the disambiguator
-        # picked.  The value is the source id (with optional alias).
+        # picked. The source note still links by its exported path.
         readme_meta, _ = _parse_markdown(files_by_id["readme"])
         said = readme_meta["said"]
         assert isinstance(said, list)
-        assert any(v.startswith("source") for v in said)
+        assert any(v == "[[source|Source body]]" for v in said)
 
         # The uppercase 'README' has no incoming edges and shouldn't
         # carry a stray ``said`` key.
         upper_meta, _ = _parse_markdown(files_by_id["README"])
         assert "said" not in upper_meta
+
+    def test_forward_edge_tags_use_export_paths_for_uri_targets(
+        self, keeper, tmp_path,
+    ):
+        """Edge-tag refs are rewritten to the exported vault path namespace."""
+        file_id = "file:///tmp/readme.md"
+        _seed(keeper, [
+            {
+                "id": ".tag/speaker",
+                "summary": "speaker tagdoc",
+                "tags": {"_inverse": "said"},
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-01T00:00:00",
+                "accessed_at": "2026-01-01T00:00:00",
+            },
+            _make_doc(file_id, "Readme"),
+            _make_doc("conv", "Conversation", tags={"speaker": file_id}),
+        ])
+        out = tmp_path / "md-uri-edge"
+        out.mkdir()
+
+        _write_markdown_export(keeper, out, include_system=False)
+
+        meta, _ = _parse_markdown(out / "conv.md")
+        assert meta["speaker"] == "[[file/tmp/readme.md]]"
+
+    def test_non_edge_tag_values_are_not_rewritten_to_export_refs(
+        self, keeper, tmp_path,
+    ):
+        """Only actual edge tags become export-local wikilinks."""
+        file_id = "file:///tmp/readme.md"
+        _seed(keeper, [
+            _make_doc(file_id, "Readme"),
+            _make_doc("conv", "Conversation", tags={"topic": file_id}),
+        ])
+        out = tmp_path / "md-non-edge-ref"
+        out.mkdir()
+
+        _write_markdown_export(keeper, out, include_system=False)
+
+        meta, _ = _parse_markdown(out / "conv.md")
+        assert meta["topic"] == file_id
+
+    def test_chain_links_use_export_paths_for_uri_backed_parent(
+        self, keeper, tmp_path,
+    ):
+        """Prev/next chain refs follow the exported sidecar paths."""
+        file_id = "file:///tmp/readme.md"
+        _seed(keeper, [
+            _make_doc(file_id, "Current", parts=[
+                {"part_num": 1, "summary": "p1",
+                 "tags": {}, "created_at": "2026-01-01T00:00:00"},
+            ], versions=[
+                {"version": 1, "summary": "older",
+                 "tags": {}, "content_hash": "h1",
+                 "created_at": "2025-12-01T00:00:00"},
+            ]),
+        ])
+        out = tmp_path / "md-uri-chain"
+        out.mkdir()
+
+        _write_markdown_export(
+            keeper, out, include_system=False,
+            include_parts=True, include_versions=True,
+        )
+
+        parent = out / "file" / "tmp" / "readme.md.md"
+        parent_meta, _ = _parse_markdown(parent)
+        assert parent_meta["_next_part"] == "[[file/tmp/readme.md/@P{1}]]"
+        assert parent_meta["_prev_version"] == "[[file/tmp/readme.md/@V{1}]]"
+
+        part_meta, _ = _parse_markdown(out / "file" / "tmp" / "readme.md" / "@P{1}.md")
+        assert part_meta["_prev_part"] == "[[file/tmp/readme.md]]"
+
+        version_meta, _ = _parse_markdown(
+            out / "file" / "tmp" / "readme.md" / "@V{1}.md",
+        )
+        assert version_meta["_next_version"] == "[[file/tmp/readme.md]]"
+
+    def test_forward_edge_tags_use_export_paths_for_email_targets(
+        self, keeper, tmp_path,
+    ):
+        """Bare email IDs export to the grouped email path namespace."""
+        _seed(keeper, [
+            {
+                "id": ".tag/speaker",
+                "summary": "speaker tagdoc",
+                "tags": {"_inverse": "said"},
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-01T00:00:00",
+                "accessed_at": "2026-01-01T00:00:00",
+            },
+            _make_doc("alice@example.com", "Alice"),
+            _make_doc("conv", "Conversation", tags={"speaker": "alice@example.com"}),
+        ])
+        out = tmp_path / "md-email-edge"
+        out.mkdir()
+
+        _write_markdown_export(keeper, out, include_system=False)
+
+        meta, _ = _parse_markdown(out / "conv.md")
+        assert meta["speaker"] == "[[_email/example.com/alice@example.com]]"
+
+    def test_inverse_edges_use_disambiguated_export_paths(
+        self, keeper, tmp_path,
+    ):
+        """Backlinks point at the final exported filename when ids collide."""
+        _seed(keeper, [
+            _make_doc("readme", "lower"),
+            _make_doc("README", "upper"),
+            _make_doc("target", "Target"),
+        ])
+        ds = keeper._document_store
+        coll = keeper._resolve_doc_collection()
+        ds.upsert_edge(
+            coll, "README", "speaker", "target", "said",
+            "2026-01-15T10:00:00",
+        )
+
+        out = tmp_path / "md-disambig-export-ref"
+        out.mkdir()
+        _write_markdown_export(keeper, out, include_system=False)
+
+        files_by_id: dict[str, Path] = {}
+        for p in out.iterdir():
+            if not p.is_file():
+                continue
+            meta, _ = _parse_markdown(p)
+            files_by_id[meta["id"]] = p
+
+        exported_readme_ref = (
+            files_by_id["README"].relative_to(out).with_suffix("").as_posix()
+        )
+        target_meta, _ = _parse_markdown(files_by_id["target"])
+        assert target_meta["said"] == [f"[[{exported_readme_ref}|upper]]"]
 
     def test_cli_include_parts_and_versions_flags(self, tmp_path):
         from typer.testing import CliRunner
@@ -1331,6 +1524,7 @@ class TestMarkdownExport:
             "file:///Users/x/README.md",
             "thread:abc@host#frag",
             "%9f86d081884c",
+            "alice@example.com",
         ):
             rel = _id_to_rel_path(doc_id)
             link = _md_link_target(rel, Path("anchor.md"))
@@ -1359,28 +1553,28 @@ class TestMarkdownExport:
         )
 
         # Parent links forward to the first part in the chain via the
-        # ``_next_part`` frontmatter key (canonical part-ref id).
+        # exported sidecar path.
         parent_meta, parent_body = _parse_markdown(out / "doc.md")
-        assert parent_meta["_next_part"] == "doc@P{1}"
+        assert parent_meta["_next_part"] == "[[doc/@P{1}]]"
         assert "_prev_part" not in parent_meta
         # Parent body is just its summary — no chain markdown links.
         assert parent_body.strip() == "Parent body"
 
         # Chain head: _prev_part → parent, _next_part → @P{2}
         m1, b1 = _parse_markdown(out / "doc" / "@P{1}.md")
-        assert m1["_prev_part"] == "doc"
-        assert m1["_next_part"] == "doc@P{2}"
+        assert m1["_prev_part"] == "[[doc]]"
+        assert m1["_next_part"] == "[[doc/@P{2}]]"
         assert b1.strip() == "first part"
 
         # Chain middle: _prev_part → @P{1}, _next_part → @P{5}
         m2, b2 = _parse_markdown(out / "doc" / "@P{2}.md")
-        assert m2["_prev_part"] == "doc@P{1}"
-        assert m2["_next_part"] == "doc@P{5}"
+        assert m2["_prev_part"] == "[[doc/@P{1}]]"
+        assert m2["_next_part"] == "[[doc/@P{5}]]"
         assert b2.strip() == "second part"
 
         # Chain tail: _prev_part → @P{2}, no _next_part.
         m5, b5 = _parse_markdown(out / "doc" / "@P{5}.md")
-        assert m5["_prev_part"] == "doc@P{2}"
+        assert m5["_prev_part"] == "[[doc/@P{2}]]"
         assert "_next_part" not in m5
         assert b5.strip() == "fifth part"
 
@@ -1410,24 +1604,24 @@ class TestMarkdownExport:
 
         # Parent records its chain entry as a `_prev_version` key.
         parent_meta, parent_body = _parse_markdown(out / "doc.md")
-        assert parent_meta["_prev_version"] == "doc@V{1}"
+        assert parent_meta["_prev_version"] == "[[doc/@V{1}]]"
         assert "_next_version" not in parent_meta
         assert parent_body.strip() == "current"
 
         # Chain head: _prev_version → @V{2}, _next_version → parent
         m1, _ = _parse_markdown(out / "doc" / "@V{1}.md")
-        assert m1["_prev_version"] == "doc@V{2}"
-        assert m1["_next_version"] == "doc"
+        assert m1["_prev_version"] == "[[doc/@V{2}]]"
+        assert m1["_next_version"] == "[[doc]]"
 
         # Middle: _prev_version → @V{3}, _next_version → @V{1}
         m2, _ = _parse_markdown(out / "doc" / "@V{2}.md")
-        assert m2["_prev_version"] == "doc@V{3}"
-        assert m2["_next_version"] == "doc@V{1}"
+        assert m2["_prev_version"] == "[[doc/@V{3}]]"
+        assert m2["_next_version"] == "[[doc/@V{1}]]"
 
         # Chain tail (oldest): no _prev_version, _next_version → @V{3}
         m4, _ = _parse_markdown(out / "doc" / "@V{4}.md")
         assert "_prev_version" not in m4
-        assert m4["_next_version"] == "doc@V{3}"
+        assert m4["_next_version"] == "[[doc/@V{3}]]"
 
     def test_parent_doc_chain_entries_for_both_parts_and_versions(
         self, keeper, tmp_path,
@@ -1450,8 +1644,8 @@ class TestMarkdownExport:
             include_parts=True, include_versions=True,
         )
         parent_meta, _ = _parse_markdown(out / "doc.md")
-        assert parent_meta["_prev_version"] == "doc@V{1}"
-        assert parent_meta["_next_part"] == "doc@P{1}"
+        assert parent_meta["_prev_version"] == "[[doc/@V{1}]]"
+        assert parent_meta["_next_part"] == "[[doc/@P{1}]]"
 
     def test_doc_with_no_sidecars_has_no_chain_keys(self, keeper, tmp_path):
         """A plain doc records no chain-navigation frontmatter keys."""
@@ -1517,14 +1711,14 @@ class TestMarkdownExport:
         meta, body = _parse_markdown(out / "Deborah.md")
         # Inverse-edge predicate is a top-level frontmatter key with
         # the source ids as a multi-value list.  Each value is the
-        # canonical ``id[[display name]]`` form when the source has
+        # canonical ``[[id|display name]]`` form when the source has
         # a resolvable display name.
         said = meta["said"]
         assert isinstance(said, list)
         assert len(said) == 2
-        # Sources are stored with the wikilink alias (display name).
-        assert any(v.startswith("conv1") for v in said)
-        assert any(v.startswith("conv2") for v in said)
+        # Sources are stored with canonical labeled refs.
+        assert any(v == "[[conv1|First conversation]]" for v in said)
+        assert any(v == "[[conv2|Second conversation]]" for v in said)
 
         # No body section — inverse edges live entirely in frontmatter.
         assert "## Referenced By" not in body
@@ -1545,7 +1739,7 @@ class TestMarkdownExport:
         ds = keeper._document_store
         coll = keeper._resolve_doc_collection()
         # Source 'Foo Malone' has a display name distinct from its id,
-        # so the edge value will be ``Foo Malone[[Foo Malone]]`` —
+        # so the edge value will be ``[[Foo Malone|Foo Malone]]`` —
         # which YAML must render with double quotes for the brackets
         # to be unambiguous.
         ds.upsert_edge(
@@ -1560,12 +1754,46 @@ class TestMarkdownExport:
         # Read the raw frontmatter text to verify the quote style.
         text = (out / "contact.md").read_text(encoding="utf-8")
         fm_text = text.split("---", 2)[1]
-        # The wikilink value uses double quotes, not single.
-        assert '- "Foo Malone[[' in fm_text
+        # The labeled-ref value uses double quotes, not single.
+        assert '- "[[Foo Malone|About Foo]]"' in fm_text
         # And it loads back correctly.
         meta = yaml.safe_load(fm_text)
-        assert meta["said"][0].startswith("Foo Malone")
-        assert "[[" in meta["said"][0]
+        assert meta["said"][0] == "[[Foo Malone|About Foo]]"
+
+    def test_inverse_edges_keep_long_labeled_refs_on_one_line(
+        self, keeper, tmp_path,
+    ):
+        """Long inverse-edge labeled refs should not wrap across YAML lines."""
+        long_id = (
+            "source/with/a/very/long/path/that/used/to/trigger/"
+            "yaml/frontmatter/wrapping/in/export"
+        )
+        long_summary = (
+            "A deliberately long display name for the referenced note that "
+            "would exceed the default YAML wrapping width"
+        )
+        _seed(keeper, [
+            _make_doc(long_id, long_summary),
+            _make_doc("target", "Target card"),
+        ])
+        ds = keeper._document_store
+        coll = keeper._resolve_doc_collection()
+        ds.upsert_edge(
+            coll, long_id, "references", "target", "referenced_by",
+            "2026-01-15T10:00:00",
+        )
+
+        out = tmp_path / "md-long-inverse"
+        out.mkdir()
+        _write_markdown_export(keeper, out, include_system=False)
+
+        text = (out / "target.md").read_text(encoding="utf-8")
+        fm_text = text.split("---", 2)[1]
+        meta = yaml.safe_load(fm_text)
+        emitted = meta["referenced_by"][0]
+        assert emitted.startswith(f"[[{long_id}|")
+        assert f'- "{emitted}"' in fm_text
+        assert f'- "{emitted}\\n' not in fm_text
 
     def test_inverse_edges_skip_system_sources(self, keeper, tmp_path):
         """When include_system=False, system-id edge sources are dropped."""
@@ -1588,7 +1816,7 @@ class TestMarkdownExport:
         meta, _ = _parse_markdown(out / "target.md")
         said = meta["said"]
         # Only the non-system source survives.
-        assert any(v.startswith("real-source") for v in said)
+        assert any(v == "[[real-source]]" for v in said)
         assert not any(".meta/something" in v for v in said)
 
     def test_version_sidecar_inverse_edges_in_frontmatter(
@@ -1641,6 +1869,6 @@ class TestMarkdownExport:
         meta, body = _parse_markdown(out / "target" / "@V{1}.md")
         said = meta["said"]
         assert isinstance(said, list)
-        assert any(v.startswith("src") for v in said)
+        assert any(v == "[[src|current source]]" for v in said)
         # No body section.
         assert "## Referenced By" not in body

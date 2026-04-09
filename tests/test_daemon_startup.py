@@ -10,6 +10,13 @@ from keep.api import Keeper
 def test_keeper_deferred_startup_skips_scans_until_started(mock_providers, tmp_path):
     calls: list[str] = []
 
+    def fake_labeled_ref(self, doc_coll):
+        calls.append("labeled-ref")
+        return {"documents": 0, "versions": 0, "parts": 0}
+
+    def fake_part_reindex(self):
+        calls.append("part-reindex")
+
     def fake_marker(self, chroma_coll, doc_coll, *, _doc_store=None):
         calls.append("marker")
 
@@ -18,6 +25,8 @@ def test_keeper_deferred_startup_skips_scans_until_started(mock_providers, tmp_p
         return False
 
     with (
+        patch.object(Keeper, "_run_labeled_ref_format_migration", fake_labeled_ref),
+        patch.object(Keeper, "_enqueue_migrated_part_reindex", fake_part_reindex),
         patch.object(Keeper, "_run_tag_marker_startup_check", fake_marker),
         patch.object(Keeper, "_check_store_consistency", fake_check),
     ):
@@ -27,7 +36,9 @@ def test_keeper_deferred_startup_skips_scans_until_started(mock_providers, tmp_p
 
             kp._run_deferred_startup_maintenance()
 
-            assert calls == ["marker", "reconcile-check"]
+            assert calls == [
+                "labeled-ref", "part-reindex", "marker", "reconcile-check",
+            ]
         finally:
             kp.close()
 

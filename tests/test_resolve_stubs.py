@@ -80,7 +80,7 @@ class TestResolveStubs:
         # Source item that references the stub
         source = _make_item(
             "file:///vault/Source.md",
-            tags={"references": ["file:///vault/Foo.md[[Foo]]"]},
+            tags={"references": ["[[file:///vault/Foo.md|Foo]]"]},
         )
 
         ctx = _make_context(
@@ -98,8 +98,8 @@ class TestResolveStubs:
         set_tags_muts = [m for m in result["mutations"] if m["op"] == "set_tags"]
         assert len(set_tags_muts) == 1
         refs = set_tags_muts[0]["tags"]["references"]
-        assert f"{real_id}[[Foo]]" in refs
-        assert "file:///vault/Foo.md[[Foo]]" not in refs
+        assert f"[[{real_id}|Foo]]" in refs
+        assert "[[file:///vault/Foo.md|Foo]]" not in refs
 
     def test_preserves_other_references(self):
         stub = _make_item(
@@ -111,8 +111,8 @@ class TestResolveStubs:
         source = _make_item(
             "file:///vault/Source.md",
             tags={"references": [
-                "file:///vault/Foo.md[[Foo]]",
-                "file:///vault/Other.md[[Other]]",
+                "[[file:///vault/Foo.md|Foo]]",
+                "[[file:///vault/Other.md|Other]]",
             ]},
         )
 
@@ -125,8 +125,8 @@ class TestResolveStubs:
         result = ResolveStubs().run({"item_id": real_id}, ctx)
 
         refs = result["mutations"][0]["tags"]["references"]
-        assert f"{real_id}[[Foo]]" in refs
-        assert "file:///vault/Other.md[[Other]]" in refs
+        assert f"[[{real_id}|Foo]]" in refs
+        assert "[[file:///vault/Other.md|Other]]" in refs
 
     def test_skips_self_stub(self):
         """If the stub ID is the same as the new item, skip it."""

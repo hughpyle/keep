@@ -276,14 +276,35 @@ def _normalize_http_uri(uri: str) -> str:
     return urlunparse((scheme, netloc, path, parsed.params, query, fragment))
 
 
-def parse_ref(value: str) -> tuple[str, str | None]:
-    """Parse a reference value into (id, wikilink_alias).
+def format_ref(target: str, alias: str | None = None) -> str:
+    """Format a labeled reference in canonical MediaWiki-style syntax.
 
-    Wikilink-resolved references carry an alias suffix:
-    ``file:///vault/Notes/Foo.md[[Foo]]``
-
-    Returns ``(id, alias)`` where alias is ``None`` if no suffix.
+    Canonical labeled refs use ``[[target|label]]``. Bare refs are stored as
+    the plain target ID with no surrounding brackets.
     """
+    target = str(target or "").strip()
+    if not target:
+        return ""
+    label = None if alias is None else str(alias).strip()
+    if not label:
+        return target
+    if "|" in label or "]]" in label:
+        return target
+    return f"[[{target}|{label}]]"
+
+
+def parse_ref(value: str) -> tuple[str, str | None]:
+    """Parse a reference value into ``(id, alias)``.
+
+    Accepts both canonical ``[[target|label]]`` refs and legacy
+    ``target[[label]]`` refs for backward compatibility.
+    """
+    if value.startswith("[[") and value.endswith("]]"):
+        inner = value[2:-2]
+        if "|" in inner:
+            target, alias = inner.split("|", 1)
+            return target, alias
+        return inner, None
     if value.endswith("]]"):
         idx = value.rfind("[[")
         if idx >= 0:
@@ -300,26 +321,25 @@ _MARKDOWN_LINK_REF_RE = re.compile(
 
 
 def normalize_edge_value(value: str) -> str:
-    """Coerce a single edge-tag value into the canonical ``id[[alias]]`` form.
+    """Coerce one edge-tag value into the canonical labeled-ref format.
 
-    Agents (and humans) often emit markdown link syntax ``[Title](URL)``
-    when populating an edge tag. Stored as-is, the literal ``[Title](URL)``
-    string becomes the edge target ID, which is junk. This helper detects
-    that shape and rewrites it to the wikilink-style ``URL[[Title]]`` form
-    that the rest of the pipeline already understands.
-
-    Returns the value unchanged when it doesn't match (already canonical,
-    bare URL, internal ID, etc.).
+    Canonical labeled refs use ``[[target|label]]``. This helper also accepts
+    legacy ``target[[label]]`` refs and markdown links ``[Title](URL)`` so old
+    stored values and agent-written edge tags converge on one representation.
     """
     if not value or "[" not in value:
         return value
-    m = _MARKDOWN_LINK_REF_RE.match(value.strip())
-    if not m:
-        return value
-    title, url = m.group(1).strip(), m.group(2).strip()
-    if not title or not url or "]]" in title:
-        return value
-    return f"{url}[[{title}]]"
+    stripped = value.strip()
+    m = _MARKDOWN_LINK_REF_RE.match(stripped)
+    if m:
+        title, url = m.group(1).strip(), m.group(2).strip()
+        if not title or not url:
+            return value
+        return format_ref(url, title)
+
+    target, alias = parse_ref(stripped)
+    normalized = format_ref(target, alias)
+    return normalized if normalized else value
 
 
 def normalize_id(id: str) -> str:

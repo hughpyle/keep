@@ -335,7 +335,7 @@ class TestKeeperAnalyze:
             tags={
                 "topic": "graphs",  # content tag
                 "year": "2024",     # content tag
-                "cites": "https://example.com/other-paper[[Other Paper]]",  # edge tag
+                "cites": "[[https://example.com/other-paper|Other Paper]]",  # edge tag
             },
         )
 

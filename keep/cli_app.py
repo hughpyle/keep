@@ -13,7 +13,7 @@ import shutil
 import sys
 import http.client
 from pathlib import Path
-from typing import Annotated, Callable, Optional
+from typing import Annotated, Callable, Mapping, Optional
 from urllib.parse import quote
 
 import typer
@@ -22,7 +22,7 @@ import yaml
 from .daemon_client import get_port as _daemon_get_port
 from .daemon_client import http_request as _http
 from .const import DAEMON_PORT_FILE, DAEMON_TOKEN_FILE, STATE_PROMPT
-from .types import note_display_name, parse_ref
+from .types import format_ref, note_display_name, parse_ref
 
 app = typer.Typer(
     name="keep",
@@ -1882,6 +1882,11 @@ def _truncate_component(comp: str, *, budget: int) -> str:
 
 
 _URI_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):(.*)$", re.DOTALL)
+_INLINE_CONTENT_ID_RE = re.compile(r"^%[0-9a-f]{12}$")
+_BARE_EMAIL_ID_RE = re.compile(
+    r"^(?P<local>[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+)@"
+    r"(?P<domain>[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)$"
+)
 
 
 def _id_to_rel_path(doc_id: str) -> Path:
@@ -1899,6 +1904,11 @@ def _id_to_rel_path(doc_id: str) -> Path:
       parsed as a path: ``/`` becomes a directory separator.
     * Non-URI ids containing ``/`` become nested directories mirroring
       the id structure: ``.tag/act/commitment`` → ``.tag/act/commitment.md``.
+    * Content-addressed inline ids (``%<12-hex>``) are grouped under
+      ``_inline/`` using the hash body as the filename to keep the
+      export root browsable and avoid ``%25...`` filenames on disk.
+    * Bare email-address ids are grouped under ``_email/<domain>/`` so
+      person-like notes don't crowd the export root.
     * Simple ids are flat: ``auth-notes`` → ``auth-notes.md``.
     * Within each path component, filesystem-unsafe characters
       (``:``, ``#``, ``?``, ``@``, etc.) are percent-encoded.
@@ -1909,8 +1919,15 @@ def _id_to_rel_path(doc_id: str) -> Path:
       that already end in ``.md`` — so the suffix is unambiguous.
     """
     raw_components: list[str]
-    m = _URI_SCHEME_RE.match(doc_id)
-    if m:
+    if _INLINE_CONTENT_ID_RE.match(doc_id):
+        raw_components = ["_inline", doc_id[1:]]
+    elif (email_match := _BARE_EMAIL_ID_RE.match(doc_id)):
+        raw_components = [
+            "_email",
+            email_match.group("domain").lower(),
+            doc_id,
+        ]
+    elif (m := _URI_SCHEME_RE.match(doc_id)):
         scheme = m.group(1)
         rest = m.group(2)
         # An authority-style URI starts with "//" right after the colon;
@@ -1972,7 +1989,29 @@ def _md_link_target(target_rel: Path, src_rel: Path) -> str:
     return "/".join(parts)
 
 
-def _get_edge_data(keeper) -> tuple[
+def _export_ref_from_rel_path(rel_path: Path) -> str:
+    """Return the vault-native wiki target for an exported markdown path."""
+    return rel_path.with_suffix("").as_posix()
+
+
+def _rewrite_export_ref_value(
+    value: str,
+    export_refs: Mapping[str, str],
+) -> str:
+    """Rewrite one canonical ref value to the exported vault-local target."""
+    target_id, alias = parse_ref(value)
+    export_target = export_refs.get(target_id)
+    if export_target is None:
+        return value
+    if alias is not None:
+        return format_ref(export_target, alias)
+    return _wiki_link_value(export_target)
+
+
+def _get_edge_data(
+    keeper,
+    export_refs: Mapping[str, str] | None = None,
+) -> tuple[
     Callable[[str], list[tuple[str, str]]],
     Callable[[str], list[tuple[str, str]]],
 ]:
@@ -1980,10 +2019,10 @@ def _get_edge_data(keeper) -> tuple[
 
     Each function takes a doc id and returns a list of
     ``(inverse_predicate, formatted_source)`` pairs ordered as the
-    underlying store returns them.  ``formatted_source`` is the
-    canonical edge-tag value: just the source id when no display name
-    is available, or ``id[[display name]]`` (the system's wikilink
-    form) when the source doc has a resolvable display name.
+    underlying store returns them. ``formatted_source`` is always an
+    explicit wiki-style ref: ``[[id]]`` when no display name is
+    available, or ``[[id|display name]]`` when the source doc has a
+    resolvable display name.
 
     Source-doc display names are looked up lazily and cached, so a
     typical export pays one ``DocumentStore.get`` per *unique* source
@@ -2001,24 +2040,29 @@ def _get_edge_data(keeper) -> tuple[
         return empty, empty
 
     formatted_cache: dict[str, str] = {}
+    export_refs = export_refs or {}
 
     def _format_source(source_id: str) -> str:
         cached = formatted_cache.get(source_id)
         if cached is not None:
             return cached
+        export_target = export_refs.get(source_id)
         try:
             record = ds.get(doc_coll, source_id)
         except Exception:
-            formatted_cache[source_id] = source_id
-            return source_id
+            fallback = _wiki_link_value(export_target or source_id)
+            formatted_cache[source_id] = fallback
+            return fallback
         if record is None:
-            formatted_cache[source_id] = source_id
-            return source_id
+            fallback = _wiki_link_value(export_target or source_id)
+            formatted_cache[source_id] = fallback
+            return fallback
         display = note_display_name(record.tags, record.summary or "")
-        if display and display != source_id:
-            formatted = f"{source_id}[[{display}]]"
+        if display != source_id:
+            target = export_target or source_id
+            formatted = format_ref(target, display)
         else:
-            formatted = source_id
+            formatted = _wiki_link_value(export_target or source_id)
         formatted_cache[source_id] = formatted
         return formatted
 
@@ -2046,9 +2090,9 @@ def _group_inverse_edges_to_tags(
 ) -> dict[str, list[str]]:
     """Group inverse edges by predicate for frontmatter rendering.
 
-    Returns ``{inverse_predicate: [formatted_source, ...]}``.  Each
+    Returns ``{inverse_predicate: [formatted_source, ...]}``. Each
     formatted source is whatever ``_get_edge_data`` already produced
-    (just the id, or ``id[[display]]`` when an alias was available).
+    (``[[id]]`` or ``[[id|display]]``).
     Duplicate ``(inverse, source)`` pairs are suppressed.  When
     ``include_system`` is False, sources whose canonical id starts
     with ``.`` are dropped — this matches the writer's
@@ -2059,8 +2103,8 @@ def _group_inverse_edges_to_tags(
     for inverse, source in inverse_edges:
         if not source:
             continue
-        # Strip an optional ``[[alias]]`` suffix to get the bare id
-        # for the system-doc check.
+        # Strip any optional labeled-ref syntax to get the bare id for
+        # the system-doc check.
         bare_id, _alias = parse_ref(source)
         if not include_system and bare_id.startswith("."):
             continue
@@ -2108,14 +2152,17 @@ def _merge_inverse_edges_into_tags(
 
 
 class _ExportYamlDumper(yaml.SafeDumper):
-    """SafeDumper variant that double-quotes wikilink-format strings.
+    """SafeDumper variant that double-quotes labeled-ref strings.
 
     Strings containing ``[[`` get rendered with ``style='"'`` so YAML
     parsers don't have to guess at the meaning of the brackets and the
-    canonical edge-tag link form ``id[[alias]]`` always lands as an
+    canonical edge-tag link form ``[[id|alias]]`` always lands as an
     unambiguous double-quoted scalar.  Other strings use PyYAML's
     default scalar style.
     """
+
+
+_YAML_NO_WRAP = 1_000_000_000
 
 
 def _wikilink_str_representer(dumper: yaml.SafeDumper, data: str):
@@ -2137,11 +2184,49 @@ def _render_frontmatter_markdown(meta: dict, body: str) -> str:
         sort_keys=False,
         allow_unicode=True,
         default_flow_style=False,
+        width=_YAML_NO_WRAP,
     )
     text = f"---\n{fm}---\n\n{body}"
     if not text.endswith("\n"):
         text += "\n"
     return text
+
+
+def _wiki_link_value(target_id: str) -> str:
+    """Render a wrapped frontmatter ref.
+
+    This intentionally differs from ``format_ref(id, None)``: chain and export
+    references are always wrapped as ``[[target]]``, even without a label.
+    """
+    return f"[[{target_id}]]"
+
+
+def _rewrite_export_refs_in_tags(
+    tags: dict[str, object],
+    *,
+    export_refs: Mapping[str, str],
+    is_edge_tag: Callable[[str], bool] | None = None,
+) -> dict[str, object]:
+    """Rewrite stored edge-tag values to exported vault-native refs."""
+    if not tags or not export_refs or is_edge_tag is None:
+        return tags
+
+    rewritten: dict[str, object] = {}
+    for tag_key, tag_value in tags.items():
+        if tag_key.startswith("_") or not is_edge_tag(tag_key):
+            rewritten[tag_key] = tag_value
+            continue
+        if isinstance(tag_value, list):
+            rewritten[tag_key] = [
+                _rewrite_export_ref_value(v, export_refs)
+                if isinstance(v, str) else v
+                for v in tag_value
+            ]
+        elif isinstance(tag_value, str):
+            rewritten[tag_key] = _rewrite_export_ref_value(tag_value, export_refs)
+        else:
+            rewritten[tag_key] = tag_value
+    return rewritten
 
 
 def _render_doc_markdown(
@@ -2151,6 +2236,8 @@ def _render_doc_markdown(
     prev_version_id: Optional[str] = None,
     inverse_edges: Optional[list[tuple[str, str]]] = None,
     include_system: bool = True,
+    export_refs: Mapping[str, str] | None = None,
+    is_edge_tag: Callable[[str], bool] | None = None,
 ) -> str:
     """Render a single exported document dict as markdown with YAML frontmatter.
 
@@ -2160,8 +2247,9 @@ def _render_doc_markdown(
     each sidecar chain), then every stored tag (user + system) as
     its own top-level key.  Inverse-edge predicates (computed from
     the edges table) are folded into that same flat namespace as
-    multi-value entries — the export treats them as ordinary tags
-    whose values happen to be in canonical ``id[[alias]]`` form.
+    multi-value entries. Stored edge-tag values are rewritten from
+    canonical keep IDs to the exported vault-local path namespace so
+    the resulting wikilinks resolve in tools like Obsidian.
 
     The duplicated ``created_at``/``updated_at``/``accessed_at``
     columns are intentionally dropped because the same values
@@ -2178,11 +2266,16 @@ def _render_doc_markdown(
             meta[key] = doc[key]
 
     if prev_version_id is not None:
-        meta["_prev_version"] = prev_version_id
+        meta["_prev_version"] = _wiki_link_value(prev_version_id)
     if next_part_id is not None:
-        meta["_next_part"] = next_part_id
+        meta["_next_part"] = _wiki_link_value(next_part_id)
 
     tags = dict(doc.get("tags") or {})
+    tags = _rewrite_export_refs_in_tags(
+        tags,
+        export_refs=export_refs or {},
+        is_edge_tag=is_edge_tag,
+    )
     tags = _merge_inverse_edges_into_tags(
         tags, inverse_edges, include_system=include_system,
     )
@@ -2199,6 +2292,8 @@ def _render_part_markdown(
     *,
     prev_part_id: Optional[str] = None,
     next_part_id: Optional[str] = None,
+    export_refs: Mapping[str, str] | None = None,
+    is_edge_tag: Callable[[str], bool] | None = None,
 ) -> str:
     """Render a single analysis part as markdown with YAML frontmatter.
 
@@ -2228,10 +2323,15 @@ def _render_part_markdown(
         "part_num": part["part_num"],
     }
     if prev_part_id is not None:
-        meta["_prev_part"] = prev_part_id
+        meta["_prev_part"] = _wiki_link_value(prev_part_id)
     if next_part_id is not None:
-        meta["_next_part"] = next_part_id
+        meta["_next_part"] = _wiki_link_value(next_part_id)
     part_tags = dict(part.get("tags") or {})
+    part_tags = _rewrite_export_refs_in_tags(
+        part_tags,
+        export_refs=export_refs or {},
+        is_edge_tag=is_edge_tag,
+    )
     if part.get("created_at") and "_created" not in part_tags:
         meta["created_at"] = part["created_at"]
     for tag_key, tag_value in part_tags.items():
@@ -2250,6 +2350,8 @@ def _render_version_markdown(
     next_version_id: Optional[str] = None,
     inverse_edges: Optional[list[tuple[str, str]]] = None,
     include_system: bool = True,
+    export_refs: Mapping[str, str] | None = None,
+    is_edge_tag: Callable[[str], bool] | None = None,
 ) -> str:
     """Render an archived version as markdown with YAML frontmatter.
 
@@ -2282,11 +2384,16 @@ def _render_version_markdown(
         meta["content_hash"] = version["content_hash"]
 
     if prev_version_id is not None:
-        meta["_prev_version"] = prev_version_id
+        meta["_prev_version"] = _wiki_link_value(prev_version_id)
     if next_version_id is not None:
-        meta["_next_version"] = next_version_id
+        meta["_next_version"] = _wiki_link_value(next_version_id)
 
     version_tags = dict(version.get("tags") or {})
+    version_tags = _rewrite_export_refs_in_tags(
+        version_tags,
+        export_refs=export_refs or {},
+        is_edge_tag=is_edge_tag,
+    )
     if version.get("created_at") and "_created" not in version_tags:
         meta["created_at"] = version["created_at"]
 
@@ -2446,8 +2553,6 @@ def _write_markdown_export(
     If ``progress`` is given it is invoked as ``progress(current, total, label)``
     after each document is written.
     """
-    current_inverse, version_inverse = _get_edge_data(keeper)
-
     # Pass 1: stream the iterator and plan disambiguated paths.  We
     # need every doc's final path before we render any inverse-edge
     # link, because a backlink from one doc to another has to point at
@@ -2459,6 +2564,8 @@ def _write_markdown_export(
 
     slots: dict[str, tuple[str, str, Path]] = {}
     final_paths: dict[str, Path] = {}
+    part_nums_by_id: dict[str, list[int]] = {}
+    version_offsets_by_id: dict[str, list[int]] = {}
 
     for doc in it:
         doc_id = doc["id"]
@@ -2469,6 +2576,8 @@ def _write_markdown_export(
         version_offsets = list(
             range(1, len(doc.get("versions") or []) + 1)
         ) if include_versions else []
+        part_nums_by_id[doc_id] = [part["part_num"] for part in sorted_parts]
+        version_offsets_by_id[doc_id] = version_offsets
 
         planned = _planned_slots(canonical, sorted_parts, version_offsets)
         conflict = _find_slot_conflict(planned, slots)
@@ -2496,15 +2605,48 @@ def _write_markdown_export(
     # Drop the slot index — only ``final_paths`` is needed in pass 2.
     del slots
 
+    doc_coll = keeper._resolve_doc_collection()
+    edge_tag_cache: dict[str, bool] = {}
+
+    export_refs: dict[str, str] = {}
+    for doc_id, rel_path in final_paths.items():
+        export_refs[doc_id] = _export_ref_from_rel_path(rel_path)
+        sidecar_dir = rel_path.with_suffix("")
+        for pnum in part_nums_by_id.get(doc_id, []):
+            export_ref = _export_ref_from_rel_path(
+                sidecar_dir / f"@P{{{pnum}}}.md",
+            )
+            export_refs[f"{doc_id}@P{{{pnum}}}"] = export_ref
+            export_refs[f"{doc_id}@p{pnum}"] = export_ref
+        for offset in version_offsets_by_id.get(doc_id, []):
+            export_refs[f"{doc_id}@V{{{offset}}}"] = _export_ref_from_rel_path(
+                sidecar_dir / f"@V{{{offset}}}.md",
+            )
+
+    current_inverse, version_inverse = _get_edge_data(
+        keeper, export_refs=export_refs,
+    )
+
+    def is_edge_tag(key: str) -> bool:
+        if key.startswith("_"):
+            return False
+        cached = edge_tag_cache.get(key)
+        if cached is not None:
+            return cached
+        tagdoc = keeper._document_store.get(doc_coll, f".tag/{key}")
+        is_edge = bool(tagdoc and tagdoc.tags.get("_inverse"))
+        edge_tag_cache[key] = is_edge
+        return is_edge
+
     def write(rel_path: Path, text: str) -> None:
         dest = out_dir / rel_path
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
 
     # Pass 2: stream the iterator a second time and write each doc
-    # using its resolved final path.  Chain links use the doc's own
-    # final path; inverse edges go straight into the frontmatter as
-    # multi-value tags, no link rewriting needed.
+    # using its resolved final path. Every exported wikilink target
+    # comes from the final on-disk path stem so URI-backed note ids
+    # and disambiguated filenames stay navigable in vault tools.
     it2 = keeper.export_iter(include_system=include_system)
     next(it2)  # discard header
     count = 0
@@ -2520,40 +2662,53 @@ def _write_markdown_export(
         # Build the parts chain (sorted by part_num) and versions chain
         # (already in offset order from the iterator).  These drive both
         # the parent's chain-entry links and the sidecars' prev/next
-        # neighbours.  Each entry is (label, target_id, sidecar_rel_path).
-        parts_chain: list[tuple[int, str, Path]] = []
+        # neighbours. Each entry is
+        # (part_num, canonical_ref_id, sidecar_rel_path, export_ref).
+        parts_chain: list[tuple[int, str, Path, str]] = []
         if include_parts and doc.get("parts"):
             sorted_parts = sorted(
                 doc.get("parts") or [], key=lambda p: p["part_num"],
             )
             for part in sorted_parts:
                 pnum = part["part_num"]
+                sidecar_rel = sidecar_dir / f"@P{{{pnum}}}.md"
                 parts_chain.append(
-                    (pnum, f"@P{{{pnum}}}", sidecar_dir / f"@P{{{pnum}}}.md")
+                    (
+                        pnum,
+                        f"{doc_id}@P{{{pnum}}}",
+                        sidecar_rel,
+                        _export_ref_from_rel_path(sidecar_rel),
+                    )
                 )
         else:
             sorted_parts = []
 
-        versions_chain: list[tuple[int, str, Path]] = []
+        versions_chain: list[tuple[int, str, Path, str]] = []
         if include_versions and doc.get("versions"):
             for offset, _version in enumerate(doc.get("versions") or [], start=1):
+                sidecar_rel = sidecar_dir / f"@V{{{offset}}}.md"
                 versions_chain.append(
-                    (offset, f"@V{{{offset}}}", sidecar_dir / f"@V{{{offset}}}.md")
+                    (
+                        offset,
+                        f"{doc_id}@V{{{offset}}}",
+                        sidecar_rel,
+                        _export_ref_from_rel_path(sidecar_rel),
+                    )
                 )
 
-        # Compute the canonical chain ids — these go into the
+        # Compute the export-local chain refs — these go into the
         # ``_prev_*``/``_next_*`` frontmatter keys for navigation.
-        # Part ref: ``parent_id@P{N}``;  version ref: ``parent_id@V{N}``.
+        # Part ref: exported stem for ``parent_id@P{N}``; version ref:
+        # exported stem for ``parent_id@V{N}``.
         # The parent itself has a ``_next_part`` (into the part chain)
         # and a ``_prev_version`` (into the version chain).
         first_part_id: Optional[str] = None
         if parts_chain:
-            first_pnum = parts_chain[0][0]
-            first_part_id = f"{doc_id}@P{{{first_pnum}}}"
+            first_part_id = parts_chain[0][3]
 
         first_version_id: Optional[str] = None
         if versions_chain:
-            first_version_id = f"{doc_id}@V{{1}}"
+            first_version_id = versions_chain[0][3]
 
         doc_inverse = current_inverse(doc_id)
 
@@ -2565,6 +2720,8 @@ def _write_markdown_export(
                 prev_version_id=first_version_id,
                 inverse_edges=doc_inverse,
                 include_system=include_system,
+                export_refs=export_refs,
+                is_edge_tag=is_edge_tag,
             ),
         )
 
@@ -2576,17 +2733,15 @@ def _write_markdown_export(
                 # Previous: parent (for the first part) or the
                 # next-lower-part_num sidecar.
                 if idx == 0:
-                    prev_part_id = doc_id
+                    prev_part_id = export_refs[doc_id]
                 else:
-                    prev_pnum = parts_chain[idx - 1][0]
-                    prev_part_id = f"{doc_id}@P{{{prev_pnum}}}"
+                    prev_part_id = parts_chain[idx - 1][3]
 
                 # Next: the next-higher-part_num sidecar, or nothing
                 # at the chain tail.
                 next_part_id: Optional[str] = None
                 if idx + 1 < n:
-                    next_pnum = parts_chain[idx + 1][0]
-                    next_part_id = f"{doc_id}@P{{{next_pnum}}}"
+                    next_part_id = parts_chain[idx + 1][3]
 
                 write(
                     parts_chain[idx][2],
@@ -2594,6 +2749,8 @@ def _write_markdown_export(
                         doc_id, part,
                         prev_part_id=prev_part_id,
                         next_part_id=next_part_id,
+                        export_refs=export_refs,
+                        is_edge_tag=is_edge_tag,
                     ),
                 )
 
@@ -2610,17 +2767,15 @@ def _write_markdown_export(
                 # Next: parent (newer than @V{1}) or the lower-offset
                 # sidecar (one step toward "current").
                 if idx == 0:
-                    next_version_id = doc_id
+                    next_version_id = export_refs[doc_id]
                 else:
-                    next_offset = versions_chain[idx - 1][0]
-                    next_version_id = f"{doc_id}@V{{{next_offset}}}"
+                    next_version_id = versions_chain[idx - 1][3]
 
                 # Previous: the next-older archived version, or nothing
                 # at the chain tail (oldest version).
                 prev_version_id: Optional[str] = None
                 if idx + 1 < n:
-                    prev_offset = versions_chain[idx + 1][0]
-                    prev_version_id = f"{doc_id}@V{{{prev_offset}}}"
+                    prev_version_id = versions_chain[idx + 1][3]
 
                 write(
                     versions_chain[idx][2],
@@ -2630,6 +2785,8 @@ def _write_markdown_export(
                         next_version_id=next_version_id,
                         inverse_edges=historical_inverse,
                         include_system=include_system,
+                        export_refs=export_refs,
+                        is_edge_tag=is_edge_tag,
                     ),
                 )
 

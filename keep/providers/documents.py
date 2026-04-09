@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 import requests
 
 from ..paths import validate_path_within_home
-from ..types import file_uri_to_path
+from ..types import file_uri_to_path, format_ref
 from .base import Document, DocumentProvider, get_registry
 from . import http as _http_mod
 from .model_files import extract_3d_metadata
@@ -63,7 +63,7 @@ def _format_email_edge_ref(display_name: str, email_addr: str) -> str:
     if not addr:
         return ""
     label = " ".join((display_name or "").split()).strip()
-    return f"{addr}[[{label}]]" if label else addr
+    return format_ref(addr, label)
 
 
 def extract_html_text(html_content: str) -> str:
@@ -907,9 +907,8 @@ class FileDocumentProvider:
                 # Use a space separator so nested elements don't get glued
                 # together (e.g. "<b>Example</b> Site" → "Example Site").
                 title = " ".join(a.get_text(separator=" ").split())
-                # Reject empty, URL-equal, or unsafe titles. ``]]`` would
-                # break the ``id[[alias]]`` ref encoding downstream.
-                if title and title != href and "]]" not in title:
+                # Reject empty, URL-equal, or unsafe titles.
+                if title and title != href and "]]" not in title and "|" not in title:
                     entry["title"] = title
                 links.append(entry)
             return links or None

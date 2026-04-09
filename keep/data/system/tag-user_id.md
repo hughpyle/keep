@@ -19,4 +19,4 @@ edge. If a conversation note has `user_id: contact:telegram:42`, then
 - **Edge-creating**: The `_inverse: user_id_of` declaration makes this an edge tag.
 - **Machine-populated**: Typically set automatically by integrations such as Hermes.
 - **Stable target**: Values should be canonical identifiers, not display names.
-- **Label-friendly**: Values may use labeled-ref syntax such as `contact:telegram:42[[Alice]]`.
+- **Label-friendly**: Values may use labeled-ref syntax such as `[[contact:telegram:42|Alice]]`.

@@ -275,6 +275,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 )
         chroma_coll = self._resolve_chroma_collection()
         doc_coll = self._resolve_doc_collection()
+        if not self._startup_maintenance_deferred:
+            self._run_labeled_ref_format_migration(doc_coll)
 
         if not self._startup_maintenance_deferred:
             self._enqueue_migrated_part_reindex()
@@ -413,6 +415,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         except Exception as e:
             logger.debug("Failed to persist legacy_overview_parts_cleaned: %s", e)
 
+    def _mark_labeled_ref_format_verified(self) -> None:
+        """Persist that labeled refs are canonicalized in this store."""
+        if self._config.labeled_ref_format_verified:
+            return
+        self._config.labeled_ref_format_verified = True
+        try:
+            save_config(self._config)
+        except Exception as e:
+            logger.debug("Failed to persist labeled_ref_format_verified: %s", e)
+
     def _run_legacy_overview_cleanup(self, chroma_coll: str, doc_coll: str) -> int:
         """Run @P{0} overview cleanup at most once per store."""
         if self._config.legacy_overview_parts_cleaned:
@@ -420,6 +432,242 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         deleted = self._cleanup_legacy_overview_parts(chroma_coll, doc_coll)
         self._mark_legacy_overview_parts_cleaned()
         return deleted
+
+    def _run_labeled_ref_format_migration(self, doc_coll: str) -> dict[str, int]:
+        """Canonicalize stored labeled refs once per store."""
+        if self._config.labeled_ref_format_verified:
+            return {"documents": 0, "versions": 0, "parts": 0}
+        if not self._document_store.list_ids(doc_coll, limit=1):
+            self._mark_labeled_ref_format_verified()
+            return {"documents": 0, "versions": 0, "parts": 0}
+
+        try:
+            logger.info(
+                "Canonicalizing labeled refs to MediaWiki-style [[target|label]]"
+            )
+            stats = self._migrate_labeled_ref_format(doc_coll)
+            self._mark_labeled_ref_format_verified()
+            logger.info(
+                "Labeled-ref canonicalization complete (%d docs, %d versions, %d parts)",
+                stats["documents"], stats["versions"], stats["parts"],
+            )
+            return stats
+        except Exception as e:
+            logger.warning(
+                "Labeled-ref canonicalization failed; exports may contain mixed ref "
+                "syntax until it succeeds: %s",
+                e,
+            )
+            return {"documents": 0, "versions": 0, "parts": 0}
+
+    def _merge_auto_vivified_target_names(
+        self,
+        doc_coll: str,
+        target_name_updates: dict[str, list[str]],
+    ) -> None:
+        """Merge observed labels into auto-vivified target notes only."""
+        if not target_name_updates:
+            return
+        chroma_coll = self._resolve_chroma_collection()
+        targets = self._document_store.get_many(doc_coll, list(target_name_updates))
+        for target_id, incoming_names in target_name_updates.items():
+            target_doc = targets.get(target_id)
+            if target_doc is None:
+                continue
+            if target_doc.tags.get("_source") != "auto-vivify":
+                continue
+            merged_name_values = tag_values(target_doc.tags, "name")
+            changed = False
+            for name in incoming_names:
+                if name not in merged_name_values:
+                    merged_name_values.append(name)
+                    changed = True
+            if not changed:
+                continue
+            updated_tags = dict(target_doc.tags)
+            set_tag_values(updated_tags, "name", merged_name_values)
+            self._document_store.update_tags(doc_coll, target_id, updated_tags)
+            self._store.update_tags(
+                chroma_coll, target_id, casefold_tags_for_index(updated_tags)
+            )
+
+    def _restore_current_edges_without_backfill(
+        self,
+        id: str,
+        merged_tags: dict[str, str],
+        doc_coll: str,
+    ) -> None:
+        """Upsert current edge rows and target labels without delete/backfill churn."""
+        if id.startswith("."):
+            return
+
+        edges_to_add: list[tuple[str, str, str, str, str]] = []
+        target_name_updates: dict[str, list[str]] = {}
+
+        def _queue_target_name(target_id: str, label: str | None) -> None:
+            label = (label or "").strip()
+            if not label:
+                return
+            names = target_name_updates.setdefault(target_id, [])
+            if label not in names:
+                names.append(label)
+
+        for key in merged_tags:
+            if key.startswith(SYSTEM_TAG_PREFIX):
+                continue
+            if key not in self._tagdoc_cache:
+                parent = self._document_store.get(doc_coll, f".tag/{key}")
+                self._tagdoc_cache[key] = parent.tags if parent else None
+            td_tags = self._tagdoc_cache[key]
+            if td_tags is None or not td_tags.get("_inverse"):
+                continue
+            inverse = td_tags.get("_inverse")
+            if isinstance(inverse, list):
+                inverse = inverse[0]
+            if not inverse:
+                continue
+
+            for current_value in tag_values(merged_tags, key):
+                if not current_value:
+                    continue
+                raw_target_id, target_label = parse_ref(current_value)
+                try:
+                    target_id = normalize_id(raw_target_id)
+                except ValueError:
+                    logger.debug(
+                        "Skipping invalid edge target for tag %r during migration: %r",
+                        key, current_value,
+                    )
+                    continue
+                if target_id.startswith("."):
+                    continue
+                _queue_target_name(target_id, target_label)
+
+                reference_created = (
+                    merged_tags.get("_created")
+                    or merged_tags.get("_updated")
+                    or utc_now()
+                )
+                now = utc_now()
+                target_tags = {
+                    "_created": reference_created,
+                    "_updated": now,
+                    "_source": "auto-vivify",
+                }
+                if target_id in target_name_updates:
+                    set_tag_values(target_tags, "name", target_name_updates[target_id])
+                inserted = self._document_store.insert_if_absent(
+                    doc_coll, target_id,
+                    summary="",
+                    tags=target_tags,
+                    created_at=reference_created,
+                )
+                if inserted:
+                    self._pending_queue.enqueue(
+                        target_id, doc_coll, "",
+                        task_type="reindex",
+                        metadata={"tags": target_tags},
+                    )
+
+                created = (
+                    merged_tags.get("_created")
+                    or merged_tags.get("_updated")
+                    or utc_now()
+                )
+                edges_to_add.append((id, key, target_id, inverse, created))
+
+        self._merge_auto_vivified_target_names(doc_coll, target_name_updates)
+        if edges_to_add:
+            self._document_store.upsert_edges_batch(doc_coll, edges_to_add)
+
+    def _rewrite_index_tags_without_timestamp(
+        self,
+        chroma_coll: str,
+        id: str,
+        tags: dict[str, Any],
+    ) -> bool:
+        """Rewrite vector-store metadata tags without mutating timestamps."""
+        rewrite_tags = getattr(self._store, "rewrite_tags", None)
+        if callable(rewrite_tags):
+            return bool(rewrite_tags(chroma_coll, id, tags))
+        return bool(self._store.update_tags(chroma_coll, id, tags))
+
+    def _migrate_labeled_ref_format(self, doc_coll: str) -> dict[str, int]:
+        """Rewrite stored edge-tag refs into canonical syntax in-place."""
+        changed_docs = 0
+        changed_versions = 0
+        changed_parts = 0
+        touched_version_sources: set[str] = set()
+        chroma_coll = self._resolve_chroma_collection()
+
+        for doc_id in self._document_store.list_ids(doc_coll):
+            record = self._document_store.get(doc_coll, doc_id)
+            if record is None:
+                continue
+
+            current_tags = dict(record.tags)
+            migrated_tags = dict(record.tags)
+            self._normalize_edge_tag_values(migrated_tags, doc_coll)
+            if migrated_tags != current_tags:
+                self._document_store.patch_head_tags(doc_coll, doc_id, migrated_tags)
+                self._rewrite_index_tags_without_timestamp(
+                    chroma_coll, doc_id, casefold_tags_for_index(migrated_tags),
+                )
+                self._restore_current_edges_without_backfill(
+                    doc_id, migrated_tags, doc_coll,
+                )
+                changed_docs += 1
+
+            for version in self._document_store.list_versions(doc_coll, doc_id, limit=10000):
+                version_tags = dict(version.tags)
+                migrated_version_tags = dict(version.tags)
+                self._normalize_edge_tag_values(migrated_version_tags, doc_coll)
+                if migrated_version_tags != version_tags:
+                    self._document_store.replace_version_content(
+                        doc_coll,
+                        doc_id,
+                        version.version,
+                        version.summary,
+                        migrated_version_tags,
+                        version.content_hash,
+                    )
+                    indexed_version_tags = dict(migrated_version_tags)
+                    indexed_version_tags["_version"] = str(version.version)
+                    indexed_version_tags["_base_id"] = doc_id
+                    self._rewrite_index_tags_without_timestamp(
+                        chroma_coll,
+                        f"{doc_id}@v{version.version}",
+                        casefold_tags_for_index(indexed_version_tags),
+                    )
+                    touched_version_sources.add(doc_id)
+                    changed_versions += 1
+
+            for part in self._document_store.list_parts(doc_coll, doc_id):
+                part_tags = dict(part.tags)
+                migrated_part_tags = dict(part.tags)
+                self._normalize_edge_tag_values(migrated_part_tags, doc_coll)
+                if migrated_part_tags != part_tags:
+                    self._document_store.update_part_tags(
+                        doc_coll, doc_id, part.part_num, migrated_part_tags,
+                    )
+                    indexed_part_tags = dict(migrated_part_tags)
+                    indexed_part_tags["_part_num"] = str(part.part_num)
+                    indexed_part_tags["_base_id"] = doc_id
+                    self._rewrite_index_tags_without_timestamp(
+                        chroma_coll,
+                        f"{doc_id}@p{part.part_num}",
+                        casefold_tags_for_index(indexed_part_tags),
+                    )
+                    changed_parts += 1
+
+        for source_id in touched_version_sources:
+            self._document_store.rebuild_version_edges_for_source(doc_coll, source_id)
+
+        return {
+            "documents": changed_docs,
+            "versions": changed_versions,
+            "parts": changed_parts,
+        }
 
     # Provider+model combinations known to be symmetric (task param is a no-op).
     # Key: provider name, Value: set of model prefixes that are symmetric,
@@ -686,6 +934,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
             chroma_coll = self._resolve_chroma_collection()
             doc_coll = self._resolve_doc_collection()
+            self._run_labeled_ref_format_migration(doc_coll)
             self._enqueue_migrated_part_reindex()
             self._run_tag_marker_startup_check(
                 chroma_coll, doc_coll, _doc_store=startup_doc_store,
@@ -1185,7 +1434,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         **First yield** — header dict::
 
-            {"format": "keep-export", "version": 2, "exported_at": "...",
+            {"format": "keep-export", "version": 3, "exported_at": "...",
              "store_info": {"document_count": N, "version_count": N,
                             "part_count": N, "collection": "..."}}
 
@@ -1212,7 +1461,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # as we stream (header store_info is best-effort for streaming)
         yield {
             "format": "keep-export",
-            "version": 2,
+            "version": 3,
             "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "store_info": {
                 "document_count": len(doc_ids),
@@ -1279,7 +1528,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         ``export_iter()`` directly to stream documents.
 
         Returns:
-            Dict in keep-export format (version 2) with a ``documents`` list.
+            Dict in keep-export format (version 3) with a ``documents`` list.
         """
         it = self.export_iter(include_system=include_system)
         header = next(it)
@@ -1301,14 +1550,39 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         """
         if data.get("format") != "keep-export":
             raise ValueError("Invalid export format (expected 'keep-export')")
-        if data.get("version", 0) > 2:
+        if data.get("version", 0) > 3:
             raise ValueError(
                 f"Export format version {data['version']} is not supported "
-                f"(this version supports up to 2)"
+                f"(this version supports up to 3)"
             )
 
         doc_coll = self._resolve_doc_collection()
         documents = data.get("documents", [])
+        incoming_edge_keys: set[str] = set()
+        for doc in documents:
+            doc_id = str(doc.get("id", ""))
+            if not doc_id.startswith(".tag/"):
+                continue
+            key = doc_id[5:]
+            if not key or "/" in key:
+                continue
+            raw_tags = doc.get("tags", {})
+            if isinstance(raw_tags, dict) and raw_tags.get("_inverse"):
+                incoming_edge_keys.add(key)
+
+        def _normalize_import_edge_tags(tags: dict[str, Any]) -> None:
+            self._normalize_edge_tag_values(tags, doc_coll)
+            for key in incoming_edge_keys:
+                if key not in tags:
+                    continue
+                value = tags[key]
+                if isinstance(value, list):
+                    tags[key] = [
+                        normalize_edge_value(v) if isinstance(v, str) else v
+                        for v in value
+                    ]
+                elif isinstance(value, str):
+                    tags[key] = normalize_edge_value(value)
 
         if mode == "replace":
             self._document_store.delete_collection_all(doc_coll)
@@ -1331,6 +1605,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 source=f"Import document tags ({doc_id})",
                 check_constraints=False,
             )
+            _normalize_import_edge_tags(doc["tags"])
             for ver in doc.get("versions", []):
                 ver_num = ver.get("version", "?")
                 ver["tags"] = self._validate_tag_map(
@@ -1338,6 +1613,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     source=f"Import version tags ({doc_id}@v{ver_num})",
                     check_constraints=False,
                 )
+                _normalize_import_edge_tags(ver["tags"])
             for part in doc.get("parts", []):
                 part_num = part.get("part_num", "?")
                 part["tags"] = self._validate_tag_map(
@@ -1345,6 +1621,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     source=f"Import part tags ({doc_id}@p{part_num})",
                     check_constraints=False,
                 )
+                _normalize_import_edge_tags(part["tags"])
                 part["summary"] = str(part.get("content") or part.get("summary") or "")
 
         # Filter to importable documents
@@ -1707,17 +1984,18 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
     def _normalize_edge_tag_values(
         self, merged_tags: dict[str, Any], doc_coll: str,
     ) -> None:
-        """Rewrite markdown-style link values on edge tags into wikilink form.
+        """Rewrite edge-tag values into canonical labeled-ref form.
 
         Mutates ``merged_tags`` in place. For each non-system key whose
         ``.tag/{key}`` tagdoc declares an ``_inverse`` (i.e. it's an edge
-        tag), every value matching ``[Title](URL)`` is rewritten to
-        ``URL[[Title]]``. Non-edge tags are left alone — markdown-link
-        text in a content tag is none of our business.
+        tag), values are normalized into canonical MediaWiki-style
+        ``[[target|label]]`` refs. Legacy ``target[[label]]`` refs and
+        markdown links ``[Title](URL)`` are both accepted on input.
+        Non-edge tags are left alone.
 
         This is the single normalization point for both ``put`` and
         ``set_tags`` mutation paths, so the canonical storage form stays
-        ``id[[alias]]`` regardless of which writer produced the value.
+        stable regardless of which writer produced the value.
         """
         if not merged_tags:
             return
@@ -1877,29 +2155,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 edges_to_add.append((id, key, target_id, inverse, created))
                 backfill_checks.append((key, inverse))
 
-        if target_name_updates:
-            chroma_coll = self._resolve_chroma_collection()
-            targets = self._document_store.get_many(doc_coll, list(target_name_updates))
-            for target_id, incoming_names in target_name_updates.items():
-                target_doc = targets.get(target_id)
-                if target_doc is None:
-                    continue
-                if target_doc.tags.get("_source") != "auto-vivify":
-                    continue
-                merged_name_values = tag_values(target_doc.tags, "name")
-                changed = False
-                for name in incoming_names:
-                    if name not in merged_name_values:
-                        merged_name_values.append(name)
-                        changed = True
-                if not changed:
-                    continue
-                updated_tags = dict(target_doc.tags)
-                set_tag_values(updated_tags, "name", merged_name_values)
-                self._document_store.update_tags(doc_coll, target_id, updated_tags)
-                self._store.update_tags(
-                    chroma_coll, target_id, casefold_tags_for_index(updated_tags)
-                )
+        self._merge_auto_vivified_target_names(doc_coll, target_name_updates)
 
         # Execute batched edge mutations
         if edges_to_delete:
@@ -2184,8 +2440,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         ):
             merged_tags["_analyzed_version"] = _prev_analyzed_version
 
-        # Normalize markdown-style edge tag values to canonical id[[alias]]
-        # form before change detection and storage. Done here so a single
+        # Normalize edge-tag values to canonical labeled-ref form before
+        # change detection and storage. Done here so a single
         # call covers both cloud and local code paths below, and so the
         # change-detection diff sees the canonical form.
         self._normalize_edge_tag_values(merged_tags, doc_coll)

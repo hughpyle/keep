@@ -32,8 +32,8 @@ Use `cites` only when the relationship is a *formal citation*: the edge exists b
 ```bash
 # A research-paper enricher sets cites with display aliases:
 keep tag 'https://arxiv.org/abs/2403.04782' \
-  -t 'cites=https://arxiv.org/abs/2201.08236[[Temporal KGs Survey 2022]]' \
-  -t 'cites=https://doi.org/10.1145/3460231.3474243[[TKG Reasoning (SIGIR 2021)]]'
+  -t 'cites=[[https://arxiv.org/abs/2201.08236|Temporal KGs Survey 2022]]' \
+  -t 'cites=[[https://doi.org/10.1145/3460231.3474243|TKG Reasoning (SIGIR 2021)]]'
 
 # See who cites a paper
 keep get https://arxiv.org/abs/2201.08236
@@ -41,4 +41,4 @@ keep get https://arxiv.org/abs/2201.08236
 # →   - https://arxiv.org/abs/2403.04782  [2024-03-11] Temporal Knowledge Graph: …
 ```
 
-Aliases on the tag value (`target[[Label]]`) are picked up by the edge processor's labeled-edge enrichment and seed the target note's `name` tag, so auto-vivified citation targets render with their paper title instead of a bare URL.
+Aliases on the tag value (`[[target|Label]]`) are picked up by the edge processor's labeled-edge enrichment and seed the target note's `name` tag, so auto-vivified citation targets render with their paper title instead of a bare URL.

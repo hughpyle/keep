@@ -12,6 +12,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from ..types import file_uri_to_path
+from ..types import format_ref
 from . import action
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ class ResolveStubs:
                 for r in refs:
                     rid, alias = parse_ref(r)
                     if rid == stub_id:
-                        new_val = f"{item_id}[[{alias}]]" if alias else item_id
+                        new_val = format_ref(item_id, alias)
                         new_refs.append(new_val)
                         updated = True
                     else:

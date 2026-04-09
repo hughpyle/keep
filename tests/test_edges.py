@@ -181,7 +181,7 @@ class TestEdgeIntegration:
             id="https://arxiv.org/abs/2403.04782",
             summary="Temporal KG Survey",
             tags={
-                "cites": "https://arxiv.org/abs/2201.08236[[TKG Survey 2022]]",
+                "cites": "[[https://arxiv.org/abs/2201.08236|TKG Survey 2022]]",
             },
         )
 
@@ -253,7 +253,7 @@ class TestEdgeIntegration:
             content="Message",
             id="conv-labeled",
             summary="Greeting",
-            tags={"speaker": "contact:telegram:42[[Alice]]"},
+            tags={"speaker": "[[contact:telegram:42|Alice]]"},
         )
 
         item = kp.get("contact:telegram:42")
@@ -274,7 +274,7 @@ class TestEdgeIntegration:
             content="Second message",
             id="conv-second",
             summary="Follow-up",
-            tags={"speaker": "contact:telegram:42[[Alice]]"},
+            tags={"speaker": "[[contact:telegram:42|Alice]]"},
         )
 
         item = kp.get("contact:telegram:42")
@@ -290,8 +290,8 @@ class TestEdgeIntegration:
             id="conv-multi-label",
             summary="Greeting",
             tags={
-                "speaker": "contact:telegram:42[[Alice]]",
-                "author": "contact:telegram:42[[Ali]]",
+                "speaker": "[[contact:telegram:42|Alice]]",
+                "author": "[[contact:telegram:42|Ali]]",
             },
         )
 
@@ -300,8 +300,8 @@ class TestEdgeIntegration:
         names = item.tags.get("name")
         assert sorted(names) == ["Ali", "Alice"]
 
-    def test_markdown_link_edge_value_is_normalized_to_wikilink(self, kp):
-        """`[Title](URL)` on an edge tag stores as `URL[[Title]]` and routes correctly.
+    def test_markdown_link_edge_value_is_normalized_to_canonical_ref(self, kp):
+        """`[Title](URL)` on an edge tag stores as `[[URL|Title]]` and routes correctly.
 
         Mirrors the bug observed in the wild where an agent wrote raw
         markdown link syntax into an edge tag and the literal string
@@ -316,15 +316,15 @@ class TestEdgeIntegration:
             tags={"cites": "[Example Paper](https://example.com/paper)"},
         )
 
-        # The stored tag value should be the canonical wikilink form,
+        # The stored tag value should be the canonical labeled-ref form,
         # not the literal markdown blob.
         stored = kp.get("paper-A")
         assert stored is not None
         cites_values = stored.tags.get("cites")
         if isinstance(cites_values, list):
-            assert "https://example.com/paper[[Example Paper]]" in cites_values
+            assert "[[https://example.com/paper|Example Paper]]" in cites_values
         else:
-            assert cites_values == "https://example.com/paper[[Example Paper]]"
+            assert cites_values == "[[https://example.com/paper|Example Paper]]"
 
         # The edge target is the URL (not the markdown blob).
         target = kp.get("https://example.com/paper")
@@ -368,7 +368,7 @@ class TestEdgeIntegration:
             content="Message",
             id="conv-curated",
             summary="Greeting",
-            tags={"speaker": "contact:telegram:42[[Alice]]"},
+            tags={"speaker": "[[contact:telegram:42|Alice]]"},
         )
 
         item = kp.get("contact:telegram:42")

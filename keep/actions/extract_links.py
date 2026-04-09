@@ -7,7 +7,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from ..types import file_uri_to_path
+from ..types import file_uri_to_path, format_ref
 from . import action
 from ._item_scope import resolve_item_text
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # [[target]] or [[target|display text]]
-_WIKI_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+_WIKI_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]*))?\]\]")
 
 # [display](target) or [display](target "title") — but not images
 _MD_LINK_RE = re.compile(r'(?<!!)\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)')
@@ -49,9 +49,13 @@ def _parse_links(content: str, *, content_type: str = "text/markdown") -> list[d
     if is_markdown:
         for m in _WIKI_LINK_RE.finditer(content):
             target = m.group(1).strip()
+            title = (m.group(2) or "").strip()
             if target and target not in seen:
                 seen.add(target)
-                links.append({"target": target, "style": "wiki"})
+                link = {"target": target, "style": "wiki"}
+                if title:
+                    link["title"] = title
+                links.append(link)
 
         for m in _MD_IMAGE_RE.finditer(content):
             target = m.group(2).strip()
@@ -288,7 +292,7 @@ class ExtractLinks:
                 # upgrade-to-named-entity that a title would trigger.
                 if title and not create_targets:
                     title = None
-                ref_value = f"{target}[[{title}]]" if title else target
+                ref_value = format_ref(target, title)
                 resolved_targets.append(ref_value)
                 if create_targets and not title:
                     # Untitled URL — keep the legacy put_item so the stub
@@ -314,7 +318,7 @@ class ExtractLinks:
                     ref_value = resolved
                     if style == "wiki":
                         bare = target.removesuffix(".md")
-                        ref_value = f"{resolved}[[{bare}]]"
+                        ref_value = format_ref(resolved, link.get("title") or bare)
                     resolved_targets.append(ref_value)
                 elif create_targets:
                     # Auto-vivify: create from relative path if source is file://
@@ -323,7 +327,7 @@ class ExtractLinks:
                         bare = target.removesuffix(".md")
                         ref_value = vivified
                         if style == "wiki":
-                            ref_value = f"{vivified}[[{bare}]]"
+                            ref_value = format_ref(vivified, link.get("title") or bare)
                         resolved_targets.append(ref_value)
                         mutations.append({
                             "op": "put_item",

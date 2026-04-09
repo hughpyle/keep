@@ -160,7 +160,7 @@ class TestSyncTurn:
             p._sync_thread.join(timeout=5.0)
         item = p._keeper.get(p._session_item_id)
         assert item is not None
-        assert item.tags["user_id"] == "contact:discord:42[[Alice]]"
+        assert item.tags["user_id"] == "[[contact:discord:42|Alice]]"
         assert item.tags["user_name"] == "Alice"
         p.shutdown()
 

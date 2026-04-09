@@ -171,11 +171,24 @@ class TestExtractLinksAction:
         result = ExtractLinks().run({"item_id": "file:///vault/a.md"}, ctx)
 
         assert not result.get("skipped")
-        assert "file:///vault/b.md[[b]]" in result["resolved"]
+        assert "[[file:///vault/b.md|b]]" in result["resolved"]
         # Should have set_tags mutation
         tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
         assert len(tag_mut) == 1
-        assert "file:///vault/b.md[[b]]" in tag_mut[0]["tags"]["references"]
+        assert "[[file:///vault/b.md|b]]" in tag_mut[0]["tags"]["references"]
+
+    def test_wiki_link_with_display_preserves_display(self):
+        source = _make_item("file:///vault/a.md", "See [[b|Bee note]] for more.")
+        target = _make_item("file:///vault/b.md", "Target content")
+        ctx = _make_context(
+            {"file:///vault/a.md": source, "file:///vault/b.md": target},
+            item_id="file:///vault/a.md",
+        )
+        ctx.item_content = source.content
+
+        result = ExtractLinks().run({"item_id": "file:///vault/a.md"}, ctx)
+
+        assert "[[file:///vault/b.md|Bee note]]" in result["resolved"]
 
     def test_external_url(self):
         source = _make_item("file:///vault/a.md", "See [docs](https://example.com).")
@@ -227,7 +240,7 @@ class TestExtractLinksAction:
 
         tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
         refs = tag_mut[0]["tags"]["references"]
-        assert "https://example.com[[Example Site]]" in refs
+        assert "[[https://example.com|Example Site]]" in refs
         # Titled URL → no put_item; edge processor will auto-vivify with name.
         put_muts = [
             m for m in result["mutations"]
@@ -314,7 +327,7 @@ class TestExtractLinksAction:
         refs = tag_mut[0]["tags"]["references"]
         # Alias is stripped — bare URL only.
         assert "https://example.com" in refs
-        assert "https://example.com[[Example Site]]" not in refs
+        assert "[[https://example.com|Example Site]]" not in refs
         # No put_item either.
         put_muts = [m for m in result["mutations"] if m["op"] == "put_item"]
         assert put_muts == []
@@ -352,7 +365,7 @@ class TestExtractLinksAction:
         tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
         refs = tag_mut[0]["tags"]["references"]
         assert "existing-ref" in refs
-        assert "new-link[[new-link]]" in refs
+        assert "[[new-link|new-link]]" in refs
 
 
 # ---------------------------------------------------------------------------
@@ -365,14 +378,23 @@ class TestParseRef:
     def test_plain_id(self):
         assert parse_ref("file:///vault/Foo.md") == ("file:///vault/Foo.md", None)
 
-    def test_with_alias(self):
+    def test_with_alias_legacy(self):
         assert parse_ref("file:///vault/Foo.md[[Foo]]") == ("file:///vault/Foo.md", "Foo")
+
+    def test_with_alias_canonical(self):
+        assert parse_ref("[[file:///vault/Foo.md|Foo]]") == ("file:///vault/Foo.md", "Foo")
 
     def test_url_no_alias(self):
         assert parse_ref("https://example.com") == ("https://example.com", None)
 
     def test_empty_alias(self):
         assert parse_ref("id[[]]") == ("id", "")
+
+    def test_empty_alias_canonical(self):
+        assert parse_ref("[[id|]]") == ("id", "")
+
+    def test_canonical_unlabeled_ref(self):
+        assert parse_ref("[[id]]") == ("id", None)
 
     def test_no_closing_brackets(self):
         assert parse_ref("id[[Foo") == ("id[[Foo", None)
@@ -387,42 +409,48 @@ class TestParseRef:
 # ---------------------------------------------------------------------------
 
 class TestNormalizeEdgeValue:
-    """Tests for markdown-link → wikilink edge value normalization."""
+    """Tests for canonical labeled-ref normalization on edge values."""
 
     def test_https_link(self):
         assert (
             normalize_edge_value("[Example](https://example.com)")
-            == "https://example.com[[Example]]"
+            == "[[https://example.com|Example]]"
         )
 
     def test_http_link(self):
         assert (
             normalize_edge_value("[Example](http://example.com)")
-            == "http://example.com[[Example]]"
+            == "[[http://example.com|Example]]"
         )
 
     def test_file_link(self):
         assert (
             normalize_edge_value("[Doc](file:///vault/notes/Doc.md)")
-            == "file:///vault/notes/Doc.md[[Doc]]"
+            == "[[file:///vault/notes/Doc.md|Doc]]"
         )
 
     def test_title_with_spaces(self):
         assert (
             normalize_edge_value("[A Long Title](https://example.com/page)")
-            == "https://example.com/page[[A Long Title]]"
+            == "[[https://example.com/page|A Long Title]]"
         )
 
     def test_title_strips_whitespace(self):
         assert (
             normalize_edge_value("  [Example](https://example.com)  ")
-            == "https://example.com[[Example]]"
+            == "[[https://example.com|Example]]"
         )
 
-    def test_already_canonical_unchanged(self):
+    def test_already_canonical_legacy_is_rewritten(self):
         assert (
             normalize_edge_value("https://example.com[[Example]]")
-            == "https://example.com[[Example]]"
+            == "[[https://example.com|Example]]"
+        )
+
+    def test_already_canonical_new_unchanged(self):
+        assert (
+            normalize_edge_value("[[https://example.com|Example]]")
+            == "[[https://example.com|Example]]"
         )
 
     def test_bare_url_unchanged(self):
@@ -449,7 +477,7 @@ class TestNormalizeEdgeValue:
         )
 
     def test_unsafe_close_bracket_pair_unchanged(self):
-        # Title containing ]] would break id[[alias]] re-parsing.
+        # Title containing ]] would break labeled-ref re-parsing.
         # Note: ]] in title also breaks the markdown match itself, so this
         # path is doubly defended.
         assert (
@@ -568,7 +596,7 @@ class TestExtractHtmlLinks:
         assert links == [{"url": "https://example.com"}]
 
     def test_unsafe_title_rejected(self, tmp_path):
-        # Titles containing ]] would break the id[[alias]] ref encoding.
+        # Titles containing ]] would break the labeled-ref encoding.
         path = self._write(
             tmp_path,
             '<html><body><a href="https://example.com">bad]]title</a></body></html>',

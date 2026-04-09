@@ -130,8 +130,8 @@ class TestExtractEmail:
 
         content, tags, _ = provider._extract_email(email_file)
 
-        assert tags['from'] == 'alice@example.com[[Alice Smith]]'
-        assert tags['to'] == 'bob@example.com[[Bob Jones]]'
+        assert tags['from'] == '[[alice@example.com|Alice Smith]]'
+        assert tags['to'] == '[[bob@example.com|Bob Jones]]'
 
     def test_addresses_lowercased(self, tmp_path, provider):
         email_file = tmp_path / "test.eml"

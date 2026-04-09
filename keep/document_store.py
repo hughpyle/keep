@@ -23,7 +23,14 @@ from typing import Any, Optional
 from .const import SQLITE_BUSY_TIMEOUT_MS
 from .recovery import is_malformed_db_error
 from .tracing import get_tracer
-from .types import normalize_tag_map, repair_surrogate_text, tag_values, utc_now
+from .types import (
+    normalize_id,
+    normalize_tag_map,
+    parse_ref,
+    repair_surrogate_text,
+    tag_values,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1234,6 +1241,19 @@ class DocumentStore:
 
         return mapping
 
+    def _version_edge_target_id(self, value: Any) -> str | None:
+        """Resolve one version-edge tag value to its canonical target ID."""
+        raw = str(value).strip()
+        if not raw:
+            return None
+        target_id = parse_ref(raw)[0]
+        if not target_id or target_id.startswith("."):
+            return None
+        try:
+            return normalize_id(target_id)
+        except ValueError:
+            return None
+
     def _materialize_version_edges_for_version_unlocked(
         self,
         *,
@@ -1262,8 +1282,8 @@ class DocumentStore:
             if not inverse:
                 continue
             for value in tag_values(tags, key):
-                target_id = str(value).strip()
-                if not target_id or target_id.startswith("."):
+                target_id = self._version_edge_target_id(value)
+                if not target_id:
                     continue
                 self._execute(
                     """
@@ -1294,6 +1314,9 @@ class DocumentStore:
             """,
             (collection, source_id),
         ).fetchall()
+        # This used to be a pure-SQL INSERT...SELECT path, but version-edge
+        # targets can now be labeled refs. We have to parse_ref() each value in
+        # Python before storing the canonical target_id.
         for row in rows:
             tags = json.loads(row["tags_json"]) if row["tags_json"] else {}
             for key in tags:
@@ -1303,8 +1326,8 @@ class DocumentStore:
                 if not inverse:
                     continue
                 for value in tag_values(tags, key):
-                    target_id = str(value).strip()
-                    if not target_id or target_id.startswith("."):
+                    target_id = self._version_edge_target_id(value)
+                    if not target_id:
                         continue
                     self._execute(
                         """
@@ -3779,6 +3802,17 @@ class DocumentStore:
         self._conn.commit()
         return cur.rowcount
 
+    def rebuild_version_edges_for_source(self, collection: str, source_id: str) -> None:
+        """Rebuild all materialized archived-version edges for one source."""
+        with self._lock:
+            self._execute("BEGIN IMMEDIATE")
+            try:
+                self._rebuild_version_edges_for_source_unlocked(collection, source_id)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def delete_version_edges_for_target(self, collection: str, target_id: str) -> int:
         """Delete all materialized version edges pointing at *target_id*."""
         cur = self._execute(
@@ -3819,36 +3853,40 @@ class DocumentStore:
                     """,
                     (collection, predicate),
                 )
-                cur = self._execute(
+                rows = self._execute(
                     """
-                    INSERT OR REPLACE INTO version_edges
-                        (collection, source_id, version, predicate, target_id, inverse, created)
-                    SELECT
-                        v.collection,
-                        v.id,
-                        v.version,
-                        ?,
-                        CAST(vv.value AS TEXT),
-                        ?,
-                        v.created_at
-                    FROM document_versions v
-                    JOIN json_each(v.tags_json) j
-                      ON j.key = ?
-                    JOIN json_each(
-                        CASE
-                            WHEN j.type = 'array' THEN j.value
-                            ELSE json_array(j.value)
-                        END
-                    ) vv
-                    WHERE v.collection = ?
-                      AND vv.value IS NOT NULL
-                      AND TRIM(CAST(vv.value AS TEXT)) != ''
-                      AND SUBSTR(CAST(vv.value AS TEXT), 1, 1) != '.'
+                    SELECT id, version, tags_json, created_at
+                    FROM document_versions
+                    WHERE collection = ?
                     """,
-                    (predicate, inverse, predicate, collection),
-                )
+                    (collection,),
+                ).fetchall()
+                inserted = 0
+                for row in rows:
+                    tags = json.loads(row["tags_json"]) if row["tags_json"] else {}
+                    for value in tag_values(tags, predicate):
+                        target_id = self._version_edge_target_id(value)
+                        if not target_id:
+                            continue
+                        self._execute(
+                            """
+                            INSERT OR REPLACE INTO version_edges
+                                (collection, source_id, version, predicate, target_id, inverse, created)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                collection,
+                                row["id"],
+                                row["version"],
+                                predicate,
+                                target_id,
+                                inverse,
+                                row["created_at"],
+                            ),
+                        )
+                        inserted += 1
                 self._conn.commit()
-                return cur.rowcount
+                return inserted
             except Exception:
                 self._conn.rollback()
                 raise

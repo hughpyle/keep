@@ -40,6 +40,7 @@ from keep.hermes.const import (
     TOOL_ERROR_SETUP_HINT,
     TOOL_ERROR_SETUP_REQUIRED,
 )
+from keep.types import format_ref
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def _contact_ref(*, platform: str, user_id: str, user_name: str = "") -> str:
     """Build a canonical contact ref, optionally labeled with a display name."""
     target_id = f"contact:{platform}:{user_id}"
     label = (user_name or "").strip()
-    return f"{target_id}[[{label}]]" if label else target_id
+    return format_ref(target_id, label)
 
 
 # ---------------------------------------------------------------------------

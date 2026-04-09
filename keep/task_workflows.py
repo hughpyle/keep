@@ -363,8 +363,8 @@ def _apply_mutations(
                 merged = dict(existing_tags)
                 merged.update(tags)
 
-                # Normalize markdown-style edge tag values into canonical
-                # id[[alias]] form before storage. Mirrors the put path.
+                # Normalize edge-tag values into canonical labeled-ref
+                # form before storage. Mirrors the put path.
                 keeper._normalize_edge_tag_values(merged, collection)
 
                 keeper._document_store.update_tags(collection, target, merged)
