@@ -6,13 +6,22 @@ import json
 import logging
 import shutil
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from .dependencies import NoteDependencyService
+from .markdown_export import (
+    _bundle_export_refs,
+    _export_ref_from_rel_path,
+    _get_edge_data,
+    _get_export_doc,
+    _id_to_rel_path,
+    _render_doc_bundle,
+)
 from .processors import _content_hash
 from .types import file_uri_to_path
 from .watches import _DEFAULT_INTERVAL, _DOC_COLLECTION, parse_duration
@@ -41,6 +50,8 @@ class MarkdownMirrorEntry:
     enabled: bool = True
     added_at: str = ""
     pending_since: str = ""
+    pending_full_replan: bool = False
+    pending_note_ids: list[str] = field(default_factory=list)
     last_run: str = ""
     last_error: str = ""
 
@@ -57,6 +68,14 @@ class MarkdownMirrorEntry:
             return now >= pending + parse_duration(self.interval)
         except (ValueError, TypeError):
             return True
+
+
+@dataclass(frozen=True)
+class MarkdownMirrorUpdatePlan:
+    """One mirror pass plan derived from sync outbox events."""
+
+    full_replan: bool
+    note_ids: tuple[str, ...]
 
 
 def _mirror_to_dict(entry: MarkdownMirrorEntry) -> dict[str, Any]:
@@ -177,6 +196,8 @@ def record_markdown_mirror_export_success(
             continue
         entry.last_run = now_ts
         entry.pending_since = ""
+        entry.pending_full_replan = False
+        entry.pending_note_ids = []
         entry.last_error = error
         changed = True
         break
@@ -354,6 +375,230 @@ def _prune_empty_dirs(root: Path, start: Path) -> None:
         current = current.parent
 
 
+def _is_exported_note_id(doc_id: str, *, include_system: bool) -> bool:
+    return include_system or not doc_id.startswith(".")
+
+
+def _map_reverse(entries: dict[str, str]) -> dict[str, str]:
+    return {keep_id: export_ref for export_ref, keep_id in entries.items()}
+
+
+def _bundle_map_entries(
+    existing_map: dict[str, str],
+    doc_id: str,
+) -> dict[str, str]:
+    return {
+        export_ref: keep_id
+        for export_ref, keep_id in existing_map.items()
+        if keep_id == doc_id
+        or keep_id.startswith(f"{doc_id}@P{{")
+        or keep_id.startswith(f"{doc_id}@V{{")
+        or keep_id.startswith(f"{doc_id}@p")
+    }
+
+
+def _delete_rel_path(root: Path, rel_path: Path) -> None:
+    target = root / rel_path
+    if target.exists():
+        target.unlink()
+        _prune_empty_dirs(root, target.parent)
+
+
+def _current_store_info(keeper: Keeper, *, include_system: bool) -> dict[str, Any]:
+    doc_coll = keeper._resolve_doc_collection()
+    doc_ids = keeper._document_store.list_ids(doc_coll)
+    if not include_system:
+        doc_ids = [doc_id for doc_id in doc_ids if not doc_id.startswith(".")]
+    return {
+        "document_count": len(doc_ids),
+        "version_count": sum(
+            keeper._document_store.version_count(doc_coll, doc_id)
+            for doc_id in doc_ids
+        ),
+        "part_count": sum(
+            keeper._document_store.part_count(doc_coll, doc_id)
+            for doc_id in doc_ids
+        ),
+        "collection": doc_coll,
+    }
+
+
+def _edge_tag_resolver(keeper: Keeper):
+    doc_coll = keeper._resolve_doc_collection()
+    edge_tag_cache: dict[str, bool] = {}
+
+    def is_edge_tag(key: str) -> bool:
+        if key.startswith("_"):
+            return False
+        cached = edge_tag_cache.get(key)
+        if cached is not None:
+            return cached
+        tagdoc = keeper._document_store.get(doc_coll, f".tag/{key}")
+        is_edge = bool(tagdoc and tagdoc.tags.get("_inverse"))
+        edge_tag_cache[key] = is_edge
+        return is_edge
+
+    return is_edge_tag
+
+
+def _plan_markdown_mirror_update(
+    keeper: Keeper,
+    entry: MarkdownMirrorEntry,
+    events: list[dict[str, Any]],
+) -> MarkdownMirrorUpdatePlan:
+    if not events:
+        return MarkdownMirrorUpdatePlan(full_replan=True, note_ids=())
+
+    doc_coll = keeper._resolve_doc_collection()
+    dependencies = NoteDependencyService(keeper._document_store, doc_coll)
+    note_ids: set[str] = set()
+
+    def _maybe_add(doc_id: str) -> None:
+        if not doc_id:
+            return
+        if _is_exported_note_id(doc_id, include_system=entry.include_system):
+            note_ids.add(doc_id)
+
+    for row in events:
+        if row.get("collection") != _DOC_COLLECTION:
+            continue
+        mutation = str(row.get("mutation") or "")
+        doc_id = str(row.get("entity_id") or "")
+        payload = row.get("payload_json")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        if mutation in {"doc_insert", "doc_delete"}:
+            if _is_exported_note_id(doc_id, include_system=entry.include_system):
+                return MarkdownMirrorUpdatePlan(full_replan=True, note_ids=())
+            continue
+
+        if mutation == "doc_update":
+            _maybe_add(doc_id)
+            for target_id in dependencies.all_target_ids(doc_id):
+                _maybe_add(target_id)
+            continue
+
+        if mutation in {"part_insert", "part_update", "part_delete"}:
+            _maybe_add(doc_id)
+            continue
+
+        if mutation in {"version_insert", "version_update", "version_delete"}:
+            _maybe_add(doc_id)
+            continue
+
+        if mutation in {"edge_insert", "edge_update", "edge_delete"}:
+            _maybe_add(doc_id)
+            _maybe_add(str(payload.get("target_id") or ""))
+            _maybe_add(str(payload.get("old_target_id") or ""))
+            continue
+
+        if mutation in {
+            "version_edge_insert",
+            "version_edge_update",
+            "version_edge_delete",
+        }:
+            _maybe_add(doc_id)
+            _maybe_add(str(payload.get("target_id") or ""))
+            _maybe_add(str(payload.get("old_target_id") or ""))
+            continue
+
+        return MarkdownMirrorUpdatePlan(full_replan=True, note_ids=())
+
+    return MarkdownMirrorUpdatePlan(
+        full_replan=False,
+        note_ids=tuple(sorted(note_ids)),
+    )
+
+
+def run_markdown_export_incremental(
+    keeper: Keeper,
+    root: str | Path,
+    *,
+    note_ids: list[str],
+    include_system: bool,
+    include_parts: bool = False,
+    include_versions: bool = False,
+    mirror_entry: MarkdownMirrorEntry | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Rewrite only selected exported note bundles under an existing mirror."""
+    out_dir = _resolve_root(root)
+    if not out_dir.is_dir():
+        raise ValueError(f"{out_dir} does not exist")
+
+    existing_map = _load_map(out_dir)
+    reverse_map = _map_reverse(existing_map)
+    export_refs = dict(reverse_map)
+    is_edge_tag = _edge_tag_resolver(keeper)
+    current_inverse, version_inverse = _get_edge_data(
+        keeper, export_refs=export_refs,
+    )
+
+    updated_entries = dict(existing_map)
+    rewritten = 0
+
+    for doc_id in note_ids:
+        existing_export_ref = reverse_map.get(doc_id)
+        if existing_export_ref is None:
+            raise ValueError(f"incremental export missing namespace mapping for {doc_id}")
+        rel_path = Path(f"{existing_export_ref}.md")
+        doc = _get_export_doc(keeper, doc_id)
+        if doc is None:
+            raise ValueError(f"incremental export missing note {doc_id}")
+        if not _is_exported_note_id(doc_id, include_system=include_system):
+            continue
+
+        bundle_refs = _bundle_export_refs(
+            doc,
+            rel_path,
+            include_parts=include_parts,
+            include_versions=include_versions,
+        )
+        export_refs.update(bundle_refs)
+        bundle_entries = {
+            export_ref: keep_id
+            for keep_id, export_ref in bundle_refs.items()
+            if keep_id == doc_id or "@P{" in keep_id or "@V{" in keep_id
+        }
+        files = _render_doc_bundle(
+            keeper,
+            doc,
+            rel_path,
+            include_system=include_system,
+            include_parts=include_parts,
+            include_versions=include_versions,
+            export_refs=export_refs,
+            current_inverse=current_inverse,
+            version_inverse=version_inverse,
+            is_edge_tag=is_edge_tag,
+        )
+        for file_rel, text in files.items():
+            dest = out_dir / file_rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(text, encoding="utf-8")
+
+        previous_entries = _bundle_map_entries(updated_entries, doc_id)
+        stale_refs = set(previous_entries) - set(bundle_entries)
+        for stale_ref in stale_refs:
+            _delete_rel_path(out_dir, Path(f"{stale_ref}.md"))
+            updated_entries.pop(stale_ref, None)
+
+        for old_ref in previous_entries:
+            updated_entries.pop(old_ref, None)
+        updated_entries.update(bundle_entries)
+        rewritten += 1
+
+    _write_map(out_dir, updated_entries)
+    info = _current_store_info(keeper, include_system=include_system)
+    _write_state(out_dir, entry=mirror_entry, count=info["document_count"], info=info)
+    return rewritten, info
+
+
 def run_markdown_export_once(
     keeper: Keeper,
     root: str | Path,
@@ -448,10 +693,10 @@ def clear_sync_outbox(keeper: Keeper) -> int:
 
 def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
     # v1 uses the sync outbox only as a precise trigger boundary. Any activity
-    # still results in a full mirror export pass once the debounce interval
-    # elapses. True incremental export will consume the same outbox events but
-    # must also resolve the reverse dependency graph for inverse-edge
-    # frontmatter before it can narrow writes safely.
+    # is coalesced by the mirror interval. Structural changes still force a
+    # whole-mirror replan; ordinary note/part/version/edge changes can now be
+    # handled as bounded incremental rewrites through the shared dependency
+    # service.
     entries = load_markdown_mirrors(keeper)
     from .types import utc_now as _utc_now
 
@@ -465,40 +710,75 @@ def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
     stats = {"checked": 0, "exported": 0, "errors": 0, "discarded": 0}
     events, _discarded = _drain_sync_outbox(keeper, discard=False)
     if events:
-        earliest_by_root: dict[str, str] = {}
         for entry in entries:
             if not entry.enabled:
                 continue
-            if entry.pending_since:
-                earliest_by_root[entry.root] = entry.pending_since
-            for row in events:
-                if row.get("collection") != _DOC_COLLECTION:
-                    continue
-                created_at = row.get("created_at") or now_ts
-                existing = earliest_by_root.get(entry.root)
-                if existing is None or created_at < existing:
-                    earliest_by_root[entry.root] = created_at
-        for entry in entries:
-            pending_since = earliest_by_root.get(entry.root)
-            if pending_since and entry.pending_since != pending_since:
+            plan = _plan_markdown_mirror_update(keeper, entry, events)
+            if not plan.full_replan and not plan.note_ids:
+                continue
+            event_times = [
+                (row.get("created_at") or now_ts)
+                for row in events
+                if row.get("collection") == _DOC_COLLECTION
+            ]
+            pending_since = min(
+                [entry.pending_since] + event_times
+                if entry.pending_since else event_times
+            )
+            if entry.pending_since != pending_since:
                 entry.pending_since = pending_since
-                dirty = True
+            if plan.full_replan:
+                entry.pending_full_replan = True
+                entry.pending_note_ids = []
+            elif not entry.pending_full_replan:
+                merged = set(entry.pending_note_ids)
+                merged.update(plan.note_ids)
+                entry.pending_note_ids = sorted(merged)
+            dirty = True
+    for entry in entries:
+        if entry.pending_since and not entry.pending_full_replan and not entry.pending_note_ids:
+            entry.pending_since = ""
+            dirty = True
     for entry in entries:
         if not entry.is_due(now):
             continue
+        plan = MarkdownMirrorUpdatePlan(
+            full_replan=entry.pending_full_replan or not entry.pending_note_ids,
+            note_ids=tuple(entry.pending_note_ids),
+        )
+        if not plan.full_replan and not plan.note_ids:
+            entry.pending_since = ""
+            entry.last_error = ""
+            entry.pending_note_ids = []
+            entry.pending_full_replan = False
+            dirty = True
+            continue
         stats["checked"] += 1
         try:
-            run_markdown_export_once(
-                keeper,
-                entry.root,
-                include_system=entry.include_system,
-                include_parts=entry.include_parts,
-                include_versions=entry.include_versions,
-                allow_existing=True,
-                mirror_entry=entry,
-            )
+            if plan.full_replan:
+                run_markdown_export_once(
+                    keeper,
+                    entry.root,
+                    include_system=entry.include_system,
+                    include_parts=entry.include_parts,
+                    include_versions=entry.include_versions,
+                    allow_existing=True,
+                    mirror_entry=entry,
+                )
+            else:
+                run_markdown_export_incremental(
+                    keeper,
+                    entry.root,
+                    note_ids=list(plan.note_ids),
+                    include_system=entry.include_system,
+                    include_parts=entry.include_parts,
+                    include_versions=entry.include_versions,
+                    mirror_entry=entry,
+                )
             entry.last_run = now_ts
             entry.pending_since = ""
+            entry.pending_note_ids = []
+            entry.pending_full_replan = False
             entry.last_error = ""
             stats["exported"] += 1
         except Exception as exc:

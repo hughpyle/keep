@@ -945,17 +945,26 @@ class MockDocumentStore:
     def upsert_edge(self, collection: str, source_id: str, predicate: str,
                     target_id: str, inverse: str, created: str) -> None:
         self.__init_edges()
-        # Replace existing edge with same PK
         self._edges = [
             e for e in self._edges
-            if not (e["source_id"] == source_id and e["collection"] == collection
-                    and e["predicate"] == predicate and e["target_id"] == target_id)
+            if not (
+                e["source_id"] == source_id
+                and e["collection"] == collection
+                and e["predicate"] == predicate
+                and e["target_id"] == target_id
+            )
         ]
         self._edges.append({
             "source_id": source_id, "collection": collection,
             "predicate": predicate, "target_id": target_id,
             "inverse": inverse, "created": created,
         })
+        self._enqueue_sync_outbox(
+            "edge_insert",
+            collection,
+            source_id,
+            {"predicate": predicate, "target_id": target_id},
+        )
 
     def upsert_edges_batch(self, collection: str,
                            edges: list[tuple[str, str, str, str, str]]) -> int:
@@ -974,14 +983,26 @@ class MockDocumentStore:
         self, collection: str, source_id: str, predicate: str, target_id: str | None = None
     ) -> int:
         self.__init_edges()
-        before = len(self._edges)
+        removed = [
+            e for e in self._edges
+            if e["source_id"] == source_id and e["collection"] == collection
+            and e["predicate"] == predicate
+            and (target_id is None or e["target_id"] == target_id)
+        ]
         self._edges = [
             e for e in self._edges
             if not (e["source_id"] == source_id and e["collection"] == collection
                     and e["predicate"] == predicate
                     and (target_id is None or e["target_id"] == target_id))
         ]
-        return before - len(self._edges)
+        for edge in removed:
+            self._enqueue_sync_outbox(
+                "edge_delete",
+                collection,
+                source_id,
+                {"predicate": predicate, "target_id": edge["target_id"]},
+            )
+        return len(removed)
 
     def delete_edges_for_source(self, collection: str, source_id: str) -> int:
         self.__init_edges()

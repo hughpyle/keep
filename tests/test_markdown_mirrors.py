@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -20,6 +21,24 @@ from keep.markdown_mirrors import (
 )
 from keep.types import utc_now
 from keep.watches import add_watch
+
+
+def _create_tagdoc(kp: Keeper, key: str, inverse: str) -> None:
+    doc_coll = kp._resolve_doc_collection()
+    now = utc_now()
+    kp._document_store.upsert(
+        collection=doc_coll,
+        id=f".tag/{key}",
+        summary=f"Tag: {key}",
+        tags={
+            "_inverse": inverse,
+            "_created": now,
+            "_updated": now,
+            "_source": "inline",
+            "category": "system",
+        },
+        archive=False,
+    )
 
 
 def test_add_markdown_mirror_rejects_watch_overlap(mock_providers, tmp_path):
@@ -186,6 +205,139 @@ def test_poll_markdown_mirrors_debounces_sync_outbox(mock_providers, tmp_path):
         refreshed = list_markdown_mirrors(kp)
         assert refreshed[0].pending_since == ""
         assert refreshed[0].last_run
+    finally:
+        kp.close()
+
+
+def test_poll_markdown_mirrors_incremental_rewrites_only_changed_note(
+    mock_providers, tmp_path,
+):
+    kp = Keeper(store_path=tmp_path / "store")
+    try:
+        kp.put("Alpha body", id="alpha")
+        kp.put("Beta body", id="beta")
+        root = tmp_path / "vault"
+        root.mkdir()
+        run_markdown_export_once(
+            kp,
+            root,
+            include_system=False,
+            allow_existing=True,
+        )
+        clear_sync_outbox(kp)
+        add_markdown_mirror(kp, root, interval="PT1S")
+
+        alpha_path = root / "alpha.md"
+        beta_path = root / "beta.md"
+        alpha_before = alpha_path.stat().st_mtime_ns
+        beta_before = beta_path.stat().st_mtime_ns
+
+        time.sleep(0.01)
+        kp.put("Alpha body updated", id="alpha")
+        stats = poll_markdown_mirrors(kp)
+        assert stats["exported"] == 0
+        entries = list_markdown_mirrors(kp)
+        entries[0].pending_since = "2000-01-01T00:00:00"
+        save_markdown_mirrors(kp, entries)
+        stats = poll_markdown_mirrors(kp)
+
+        assert stats["exported"] == 1
+        assert alpha_path.stat().st_mtime_ns > alpha_before
+        assert beta_path.stat().st_mtime_ns == beta_before
+    finally:
+        kp.close()
+
+
+def test_poll_markdown_mirrors_incremental_rewrites_inverse_target_on_source_display_change(
+    mock_providers, tmp_path,
+):
+    kp = Keeper(store_path=tmp_path / "store")
+    try:
+        _create_tagdoc(kp, "speaker", "said")
+        kp.put("Joanna note", id="Joanna")
+        kp.put("Session body", id="session-1", tags={"speaker": "Joanna"})
+        kp.put("Unrelated body", id="other")
+
+        root = tmp_path / "vault"
+        root.mkdir()
+        run_markdown_export_once(
+            kp,
+            root,
+            include_system=False,
+            allow_existing=True,
+        )
+        clear_sync_outbox(kp)
+        add_markdown_mirror(kp, root, interval="PT1S")
+
+        source_path = root / "session-1.md"
+        target_path = root / "Joanna.md"
+        other_path = root / "other.md"
+        source_before = source_path.stat().st_mtime_ns
+        target_before = target_path.stat().st_mtime_ns
+        other_before = other_path.stat().st_mtime_ns
+
+        time.sleep(0.01)
+        kp.put("Session body renamed", id="session-1", summary="Session renamed", tags={"speaker": "Joanna"})
+        stats = poll_markdown_mirrors(kp)
+        assert stats["exported"] == 0
+        entries = list_markdown_mirrors(kp)
+        entries[0].pending_since = "2000-01-01T00:00:00"
+        save_markdown_mirrors(kp, entries)
+        stats = poll_markdown_mirrors(kp)
+
+        assert stats["exported"] == 1
+        assert source_path.stat().st_mtime_ns > source_before
+        assert target_path.stat().st_mtime_ns > target_before
+        assert other_path.stat().st_mtime_ns == other_before
+    finally:
+        kp.close()
+
+
+def test_poll_markdown_mirrors_incremental_rewrites_old_and_new_edge_targets(
+    mock_providers, tmp_path,
+):
+    kp = Keeper(store_path=tmp_path / "store")
+    try:
+        _create_tagdoc(kp, "speaker", "said")
+        kp.put("Joanna note", id="Joanna")
+        kp.put("Nate note", id="Nate")
+        kp.put("Session body", id="session-2", tags={"speaker": "Joanna"})
+        kp.put("Unrelated body", id="other")
+
+        root = tmp_path / "vault"
+        root.mkdir()
+        run_markdown_export_once(
+            kp,
+            root,
+            include_system=False,
+            allow_existing=True,
+        )
+        clear_sync_outbox(kp)
+        add_markdown_mirror(kp, root, interval="PT1S")
+
+        source_path = root / "session-2.md"
+        joanna_path = root / "Joanna.md"
+        nate_path = root / "Nate.md"
+        other_path = root / "other.md"
+        source_before = source_path.stat().st_mtime_ns
+        joanna_before = joanna_path.stat().st_mtime_ns
+        nate_before = nate_path.stat().st_mtime_ns
+        other_before = other_path.stat().st_mtime_ns
+
+        time.sleep(0.01)
+        kp.put("Session body", id="session-2", tags={"speaker": "Nate"})
+        stats = poll_markdown_mirrors(kp)
+        assert stats["exported"] == 0
+        entries = list_markdown_mirrors(kp)
+        entries[0].pending_since = "2000-01-01T00:00:00"
+        save_markdown_mirrors(kp, entries)
+        stats = poll_markdown_mirrors(kp)
+
+        assert stats["exported"] == 1
+        assert source_path.stat().st_mtime_ns > source_before
+        assert joanna_path.stat().st_mtime_ns > joanna_before
+        assert nate_path.stat().st_mtime_ns > nate_before
+        assert other_path.stat().st_mtime_ns == other_before
     finally:
         kp.close()
 

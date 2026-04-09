@@ -189,6 +189,56 @@ def _get_edge_data(
     return current_inverse, version_inverse
 
 
+def _get_export_doc(
+    keeper,
+    doc_id: str,
+) -> dict | None:
+    """Return one export-shaped note dict from the current store."""
+    try:
+        doc_coll = keeper._resolve_doc_collection()
+        record = keeper._document_store.get(doc_coll, doc_id)
+    except AttributeError:
+        return None
+    if record is None:
+        return None
+
+    doc_dict: dict = {
+        "id": record.id,
+        "summary": record.summary,
+        "tags": dict(record.tags),
+        "content_hash": record.content_hash,
+        "content_hash_full": record.content_hash_full,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "accessed_at": record.accessed_at,
+    }
+
+    versions = []
+    for vi in keeper._document_store.list_versions(doc_coll, doc_id, limit=10000):
+        versions.append({
+            "version": vi.version,
+            "summary": vi.summary,
+            "tags": dict(vi.tags),
+            "content_hash": vi.content_hash,
+            "created_at": vi.created_at,
+        })
+    if versions:
+        doc_dict["versions"] = versions
+
+    parts = []
+    for pi in keeper._document_store.list_parts(doc_coll, doc_id):
+        parts.append({
+            "part_num": pi.part_num,
+            "summary": pi.summary,
+            "tags": dict(pi.tags),
+            "created_at": pi.created_at,
+        })
+    if parts:
+        doc_dict["parts"] = parts
+
+    return doc_dict
+
+
 def _group_inverse_edges_to_tags(
     inverse_edges: list[tuple[str, str]],
     *,
@@ -470,6 +520,145 @@ def _planned_slots(
     return slots_list
 
 
+def _bundle_export_refs(
+    doc: dict,
+    rel_path: Path,
+    *,
+    include_parts: bool,
+    include_versions: bool,
+) -> dict[str, str]:
+    """Return keep-id -> export-ref entries for one note bundle."""
+    doc_id = doc["id"]
+    refs = {doc_id: _export_ref_from_rel_path(rel_path)}
+    sidecar_dir = rel_path.with_suffix("")
+    if include_parts:
+        for part in sorted(doc.get("parts") or [], key=lambda p: p["part_num"]):
+            pnum = part["part_num"]
+            export_ref = _export_ref_from_rel_path(sidecar_dir / f"@P{{{pnum}}}.md")
+            refs[f"{doc_id}@P{{{pnum}}}"] = export_ref
+            refs[f"{doc_id}@p{pnum}"] = export_ref
+    if include_versions:
+        for offset, _version in enumerate(doc.get("versions") or [], start=1):
+            refs[f"{doc_id}@V{{{offset}}}"] = _export_ref_from_rel_path(
+                sidecar_dir / f"@V{{{offset}}}.md",
+            )
+    return refs
+
+
+def _render_doc_bundle(
+    keeper,
+    doc: dict,
+    rel_path: Path,
+    *,
+    include_system: bool,
+    include_parts: bool,
+    include_versions: bool,
+    export_refs: Mapping[str, str],
+    current_inverse: Callable[[str], list[tuple[str, str]]],
+    version_inverse: Callable[[str], list[tuple[str, str]]],
+    is_edge_tag: Callable[[str], bool],
+) -> dict[Path, str]:
+    """Render one note's file set: note plus any exported sidecars."""
+    doc_id = doc["id"]
+    files: dict[Path, str] = {}
+    sidecar_dir = rel_path.with_suffix("")
+
+    sorted_parts = sorted(
+        doc.get("parts") or [], key=lambda p: p["part_num"],
+    ) if include_parts else []
+    parts_chain: list[tuple[int, str, Path, str]] = []
+    for part in sorted_parts:
+        pnum = part["part_num"]
+        sidecar_rel = sidecar_dir / f"@P{{{pnum}}}.md"
+        parts_chain.append(
+            (
+                pnum,
+                f"{doc_id}@P{{{pnum}}}",
+                sidecar_rel,
+                _export_ref_from_rel_path(sidecar_rel),
+            )
+        )
+
+    versions = list(doc.get("versions") or []) if include_versions else []
+    versions_chain: list[tuple[int, str, Path, str]] = []
+    for offset, _version in enumerate(versions, start=1):
+        sidecar_rel = sidecar_dir / f"@V{{{offset}}}.md"
+        versions_chain.append(
+            (
+                offset,
+                f"{doc_id}@V{{{offset}}}",
+                sidecar_rel,
+                _export_ref_from_rel_path(sidecar_rel),
+            )
+        )
+
+    first_part_id: Optional[str] = None
+    if parts_chain:
+        first_part_id = parts_chain[0][3]
+
+    first_version_id: Optional[str] = None
+    if versions_chain:
+        first_version_id = versions_chain[0][3]
+
+    files[rel_path] = _render_doc_markdown(
+        doc,
+        next_part_id=first_part_id,
+        prev_version_id=first_version_id,
+        inverse_edges=current_inverse(doc_id),
+        include_system=include_system,
+        export_refs=export_refs,
+        is_edge_tag=is_edge_tag,
+    )
+
+    if include_parts and sorted_parts:
+        n = len(parts_chain)
+        for idx, part in enumerate(sorted_parts):
+            if idx == 0:
+                prev_part_id = export_refs[doc_id]
+            else:
+                prev_part_id = parts_chain[idx - 1][3]
+
+            next_part_id: Optional[str] = None
+            if idx + 1 < n:
+                next_part_id = parts_chain[idx + 1][3]
+
+            files[parts_chain[idx][2]] = _render_part_markdown(
+                doc_id,
+                part,
+                prev_part_id=prev_part_id,
+                next_part_id=next_part_id,
+                export_refs=export_refs,
+                is_edge_tag=is_edge_tag,
+            )
+
+    if include_versions and versions_chain:
+        n = len(versions_chain)
+        historical_inverse = version_inverse(doc_id)
+        for idx, version in enumerate(versions):
+            if idx == 0:
+                next_version_id = export_refs[doc_id]
+            else:
+                next_version_id = versions_chain[idx - 1][3]
+
+            prev_version_id: Optional[str] = None
+            if idx + 1 < n:
+                prev_version_id = versions_chain[idx + 1][3]
+
+            files[versions_chain[idx][2]] = _render_version_markdown(
+                doc_id,
+                version,
+                versions_chain[idx][0],
+                prev_version_id=prev_version_id,
+                next_version_id=next_version_id,
+                inverse_edges=historical_inverse,
+                include_system=include_system,
+                export_refs=export_refs,
+                is_edge_tag=is_edge_tag,
+            )
+
+    return files
+
+
 def _find_slot_conflict(
     planned: list[tuple[Path, str]],
     slots: dict[str, tuple[str, str, Path]],
@@ -607,112 +796,19 @@ def _write_markdown_export(
     for doc in it2:
         doc_id = doc["id"]
         rel_path = final_paths[doc_id]
-        sidecar_dir = rel_path.with_suffix("")
-
-        parts_chain: list[tuple[int, str, Path, str]] = []
-        if include_parts and doc.get("parts"):
-            sorted_parts = sorted(
-                doc.get("parts") or [], key=lambda p: p["part_num"],
-            )
-            for part in sorted_parts:
-                pnum = part["part_num"]
-                sidecar_rel = sidecar_dir / f"@P{{{pnum}}}.md"
-                parts_chain.append(
-                    (
-                        pnum,
-                        f"{doc_id}@P{{{pnum}}}",
-                        sidecar_rel,
-                        _export_ref_from_rel_path(sidecar_rel),
-                    )
-                )
-        else:
-            sorted_parts = []
-
-        versions_chain: list[tuple[int, str, Path, str]] = []
-        if include_versions and doc.get("versions"):
-            for offset, _version in enumerate(doc.get("versions") or [], start=1):
-                sidecar_rel = sidecar_dir / f"@V{{{offset}}}.md"
-                versions_chain.append(
-                    (
-                        offset,
-                        f"{doc_id}@V{{{offset}}}",
-                        sidecar_rel,
-                        _export_ref_from_rel_path(sidecar_rel),
-                    )
-                )
-
-        first_part_id: Optional[str] = None
-        if parts_chain:
-            first_part_id = parts_chain[0][3]
-
-        first_version_id: Optional[str] = None
-        if versions_chain:
-            first_version_id = versions_chain[0][3]
-
-        doc_inverse = current_inverse(doc_id)
-
-        write(
+        for bundle_rel, text in _render_doc_bundle(
+            keeper,
+            doc,
             rel_path,
-            _render_doc_markdown(
-                doc,
-                next_part_id=first_part_id,
-                prev_version_id=first_version_id,
-                inverse_edges=doc_inverse,
-                include_system=include_system,
-                export_refs=export_refs,
-                is_edge_tag=is_edge_tag,
-            ),
-        )
-
-        if include_parts and sorted_parts:
-            n = len(parts_chain)
-            for idx, part in enumerate(sorted_parts):
-                if idx == 0:
-                    prev_part_id = export_refs[doc_id]
-                else:
-                    prev_part_id = parts_chain[idx - 1][3]
-
-                next_part_id: Optional[str] = None
-                if idx + 1 < n:
-                    next_part_id = parts_chain[idx + 1][3]
-
-                write(
-                    parts_chain[idx][2],
-                    _render_part_markdown(
-                        doc_id, part,
-                        prev_part_id=prev_part_id,
-                        next_part_id=next_part_id,
-                        export_refs=export_refs,
-                        is_edge_tag=is_edge_tag,
-                    ),
-                )
-
-        if include_versions and versions_chain:
-            versions = doc.get("versions") or []
-            historical_inverse = version_inverse(doc_id)
-            n = len(versions_chain)
-            for idx, version in enumerate(versions):
-                if idx == 0:
-                    next_version_id = export_refs[doc_id]
-                else:
-                    next_version_id = versions_chain[idx - 1][3]
-
-                prev_version_id: Optional[str] = None
-                if idx + 1 < n:
-                    prev_version_id = versions_chain[idx + 1][3]
-
-                write(
-                    versions_chain[idx][2],
-                    _render_version_markdown(
-                        doc_id, version, versions_chain[idx][0],
-                        prev_version_id=prev_version_id,
-                        next_version_id=next_version_id,
-                        inverse_edges=historical_inverse,
-                        include_system=include_system,
-                        export_refs=export_refs,
-                        is_edge_tag=is_edge_tag,
-                    ),
-                )
+            include_system=include_system,
+            include_parts=include_parts,
+            include_versions=include_versions,
+            export_refs=export_refs,
+            current_inverse=current_inverse,
+            version_inverse=version_inverse,
+            is_edge_tag=is_edge_tag,
+        ).items():
+            write(bundle_rel, text)
 
         count += 1
         if progress is not None:

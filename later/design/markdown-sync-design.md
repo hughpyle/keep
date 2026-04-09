@@ -541,7 +541,7 @@ rewrite only the notes reached through the dependency graph above.
 
 ### Current implementation notes
 
-The current codebase has the correct trigger boundary, but not yet the full
+The current codebase now has the correct trigger boundary and a first
 incremental dependency response.
 
 Specifically:
@@ -550,14 +550,19 @@ Specifically:
   acceptable with today's effectively single-collection runtime, but true
   multi-collection support will need mirror registrations and outbox handling
   to become collection-aware.
-- edge and version-edge trigger payloads are currently source-oriented. That is
-  sufficient for whole-mirror export passes, but true incremental export will
-  need explicit target-side dependency resolution rather than assuming the
-  source id is enough.
+- edge and version-edge trigger payloads are currently source-oriented. The
+  implementation resolves target-side impact through the shared dependency
+  service rather than relying on the payload alone.
 - large bulk mutation streams can require multiple outbox-drain ticks before
   the mirror reaches its debounce/export phase. This is acceptable for the
   current checkpoint, but throughput behavior should be revisited once
   incremental export narrows the affected-set rewrite cost.
+- the debounce window now stores a pending mirror-update plan on the mirror
+  entry itself. This is required so a due poll can still perform a bounded
+  rewrite after the original outbox rows have been drained.
+- structural mutations still force a full mirror replan. Bounded incremental
+  rewrites currently cover ordinary note updates, part/version changes, and
+  edge-driven inverse-edge fanout.
 
 ## 9. Continuous Export First
 
@@ -572,6 +577,14 @@ This stage includes:
 - defining and implementing the outbound dependency graph above
 - updating only affected exported files on keep changes, except when a full
   path replan is required
+
+This milestone is now partially implemented:
+
+- dependency traversal is provided by a shared core service rather than export-
+  specific edge queries
+- mirror polling performs bounded note-bundle rewrites for non-structural
+  mutations
+- note create/delete and other namespace-shaping changes still use full replan
 
 This should use existing change notifications. The hard part is not detection;
 it is stable namespace planning and file mapping.
