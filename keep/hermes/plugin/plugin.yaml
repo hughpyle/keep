@@ -1,0 +1,10 @@
+name: keep
+version: 1.0.0
+description: "Keep — reflective memory with semantic search, tagging, versioned session capture, and agent prompts."
+pip_dependencies:
+  - keep-skill
+hooks:
+  - on_session_end
+  - on_pre_compress
+  - on_memory_write
+  - on_delegation

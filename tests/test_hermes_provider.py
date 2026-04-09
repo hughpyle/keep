@@ -518,28 +518,78 @@ class TestSessionTags:
 class TestConfigSchema:
     """get_config_schema() and save_config()."""
 
-    def test_config_schema_returns_list(self, mock_providers):
+    def test_config_schema_returns_plain_string_choices(self, mock_providers):
+        """Choices must be plain strings for Hermes memory_setup compat."""
         p = KeepMemoryProvider()
-        with patch.object(
-            KeepMemoryProvider,
-            "_setup_choices",
-            return_value=([{"name": "Embed", "hint": "-- fast", "value": "mock"}], []),
-        ):
+        embed_choices = [
+            {"name": "Ollama (nomic-embed-text)", "hint": "-- local", "value": ("ollama", {"model": "nomic-embed-text"}), "default": True},
+            {"name": "OpenAI (text-embedding-3-small)", "hint": "-- API", "value": ("openai", {"model": "text-embedding-3-small"})},
+        ]
+        summ_choices = [
+            {"name": "Ollama (llama3)", "hint": "-- local", "value": ("ollama", {"model": "llama3"}), "default": True},
+        ]
+        with patch.object(KeepMemoryProvider, "_setup_choices", return_value=(embed_choices, summ_choices)):
             schema = p.get_config_schema()
-        assert isinstance(schema, list)
+
+        assert len(schema) == 2
+        embed_field = schema[0]
+        assert embed_field["key"] == "embedding_choice"
+        assert embed_field["choices"] == ["Ollama (nomic-embed-text)", "OpenAI (text-embedding-3-small)"]
+        assert embed_field["default"] == "Ollama (nomic-embed-text)"
+        assert all(isinstance(c, str) for c in embed_field["choices"])
+
+        summ_field = schema[1]
+        assert summ_field["choices"] == ["Ollama (llama3)"]
+
+    def test_config_schema_empty_when_no_embeddings(self, capsys):
+        """When no embedding providers are available, returns empty schema with guidance."""
+        p = KeepMemoryProvider()
+        with patch.object(KeepMemoryProvider, "_setup_choices", return_value=([], [])):
+            schema = p.get_config_schema()
+        assert schema == []
+        out = capsys.readouterr().out
+        assert "No embedding provider available" in out
 
     def test_config_schema_empty_without_keep(self):
         """When keep is not importable, returns empty list."""
         p = KeepMemoryProvider()
-        # This should work even if the wizard imports fail
-        # (gracefully returns [])
-        with patch.object(
-            KeepMemoryProvider,
-            "_setup_choices",
-            return_value=([], []),
-        ):
+        with patch.object(KeepMemoryProvider, "_setup_choices", return_value=([], [])):
             schema = p.get_config_schema()
         assert isinstance(schema, list)
+
+    def test_save_config_maps_name_back_to_structured_value(self, mock_providers, tmp_path):
+        """save_config receives plain string names and maps them back to provider configs."""
+        p = KeepMemoryProvider()
+        embed_choices = [
+            {"name": "Ollama (nomic-embed-text)", "hint": "-- local", "value": ("ollama", {"model": "nomic-embed-text"}), "default": True},
+        ]
+        summ_choices = [
+            {"name": "Ollama (llama3)", "hint": "-- local", "value": ("ollama", {"model": "llama3"})},
+        ]
+
+        saved_config = {}
+
+        def fake_save_config(config):
+            saved_config["embedding"] = (config.embedding.name, dict(config.embedding.params))
+            if config.summarization:
+                saved_config["summarization"] = (config.summarization.name, dict(config.summarization.params))
+
+        with (
+            patch.object(KeepMemoryProvider, "_setup_choices", return_value=(embed_choices, summ_choices)),
+            patch("keep.config.save_config", fake_save_config),
+            patch("keep.config.create_default_config") as mock_create,
+        ):
+            from keep.config import StoreConfig
+            mock_cfg = StoreConfig(path=tmp_path)
+            mock_create.return_value = mock_cfg
+
+            p.save_config(
+                {"embedding_choice": "Ollama (nomic-embed-text)", "summarization_choice": "Ollama (llama3)"},
+                str(tmp_path),
+            )
+
+        assert saved_config["embedding"] == ("ollama", {"model": "nomic-embed-text"})
+        assert saved_config["summarization"] == ("ollama", {"model": "llama3"})
 
 
 class TestTokenBudgets:

@@ -120,51 +120,86 @@ class KeepMemoryProvider:
             return False
 
     def get_config_schema(self):
+        """Return config schema with plain-string choices.
+
+        Hermes's memory_setup wizard only handles plain string choices,
+        so we return display names and map them back to structured configs
+        in save_config().
+        """
         try:
             current_embed, current_summ = self._current_keep_providers()
-            embedding_choices, summarization_choices = self._setup_choices(
-                current_embed, current_summ
+            embed_raw, summ_raw = self._setup_choices(current_embed, current_summ)
+
+            embed_names = [c["name"] for c in embed_raw]
+            summ_names = [c["name"] for c in summ_raw]
+
+            # Find the default choice name for pre-selection
+            embed_default = next(
+                (c["name"] for c in embed_raw if c.get("default")), None
             )
-            return [
-                {
+            summ_default = next(
+                (c["name"] for c in summ_raw if c.get("default")), None
+            )
+
+            schema = []
+            if embed_names:
+                schema.append({
                     "key": "embedding_choice",
                     "description": EMBEDDING_LABEL,
-                    "choices": embedding_choices,
-                    "empty_message": EMBEDDING_EMPTY_MESSAGE,
-                    "empty_hints": EMBEDDING_EMPTY_HINTS,
-                },
-                {
-                    "key": "summarization_choice",
-                    "description": SUMMARIZATION_LABEL,
-                    "choices": summarization_choices,
-                },
-            ]
+                    "choices": embed_names,
+                    "default": embed_default,
+                })
+            else:
+                # No embedding providers available — print guidance and
+                # return an empty schema so the wizard exits cleanly.
+                print(f"\n  {EMBEDDING_EMPTY_MESSAGE}")
+                for hint in EMBEDDING_EMPTY_HINTS:
+                    print(f"    - {hint}")
+                print()
+                return []
+
+            schema.append({
+                "key": "summarization_choice",
+                "description": SUMMARIZATION_LABEL,
+                "choices": summ_names,
+                "default": summ_default,
+            })
+            return schema
         except ImportError:
             return []
 
     def save_config(self, values, hermes_home):
         """Bootstrap a profile-scoped Keep store config for Hermes.
 
-        Prints its own setup summary so the wizard doesn't need
-        keep-specific display logic.
+        The wizard passes plain display-name strings (e.g.
+        ``"Ollama (nomic-embed-text)"``).  We re-detect the available
+        choices and match by name to recover the structured config.
         """
         from keep.config import ProviderConfig, create_default_config, save_config
 
-        # Always use profile-scoped path for setup — ignore inherited
-        # KEEP_STORE_PATH to prevent cross-profile store binding.
-        store_path = Path(hermes_home, "keep").resolve()
-        config = create_default_config(store_path)
+        current_embed, current_summ = self._current_keep_providers()
+        embed_raw, summ_raw = self._setup_choices(current_embed, current_summ)
+
+        embed_name = values.get("embedding_choice")
+        summ_name = values.get("summarization_choice")
+
+        embed_match = next((c for c in embed_raw if c["name"] == embed_name), None)
+        summ_match = next((c for c in summ_raw if c["name"] == summ_name), None)
 
         embedding = self._provider_config_from_choice(
-            ProviderConfig, values.get("embedding_choice")
+            ProviderConfig, embed_match["value"] if embed_match else None
         )
         summarization = self._provider_config_from_choice(
-            ProviderConfig, values.get("summarization_choice")
+            ProviderConfig, summ_match["value"] if summ_match else None
         )
 
         if embedding is None:
             raise ValueError(EMBEDDING_MISSING_ERROR)
 
+        # Always use profile-scoped path for setup — ignore inherited
+        # KEEP_STORE_PATH to prevent cross-profile store binding.
+        store_path = Path(hermes_home, "keep").resolve()
+        config = create_default_config(store_path)
         config.embedding = embedding
         if summarization is not None:
             config.summarization = summarization
