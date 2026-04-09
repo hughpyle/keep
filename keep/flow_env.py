@@ -383,18 +383,22 @@ class LocalFlowEnvironment:
         # Collect all related IDs first, then batch-fetch.
         per_source_related: dict[str, list[str]] = {}
         all_related_ids: list[str] = []
+        from .dependencies import NoteDependencyService
+        dependencies = NoteDependencyService(ds, doc_coll)
         for item in source_items:
             source_id = str(item.id)
             try:
-                fwd = ds.get_forward_edges(doc_coll, source_id)
-                inv = ds.get_inverse_edges(doc_coll, source_id)
+                fwd = dependencies.current_targets(source_id)
+                inv = dependencies.current_sources(source_id)
                 related_ids: list[str] = []
                 seen_ids: set[str] = set()
-                for _pred, target_id, _created in fwd:
+                for dep in fwd:
+                    target_id = dep.note_id
                     if target_id not in seen_ids and target_id not in source_set:
                         seen_ids.add(target_id)
                         related_ids.append(target_id)
-                for _inv, edge_source_id, _created in inv:
+                for dep in inv:
+                    edge_source_id = dep.note_id
                     if edge_source_id not in seen_ids and edge_source_id not in source_set:
                         seen_ids.add(edge_source_id)
                         related_ids.append(edge_source_id)

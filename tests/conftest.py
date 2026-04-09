@@ -1047,6 +1047,11 @@ class MockDocumentStore:
     ) -> list[tuple[str, str, str]]:
         return []
 
+    def get_forward_version_edges(
+        self, collection: str, source_id: str, *, limit: int = 1000
+    ) -> list[tuple[int, str, str, str]]:
+        return []
+
     def get_forward_edges(self, collection: str, source_id: str) -> list[tuple[str, str, str]]:
         self.__init_edges()
         results = [

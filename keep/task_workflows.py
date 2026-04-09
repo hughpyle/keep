@@ -191,10 +191,15 @@ class _KeeperActionContext:
 
     def find_referencing(self, target_id: str, tag_key: str = "references", limit: int = 50) -> list[Any]:
         """Find items that reference *target_id* via edge-tag *tag_key*."""
+        from .dependencies import NoteDependencyService
+
         doc_coll = self._keeper._resolve_doc_collection()
-        edges = self._keeper._document_store.get_inverse_edges(doc_coll, target_id)
-        # edges: list of (inverse, source_id, created) — we want the sources
-        source_ids = list(dict.fromkeys(src for _, src, _ in edges))[:limit]
+        dependencies = NoteDependencyService(
+            self._keeper._document_store, doc_coll,
+        )
+        source_ids = dependencies.all_source_ids(
+            target_id, include_archived=False,
+        )[:limit]
         if not source_ids:
             return []
         docs = self._keeper._document_store.get_many(doc_coll, source_ids)

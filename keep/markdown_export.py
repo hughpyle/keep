@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 import yaml
 
+from .dependencies import NoteDependencyService
 from .markdown_frontmatter import (
     MARKDOWN_EXPORTER_OWNED_KEYS,
     MARKDOWN_FRONTMATTER_ID_KEY,
@@ -141,6 +142,7 @@ def _get_edge_data(
     try:
         doc_coll = keeper._resolve_doc_collection()
         ds = keeper._document_store
+        dependencies = NoteDependencyService(ds, doc_coll)
     except AttributeError:
         empty: Callable[[str], list[tuple[str, str]]] = lambda _id: []
         return empty, empty
@@ -174,16 +176,14 @@ def _get_edge_data(
 
     def current_inverse(doc_id: str) -> list[tuple[str, str]]:
         return [
-            (inverse, _format_source(source_id))
-            for inverse, source_id, _created
-            in ds.get_inverse_edges(doc_coll, doc_id)
+            (dep.relationship, _format_source(dep.note_id))
+            for dep in dependencies.current_sources(doc_id)
         ]
 
     def version_inverse(doc_id: str) -> list[tuple[str, str]]:
         return [
-            (inverse, _format_source(source_id))
-            for inverse, source_id, _created
-            in ds.get_inverse_version_edges(doc_coll, doc_id)
+            (dep.relationship, _format_source(dep.note_id))
+            for dep in dependencies.archived_sources(doc_id)
         ]
 
     return current_inverse, version_inverse

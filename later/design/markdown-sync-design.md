@@ -409,14 +409,36 @@ The daemon should translate those low-level mutations into affected exported
 objects through an explicit dependency model. There are four distinct outbound
 dependency classes.
 
-At the implementation level, this means the daemon needs explicit helper
-queries for at least:
+This dependency model should not live inside markdown export or mirror code.
+Reverse-dependency traversal is a general capability that other features will
+also need.
+
+So the implementation should provide one shared note-dependency service in the
+core. Markdown export should consume that service rather than calling raw edge
+queries directly.
+
+That service should own both:
+
+- the semantic API for dependency traversal
+- the execution strategy used to answer it
+
+The semantic API should cover at least:
 
 - notes directly affected by a mutation
 - current-note targets reached by `edges` from a source note
 - current-note sources that point at a target note via `edges`
 - archived-version targets reached by `version_edges` from a source note
 - archived-version sources that point at a target note via `version_edges`
+- structural sidecars attached to a note id (parts, versions)
+
+The execution strategy should be hidden behind the service boundary:
+
+- start with query-backed resolution over the existing indexed `edges`,
+  `version_edges`, `document_parts`, and `document_versions` tables
+- allow the service to switch later to a materialized dependency tracker if
+  indexed queries are no longer good enough
+
+Callers should not need to know which strategy was used.
 
 ### Direct surface dependencies
 

@@ -4104,6 +4104,36 @@ class DocumentStore:
         ).fetchall()
         return [(r["inverse"], r["source_id"], r["created"]) for r in rows]
 
+    def get_forward_version_edges(
+        self,
+        collection: str,
+        source_id: str,
+        *,
+        limit: int = 1000,
+    ) -> list[tuple[int, str, str, str]]:
+        """Return archived-version edges originating from *source_id*.
+
+        Returns list of ``(version, predicate, target_id, created)`` ordered by
+        version descending, then predicate, then created descending.
+        """
+        if not source_id:
+            return []
+        rows = self._execute(
+            """
+            SELECT version, predicate, target_id, created
+            FROM version_edges
+            WHERE collection = ?
+              AND source_id = ?
+            ORDER BY version DESC, predicate, created DESC
+            LIMIT ?
+            """,
+            (collection, source_id, limit),
+        ).fetchall()
+        return [
+            (r["version"], r["predicate"], r["target_id"], r["created"])
+            for r in rows
+        ]
+
     def get_forward_edges(
         self, collection: str, source_id: str,
     ) -> list[tuple[str, str, str]]:
