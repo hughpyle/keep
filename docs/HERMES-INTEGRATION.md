@@ -1,29 +1,39 @@
 # Hermes Agent Integration
 
-Keep provides a memory provider plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent). Once configured, Hermes gets persistent reflective memory across sessions — semantic search, conversation versioning, and agent prompts.
+Keep provides a memory provider plugin for [Hermes Agent](https://hermes-agent.nousresearch.com/). Once configured, Hermes gets persistent reflective memory across sessions — semantic search, conversation versioning, and agent prompts.
 
-Currently requires [this branch](https://github.com/NousResearch/hermes-agent/pull/5172).  Check out the branch and run.
+If you have Ollama running locally, it will be auto-detected. For other providers, put the appropriate API keys in your Hermes environment first. Supports multiple independent profiles.
 
-If you have Ollama running locally, it will be auto-detected.  For other providers, put the appropriate API keys in your Hermes environment first.  Supports multiple independent profiles.
-
-## Setup
+## Install
 
 ```bash
-# 1. Run the setup wizard
-hermes memory setup
-# Select "keep", choose embedding/summarization providers
+curl -sSL https://keepnotes.ai/scripts/install-hermes.sh | bash
+```
 
-# 2. Start a new Hermes session
+This finds your Hermes installation, installs the plugin, and runs the setup wizard. Choose your embedding and summarization providers when prompted.
+
+Or manually:
+
+```bash
+# 1. Copy the plugin into Hermes
+cp -r hermes-plugin /path/to/hermes-agent/plugins/memory/keep
+
+# 2. Run the setup wizard — installs keep-skill, configures providers
+hermes memory setup
+
+# 3. Start a new Hermes session
 hermes
 ```
 
-The first session initializes the store, migrates system docs, and presents the agent with the reflective memory practice guide. The agent should follow the instructions in the nowdoc — reading the practice guide, the foundational teachings, and then reflecting.
+When Hermes starts, ask it:
+
+> "Follow the keep instructions in your system prompt."
 
 ## What the agent sees
 
 The agent's system prompt is framed by a Hermes-specific wrapper (`.prompt/agent/system-hermes`) that renders alongside the built-in `memory` tool and the USER PROFILE / MEMORY blocks. It positions keep as the cross-session working memory (`now`) and long-term store, sitting above Hermes' pinned-essentials layer. The wrapper then includes the generic reflective-memory practice (`.prompt/agent/system`), so the same core instructions are available in any host.
 
-On first session, the prefetched user-message context includes the nowdoc with step-by-step instructions to read the practice guide (`keep_help`), read the library teachings (`keep_flow get`), and reflect (`keep_prompt reflect`). After the agent completes this and updates `now`, subsequent sessions show its own working context instead.
+On first session, the context includes step-by-step instructions to read the practice guide (`keep_help`), read the library (`keep_flow get`), and reflect (`keep_prompt reflect`). After the agent completes this and updates `now`, subsequent sessions show its own working context instead.
 
 Three tools are available: `keep_flow` (all operations), `keep_help` (documentation), `keep_prompt` (context-injected prompts).
 
@@ -41,21 +51,17 @@ keep_flow(state="put", params={"id": "now", "content": "updated intentions"})
 
 ## Agent behavior
 
-Hermes agents can be reluctant to follow the first-time instructions unprompted. If the agent doesn't engage with the practice guide on its own, ask it directly:
-
-> "Follow the keep instructions in your system prompt."
-
 Once the agent completes the initial practice (reading, reflecting, updating now), it typically generates its own workflow or checklist for using reflective memory effectively. This self-generated practice tends to be more durable than the initial instructions.
 
-## Store location
+## Keep datastore
 
 By default, the setup wizard creates the store at `$HERMES_HOME/keep` (e.g. `~/.hermes/keep`). This is written to `$HERMES_HOME/.env` as `KEEP_STORE_PATH`.
 
-If `KEEP_STORE_PATH` is already set in the environment when `initialize()` runs, the provider uses that path instead. This allows sharing a store across profiles or pointing to an external store, but it overrides the per-profile default.
+If `KEEP_STORE_PATH` is already set in the environment when Hermes starts, the provider uses that path instead. This allows sharing a store across profiles or pointing to an external store, but it overrides the per-profile default.
 
 ## Using keep CLI with the Hermes store
 
-To use the `keep` CLI with the Hermes store, set `KEEP_STORE_PATH`:
+To use the `keep` standalone CLI, set `KEEP_STORE_PATH` to point at the store:
 
 ```bash
 export KEEP_STORE_PATH=~/.hermes/keep
@@ -70,4 +76,3 @@ keep flow stats
 - **Background daemon** (auto-started) handles embeddings and summaries asynchronously
 - **Per-profile store** — defaults to `$HERMES_HOME/keep`; overridable via `KEEP_STORE_PATH`
 - **Conversation versioning** — each turn is stored as a version of a per-channel item
-- **Shared-chat grouping** — Hermes gateway sessions are per-user in groups/channels by default (`group_sessions_per_user: true`); set it to `false` in Hermes if you want one shared session per channel/thread
