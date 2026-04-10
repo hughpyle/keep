@@ -97,7 +97,10 @@ class KeepMemoryProvider(MemoryProvider):
 
     def get_config_schema(self) -> List[Dict[str, Any]]:
         if not self._ensure_impl():
-            return []
+            # Return a placeholder so the setup wizard shows "local"
+            # instead of "no setup needed". keep-skill will be installed
+            # by _install_dependencies before save_config runs.
+            return [{"key": "_pending_install", "description": "Embedding provider", "choices": ["(install keep-skill to configure)"]}]
         return self._impl.get_config_schema()
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
