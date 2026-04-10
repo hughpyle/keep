@@ -368,13 +368,13 @@ Extract text from images or scanned PDF pages.
 
 ### resolve_stubs
 
-Resolve auto-vivified stub items by fetching content from their URI.
+Resolve stub notes by fetching content from their URI.
 
 ```yaml
 - do: resolve_stubs
 ```
 
-Runs during after-write for URI-backed items that were auto-created as stubs.
+Runs during after-write for URI-backed stubs that don't have content yet.
 
 ## Store profiling
 

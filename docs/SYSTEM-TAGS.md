@@ -93,7 +93,7 @@ How the content was obtained.
 | `inline` | Inline content (CLI: `keep put "text"`, API: `kp.put("text")`) |
 | `uri` | Content fetched from a URI (CLI: `keep put <uri>`, API: `kp.put(uri=...)`) |
 | `langchain` | Created via `KeepStore` (LangChain/LangGraph integration) |
-| `auto-vivify` | Auto-created stub from an edge target (e.g. `speaker=Deborah`) |
+| `auto-vivify` | Stub note created from an edge target (e.g. `speaker=Deborah`) |
 
 Query with `kp.list_items(tags={"_source": "inline"})` to find inline notes,
 or `tags={"_source": "uri"}` to find indexed documents.

@@ -30,7 +30,7 @@ note, and run a semantic search.
 - **[Tagging](TAGGING.md)** — Structured key-value tags for organizing notes by domain, thread, and facet. Combine with semantic search for precise retrieval.
 - **[System Tags](SYSTEM-TAGS.md)** — Automatic tags managed by keep: `_created`, `_updated`, `_accessed`, `_source`, `_content_type`, plus internal pipeline and projection tags. Understand what's tracked and when.
 - **[Meta-Tags](META-TAGS.md)** — Automatic cross-note relationships. Similar items, extracted learnings, and version history surface as structured metadata, giving agents longitudinal awareness.
-- **[Edge Tags](EDGE-TAGS.md)** — Turn tags into navigable relationships. Tag a turn with `speaker: Deborah` and `get Deborah` shows everything she said — auto-vivification, backfill, and inverse listings.
+- **[Edge Tags](EDGE-TAGS.md)** — Turn tags into navigable relationships. Tag a turn with `speaker: Deborah` and `get Deborah` shows everything she said — stub creation, backfill, and inverse listings.
 - **[Prompts](PROMPTS.md)** — How prompts work: template rendering, context injection, built-in vs custom prompts.
 - **[Flows](FLOWS.md)** — Multi-step workflows: chaining operations, conditionals, LLM-driven decisions, and automation patterns.
 - **[Flow Actions](FLOW-ACTIONS.md)** — Action reference for building custom flows: find, get, list_parts, list_versions, resolve_meta, resolve_edges, summarize, tag, analyze, and more.
@@ -71,7 +71,7 @@ Complete listing with summaries:
 | [Tagging](TAGGING.md) | Structured key-value tags: `domain: healthcare`, `thread: margaret`, `facet: metabolic`. Tags enable precise filtering alongside semantic search. Thread-level tags provide hard links that similarity alone can't maintain. |
 | [System Tags](SYSTEM-TAGS.md) | Automatic tags managed by keep: `_created`, `_updated`, `_accessed` (UTC `YYYY-MM-DDTHH:MM:SS`), `_source` (`inline`, `uri`, `langchain`, `auto-vivify`), `_content_type`, plus internal pipeline and projection tags. Cannot be manually set. |
 | [Meta-Tags](META-TAGS.md) | Metaschema rules define how notes relate. `similar` surfaces semantically close notes. `meta/learnings` extracts insights tagged as learnings. `prev` shows version history. Meta-tags give agents longitudinal awareness — context compounds over time. |
-| [Edge Tags](EDGE-TAGS.md) | Turn tags into navigable relationship edges. When a tagdoc declares `_inverse`, tagged documents become links — and targets get automatic inverse listings. Tag a conversation with `speaker: Deborah` and `get Deborah` shows everything she said. Targets auto-vivify on first reference. |
+| [Edge Tags](EDGE-TAGS.md) | Turn tags into navigable relationship edges. When a tagdoc declares `_inverse`, tagged documents become links — and targets get automatic inverse listings. Tag a conversation with `speaker: Deborah` and `get Deborah` shows everything she said. Targets are created as stubs on first reference. |
 | [Prompts](PROMPTS.md) | How prompts work: template rendering, context injection, built-in vs custom prompts. |
 | [Flows](FLOWS.md) | Multi-step workflows: chaining operations, conditionals, LLM-driven decisions, and automation patterns. |
 | [Flow Actions](FLOW-ACTIONS.md) | Action reference for building custom flows. Covers search (find, traverse), context (get, list_parts, list_versions, resolve_meta, resolve_edges), processing (summarize, tag, analyze), and the generate escape hatch. |

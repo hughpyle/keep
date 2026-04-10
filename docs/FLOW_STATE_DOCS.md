@@ -70,8 +70,8 @@ The `links` fragment handles every text-bearing content type, not just
 markdown — it covers HTML, RFC 822 email, PDF, DOCX, and PPTX as well, so
 link extraction works on indexed documents from many sources. The
 `resolve-stubs` fragment runs for any URI-backed item that isn't a `link`-
-sourced stub, which includes both auto-vivified edge targets and other
-URI items that came in as placeholders.
+sourced stub, which includes both edge-target stubs and other URI items
+that came in as placeholders.
 
 ---
 

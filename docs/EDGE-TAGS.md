@@ -34,9 +34,9 @@ tags:
 
 The `said` entries under `tags:` are computed from the edges table — they're not stored as tags on `Deborah`. Each entry links back to the source document, rendered as `id [date] "summary"`.
 
-## Auto-vivification
+## Stub creation
 
-If the target doesn't exist, it's created as an empty document automatically. In the example above, `speaker=Deborah` creates a `Deborah` document if one doesn't exist yet. You can add content to it later:
+If the target doesn't exist, keep creates a stub note for it automatically. In the example above, `speaker=Deborah` creates a stub `Deborah` note if one doesn't exist yet. You can add content to it later:
 
 ```bash
 keep put "Deborah is the tech lead on project X" --id Deborah

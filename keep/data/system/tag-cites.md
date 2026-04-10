@@ -41,4 +41,4 @@ keep get https://arxiv.org/abs/2201.08236
 # →   - https://arxiv.org/abs/2403.04782  [2024-03-11] Temporal Knowledge Graph: …
 ```
 
-Aliases on the tag value (`[[target|Label]]`) are picked up by the edge processor's labeled-edge enrichment and seed the target note's `name` tag, so auto-vivified citation targets render with their paper title instead of a bare URL.
+Aliases on the tag value (`[[target|Label]]`) are picked up by the edge processor's labeled-edge enrichment and seed the target note's `name` tag, so citation target stubs render with their paper title instead of a bare URL.
