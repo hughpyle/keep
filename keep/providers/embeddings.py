@@ -5,7 +5,7 @@ import os
 import sys
 import time
 
-from .base import EmbedTask, get_registry
+from .base import EmbedTask, get_registry, require_provider_param
 from .openai_client import create_openai_client
 
 
@@ -17,7 +17,7 @@ class SentenceTransformerEmbedding:
     Requires: pip install sentence-transformers
     """
 
-    def __init__(self, model: str = "all-MiniLM-L6-v2", trust_remote_code: bool = False):
+    def __init__(self, model: str | None = None, trust_remote_code: bool = False):
         """Initialize.
 
         Args:
@@ -33,6 +33,7 @@ class SentenceTransformerEmbedding:
                 "Install with: pip install sentence-transformers"
             )
 
+        model = require_provider_param(model, provider="SentenceTransformerEmbedding")
         self.model_name = model
 
         # Check if model is already cached locally to avoid network calls
@@ -105,7 +106,7 @@ class OpenAIEmbedding:
 
     def __init__(
         self,
-        model: str = "text-embedding-3-small",
+        model: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
     ):
@@ -121,6 +122,7 @@ class OpenAIEmbedding:
         """
         # Include base_url in model_name so embedding identity and cache keys
         # distinguish between different servers using the same model string.
+        model = require_provider_param(model, provider="OpenAIEmbedding")
         self.model_name = f"{model}@{base_url}" if base_url else model
         self._api_model = model  # raw model name for API calls
         self._dimension = self.MODEL_DIMENSIONS.get(model)
@@ -177,7 +179,7 @@ class GeminiEmbedding:
 
     def __init__(
         self,
-        model: str = "text-embedding-004",
+        model: str | None = None,
         api_key: str | None = None,
         output_dimensionality: int | None = None,
     ):
@@ -193,6 +195,7 @@ class GeminiEmbedding:
         from google.genai import types as genai_types  # noqa: PLC0415
         from .gemini_client import create_gemini_client  # noqa: PLC0415
 
+        model = require_provider_param(model, provider="GeminiEmbedding")
         self.model_name = model
         self._client = create_gemini_client(api_key)
         self._genai_types = genai_types
@@ -263,7 +266,7 @@ class OllamaEmbedding:
 
     def __init__(
         self,
-        model: str = "nomic-embed-text",
+        model: str | None = None,
         base_url: str | None = None,
     ):
         """Initialize.
@@ -274,6 +277,7 @@ class OllamaEmbedding:
         """
         from .ollama_utils import ollama_base_url, ollama_ensure_model  # noqa: PLC0415
 
+        model = require_provider_param(model, provider="OllamaEmbedding")
         self.model_name = model
         self.base_url = ollama_base_url(base_url)
         self._dimension: int | None = None
@@ -388,7 +392,7 @@ class VoyageEmbedding:
 
     def __init__(
         self,
-        model: str = "voyage-3.5-lite",
+        model: str | None = None,
         api_key: str | None = None,
     ):
         """Initialize.
@@ -397,6 +401,7 @@ class VoyageEmbedding:
         model: Voyage embedding model name
         api_key: API key (defaults to environment variable).
         """
+        model = require_provider_param(model, provider="VoyageEmbedding")
         self.model_name = model
         # Use lookup table if available, otherwise detect lazily from first embedding
         self._dimension = self.MODEL_DIMENSIONS.get(model)
@@ -545,11 +550,12 @@ class MistralEmbedding:
 
     def __init__(
         self,
-        model: str = "mistral-embed",
+        model: str | None = None,
         api_key: str | None = None,
     ):
         from mistralai import Mistral  # noqa: PLC0415
 
+        model = require_provider_param(model, provider="MistralEmbedding")
         self.model_name = model
         self._dimension = self.MODEL_DIMENSIONS.get(model)
 

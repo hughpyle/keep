@@ -270,7 +270,7 @@ class CachingEmbeddingProvider:
     """Wrapper that adds caching to any EmbeddingProvider.
     
     Usage:
-        base_provider = SentenceTransformerEmbedding()
+        base_provider = SentenceTransformerEmbedding(model="all-MiniLM-L6-v2")
         cached = CachingEmbeddingProvider(base_provider, cache_path)
     """
     

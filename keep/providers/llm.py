@@ -7,6 +7,7 @@ import os
 from .base import (
     get_registry,
     build_summarization_prompt,
+    require_provider_param,
     strip_summary_preamble,
     SUMMARIZATION_SYSTEM_PROMPT,
 )
@@ -37,12 +38,13 @@ class AnthropicSummarization:
 
     def __init__(
         self,
-        model: str = "claude-haiku-4-5-20251001",
+        model: str | None = None,
         api_key: str | None = None,
         max_tokens: int = 150,
     ):
         from anthropic import Anthropic  # noqa: PLC0415
 
+        model = require_provider_param(model, provider="AnthropicSummarization")
         self.model_name = model
         self.max_tokens = max_tokens
 
@@ -111,11 +113,12 @@ class OpenAISummarization:
 
     def __init__(
         self,
-        model: str = "gpt-4.1-mini",
+        model: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
         max_tokens: int = 200,
     ):
+        model = require_provider_param(model, provider="OpenAISummarization")
         self.model_name = model
         self.max_tokens = max_tokens
         self._client = create_openai_client(api_key=api_key, base_url=base_url)
@@ -186,12 +189,13 @@ class OllamaSummarization:
 
     def __init__(
         self,
-        model: str = "llama3.2",
+        model: str | None = None,
         base_url: str | None = None,
         context_length: int = 16384,
     ):
         from .ollama_utils import ollama_base_url, ollama_ensure_model  # noqa: PLC0415
 
+        model = require_provider_param(model, provider="OllamaSummarization")
         self.model_name = model
         self.context_length = context_length
         self.base_url = ollama_base_url(base_url)
@@ -260,10 +264,11 @@ class GeminiSummarization:
 
     def __init__(
         self,
-        model: str = "gemini-2.5-flash",
+        model: str | None = None,
         api_key: str | None = None,
         max_tokens: int = 150,
     ):
+        model = require_provider_param(model, provider="GeminiSummarization")
         self.model_name = model
         from .gemini_client import create_gemini_client  # noqa: PLC0415
 
@@ -357,12 +362,13 @@ class OllamaMediaDescriber:
 
     def __init__(
         self,
-        model: str = "llava",
+        model: str | None = None,
         base_url: str | None = None,
         context_length: int = 16384,
     ):
         from .ollama_utils import ollama_base_url, ollama_ensure_model  # noqa: PLC0415
 
+        model = require_provider_param(model, provider="OllamaMediaDescriber")
         self.model_name = model
         self.context_length = context_length
         self.base_url = ollama_base_url(base_url)
@@ -418,12 +424,13 @@ class OllamaContentExtractor:
 
     def __init__(
         self,
-        model: str = "glm-ocr",
+        model: str | None = None,
         base_url: str | None = None,
         context_length: int = 16384,
     ):
         from .ollama_utils import ollama_base_url, ollama_ensure_model  # noqa: PLC0415
 
+        model = require_provider_param(model, provider="OllamaContentExtractor")
         self.model_name = model
         self.context_length = context_length
         self.base_url = ollama_base_url(base_url)
@@ -471,12 +478,13 @@ class MistralSummarization:
 
     def __init__(
         self,
-        model: str = "mistral-small-latest",
+        model: str | None = None,
         api_key: str | None = None,
         max_tokens: int = 200,
     ):
         from mistralai import Mistral  # noqa: PLC0415
 
+        model = require_provider_param(model, provider="MistralSummarization")
         self.model_name = model
         self.max_tokens = max_tokens
 
@@ -535,11 +543,12 @@ class MistralContentExtractor:
 
     def __init__(
         self,
-        model: str = "mistral-ocr-latest",
+        model: str | None = None,
         api_key: str | None = None,
     ):
         from mistralai import Mistral  # noqa: PLC0415
 
+        model = require_provider_param(model, provider="MistralContentExtractor")
         self.model_name = model
 
         key = api_key or os.environ.get("MISTRAL_API_KEY")

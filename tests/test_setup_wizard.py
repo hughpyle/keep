@@ -117,6 +117,7 @@ class TestDetectEmbeddingChoices:
         openrouter = [c for c in choices if "OpenRouter" in c["name"]]
         assert len(openrouter) == 1
         assert openrouter[0]["available"] is True
+        assert openrouter[0]["value"] == ("openrouter", {"model": "openai/text-embedding-3-small"})
 
 
 class TestDetectSummarizationChoices:
@@ -156,6 +157,7 @@ class TestDetectSummarizationChoices:
         openrouter = [c for c in choices if "OpenRouter" in c["name"]]
         assert len(openrouter) == 1
         assert openrouter[0]["available"] is True
+        assert openrouter[0]["value"] == ("openrouter", {"model": "openai/gpt-4.1-mini"})
 
 
 class TestRunWizardNonInteractive:

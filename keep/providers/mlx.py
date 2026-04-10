@@ -14,6 +14,7 @@ from .base import (
     EmbedTask,
     get_registry,
     build_summarization_prompt,
+    require_provider_param,
     strip_summary_preamble,
     SUMMARIZATION_SYSTEM_PROMPT,
 )
@@ -27,7 +28,7 @@ class MLXEmbedding:
     Requires: pip install mlx sentence-transformers
     """
 
-    def __init__(self, model: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model: str | None = None):
         """Initialize.
 
         Args:
@@ -43,6 +44,7 @@ class MLXEmbedding:
                 "Install with: pip install mlx sentence-transformers"
             )
 
+        model = require_provider_param(model, provider="MLXEmbedding")
         self.model_name = model
 
         # Check if model is already cached locally to avoid network calls
@@ -108,7 +110,7 @@ class MLXSummarization:
 
     def __init__(
         self,
-        model: str = "mlx-community/Llama-3.2-3B-Instruct-4bit",
+        model: str | None = None,
         max_tokens: int = 300,
     ):
         """Initialize.
@@ -130,6 +132,7 @@ class MLXSummarization:
                 "Install with: pip install mlx-lm"
             )
         
+        model = require_provider_param(model, provider="MLXSummarization")
         self.model_name = model
         self.max_tokens = max_tokens
 
@@ -213,7 +216,7 @@ class MLXVisionDescriber:
 
     def __init__(
         self,
-        model: str = "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+        model: str | None = None,
         max_tokens: int = 300,
     ):
         try:
@@ -224,6 +227,7 @@ class MLXVisionDescriber:
                 "Install with: pip install mlx-vlm"
             )
 
+        model = require_provider_param(model, provider="MLXVisionDescriber")
         self.model_name = model
         self.max_tokens = max_tokens
 
@@ -271,7 +275,7 @@ class MLXWhisperDescriber:
 
     def __init__(
         self,
-        model: str = "mlx-community/whisper-large-v3-turbo",
+        model: str | None = None,
     ):
         try:
             import mlx_whisper  # noqa: F401, PLC0415
@@ -281,6 +285,7 @@ class MLXWhisperDescriber:
                 "Install with: pip install mlx-whisper"
             )
 
+        model = require_provider_param(model, provider="MLXWhisperDescriber")
         self.model_name = model
 
     def describe(self, path: str, content_type: str) -> str | None:
@@ -312,7 +317,7 @@ class MLXContentExtractor:
 
     def __init__(
         self,
-        model: str = "mlx-community/GLM-OCR-bf16",
+        model: str | None = None,
         max_tokens: int = 2000,
     ):
         try:
@@ -323,6 +328,7 @@ class MLXContentExtractor:
                 "Install with: pip install mlx-vlm"
             )
 
+        model = require_provider_param(model, provider="MLXContentExtractor")
         self.model_name = model
         self.max_tokens = max_tokens
 
@@ -372,12 +378,20 @@ class MLXMediaDescriber:
 
     def __init__(
         self,
-        vision_model: str = "mlx-community/Qwen2-VL-2B-Instruct-4bit",
-        whisper_model: str = "mlx-community/whisper-large-v3-turbo",
+        vision_model: str | None = None,
+        whisper_model: str | None = None,
         max_tokens: int = 300,
     ):
-        self._vision_model = vision_model
-        self._whisper_model = whisper_model
+        self._vision_model = require_provider_param(
+            vision_model,
+            provider="MLXMediaDescriber",
+            param="vision_model",
+        )
+        self._whisper_model = require_provider_param(
+            whisper_model,
+            provider="MLXMediaDescriber",
+            param="whisper_model",
+        )
         self._max_tokens = max_tokens
         self._vision: MLXVisionDescriber | None = None
         self._whisper: MLXWhisperDescriber | None = None

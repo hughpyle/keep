@@ -19,6 +19,7 @@ from .config import (
     _detect_ollama,
     _ollama_pick_models,
     detect_default_providers,
+    get_default_provider_model,
     save_config,
 )
 from .integrations import HOOKS_VERSION, TOOL_CONFIGS, detect_new_tools, install_claude_code, install_codex, install_github_copilot, install_kiro, install_openclaw
@@ -31,7 +32,6 @@ EMBEDDING_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "voyage",
         "name": "Voyage",
-        "model": "voyage-3.5-lite",
         "provider": "voyage",
         "env_keys": ["VOYAGE_API_KEY"],
         "env_hint": "VOYAGE_API_KEY",
@@ -39,7 +39,6 @@ EMBEDDING_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "openai",
         "name": "OpenAI",
-        "model": "text-embedding-3-small",
         "provider": "openai",
         "env_keys": ["KEEP_OPENAI_API_KEY", "OPENAI_API_KEY"],
         "env_hint": "OPENAI_API_KEY",
@@ -47,7 +46,6 @@ EMBEDDING_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "gemini",
         "name": "Gemini",
-        "model": "text-embedding-004",
         "provider": "gemini",
         "env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT"],
         "env_hint": "GEMINI_API_KEY",
@@ -55,7 +53,6 @@ EMBEDDING_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "mistral",
         "name": "Mistral",
-        "model": "mistral-embed",
         "provider": "mistral",
         "env_keys": ["MISTRAL_API_KEY"],
         "env_hint": "MISTRAL_API_KEY",
@@ -63,7 +60,6 @@ EMBEDDING_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "openrouter",
         "name": "OpenRouter",
-        "model": "openai/text-embedding-3-small",
         "provider": "openrouter",
         "env_keys": ["OPENROUTER_API_KEY"],
         "env_hint": "OPENROUTER_API_KEY",
@@ -76,8 +72,6 @@ SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "anthropic",
         "name": "Anthropic",
-        "model_display": "claude-haiku-4.5",
-        "model": "claude-haiku-4-5-20251001",
         "provider": "anthropic",
         "env_keys": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         "env_hint": "ANTHROPIC_API_KEY",
@@ -85,8 +79,6 @@ SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "openai",
         "name": "OpenAI",
-        "model_display": "gpt-4o-mini",
-        "model": "gpt-4o-mini",
         "provider": "openai",
         "env_keys": ["KEEP_OPENAI_API_KEY", "OPENAI_API_KEY"],
         "env_hint": "OPENAI_API_KEY",
@@ -94,8 +86,6 @@ SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "gemini",
         "name": "Gemini",
-        "model_display": None,
-        "model": None,
         "provider": "gemini",
         "env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT"],
         "env_hint": "GEMINI_API_KEY",
@@ -103,8 +93,6 @@ SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "mistral",
         "name": "Mistral",
-        "model_display": "mistral-small-latest",
-        "model": "mistral-small-latest",
         "provider": "mistral",
         "env_keys": ["MISTRAL_API_KEY"],
         "env_hint": "MISTRAL_API_KEY",
@@ -112,8 +100,6 @@ SUMMARIZATION_PROVIDERS: list[dict[str, Any]] = [
     {
         "key": "openrouter",
         "name": "OpenRouter",
-        "model_display": "openai/gpt-4o-mini",
-        "model": "openai/gpt-4o-mini",
         "provider": "openrouter",
         "env_keys": ["OPENROUTER_API_KEY"],
         "env_hint": "OPENROUTER_API_KEY",
@@ -196,11 +182,12 @@ def detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, An
     if not local_only:
         has_default = any(c["default"] for c in choices)
         for p in EMBEDDING_PROVIDERS:
-            display = f"{p['name']} ({p['model']})"
+            model = get_default_provider_model("embedding", p["provider"])
+            display = f"{p['name']} ({model})" if model else p["name"]
             available = _has_env(*p["env_keys"])
             if p.get("show_when_available_only") and not available:
                 continue
-            params = {"model": p["model"]} if p["model"] else {}
+            params = {"model": model} if model else {}
             if current:
                 is_default = current == p["provider"]
             else:
@@ -220,16 +207,18 @@ def detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, An
         try:
             import mlx.core  # noqa
             import sentence_transformers  # noqa
+            mlx_model = get_default_provider_model("embedding", "mlx") or "all-MiniLM-L6-v2"
             choices.append({
-                "name": "MLX on Apple Silicon (all-MiniLM-L6-v2)",
-                "value": ("mlx", {"model": "all-MiniLM-L6-v2"}),
+                "name": f"MLX on Apple Silicon ({mlx_model})",
+                "value": ("mlx", {"model": mlx_model}),
                 "available": True,
                 "hint": "Apple Silicon, local",
                 "default": current == "mlx" if current else False,
             })
         except ImportError:
+            mlx_model = get_default_provider_model("embedding", "mlx") or "all-MiniLM-L6-v2"
             choices.append({
-                "name": "MLX on Apple Silicon (all-MiniLM-L6-v2)",
+                "name": f"MLX on Apple Silicon ({mlx_model})",
                 "value": None,
                 "available": False,
                 "hint": "requires: uv tool install 'keep-skill[local]'",
@@ -238,16 +227,18 @@ def detect_embedding_choices(current: Optional[str] = None) -> list[dict[str, An
 
     try:
         import sentence_transformers  # noqa
+        st_model = get_default_provider_model("embedding", "sentence-transformers") or "all-MiniLM-L6-v2"
         choices.append({
-            "name": "sentence-transformers (all-MiniLM-L6-v2)",
-            "value": ("sentence-transformers", {}),
+            "name": f"sentence-transformers ({st_model})",
+            "value": ("sentence-transformers", {"model": st_model}),
             "available": True,
             "hint": "local, no API key",
             "default": current == "sentence-transformers" if current else False,
         })
     except ImportError:
+        st_model = get_default_provider_model("embedding", "sentence-transformers") or "all-MiniLM-L6-v2"
         choices.append({
-            "name": "sentence-transformers (all-MiniLM-L6-v2)",
+            "name": f"sentence-transformers ({st_model})",
             "value": None,
             "available": False,
             "hint": "requires: uv tool install 'keep-skill[local]'",
@@ -293,11 +284,12 @@ def detect_summarization_choices(current: Optional[str] = None) -> list[dict[str
     # 2. API providers
     if not local_only:
         for p in SUMMARIZATION_PROVIDERS:
-            display = f"{p['name']} ({p['model_display']})" if p["model_display"] else p["name"]
+            model = get_default_provider_model("summarization", p["provider"])
+            display = f"{p['name']} ({model})" if model else p["name"]
             available = _has_env(*p["env_keys"])
             if p.get("show_when_available_only") and not available:
                 continue
-            params = {"model": p["model"]} if p["model"] else {}
+            params = {"model": model} if model else {}
             if current:
                 is_default = current == p["provider"]
             else:
@@ -314,16 +306,18 @@ def detect_summarization_choices(current: Optional[str] = None) -> list[dict[str
     if is_apple_silicon:
         try:
             import mlx_lm  # noqa
+            mlx_model = get_default_provider_model("summarization", "mlx") or "mlx-community/Llama-3.2-3B-Instruct-4bit"
             choices.append({
-                "name": "MLX on Apple Silicon (Llama-3.2-3B-Instruct)",
-                "value": ("mlx", {"model": "mlx-community/Llama-3.2-3B-Instruct-4bit"}),
+                "name": f"MLX on Apple Silicon ({mlx_model})",
+                "value": ("mlx", {"model": mlx_model}),
                 "available": True,
                 "hint": "Apple Silicon, local",
                 "default": current == "mlx" if current else False,
             })
         except ImportError:
+            mlx_model = get_default_provider_model("summarization", "mlx") or "mlx-community/Llama-3.2-3B-Instruct-4bit"
             choices.append({
-                "name": "MLX on Apple Silicon (Llama-3.2-3B-Instruct)",
+                "name": f"MLX on Apple Silicon ({mlx_model})",
                 "value": None,
                 "available": False,
                 "hint": "requires: uv tool install 'keep-skill[local]'",

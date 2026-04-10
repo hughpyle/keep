@@ -12,16 +12,19 @@ import tomllib
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
 # tomli_w for writing TOML (tomllib is read-only)
 import tomli_w
+import yaml
 
 
 CONFIG_FILENAME = "keep.toml"
 CONFIG_VERSION = 3  # Bumped for document versioning support
 SYSTEM_DOCS_VERSION = 20  # Legacy — kept for backward-compat reading of old configs
+DEFAULT_PROVIDER_MODELS_FILENAME = "default-provider-models.yaml"
 
 
 def get_tool_directory() -> Path:
@@ -255,6 +258,78 @@ class StoreConfig:
         return self.config_path.exists()
 
 
+@lru_cache(maxsize=1)
+def load_default_provider_models() -> dict[str, dict[str, dict[str, Any]]]:
+    """Load bundled default provider params from package data."""
+    defaults_path = Path(str(importlib.resources.files("keep"))) / "data" / DEFAULT_PROVIDER_MODELS_FILENAME
+    try:
+        raw = yaml.safe_load(defaults_path.read_text(encoding="utf-8")) or {}
+    except (FileNotFoundError, OSError, yaml.YAMLError):
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    defaults: dict[str, dict[str, dict[str, Any]]] = {}
+    for kind, entries in raw.items():
+        if not isinstance(kind, str) or not isinstance(entries, dict):
+            continue
+        section: dict[str, dict[str, Any]] = {}
+        for provider, params in entries.items():
+            if not isinstance(provider, str) or not isinstance(params, dict):
+                continue
+            section[provider] = {str(key): value for key, value in params.items()}
+        defaults[kind] = section
+    return defaults
+
+
+def get_default_provider_params(kind: str, provider: str) -> dict[str, Any]:
+    """Return bundled default params for a provider role."""
+    params = load_default_provider_models().get(kind, {}).get(provider, {})
+    return dict(params) if isinstance(params, dict) else {}
+
+
+def get_default_provider_model(kind: str, provider: str) -> str | None:
+    """Return the bundled default model name for a provider role."""
+    model = get_default_provider_params(kind, provider).get("model")
+    return model if isinstance(model, str) and model else None
+
+
+def merge_default_provider_params(
+    kind: str,
+    provider: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Merge bundled default params with explicit params, favoring explicit values."""
+    merged = get_default_provider_params(kind, provider)
+    if params:
+        merged.update(params)
+    return merged
+
+
+def make_default_provider_config(
+    kind: str,
+    provider: str,
+    *,
+    extra_params: dict[str, Any] | None = None,
+) -> "ProviderConfig":
+    """Create a provider config populated from bundled defaults."""
+    params = merge_default_provider_params(kind, provider, extra_params)
+    return ProviderConfig(provider, params)
+
+
+def _prefer_ollama_model(models: list[str], preferred_model: str | None) -> str | None:
+    """Prefer a configured Ollama model base name when present."""
+    if not models:
+        return None
+    if preferred_model:
+        preferred_base = preferred_model.split(":")[0]
+        for model in models:
+            if model.split(":")[0] == preferred_base:
+                return model
+    return models[0]
+
+
 
 
 def _detect_ollama() -> dict | None:
@@ -359,11 +434,17 @@ def _ollama_pick_models(models: list[str]) -> tuple[str, str | None]:
         else:
             generative_models.append(m)
 
-    # For embeddings: prefer dedicated embedding model, else first available
-    embed_model = embed_models[0] if embed_models else models[0]
+    # For embeddings: prefer the configured default base name when present.
+    embed_model = _prefer_ollama_model(
+        embed_models,
+        get_default_provider_model("embedding", "ollama"),
+    ) or models[0]
 
     # For summarization: need a generative model (embedding models can't generate text)
-    chat_model = generative_models[0] if generative_models else None
+    chat_model = _prefer_ollama_model(
+        generative_models,
+        get_default_provider_model("summarization", "ollama"),
+    )
 
     return embed_model, chat_model
 
@@ -373,9 +454,9 @@ OLLAMA_VISION_KEYWORDS = ("llava", "moondream", "bakllava", "llama3.2-vision")
 # gemma3 has vision at 4b+, not 1b
 _GEMMA3_MIN_VISION_SIZE = 4
 # Default vision model to pull when none available.
-OLLAMA_DEFAULT_VISION_MODEL = "gemma3:4b"
+OLLAMA_DEFAULT_VISION_MODEL = get_default_provider_model("media", "ollama") or "gemma3:4b"
 # Default OCR model to pull when none available.
-OLLAMA_DEFAULT_OCR_MODEL = "glm-ocr"
+OLLAMA_DEFAULT_OCR_MODEL = get_default_provider_model("content_extractor", "ollama") or "glm-ocr"
 
 
 def _ollama_vision_models(models: list[str]) -> list[str]:
@@ -395,6 +476,8 @@ def _ollama_vision_models(models: list[str]) -> list[str]:
                     result.append(m)
             except ValueError:
                 pass
+    preferred = OLLAMA_DEFAULT_VISION_MODEL.split(":")[0]
+    result.sort(key=lambda model: 0 if model.split(":")[0] == preferred else 1)
     return result
 
 
@@ -405,12 +488,12 @@ def _detect_content_extractor() -> "ProviderConfig | None":
     """
     # 1. Mistral OCR (high-quality cloud OCR)
     if not os.environ.get("KEEP_LOCAL_ONLY") and os.environ.get("MISTRAL_API_KEY"):
-        return ProviderConfig("mistral")
+        return make_default_provider_config("content_extractor", "mistral")
 
     # 2. Ollama
     ollama = _detect_ollama()
     if ollama:
-        params: dict[str, Any] = {"model": "glm-ocr"}
+        params = merge_default_provider_params("content_extractor", "ollama")
         if ollama["base_url"] != "http://localhost:11434":
             params["base_url"] = ollama["base_url"]
         return ProviderConfig("ollama", params)
@@ -419,7 +502,7 @@ def _detect_content_extractor() -> "ProviderConfig | None":
     if platform.system() == "Darwin" and platform.machine() == "arm64":
         try:
             import mlx_vlm  # noqa
-            return ProviderConfig("mlx")
+            return make_default_provider_config("content_extractor", "mlx")
         except ImportError:
             pass
 
@@ -502,18 +585,15 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
 
     # 1. API providers first (Voyage uses direct REST, no SDK import needed)
     if has_voyage_key:
-        embedding_provider = ProviderConfig("voyage", {"model": "voyage-3.5-lite"})
+        embedding_provider = make_default_provider_config("embedding", "voyage")
     elif has_openai_key:
-        embedding_provider = ProviderConfig("openai")
+        embedding_provider = make_default_provider_config("embedding", "openai")
     elif has_gemini_key:
-        embedding_provider = ProviderConfig("gemini")
+        embedding_provider = make_default_provider_config("embedding", "gemini")
     elif has_mistral_key:
-        embedding_provider = ProviderConfig("mistral")
+        embedding_provider = make_default_provider_config("embedding", "mistral")
     elif has_openrouter_key:
-        embedding_provider = ProviderConfig(
-            "openrouter",
-            {"model": "openai/text-embedding-3-small"},
-        )
+        embedding_provider = make_default_provider_config("embedding", "openrouter")
 
     # 2. Ollama (local server, no API key needed)
     if embedding_provider is None:
@@ -531,14 +611,14 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
             try:
                 import mlx.core  # noqa
                 import sentence_transformers  # noqa  — MLX embedding uses sentence-transformers
-                embedding_provider = ProviderConfig("mlx", {"model": "all-MiniLM-L6-v2"})
+                embedding_provider = make_default_provider_config("embedding", "mlx")
             except ImportError:
                 pass
 
         if embedding_provider is None:
             try:
                 import sentence_transformers  # noqa
-                embedding_provider = ProviderConfig("sentence-transformers")
+                embedding_provider = make_default_provider_config("embedding", "sentence-transformers")
             except ImportError:
                 pass
 
@@ -551,18 +631,15 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
 
     # 1. API providers
     if has_anthropic_key:
-        summarization_provider = ProviderConfig("anthropic", {"model": "claude-haiku-4-5-20251001"})
+        summarization_provider = make_default_provider_config("summarization", "anthropic")
     elif has_openai_key:
-        summarization_provider = ProviderConfig("openai")
+        summarization_provider = make_default_provider_config("summarization", "openai")
     elif has_gemini_key:
-        summarization_provider = ProviderConfig("gemini")
+        summarization_provider = make_default_provider_config("summarization", "gemini")
     elif has_mistral_key:
-        summarization_provider = ProviderConfig("mistral")
+        summarization_provider = make_default_provider_config("summarization", "mistral")
     elif has_openrouter_key:
-        summarization_provider = ProviderConfig(
-            "openrouter",
-            {"model": "openai/gpt-4o-mini"},
-        )
+        summarization_provider = make_default_provider_config("summarization", "openrouter")
 
     # 2. Ollama (needs a generative model, not embedding-only)
     if summarization_provider is None:
@@ -579,7 +656,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
     if summarization_provider is None and is_apple_silicon:
         try:
             import mlx_lm  # noqa
-            summarization_provider = ProviderConfig("mlx", {"model": "mlx-community/Llama-3.2-3B-Instruct-4bit"})
+            summarization_provider = make_default_provider_config("summarization", "mlx")
         except ImportError:
             pass
 
@@ -599,7 +676,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
         if ollama:
             vision_models = _ollama_vision_models(ollama["models"])
             if vision_models:
-                params: dict[str, Any] = {"model": vision_models[0]}
+                params = merge_default_provider_params("media", "ollama", {"model": vision_models[0]})
                 if ollama["base_url"] != "http://localhost:11434":
                     params["base_url"] = ollama["base_url"]
                 media_provider = ProviderConfig("ollama", params)
@@ -619,7 +696,7 @@ def detect_default_providers() -> dict[str, ProviderConfig | None]:
             except ImportError:
                 pass
         if _has_media_mlx:
-            media_provider = ProviderConfig("mlx")
+            media_provider = make_default_provider_config("media", "mlx")
 
     providers["media"] = media_provider
 

@@ -83,7 +83,7 @@ class TestOpenRouterEmbedding:
 
     def test_requires_api_key(self):
         with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
-            OpenRouterEmbedding()
+            OpenRouterEmbedding(model="openai/text-embedding-3-small")
 
     def test_embed_passes_dimensions_headers_and_input_type(self, monkeypatch):
         fake_client = _FakeClient()
@@ -170,7 +170,7 @@ class TestOpenRouterConfigDetection:
         assert providers["embedding"].name == "openrouter"
         assert providers["embedding"].params["model"] == "openai/text-embedding-3-small"
         assert providers["summarization"].name == "openrouter"
-        assert providers["summarization"].params["model"] == "openai/gpt-4o-mini"
+        assert providers["summarization"].params["model"] == "openai/gpt-4.1-mini"
 
     def test_direct_openai_beats_openrouter(self, monkeypatch):
         monkeypatch.setattr("keep.config._detect_ollama", lambda: None)

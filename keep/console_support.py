@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 _URI_SCHEME_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
 
 from .api import Keeper
-from .config import get_tool_directory
+from .config import get_default_provider_model, get_tool_directory
 from .logging_config import configure_quiet_mode, enable_debug_mode
 from .provider_identity import provider_model_name
 from .projections import plan_find_context_render, render_find_context_plan
@@ -1340,14 +1340,38 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
         lines.append("#   GOOGLE_CLOUD_PROJECT → Vertex AI (uses Workload Identity / ADC)")
         lines.append("#")
         lines.append("# Models (configure in keep.toml):")
-        lines.append("#   voyage: voyage-3.5-lite (default), voyage-3-large, voyage-code-3")
-        lines.append("#   anthropic: claude-3-haiku-20240307 (default), claude-3-5-haiku-20241022")
-        lines.append("#   openai embedding: text-embedding-3-small (default), text-embedding-3-large")
-        lines.append("#   openai summarization: gpt-4o-mini (default)")
-        lines.append("#   openrouter embedding: openai/text-embedding-3-small (default)")
-        lines.append("#   openrouter summarization: openai/gpt-4o-mini (default)")
-        lines.append("#   gemini embedding: text-embedding-004 (default)")
-        lines.append("#   gemini summarization: gemini-2.5-flash (default)")
+        lines.append(
+            f"#   voyage: {get_default_provider_model('embedding', 'voyage') or 'voyage-3.5-lite'} (default), "
+            "voyage-3-large, voyage-code-3"
+        )
+        lines.append(
+            f"#   anthropic: {get_default_provider_model('summarization', 'anthropic') or 'claude-haiku-4-5-20251001'} "
+            "(default), claude-3-5-haiku-20241022"
+        )
+        lines.append(
+            f"#   openai embedding: {get_default_provider_model('embedding', 'openai') or 'text-embedding-3-small'} "
+            "(default), text-embedding-3-large"
+        )
+        lines.append(
+            f"#   openai summarization: {get_default_provider_model('summarization', 'openai') or 'gpt-4.1-mini'} "
+            "(default)"
+        )
+        lines.append(
+            f"#   openrouter embedding: {get_default_provider_model('embedding', 'openrouter') or 'openai/text-embedding-3-small'} "
+            "(default)"
+        )
+        lines.append(
+            f"#   openrouter summarization: {get_default_provider_model('summarization', 'openrouter') or 'openai/gpt-4.1-mini'} "
+            "(default)"
+        )
+        lines.append(
+            f"#   gemini embedding: {get_default_provider_model('embedding', 'gemini') or 'text-embedding-004'} "
+            "(default)"
+        )
+        lines.append(
+            f"#   gemini summarization: {get_default_provider_model('summarization', 'gemini') or 'gemini-2.5-flash'} "
+            "(default)"
+        )
         lines.append("#")
         lines.append("# Ollama (auto-detected if running, no API key needed):")
         lines.append("#   OLLAMA_HOST        → default: http://localhost:11434")

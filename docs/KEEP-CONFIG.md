@@ -160,7 +160,7 @@ keep put "test"
 ```
 
 OpenRouter accepts OpenRouter-prefixed model names such as
-`openai/text-embedding-3-small` and `openai/gpt-4o-mini`. For common models,
+`openai/text-embedding-3-small` and `openai/gpt-4.1-mini`. For common models,
 bare names are accepted and normalized to the prefixed form in config and
 diagnostics.
 
@@ -183,7 +183,7 @@ provider choices in keep:
 | Local or self-hosted OpenAI-compatible server (`llama-server`, vLLM, LM Studio, LocalAI) | `openai` | `name = "openai"` plus `base_url = "http://..."` |
 
 - Choose **`openai`** when you want OpenAI's API directly.
-- Choose **`openrouter`** when you want OpenRouter's routing, prefixed model names such as `openai/gpt-4o-mini`, or OpenRouter-specific headers.
+- Choose **`openrouter`** when you want OpenRouter's routing, prefixed model names such as `openai/gpt-4.1-mini`, or OpenRouter-specific headers.
 - Choose **`openai` + `base_url`** when you are talking to a local or self-hosted server that implements the OpenAI API. This is the path for **llama-server** (llama.cpp), **vLLM**, **LM Studio**, and similar servers.
 - Do not use `openai` with `base_url = "https://openrouter.ai/api/v1"` in keep. OpenRouter is a first-class provider because its config, model naming, and headers differ from direct OpenAI and local compatible servers.
 
@@ -216,14 +216,19 @@ Any provider that works with keep (Ollama, MLX, API-based) works with Claude Des
 
 ### Available Models
 
+Bundled default model choices live in
+`keep/data/default-provider-models.yaml`. They are used only when the
+corresponding provider is selected and `keep.toml` does not set an explicit
+`model`.
+
 | Provider | Type | Models |
 |----------|------|--------|
 | **Voyage** | Embeddings | `voyage-3.5-lite` (default), `voyage-3-large`, `voyage-code-3` |
-| **Anthropic** | Summarization | `claude-3-haiku-20240307` (default, $0.25/MTok), `claude-3-5-haiku-20241022` |
+| **Anthropic** | Summarization | `claude-haiku-4-5-20251001` (default), `claude-3-5-haiku-20241022` |
 | **OpenAI** | Embeddings | `text-embedding-3-small` (default), `text-embedding-3-large` |
-| **OpenAI** | Summarization | `gpt-4o-mini` (default), `gpt-4o` |
+| **OpenAI** | Summarization | `gpt-4.1-mini` (default), `gpt-4.1` |
 | **OpenRouter** | Embeddings | `openai/text-embedding-3-small` (default), `openai/text-embedding-3-large` |
-| **OpenRouter** | Summarization | `openai/gpt-4o-mini` (default), other OpenRouter model slugs |
+| **OpenRouter** | Summarization | `openai/gpt-4.1-mini` (default), other OpenRouter model slugs |
 | **Gemini** | Embeddings | `text-embedding-004` (default) |
 | **Gemini** | Summarization | `gemini-2.5-flash` (default), `gemini-2.5-pro` |
 | **Mistral** | Embeddings | `mistral-embed` (default, 1024 dims) |

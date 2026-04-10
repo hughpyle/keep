@@ -31,6 +31,21 @@ class EmbedTask(str, Enum):
     QUERY = "query"
 
 
+def require_provider_param(
+    value: str | None,
+    *,
+    provider: str,
+    param: str = "model",
+) -> str:
+    """Require an explicit provider parameter after config/default resolution."""
+    if value:
+        return value
+    raise ValueError(
+        f"{provider} requires `{param}` to be configured. "
+        "Create providers through keep config/default resolution or pass it explicitly."
+    )
+
+
 # -----------------------------------------------------------------------------
 # Document Fetching
 # -----------------------------------------------------------------------------
@@ -111,7 +126,7 @@ class EmbeddingProvider(Protocol):
     
     Example implementation:
         class SentenceTransformerEmbedding:
-            def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+            def __init__(self, model_name: str):
                 from sentence_transformers import SentenceTransformer
                 self.model = SentenceTransformer(model_name)
             
@@ -295,7 +310,7 @@ class SummarizationProvider(Protocol):
     
     Example implementation:
         class OpenAISummarization:
-            def __init__(self, model: str = "gpt-4o-mini"):
+            def __init__(self, model: str = "gpt-4.1-mini"):
                 self.client = OpenAI()
                 self.model = model
             
@@ -593,7 +608,12 @@ class ProviderRegistry:
                 f"Install missing dependencies or check provider name."
             )
         try:
-            return providers[name](**(params or {}))
+            merged_params = params or {}
+            if kind in {"embedding", "summarization", "media", "content_extractor"}:
+                from ..config import merge_default_provider_params  # noqa: PLC0415
+
+                merged_params = merge_default_provider_params(kind, name, merged_params)
+            return providers[name](**merged_params)
         except ImportError as e:
             raise RuntimeError(
                 f"Failed to create {kind} provider '{name}': {e}\n"

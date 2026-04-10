@@ -9,6 +9,7 @@ from .base import (
     SUMMARIZATION_SYSTEM_PROMPT,
     build_summarization_prompt,
     get_registry,
+    require_provider_param,
     strip_summary_preamble,
 )
 from .openai_client import create_openai_client
@@ -114,13 +115,14 @@ class OpenRouterEmbedding:
 
     def __init__(
         self,
-        model: str = "openai/text-embedding-3-small",
+        model: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
         dimensions: int | None = None,
         site_url: str | None = None,
         app_name: str | None = None,
     ):
+        model = require_provider_param(model, provider="OpenRouterEmbedding")
         self.model_name = canonicalize_openrouter_model(model)
         self._dimension = dimensions or self.MODEL_DIMENSIONS.get(self.model_name)
         self._dimensions = dimensions
@@ -178,13 +180,14 @@ class OpenRouterSummarization:
 
     def __init__(
         self,
-        model: str = "openai/gpt-4o-mini",
+        model: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
         max_tokens: int = 200,
         site_url: str | None = None,
         app_name: str | None = None,
     ):
+        model = require_provider_param(model, provider="OpenRouterSummarization")
         self.model_name = canonicalize_openrouter_model(model)
         self.max_tokens = max_tokens
         self._client = _create_openrouter_client(
