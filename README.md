@@ -65,7 +65,7 @@ Run `keep` (or `keep config --setup`) and the interactive wizard offers to insta
 
 | Tool | How to install |
 |------|-------------|
-| **[Hermes Agent](docs/HERMES-INTEGRATION.md)** | `hermes memory setup` (currently requires [this branch](https://github.com/NousResearch/hermes-agent/pull/5172)). Fully integrated, with [additional skills](https://github.com/keepnotes-ai/hermes-skills) available. |
+| **[Hermes Agent](docs/HERMES-INTEGRATION.md)** | `curl -sSL https://keepnotes.ai/scripts/install-hermes.sh \| bash` — installs plugin and runs setup. Fully integrated, with [additional skills](https://github.com/keepnotes-ai/hermes-skills) available. |
 | **[OpenClaw](docs/OPENCLAW-INTEGRATION.md)** | `openclaw plugins install clawhub:keep` (or `-l $(keep config openclaw-plugin)` from a local checkout). After that, `keep config --setup` keeps the plugin upgraded. Context engine plugin — full memory assembly, session archival, reflection triggers. |
 | **Claude Desktop** | `keep config --setup`, then `keep config mcpb` to generate and open the .mcpb bundle ([details](docs/CLAUDE-DESKTOP.md)) |
 | **Claude Code** | `/plugin marketplace add https://github.com/keepnotes-ai/keep.git` then `/plugin install keep@keepnotes-ai` |
