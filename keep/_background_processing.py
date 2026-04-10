@@ -1410,8 +1410,9 @@ class BackgroundProcessingMixin:
                             or utc_now()
                         )
                         now = utc_now()
-                        self._document_store.upsert(
-                            doc_coll, target_id,
+                        self._stub_via_flow(
+                            id=target_id,
+                            content="",
                             summary="",
                             tags={
                                 "_created": reference_created,
@@ -1419,17 +1420,7 @@ class BackgroundProcessingMixin:
                                 "_source": "auto-vivify",
                             },
                             created_at=reference_created,
-                        )
-                        self._pending_queue.enqueue(
-                            target_id, doc_coll, "",
-                            task_type="reindex",
-                            metadata={
-                                "tags": {
-                                    "_created": reference_created,
-                                    "_updated": now,
-                                    "_source": "auto-vivify",
-                                },
-                            },
+                            queue_background_tasks=True,
                         )
                     created = doc.tags.get("_created") or doc.tags.get("_updated") or utc_now()
                     self._document_store.upsert_edge(

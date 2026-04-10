@@ -5,35 +5,31 @@ from typing import Any
 from . import action
 
 
-@action(id="put")
-class Put:
-    """Store content or index a URI in memory."""
+@action(id="stub")
+class Stub:
+    """Create a stub note if absent, preserving existing notes."""
 
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
-        content = params.get("content")
-        uri = params.get("uri")
-        if content is None and uri is None:
-            raise ValueError("put requires content or uri")
+        item_id = params.get("id")
+        if item_id is None or str(item_id).strip() == "":
+            raise ValueError("stub requires id")
 
         tags = params.get("tags")
         normalized_tags = {str(k): v for k, v in tags.items()} if isinstance(tags, dict) else None
         summary = params.get("summary")
-        item_id = params.get("id")
         created_at = params.get("created_at")
-        force = bool(params.get("force", False))
         raw_queue_background_tasks = params.get("queue_background_tasks")
         queue_background_tasks = (
             True if raw_queue_background_tasks is None else bool(raw_queue_background_tasks)
         )
+        content = params.get("content")
 
-        item = context.put(
+        item = context.stub(
+            id=str(item_id),
             content=str(content) if content is not None else None,
-            uri=str(uri) if uri is not None else None,
-            id=str(item_id) if item_id is not None else None,
             tags=normalized_tags,
             summary=str(summary) if summary is not None else None,
             created_at=str(created_at) if created_at is not None else None,
-            force=force,
             queue_background_tasks=queue_background_tasks,
         )
         return {

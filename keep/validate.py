@@ -562,6 +562,8 @@ _known_actions: set[str] | None = None
 
 def _check_action_name(result: ValidationResult, name: str, loc: str) -> None:
     """Check if an action name is known."""
+    if str(name or "").strip().startswith(".state/"):
+        return
     global _known_actions
     if _known_actions is None:
         try:
@@ -683,6 +685,18 @@ def _extract_edges(
     edges: list[tuple[str, str, str]],
 ) -> None:
     """Extract transition/terminal edges from a single rule."""
+    # do: .state/foo -> child flow invocation
+    action_name = str(rule.get("do") or "").strip()
+    if action_name.startswith(".state/"):
+        target = action_name.removeprefix(".state/").strip()
+        if target:
+            label = guard
+            if label:
+                label = f"{label} / call"
+            else:
+                label = "call"
+            edges.append((state_name, target, label))
+
     # return → terminal (encode status in destination as "[*]:status")
     if "return" in rule:
         ret = rule["return"]

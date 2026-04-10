@@ -120,6 +120,24 @@ identifier. Set in `Keeper.put()`.
 
 ---
 
+## Assessment tags
+
+Set by the assessment flow (`.state/assess`) when a URL reputation check runs.
+
+| Tag | Set by | Purpose |
+|-----|--------|---------|
+| `assessment_virustotal` | `assess_virustotal` action | Verdict: `ok`, `suspicious`, or `malicious` |
+| `assessment_virustotal_checked_at` | `assess_virustotal` action | UTC ISO timestamp of the check |
+
+These are only added when `VIRUSTOTAL_API_KEY` (or `VT_API_KEY`) is set and the target is an HTTP URL. Notes tagged `assessment_virustotal: malicious` have their content replaced with an explanatory message and do not trigger background processing.
+
+Query assessed notes:
+```python
+kp.list_items(tags={"assessment_virustotal": "malicious"})
+```
+
+---
+
 ## Pipeline state tags
 
 These tags exist on items so pipeline actions can skip work that's already

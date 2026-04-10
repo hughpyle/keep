@@ -3,6 +3,7 @@ tags:
   category: system
   context: state
 ---
+# List version history for a note.
 match: sequence
 rules:
   - id: versions

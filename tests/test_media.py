@@ -4,6 +4,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from keep.api import Keeper
 from keep.config import ProviderConfig
 from keep.providers.base import MediaDescriber, get_registry
 
@@ -139,17 +140,12 @@ class TestAfterWriteStateDoc:
     """
 
     @pytest.fixture
-    def after_write_doc(self):
-        from keep.state_doc import parse_state_doc, parse_fragment, merge_fragments
-        from keep.builtin_state_docs import BUILTIN_STATE_DOCS, BUILTIN_STATE_FRAGMENTS
-        base = parse_state_doc("after-write", BUILTIN_STATE_DOCS["after-write"])
-        builtin_frags = BUILTIN_STATE_FRAGMENTS.get("after-write", {})
-        fragments = []
-        for name in sorted(builtin_frags):
-            fragments.append(parse_fragment(name, builtin_frags[name]))
-        if fragments:
-            base = merge_fragments(base, fragments)
-        return base
+    def after_write_doc(self, mock_providers, tmp_path):
+        kp = Keeper(store_path=tmp_path)
+        kp.ensure_sysdocs()
+        doc = kp._load_state_doc("after-write")
+        assert doc is not None
+        return doc
 
     def _eval(self, doc, system=None, **item_overrides):
         from keep.state_doc import evaluate_state_doc
@@ -179,10 +175,28 @@ class TestAfterWriteStateDoc:
         assert "resolve_duplicates" in actions
 
     def test_short_content_skips_analyze(self, after_write_doc):
-        """Content below 500 chars skips analyze (not enough to decompose)."""
+        """Short inline notes skip analyze until they cross the size threshold."""
         actions = self._eval(after_write_doc, content_length=50)
         assert "analyze" not in actions
         assert "auto_tag" in actions  # tagging still runs
+
+    def test_link_stub_skips_analyze(self, after_write_doc):
+        """Extracted-link stubs should not spend analyzer work on placeholder content."""
+        actions = self._eval(
+            after_write_doc,
+            content_length=1000,
+            tags={"_source": "link"},
+        )
+        assert "analyze" not in actions
+
+    def test_auto_vivify_stub_skips_analyze(self, after_write_doc):
+        """Auto-vivified stubs also skip analyze."""
+        actions = self._eval(
+            after_write_doc,
+            content_length=1000,
+            tags={"_source": "auto-vivify"},
+        )
+        assert "analyze" not in actions
 
     def test_long_content_fires_summarize(self, after_write_doc):
         """Content exceeding max_summary_length fires summarize."""
@@ -215,10 +229,10 @@ class TestAfterWriteStateDoc:
         assert "ocr" in actions
 
     def test_no_content_skips_tag(self, after_write_doc):
-        """Empty content skips auto_tag (nothing to classify)."""
+        """Empty inline content skips both auto_tag and analyze."""
         actions = self._eval(after_write_doc, has_content=False)
         assert "auto_tag" not in actions
-        assert "analyze" not in actions  # short content also skips analyze
+        assert "analyze" not in actions
 
     def test_markdown_fires_extract_links(self, after_write_doc):
         """Markdown content fires extract_links."""

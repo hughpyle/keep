@@ -3,6 +3,7 @@ tags:
   category: system
   context: state
 ---
+# List notes with filters (tags, date range, prefix, ordering).
 match: sequence
 rules:
   - id: results

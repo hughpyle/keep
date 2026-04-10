@@ -12,7 +12,7 @@ import pytest
 from unittest.mock import patch
 
 from keep.api import Keeper, FindResults
-from keep.const import STATE_DELETE, STATE_MOVE, STATE_PUT, STATE_TAG
+from keep.const import STATE_ASSESS, STATE_DELETE, STATE_MOVE, STATE_PUT, STATE_STUB, STATE_TAG
 from keep.state_doc import parse_state_doc
 from keep.state_doc_runtime import run_flow
 
@@ -84,6 +84,184 @@ class TestWritePathFlow:
         )
         assert updated.summary == second
         assert updated.tags["_body_authority"] == "markdown"
+
+    def test_assess_builtin_returns_noop_payload(self, kp):
+        """With VT bundled but no API key, assess returns 'disabled' (no-op)."""
+        result = kp.run_flow_command(STATE_ASSESS, params={"target_id": "x"}, budget=2)
+
+        assert result.status == "done"
+        # VT fragment fires but has no API key → assessment: disabled.
+        # All caller params pass through unchanged.
+        assert result.data["assessment"] == "disabled"
+        assert result.data["stop_processing"] is False
+        assert result.data["skip_fetch"] is False
+
+    def test_put_flow_uses_assessed_directives(self, kp):
+        """A custom assess fragment can rewrite the final put directives."""
+        kp._put_direct(
+            """\
+order: before:default
+rules:
+  - return:
+      status: done
+      with:
+        assessment: "malicious"
+        id: "blocked-note"
+        uri: null
+        content: "Blocked by assessment"
+        tags:
+          assessment_test: "blocked"
+        summary: "Blocked summary"
+        created_at: null
+        force: false
+        queue_background_tasks: false
+        stop_processing: true
+        skip_fetch: true
+""",
+            id=".state/assess/aaa-test",
+            queue_background_tasks=False,
+        )
+        queue = kp._get_work_queue()
+        queue.claim("drain", limit=200)
+
+        result = kp.run_flow_command(
+            STATE_PUT,
+            params={"uri": "https://example.com"},
+            budget=4,
+        )
+
+        assert result.status == "done"
+        stored = kp.get("blocked-note")
+        assert stored is not None
+        assert stored.summary == "Blocked summary"
+        assert stored.tags.get("assessment_test") == "blocked"
+        assert queue.claim("test", limit=20) == []
+
+    def test_stub_flow_uses_assessed_directives(self, kp):
+        """A custom assess fragment can rewrite the final stub directives."""
+        kp._put_direct(
+            """\
+order: before:default
+rules:
+  - return:
+      status: done
+      with:
+        assessment: "suspicious"
+        id: "{params.id}"
+        uri: null
+        content: "Assessed stub"
+        tags:
+          assessment_test: "stubbed"
+        summary: "Stub summary"
+        created_at: null
+        force: false
+        queue_background_tasks: false
+        stop_processing: false
+        skip_fetch: false
+""",
+            id=".state/assess/aaa-test",
+            queue_background_tasks=False,
+        )
+        queue = kp._get_work_queue()
+        queue.claim("drain", limit=200)
+
+        result = kp.run_flow_command(
+            STATE_STUB,
+            params={"id": "assessed-stub", "content": "Ignored placeholder"},
+            budget=4,
+        )
+
+        assert result.status == "done"
+        stored = kp.get("assessed-stub")
+        assert stored is not None
+        assert stored.summary == "Stub summary"
+        assert stored.tags.get("assessment_test") == "stubbed"
+        assert queue.claim("test", limit=20) == []
+
+    def test_stub_flow_inserts_if_absent_with_default_source(self, kp):
+        """The builtin stub flow inserts a stub note without clobbering later content."""
+        result = kp.run_flow_command(
+            STATE_STUB,
+            params={"id": "stub-flow", "content": "Placeholder"},
+            budget=4,
+        )
+
+        assert result.status == "done"
+        stored = kp.get("stub-flow")
+        assert stored is not None
+        assert stored.summary == "Placeholder"
+        assert stored.tags.get("_source") == "auto-vivify"
+        assert result.data["stored"]["changed"] is True
+
+        kp._put_direct("Real content", id="stub-flow", queue_background_tasks=False)
+        second = kp.run_flow_command(
+            STATE_STUB,
+            params={"id": "stub-flow", "content": "Ignored placeholder"},
+            budget=4,
+        )
+
+        assert second.status == "done"
+        assert second.data["stored"]["changed"] is False
+        preserved = kp.get("stub-flow")
+        assert preserved is not None
+        assert preserved.summary == "Real content"
+
+    def test_stub_flow_preserves_explicit_source_and_queue_flag(self, kp):
+        """Stub flow preserves caller provenance and can suppress follow-up queue work."""
+        queue = kp._get_work_queue()
+        queue.claim("drain", limit=200)
+
+        result = kp.run_flow_command(
+            STATE_STUB,
+            params={
+                "id": "stub-link",
+                "content": "https://example.com",
+                "tags": {"_source": "link"},
+                "queue_background_tasks": False,
+            },
+            budget=4,
+        )
+
+        assert result.status == "done"
+        stored = kp.get("stub-link")
+        assert stored is not None
+        assert stored.tags.get("_source") == "link"
+        assert queue.claim("test", limit=20) == []
+
+    def test_stub_via_flow_uses_flow_when_state_doc_is_present(self, kp):
+        """Bootstrap fallback should only apply while .state/stub is absent."""
+        flow_item = object()
+        original_get = kp._document_store.get
+
+        def fake_get(collection, item_id):
+            if item_id == ".state/stub":
+                return {"id": ".state/stub"}
+            return original_get(collection, item_id)
+
+        with (
+            patch.object(kp, "_stub_direct") as stub_direct,
+            patch("keep.api.flow_stub_item", return_value=flow_item) as flow_stub,
+            patch.object(kp._document_store, "get", side_effect=fake_get),
+        ):
+            kp._needs_sysdoc_migration = True
+            result = kp._stub_via_flow(
+                id="flow-eligible-stub",
+                content="Placeholder",
+                tags={"_source": "link"},
+                queue_background_tasks=False,
+            )
+
+        assert result is flow_item
+        stub_direct.assert_not_called()
+        flow_stub.assert_called_once_with(
+            kp,
+            id="flow-eligible-stub",
+            content="Placeholder",
+            summary=None,
+            tags={"_source": "link"},
+            created_at=None,
+            queue_background_tasks=False,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -806,7 +984,8 @@ class TestFlowValidation:
     """Verify that missing required params produce error bindings, not silent nulls."""
 
     def test_put_missing_content(self, kp):
-        r = kp.run_flow_command(STATE_PUT, params={}, budget=1)
+        # put now calls assess first, so the validation path needs 3 ticks.
+        r = kp.run_flow_command(STATE_PUT, params={}, budget=3)
         assert r.data.get("stored", {}).get("error")
         assert "content" in r.data["stored"]["error"]
 

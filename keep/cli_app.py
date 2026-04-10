@@ -813,6 +813,32 @@ def _put_directory(
 ) -> None:
     """Index files from a directory via the daemon HTTP API."""
     from .utils import _list_directory_files
+    max_dir_files = 1000
+
+    # Fast local precheck so obviously ineligible directories fail before
+    # we try to bootstrap the daemon just to discover there is nothing to do.
+    preflight_files = _list_directory_files(
+        resolved_path,
+        recurse=recurse,
+        exclude=exclude or None,
+    )
+    if not preflight_files:
+        typer.echo(f"Error: no eligible files in {resolved_path}/", err=True)
+        hint = "hidden files and symlinks are skipped"
+        if not recurse:
+            hint += "; use -r to recurse into subdirectories"
+        typer.echo(f"Hint: {hint}", err=True)
+        raise typer.Exit(1)
+    if len(preflight_files) > max_dir_files:
+        typer.echo(
+            f"Error: directory has {len(preflight_files)} files (max {max_dir_files})",
+            err=True,
+        )
+        typer.echo(
+            "Hint: increase max_dir_files in keep.toml or index files individually",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     # Get ignore patterns from the store's .ignore doc (if any)
     ignore_patterns: list[str] = []
@@ -835,9 +861,11 @@ def _put_directory(
         typer.echo(f"Hint: {hint}", err=True)
         raise typer.Exit(1)
 
-    MAX_DIR_FILES = 1000
-    if len(files) > MAX_DIR_FILES:
-        typer.echo(f"Error: directory has {len(files)} files (max {MAX_DIR_FILES})", err=True)
+    if len(files) > max_dir_files:
+        typer.echo(
+            f"Error: directory has {len(files)} files (max {max_dir_files})",
+            err=True,
+        )
         typer.echo("Hint: increase max_dir_files in keep.toml or index files individually", err=True)
         raise typer.Exit(1)
 
@@ -1033,9 +1061,34 @@ def put(
                 typer.echo("Error: --id cannot be used with directory mode", err=True)
                 raise typer.Exit(1)
             # Directory mode — iterate locally, put each file via HTTP
+            resolved_dir = Path(source).resolve()
+            from .utils import _list_directory_files
+            max_dir_files = 1000
+            preflight_files = _list_directory_files(
+                resolved_dir,
+                recurse=recurse,
+                exclude=exclude or None,
+            )
+            if not preflight_files:
+                typer.echo(f"Error: no eligible files in {resolved_dir}/", err=True)
+                hint = "hidden files and symlinks are skipped"
+                if not recurse:
+                    hint += "; use -r to recurse into subdirectories"
+                typer.echo(f"Hint: {hint}", err=True)
+                raise typer.Exit(1)
+            if len(preflight_files) > max_dir_files:
+                typer.echo(
+                    f"Error: directory has {len(preflight_files)} files (max {max_dir_files})",
+                    err=True,
+                )
+                typer.echo(
+                    "Hint: increase max_dir_files in keep.toml or index files individually",
+                    err=True,
+                )
+                raise typer.Exit(1)
             port = _get_port()
             _put_directory(
-                port, Path(source).resolve(), parsed_tags,
+                port, resolved_dir, parsed_tags,
                 recurse=recurse, exclude=exclude,
                 watch=watch, unwatch=unwatch, interval=interval,
                 force=force, json_output=json_output,

@@ -3,33 +3,30 @@ tags:
   category: system
   context: state
 ---
-# Store a note. Runs assessment policy first, then writes using
-# the (possibly rewritten) directives from .state/assess.
+# Store a stub (auto-vivified from a reference edge).
 match: sequence
 rules:
   - id: assessed
     do: .state/assess
     with:
       target_id: "{params.id}"
-      target_uri: "{params.uri}"
-      source: "put"
+      # Stubs do not have a separate uri field; when the target is a URL, the
+      # stub ID itself is the assessable URI.
+      target_uri: "{params.id}"
+      source: "stub"
       id: "{params.id}"
-      uri: "{params.uri}"
       content: "{params.content}"
       tags: "{params.tags}"
       summary: "{params.summary}"
       created_at: "{params.created_at}"
-      force: "{params.force}"
       queue_background_tasks: "{params.queue_background_tasks}"
   - id: stored
-    do: put
+    do: stub
     with:
-      content: "{assessed.content}"
-      uri: "{assessed.uri}"
       id: "{assessed.id}"
+      content: "{assessed.content}"
       tags: "{assessed.tags}"
       summary: "{assessed.summary}"
       created_at: "{assessed.created_at}"
-      force: "{assessed.force}"
       queue_background_tasks: "{assessed.queue_background_tasks}"
   - return: done

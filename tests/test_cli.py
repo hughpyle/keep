@@ -65,12 +65,12 @@ name = "composite"
 
 
 @pytest.fixture
-def cli(request, _shared_e2e_cli_env):
+def cli(request):
     """Run CLI command and return result."""
     def run(*args: str, input: str | None = None) -> subprocess.CompletedProcess:
         env = None
         if request.node.get_closest_marker("e2e") is not None:
-            env = _shared_e2e_cli_env
+            env = request.getfixturevalue("_shared_e2e_cli_env")
         return subprocess.run(
             [sys.executable, "-m", "keep", *args],
             capture_output=True,

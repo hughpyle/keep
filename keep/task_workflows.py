@@ -75,6 +75,7 @@ class _KeeperActionContext:
         summary: str | None = None,
         created_at: str | None = None,
         force: bool = False,
+        queue_background_tasks: bool = True,
     ) -> Any:
         return self._keeper._put_direct(
             content=content,
@@ -84,6 +85,26 @@ class _KeeperActionContext:
             summary=summary,
             created_at=created_at,
             force=force,
+            queue_background_tasks=queue_background_tasks,
+        )
+
+    def stub(
+        self,
+        *,
+        id: str,
+        content: str | None = None,
+        tags: dict[str, Any] | None = None,
+        summary: str | None = None,
+        created_at: str | None = None,
+        queue_background_tasks: bool = True,
+    ) -> Any:
+        return self._keeper._stub_direct(
+            id=id,
+            content=content,
+            tags=tags,
+            summary=summary,
+            created_at=created_at,
+            queue_background_tasks=queue_background_tasks,
         )
 
     def tag(
@@ -342,6 +363,16 @@ def _apply_mutations(
                     tags=mut.get("tags"),
                     queue_background_tasks=mut.get("queue_background_tasks", False),
                 )
+
+        elif op == "stub_item":
+            keeper._stub_via_flow(
+                id=str(mut.get("id", "")),
+                content=str(mut.get("content", "")),
+                summary=str(mut.get("summary", "")),
+                tags=mut.get("tags"),
+                created_at=mut.get("created_at"),
+                queue_background_tasks=mut.get("queue_background_tasks", True),
+            )
 
         elif op == "set_tags":
             target = str(mut["target"])

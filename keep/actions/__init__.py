@@ -66,6 +66,18 @@ class ActionContext(Protocol):
         summary: str | None = None,
         created_at: str | None = None,
         force: bool = False,
+        queue_background_tasks: bool = True,
+    ) -> Any: ...
+
+    def stub(
+        self,
+        *,
+        id: str,
+        content: str | None = None,
+        tags: dict[str, Any] | None = None,
+        summary: str | None = None,
+        created_at: str | None = None,
+        queue_background_tasks: bool = True,
     ) -> Any: ...
 
     def tag(

@@ -96,6 +96,17 @@ class FlowRuntimeEnv(Protocol):
         capture_write_context: bool = False,
     ) -> Any: ...
 
+    def stub(
+        self,
+        *,
+        id: str,
+        content: str | None = None,
+        summary: str | None = None,
+        tags: dict[str, Any] | None = None,
+        created_at: str | None = None,
+        queue_background_tasks: bool = True,
+    ) -> Any: ...
+
     def tag(
         self,
         id: str,
@@ -297,7 +308,7 @@ class LocalFlowEnvironment:
     def put(self, *, content: str | None = None, uri: str | None = None,
             id: str | None = None, tags: dict | None = None,
             summary: str | None = None, created_at: str | None = None,
-            force: bool = False) -> Any:
+            force: bool = False, queue_background_tasks: bool = True) -> Any:
         putter = getattr(self._keeper, "_put_direct", None)
         if putter is None:
             putter = self._keeper.put
@@ -309,6 +320,7 @@ class LocalFlowEnvironment:
                 summary=summary,
                 created_at=created_at,
                 force=force,
+                queue_background_tasks=queue_background_tasks,
             )
         content = repair_surrogate_text(content) if content is not None else None
         doc_id = id or _text_content_id(content) if content else id
@@ -319,6 +331,21 @@ class LocalFlowEnvironment:
             summary=summary,
             created_at=created_at,
             force=force,
+            queue_background_tasks=queue_background_tasks,
+        )
+
+    def stub(self, *, id: str, content: str | None = None,
+             tags: dict[str, Any] | None = None, summary: str | None = None,
+             created_at: str | None = None,
+             queue_background_tasks: bool = True) -> Any:
+        content = repair_surrogate_text(content) if content is not None else None
+        return self._keeper._stub_direct(
+            id=id,
+            content=content,
+            tags=tags,
+            summary=summary,
+            created_at=created_at,
+            queue_background_tasks=queue_background_tasks,
         )
 
     def tag(

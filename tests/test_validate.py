@@ -399,6 +399,15 @@ rules:
         r = validate_system_doc(".state/test", content)
         assert not any("unknown action" in d.message for d in r.diagnostics)
 
+    def test_subflow_target_no_unknown_action_warning(self):
+        content = """\
+rules:
+  - do: .state/assess
+    with: { target: "x" }
+"""
+        r = validate_system_doc(".state/test", content)
+        assert not any("unknown action" in d.message for d in r.diagnostics)
+
     def test_invalid_return_status_errors(self):
         content = """\
 rules:

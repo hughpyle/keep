@@ -96,6 +96,7 @@ from .flow_client import (
     move_item as flow_move_item,
     put_item as flow_put_item,
     set_now_item as flow_set_now_item,
+    stub_item as flow_stub_item,
     tag_item as flow_tag_item,
 )
 from .flow_env import LocalFlowEnvironment
@@ -273,6 +274,13 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._ignore_patterns: Optional[list[str]] = None
         self._ignore_patterns_ts: float = 0.0
         self._context_cache = ContextCache()
+        # Some startup maintenance paths can route through flow-backed writes
+        # and therefore call ensure_sysdocs(). Initialize this sentinel before
+        # any migration step that might create stubs or otherwise re-enter the
+        # public state-doc surface.
+        from .system_docs import system_doc_migration_needed
+
+        self._needs_sysdoc_migration = system_doc_migration_needed(self)
 
         # If cosine migration fired (L2→cosine), auto-enqueue reindex
         if getattr(self._store, "migrated_to_cosine", False):
@@ -371,10 +379,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     )
             except Exception as e:
                 logger.warning("Failed to initialize PlannerStatsStore: %s", e)
-
-        # System doc migration deferred to first write (needs embeddings)
-        from .system_docs import system_doc_migration_needed
-        self._needs_sysdoc_migration = system_doc_migration_needed(self)
 
         # Direct work queue (replaces FlowEngine for background tasks).
         self._work_queue = None
@@ -577,18 +581,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 }
                 if target_id in target_name_updates:
                     set_tag_values(target_tags, "name", target_name_updates[target_id])
-                inserted = self._document_store.insert_if_absent(
-                    doc_coll, target_id,
+                self._stub_via_flow(
+                    id=target_id,
+                    content="",
                     summary="",
                     tags=target_tags,
                     created_at=reference_created,
+                    queue_background_tasks=True,
                 )
-                if inserted:
-                    self._pending_queue.enqueue(
-                        target_id, doc_coll, "",
-                        task_type="reindex",
-                        metadata={"tags": target_tags},
-                    )
 
                 created = (
                     merged_tags.get("_created")
@@ -2262,20 +2262,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 }
                 if target_id in target_name_updates:
                     set_tag_values(target_tags, "name", target_name_updates[target_id])
-                inserted = self._document_store.insert_if_absent(
-                    doc_coll, target_id,
+                self._stub_via_flow(
+                    id=target_id,
+                    content="",
                     summary="",
                     tags=target_tags,
                     created_at=reference_created,
+                    queue_background_tasks=True,
                 )
-                if inserted:
-                    self._pending_queue.enqueue(
-                        target_id, doc_coll, "",
-                        task_type="reindex",
-                        metadata={
-                            "tags": target_tags,
-                        },
-                    )
 
                 created = merged_tags.get("_created") or merged_tags.get("_updated") or utc_now()
                 edges_to_add.append((id, key, target_id, inverse, created))
@@ -2986,6 +2980,134 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 _body_authority=_body_authority,
             )
 
+    def _stub_direct(
+        self,
+        *,
+        id: str,
+        content: Optional[str] = None,
+        summary: Optional[str] = None,
+        tags: Optional[TagMap] = None,
+        created_at: Optional[str] = None,
+        queue_background_tasks: bool = True,
+    ) -> Item:
+        """Insert a stub note only if it does not already exist."""
+        if not str(id or "").strip():
+            raise ValueError("stub requires id")
+
+        normalized_id = normalize_id(id)
+        if is_part_id(normalized_id):
+            raise ValueError(
+                f"Cannot create stub for part directly: {normalized_id!r}. "
+                "Parts are managed by analyze()."
+            )
+
+        if tags:
+            tags = self._validate_write_tags(tags)
+        if content is not None:
+            content = repair_surrogate_text(content)
+        if summary is not None:
+            summary = repair_surrogate_text(summary)
+
+        with _get_tracer("keeper").start_as_current_span(
+            "stub.request",
+            attributes={
+                "item_id": normalized_id,
+                "queue_background_tasks": bool(queue_background_tasks),
+            },
+        ):
+            return self.__stub_direct_impl(
+                id=normalized_id,
+                content=content,
+                summary=summary,
+                tags=tags,
+                created_at=created_at,
+                queue_background_tasks=queue_background_tasks,
+            )
+
+    def _stub_via_flow(
+        self,
+        *,
+        id: str,
+        content: Optional[str] = None,
+        summary: Optional[str] = None,
+        tags: Optional[TagMap] = None,
+        created_at: Optional[str] = None,
+        queue_background_tasks: bool = True,
+    ) -> Item:
+        """Create a stub through the flow layer so assessment policy applies."""
+        if self._needs_sysdoc_migration:
+            doc_coll = self._resolve_doc_collection()
+            # Startup maintenance can materialize stubs before bundled state
+            # docs have been migrated into the store for this Keeper. Only use
+            # the flow path once the stub state note is actually present;
+            # otherwise fall back to direct insertion to avoid re-entering
+            # ensure_sysdocs() from bootstrap maintenance.
+            if self._document_store.get(doc_coll, ".state/stub") is None:
+                return self._stub_direct(
+                    id=id,
+                    content=content,
+                    summary=summary,
+                    tags=tags,
+                    created_at=created_at,
+                    queue_background_tasks=queue_background_tasks,
+                )
+        return flow_stub_item(
+            self,
+            id=id,
+            content=content,
+            summary=summary,
+            tags=tags,
+            created_at=created_at,
+            queue_background_tasks=queue_background_tasks,
+        )
+
+    def __stub_direct_impl(
+        self,
+        *,
+        id: str,
+        content: Optional[str] = None,
+        summary: Optional[str] = None,
+        tags: Optional[TagMap] = None,
+        created_at: Optional[str] = None,
+        queue_background_tasks: bool = True,
+    ) -> Item:
+        doc_coll = self._resolve_doc_collection()
+        reference_created = created_at or utc_now()
+        target_summary = summary if summary is not None else (content or "")
+        target_tags = dict(tags or {})
+        target_tags.setdefault("_source", "auto-vivify")
+        target_tags.setdefault("_created", reference_created)
+        target_tags.setdefault("_updated", utc_now())
+
+        inserted = self._document_store.insert_if_absent(
+            doc_coll,
+            id,
+            summary=target_summary,
+            tags=target_tags,
+            created_at=reference_created,
+        )
+
+        result = self._document_store.get(doc_coll, id)
+        if result is None:
+            raise RuntimeError(f"stub insert failed unexpectedly for {id!r}")
+
+        if inserted:
+            self._context_cache.notify_write(
+                id,
+                old_tags={},
+                new_tags=dict(result.tags),
+            )
+            if queue_background_tasks and not is_system_id(id):
+                self._pending_queue.enqueue(
+                    id,
+                    doc_coll,
+                    content or target_summary,
+                    task_type="reindex",
+                    metadata={"tags": dict(result.tags)},
+                )
+
+        return _record_to_item(result, changed=inserted)
+
     def __put_direct_impl(
         self,
         content: Optional[str] = None,
@@ -3167,8 +3289,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 )
 
             # Post-write background tasks are driven by the after-write
-            # state doc — do NOT hardcode task enqueues here.  See
-            # _dispatch_after_write_flow() and builtin_state_docs.py.
+            # state doc — do NOT hardcode task enqueues here. See
+            # _dispatch_after_write_flow() and the bundled `.state/*`
+            # system notes under keep/data/system/.
             if queue_background_tasks:
                 self._dispatch_after_write_flow(
                     item_id=result.id,
@@ -3231,8 +3354,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     },
                 )
             # Post-write background tasks are driven by the after-write
-            # state doc — do NOT hardcode task enqueues here.  See
-            # _dispatch_after_write_flow() and builtin_state_docs.py.
+            # state doc — do NOT hardcode task enqueues here. See
+            # _dispatch_after_write_flow() and the bundled `.state/*`
+            # system notes under keep/data/system/.
             if queue_background_tasks:
                 self._dispatch_after_write_flow(
                     item_id=result.id,

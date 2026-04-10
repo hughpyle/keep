@@ -2,7 +2,9 @@
 
 Design documents (including historical drafts) are in `later/`.  User documents are in `docs/`.
 
-User-facing terminology: "notes" (not "items" or "documents" or whatever).
+User-facing terminology:
+* "notes" (not "items" or "documents" or whatever).
+* "stubs" (not "auto-vivify", although that's fine for code and comments)
 
 ## Quality
 
@@ -10,6 +12,7 @@ User-facing terminology: "notes" (not "items" or "documents" or whatever).
 - Investigate thoroughly until the actual behavior is confirmed.  We have OTel instrumentation and debug logging.  If those are not sufficient for debugging, then they must be improved.  Don't write new code until you have exhaused all other options.  When replacing old code, clean up thoroughly.
 - Take ownership now.  When there is a problem, it must be skillfully resolved.  There are no "pre-existing issues".  The cavalry will not arrive.  Track and fix problems when they are observed.  "Bigger changes" must never be deferred.  Do hard things carefully.
 - Take care now.  Code is not ready until it has been reviewed for security, performance, consistency and correctness.  Code is not ready until it has been thoroughly tested.  Features require tests that exercise the feature in full, and that will fail if the user-visible behavior breaks.  Code is not ready until the user docs are accurate.
+- Comments are required.  Explain to the next reader, to make their work easier.
 
 ## Modular Concerns
 

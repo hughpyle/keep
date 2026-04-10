@@ -3,6 +3,7 @@ tags:
   category: system
   context: state
 ---
+# Add or remove tags on one or more notes.
 match: sequence
 rules:
   - id: tagged

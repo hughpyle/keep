@@ -20,6 +20,7 @@ from .const import (
     STATE_LIST,
     STATE_MOVE,
     STATE_PUT,
+    STATE_STUB,
     STATE_TAG,
 )
 from .protocol import FlowHostProtocol
@@ -194,6 +195,47 @@ def put_item(
     if isinstance(item, dict) and item.get("id"):
         return _coerce_item(item)
     raise ValueError("put flow completed without a stored item")
+
+
+def stub_item(
+    host: FlowHostProtocol,
+    *,
+    id: str,
+    content: Optional[str] = None,
+    summary: Optional[str] = None,
+    tags: Optional[TagMap] = None,
+    created_at: Optional[str] = None,
+    queue_background_tasks: bool = True,
+) -> Item:
+    result = _run(
+        host,
+        STATE_STUB,
+        params={
+            "id": id,
+            "content": content,
+            "summary": summary,
+            "tags": tags,
+            "created_at": created_at,
+            "queue_background_tasks": queue_background_tasks,
+        },
+        writable=True,
+    )
+    binding = getattr(result, "bindings", {}).get("stored", {})
+    _raise_binding_error(binding, STATE_STUB)
+    if isinstance(binding, dict) and binding.get("id"):
+        item = dict(binding)
+        if tags is not None and "tags" not in item:
+            item["tags"] = tags
+        return _coerce_item(item)
+    data = getattr(result, "data", None) or {}
+    stored = data.get("stored")
+    _raise_binding_error(stored, STATE_STUB)
+    if isinstance(stored, dict) and stored.get("id"):
+        item = dict(stored)
+        if tags is not None and "tags" not in item:
+            item["tags"] = tags
+        return _coerce_item(item)
+    raise ValueError("stub flow completed without a stored item")
 
 
 def find_items(

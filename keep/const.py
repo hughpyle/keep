@@ -42,6 +42,8 @@ OPS_LOG_BACKUP_COUNT = 3
 
 # Public flow state names.
 STATE_PUT = "put"
+STATE_STUB = "stub"
+STATE_ASSESS = "assess"
 STATE_TAG = "tag"
 STATE_DELETE = "delete"
 STATE_MOVE = "move"

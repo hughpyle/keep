@@ -448,6 +448,22 @@ class TestApplyMutations:
             tags={"topic": "test"}, queue_background_tasks=False,
         )
 
+    def test_stub_item_calls_stub_via_flow(self):
+        kp = MagicMock()
+        output = {"mutations": [
+            {"op": "stub_item", "id": "child1", "content": "c", "summary": "s",
+             "tags": {"_source": "link"}, "queue_background_tasks": True},
+        ]}
+        _apply_mutations(kp, "coll", output)
+        kp._stub_via_flow.assert_called_once_with(
+            id="child1",
+            content="c",
+            summary="s",
+            tags={"_source": "link"},
+            created_at=None,
+            queue_background_tasks=True,
+        )
+
     def test_set_tags(self):
         kp = MagicMock()
         output = {"mutations": [{"op": "set_tags", "target": "d1", "tags": {"topic": "AI"}}]}

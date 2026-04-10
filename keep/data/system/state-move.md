@@ -3,6 +3,7 @@ tags:
   category: system
   context: state
 ---
+# Rename a note or retag in bulk.
 match: sequence
 rules:
   - id: moved

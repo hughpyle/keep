@@ -5,9 +5,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from keep.api import Keeper
 from keep.const import STATE_FIND_DEEP
+from keep.flow_env import LocalFlowEnvironment
 from keep.state_doc import parse_state_doc
-from keep.state_doc_runtime import FlowResult, decode_cursor, run_flow
+from keep.state_doc_runtime import FlowResult, decode_cursor, make_state_doc_loader, run_flow
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +39,17 @@ def _make_runner(outputs: dict[str, dict] | None = None):
 
     _run.calls = calls  # type: ignore[attr-defined]
     return _run
+
+
+@pytest.fixture
+def kp(mock_providers, tmp_path):
+    keeper = Keeper(store_path=tmp_path)
+    keeper.ensure_sysdocs()
+    return keeper
+
+
+def _store_loader(kp: Keeper):
+    return make_state_doc_loader(LocalFlowEnvironment(kp))
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +214,116 @@ rules:
         # Find output should be enriched with stats
         assert "margin" in result.bindings["search"]
         assert "entropy" in result.bindings["search"]
+
+    def test_subflow_output_bound(self):
+        loader = _make_loader({
+            "parent": """\
+match: sequence
+rules:
+  - id: assessed
+    do: .state/child
+    with:
+      target: "abc"
+  - return:
+      status: done
+      with:
+        assessment: "{assessed.assessment}"
+""",
+            "child": """\
+match: sequence
+rules:
+  - return:
+      status: done
+      with:
+        assessment: "ok"
+        target: "{params.target}"
+""",
+        })
+        result = run_flow(
+            "parent", {},
+            load_state_doc=loader, run_action=_make_runner(),
+        )
+        assert result.status == "done"
+        assert result.bindings["assessed"]["assessment"] == "ok"
+        assert result.bindings["assessed"]["target"] == "abc"
+        assert result.data["assessment"] == "ok"
+        assert result.ticks == 2
+
+    def test_subflow_error_fails_parent(self):
+        loader = _make_loader({
+            "parent": """\
+match: sequence
+rules:
+  - id: assessed
+    do: .state/child
+    with:
+      target: "abc"
+  - return: done
+""",
+            "child": """\
+match: sequence
+rules:
+  - return:
+      status: error
+      with:
+        reason: "boom"
+""",
+        })
+        result = run_flow(
+            "parent", {},
+            load_state_doc=loader, run_action=_make_runner(),
+        )
+        assert result.status == "error"
+        assert "subflow" in result.data["reason"]
+        assert "boom" in result.data["reason"]
+
+    def test_subflow_stopped_fails_parent(self):
+        loader = _make_loader({
+            "parent": """\
+match: sequence
+rules:
+  - id: assessed
+    do: .state/child
+  - return: done
+""",
+            "child": """\
+match: sequence
+rules:
+  - return:
+      status: stopped
+      with:
+        reason: "budget"
+""",
+        })
+        result = run_flow(
+            "parent", {},
+            load_state_doc=loader, run_action=_make_runner(),
+        )
+        assert result.status == "error"
+        assert "unsupported status" in result.data["reason"]
+
+    def test_subflow_budget_exhaustion_fails_parent(self):
+        loader = _make_loader({
+            "parent": """\
+match: sequence
+rules:
+  - id: assessed
+    do: .state/child
+  - return: done
+""",
+            "child": """\
+match: sequence
+rules:
+  - return: done
+""",
+        })
+        result = run_flow(
+            "parent", {},
+            budget=1,
+            load_state_doc=loader, run_action=_make_runner(),
+        )
+        assert result.status == "error"
+        assert "subflow 'child' cannot run: budget exhausted" in result.data["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -714,17 +837,13 @@ class TestMakeActionRunner:
 
 class TestCELPredicates:
     """Tests for CEL predicate evaluation."""
-    def test_find_deep_skips_traverse_on_empty_search(self):
+    def test_find_deep_skips_traverse_on_empty_search(self, kp):
         """find-deep returns early when search.count == 0 (CEL predicate)."""
-        from keep.builtin_state_docs import BUILTIN_STATE_DOCS
-        from keep.state_doc_runtime import _get_compiled_builtin
-
-        # Verify the find-deep builtin compiles (has CEL predicates)
-        doc = _get_compiled_builtin("find-deep", BUILTIN_STATE_DOCS["find-deep"])
+        doc = _store_loader(kp)("find-deep")
         assert doc is not None
 
         # Run with empty search results — CEL predicate should short-circuit
-        loader = _make_loader({"find-deep": BUILTIN_STATE_DOCS["find-deep"]})
+        loader = _store_loader(kp)
         calls = []
 
         def _runner(action_name, params):
@@ -742,11 +861,9 @@ class TestCELPredicates:
         # Only find should have been called (traverse skipped via CEL)
         assert calls == ["find"]
 
-    def test_find_deep_traverses_when_results_found(self):
+    def test_find_deep_traverses_when_results_found(self, kp):
         """find-deep traverses results when search.count > 0."""
-        from keep.builtin_state_docs import BUILTIN_STATE_DOCS
-
-        loader = _make_loader({"find-deep": BUILTIN_STATE_DOCS["find-deep"]})
+        loader = _store_loader(kp)
         calls = []
 
         def _runner(action_name, params):
@@ -771,11 +888,9 @@ class TestCELPredicates:
         assert "traverse" in calls
         assert "related" in result.bindings
 
-    def test_find_deep_skips_traverse_when_search_errors(self):
+    def test_find_deep_skips_traverse_when_search_errors(self, kp):
         """find-deep short-circuits when search action fails (no count key)."""
-        from keep.builtin_state_docs import BUILTIN_STATE_DOCS
-
-        loader = _make_loader({"find-deep": BUILTIN_STATE_DOCS["find-deep"]})
+        loader = _store_loader(kp)
         calls = []
 
         def _runner(action_name, params):
@@ -798,13 +913,9 @@ class TestCELPredicates:
 class TestQueryResolveFlow:
     """Test query-resolve state doc with CEL conditions and transitions."""
 
-    def test_high_margin_returns_done(self):
+    def test_high_margin_returns_done(self, kp):
         """High margin result (dominant top-1) short-circuits to done."""
-        from keep.builtin_state_docs import BUILTIN_STATE_DOCS
-        loader = _make_loader({
-            k: v for k, v in BUILTIN_STATE_DOCS.items()
-            if k.startswith("query")
-        })
+        loader = _store_loader(kp)
 
         def _runner(action_name, params):
             if action_name == "find":
@@ -828,13 +939,9 @@ class TestQueryResolveFlow:
         assert result.history == ["query-resolve"]
         assert "search" in result.bindings
 
-    def test_low_margin_transitions_to_branch(self):
+    def test_low_margin_transitions_to_branch(self, kp):
         """Low margin (ambiguous top results) transitions to query-branch."""
-        from keep.builtin_state_docs import BUILTIN_STATE_DOCS
-        loader = _make_loader({
-            k: v for k, v in BUILTIN_STATE_DOCS.items()
-            if k.startswith("query")
-        })
+        loader = _store_loader(kp)
 
         call_count = {"find": 0}
 

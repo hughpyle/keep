@@ -300,7 +300,7 @@ class ExtractLinks:
                     existing = context.get(target)
                     if existing is None:
                         mutations.append({
-                            "op": "put_item",
+                            "op": "stub_item",
                             "id": target,
                             "content": target,
                             "summary": target,
@@ -330,7 +330,7 @@ class ExtractLinks:
                             ref_value = format_ref(vivified, link.get("title") or bare)
                         resolved_targets.append(ref_value)
                         mutations.append({
-                            "op": "put_item",
+                            "op": "stub_item",
                             "id": vivified,
                             "content": f"[{target}]",
                             "summary": f"[{target}]",

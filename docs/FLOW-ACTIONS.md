@@ -376,6 +376,56 @@ Resolve stub notes by fetching content from their URI.
 
 Runs during after-write for URI-backed stubs that don't have content yet.
 
+### stub
+
+Create a stub note if absent. Preserves existing notes — will not overwrite.
+
+```yaml
+- id: stored
+  do: stub
+  with:
+    id: "target-id"
+    content: "placeholder"
+    tags:
+      _source: "link"
+```
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | str | **required** | Note ID to create |
+| `content` | str | `""` | Initial content |
+| `summary` | str | content | Summary text |
+| `tags` | dict | `{"_source": "auto-vivify"}` | Tags (defaults `_source` if not set) |
+| `created_at` | str | now | UTC timestamp |
+| `queue_background_tasks` | bool | `true` | Whether to enqueue after-write processing |
+
+**Output:** `{"id": "...", "summary": "...", "tags": {...}, "changed": true|false}`
+
+`changed` is `false` when the note already existed.
+
+### assess_virustotal
+
+Look up a URL in VirusTotal and return an assessment directive.
+
+```yaml
+- id: vt
+  do: assess_virustotal
+  with:
+    target_uri: "https://example.com"
+```
+
+Requires `VIRUSTOTAL_API_KEY` or `VT_API_KEY` in the environment. Lookup-only — never submits URLs for scanning. Results are cached locally for 24 hours.
+
+| Assessment | Meaning |
+|------------|---------|
+| `ok` | No detections |
+| `suspicious` | Suspicious but not confirmed malicious |
+| `malicious` | One or more engines flagged it — rewrites content to an explanation |
+| `disabled` | No API key configured |
+| `unknown` | Lookup failed or URL not in VT database |
+
+**Output:** normalized assessment directive (same shape as `.state/assess` return value).
+
 ## Store profiling
 
 ### stats

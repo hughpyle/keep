@@ -29,6 +29,10 @@ class AsyncActionEncountered(Exception):
         self.action_params = action_params
 
 
+class SubflowExecutionError(Exception):
+    """Raised when a child state-doc flow fails and should fail the parent."""
+
+
 # ---------------------------------------------------------------------------
 # Compiled rule and state-doc types
 # ---------------------------------------------------------------------------
@@ -527,7 +531,7 @@ def _eval_sequence(
                     if isinstance(output, dict) and rule.id:
                         bindings[rule.id] = output
                         eval_ctx[rule.id] = output
-                except AsyncActionEncountered:
+                except (AsyncActionEncountered, SubflowExecutionError):
                     raise  # flow runtime handles delegation
                 except Exception as exc:
                     logger.warning("Action %s failed: %s", rule.do, exc)
@@ -587,7 +591,7 @@ def _eval_all(
                     if isinstance(output, dict) and rule.id:
                         bindings[rule.id] = output
                         eval_ctx[rule.id] = output
-                except AsyncActionEncountered:
+                except (AsyncActionEncountered, SubflowExecutionError):
                     raise  # flow runtime handles delegation
                 except Exception as exc:
                     logger.warning("Action %s failed: %s", rule.do, exc)

@@ -3,6 +3,7 @@ tags:
   category: system
   context: state
 ---
+# Delete a note and optionally its version history.
 match: sequence
 rules:
   - id: result

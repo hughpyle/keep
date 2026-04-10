@@ -31,7 +31,7 @@ from typing import Any, Callable, Optional, Protocol
 
 from .recovery import run_with_document_store_recovery
 from .result_stats import enrich_find_output
-from .state_doc import AsyncActionEncountered, StateDoc, evaluate_state_doc
+from .state_doc import AsyncActionEncountered, StateDoc, SubflowExecutionError, evaluate_state_doc
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,11 @@ class ActionRunner(Protocol):
     def __call__(self, name: str, params: dict[str, Any]) -> dict[str, Any]: ...
 
 
+def _is_subflow_target(name: str) -> bool:
+    target = str(name or "").strip()
+    return target.startswith(".state/")
+
+
 def run_flow(
     initial_state: str,
     params: dict[str, Any],
@@ -204,10 +209,14 @@ def run_flow(
 
         current_params = dict(params)
         ticks = 0
+        child_ticks = 0
         history: list[str] = []
 
+        def _total_ticks() -> int:
+            return prior_ticks + ticks + child_ticks
+
         def _stopped_flow(reason: str) -> FlowResult:
-            total_ticks = prior_ticks + ticks
+            total_ticks = _total_ticks()
             cursor_token = encode_cursor(
                 current_state, total_ticks, accumulated_bindings, tried_queries,
             )
@@ -234,6 +243,44 @@ def run_flow(
         # In foreground mode, async actions raise AsyncActionEncountered to
         # delegate the remainder of the flow to the work queue.
         def _action_callback(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
+            nonlocal child_ticks
+            if _is_subflow_target(action_name):
+                child_state = action_name.removeprefix(".state/").strip()
+                if not child_state:
+                    raise SubflowExecutionError("subflow target cannot be empty")
+                remaining_budget = budget - (ticks + child_ticks)
+                if remaining_budget <= 0:
+                    raise SubflowExecutionError(
+                        f"subflow {child_state!r} cannot run: budget exhausted"
+                    )
+                child_result = run_flow(
+                    child_state,
+                    action_params,
+                    budget=remaining_budget,
+                    load_state_doc=load_state_doc,
+                    run_action=run_action,
+                    foreground=foreground,
+                    should_stop=should_stop,
+                )
+                child_ticks += child_result.ticks
+                if child_result.status == "done":
+                    return dict(child_result.data or {})
+                if child_result.status == "error":
+                    reason = ""
+                    if isinstance(child_result.data, dict):
+                        reason = str(
+                            child_result.data.get("reason")
+                            or child_result.data.get("error")
+                            or ""
+                        ).strip()
+                    msg = f"subflow {child_state!r} failed"
+                    if reason:
+                        msg = f"{msg}: {reason}"
+                    raise SubflowExecutionError(msg)
+                raise SubflowExecutionError(
+                    f"subflow {child_state!r} returned unsupported status {child_result.status!r}"
+                )
+
             if foreground:
                 from .actions import is_async_action
                 if is_async_action(action_name):
@@ -261,11 +308,11 @@ def run_flow(
                     _elapsed_ms(),
                 )
                 _set_flow_attr("status", "error")
-                _set_flow_attr("ticks", prior_ticks + ticks)
+                _set_flow_attr("ticks", _total_ticks())
                 return FlowResult(
                     status="error",
                     data={"reason": f"state doc not found: {current_state}"},
-                    ticks=prior_ticks + ticks,
+                    ticks=_total_ticks(),
                     history=history,
                 )
 
@@ -315,11 +362,11 @@ def run_flow(
                     exc,
                 )
                 _set_flow_attr("status", "error")
-                _set_flow_attr("ticks", prior_ticks + ticks)
+                _set_flow_attr("ticks", _total_ticks())
                 return FlowResult(
                     status="error",
                     data={"reason": f"evaluation failed: {exc}"},
-                    ticks=prior_ticks + ticks,
+                    ticks=_total_ticks(),
                     history=history,
                 )
 
@@ -336,12 +383,12 @@ def run_flow(
                     _elapsed_ms(),
                 )
                 _set_flow_attr("status", result.terminal)
-                _set_flow_attr("ticks", prior_ticks + ticks)
+                _set_flow_attr("ticks", _total_ticks())
                 return FlowResult(
                     status=result.terminal,
                     bindings=accumulated_bindings,
                     data=result.terminal_data,
-                    ticks=prior_ticks + ticks,
+                    ticks=_total_ticks(),
                     history=history,
                     tried_queries=tried_queries,
                 )
@@ -356,11 +403,11 @@ def run_flow(
                         _elapsed_ms(),
                     )
                     _set_flow_attr("status", "error")
-                    _set_flow_attr("ticks", prior_ticks + ticks)
+                    _set_flow_attr("ticks", _total_ticks())
                     return FlowResult(
                         status="error",
                         data={"reason": f"invalid transition: {result.transition}"},
-                        ticks=prior_ticks + ticks,
+                        ticks=_total_ticks(),
                         history=history,
                     )
                 logger.info("flow: %s -> %s (%.1fms)", current_state, next_state, _elapsed_ms())
@@ -378,17 +425,17 @@ def run_flow(
                 _elapsed_ms(),
             )
             _set_flow_attr("status", "done")
-            _set_flow_attr("ticks", prior_ticks + ticks)
+            _set_flow_attr("ticks", _total_ticks())
             return FlowResult(
                 status="done",
                 bindings=accumulated_bindings,
-                ticks=prior_ticks + ticks,
+                ticks=_total_ticks(),
                 history=history,
                 tried_queries=tried_queries,
             )
 
         # Budget exhausted — return cursor for resumption
-        total_ticks = prior_ticks + ticks
+        total_ticks = _total_ticks()
         cursor_token = encode_cursor(current_state, total_ticks, accumulated_bindings, tried_queries)
         logger.info(
             "flow: %s -> stopped (budget, %d ticks, %.1fms)",
@@ -478,25 +525,6 @@ def _parse_transition(
 # ---------------------------------------------------------------------------
 # Factory helpers for wiring into the keep system
 # ---------------------------------------------------------------------------
-
-# Module-level cache for compiled builtin state docs (immutable, parse once).
-_builtin_cache: dict[str, StateDoc] = {}
-
-
-def _get_compiled_builtin(name: str, body: str) -> Optional[StateDoc]:
-    """Return a cached compiled StateDoc for a builtin, or compile and cache it."""
-    cached = _builtin_cache.get(name)
-    if cached is not None:
-        return cached
-    from .state_doc import parse_state_doc
-    try:
-        doc = parse_state_doc(name, body)
-        _builtin_cache[name] = doc
-        return doc
-    except (ValueError, RuntimeError) as exc:
-        logger.warning("Failed to compile builtin state doc %r: %s", name, exc)
-        return None
-
 
 def make_state_doc_loader(
     env: Any,
@@ -721,7 +749,7 @@ class _EnvActionContext:
     def put(self, *, content: str | None = None, uri: str | None = None,
             id: str | None = None, tags: dict | None = None,
             summary: str | None = None, created_at: str | None = None,
-            force: bool = False) -> Any:
+            force: bool = False, queue_background_tasks: bool = True) -> Any:
         if not self._writable:
             raise NotImplementedError("put not available in read-only flow context")
         return self._env.put(
@@ -732,6 +760,22 @@ class _EnvActionContext:
             summary=summary,
             created_at=created_at,
             force=force,
+            queue_background_tasks=queue_background_tasks,
+        )
+
+    def stub(self, *, id: str, content: str | None = None,
+             tags: dict | None = None, summary: str | None = None,
+             created_at: str | None = None,
+             queue_background_tasks: bool = True) -> Any:
+        if not self._writable:
+            raise NotImplementedError("stub not available in read-only flow context")
+        return self._env.stub(
+            id=id,
+            content=content,
+            tags=tags,
+            summary=summary,
+            created_at=created_at,
+            queue_background_tasks=queue_background_tasks,
         )
 
     def tag(

@@ -105,6 +105,33 @@ class TestGetPortNoFileStranding:
 
         assert port == 5555
 
+    def test_new_discovery_files_allow_port_return_before_ready_probe(self, tmp_path):
+        """Fresh daemon discovery files should unblock the first real request.
+
+        The daemon may publish a new port/token before /v1/ready answers
+        successfully. In that case get_port() should return the fresh port and
+        let the caller's actual request perform the next retry.
+        """
+        store = tmp_path / "store"
+        store.mkdir()
+        port_file = store / DAEMON_PORT_FILE
+        token_file = store / DAEMON_TOKEN_FILE
+
+        def mock_start(store_path):
+            port_file.write_text("5555")
+            token_file.write_text("new-token")
+
+        with (
+            patch("keep.daemon_client.resolve_store_path", return_value=store),
+            patch("keep.daemon_client.check_health", return_value=False),
+            patch("keep.daemon_client.start_daemon", side_effect=mock_start),
+            patch("keep.daemon_client._load_token"),
+        ):
+            from keep.daemon_client import get_port
+            port = get_port(str(store))
+
+        assert port == 5555
+
 
 class TestLoadTokenCacheScoping:
     """Token cache must be scoped to the resolved store path."""
@@ -131,3 +158,56 @@ class TestLoadTokenCacheScoping:
         finally:
             client._auth_token = ""
             client._auth_token_store = ""
+
+
+class TestCheckHealth:
+    """Readiness checks must send auth headers correctly."""
+
+    def test_check_health_sends_authorization_header(self):
+        from keep import daemon_client as client
+
+        class FakeResponse:
+            status = 200
+
+            def read(self):
+                return b'{"needs_setup": false, "warnings": []}'
+
+        class FakeConnection:
+            last_call = None
+
+            def __init__(self, host, port, timeout):
+                self.host = host
+                self.port = port
+                self.timeout = timeout
+
+            def request(self, method, path, body=None, headers=None, *, encode_chunked=False):
+                FakeConnection.last_call = {
+                    "method": method,
+                    "path": path,
+                    "body": body,
+                    "headers": headers,
+                }
+
+            def getresponse(self):
+                return FakeResponse()
+
+            def close(self):
+                return None
+
+        client._auth_token = "test-token"
+        client._auth_token_store = "store"
+        client._warnings_shown = False
+        try:
+            with patch("keep.daemon_client.http.client.HTTPConnection", FakeConnection):
+                assert client.check_health(5337) is True
+        finally:
+            client._auth_token = ""
+            client._auth_token_store = ""
+            client._warnings_shown = False
+
+        assert FakeConnection.last_call == {
+            "method": "GET",
+            "path": "/v1/ready",
+            "body": None,
+            "headers": {"Authorization": "Bearer test-token"},
+        }

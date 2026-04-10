@@ -259,6 +259,38 @@ back into context.
 
 ---
 
+## Assessment
+
+### .state/assess
+
+**Trigger:** called as a subflow by `.state/put` and `.state/stub`.
+**Mode:** `match: sequence` with a single default rule.
+**Path:** Synchronous (completes before the caller writes).
+
+Policy gate that runs before every write. The default returns all caller
+params unchanged with `assessment: "ok"`. Override by adding fragments
+under `.state/assess/*` (e.g., `.state/assess/virustotal`).
+
+Returns a normalized directive that the caller (put or stub) uses for
+the final write — including `stop_processing`, `skip_fetch`, rewritten
+`content`/`summary`, and merged `tags`.
+
+### .state/stub
+
+**Trigger:** edge-tag processing, edge backfill, extracted link targets.
+**Mode:** `match: sequence` — assess, then atomic insert-if-absent.
+**Path:** Synchronous.
+
+Creates a stub note only if it does not already exist. Calls
+`.state/assess` first so assessment policy applies to all stub creation
+paths uniformly. The stub ID itself is passed as `target_uri` since
+stubs (unlike puts) don't have a separate URI field.
+
+Will not overwrite existing notes — `changed: false` in the output means
+the note already existed and was left untouched.
+
+---
+
 ## Simple operation wrappers
 
 These are thin state docs that wrap a single action, providing named flow
@@ -266,9 +298,14 @@ access to every store operation.
 
 ### .state/put
 
-**Params:** `content`, `uri`, `id`, `tags`, `summary`
-**Action:** `put` — stores content or indexes a URI.
+**Params:** `content`, `uri`, `id`, `tags`, `summary`, `queue_background_tasks`
+**Actions:** `.state/assess` (subflow), then `put`.
 **Output:** `{"id": "..."}`
+
+Calls the assessment policy gate before writing. Assessment directives
+can rewrite any field (e.g., replacing content with a malicious-URL
+explanation). The `put` action receives the assessed values, not the
+original params.
 
 ### .state/tag
 

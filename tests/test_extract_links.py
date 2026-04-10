@@ -201,8 +201,8 @@ class TestExtractLinksAction:
         result = ExtractLinks().run({"item_id": "file:///vault/a.md"}, ctx)
 
         assert "https://example.com" in result["resolved"]
-        # Should have put_item for auto-vivification + set_tags
-        put_muts = [m for m in result["mutations"] if m["op"] == "put_item"]
+        # Should have stub_item for auto-vivification + set_tags
+        put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"]
         assert len(put_muts) == 1
         assert put_muts[0]["id"] == "https://example.com"
 
@@ -218,8 +218,8 @@ class TestExtractLinksAction:
 
         tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
         assert tag_mut[0]["tags"]["references"] == ["https://example.com"]
-        # Untitled URL → put_item still fires for background summarization.
-        put_muts = [m for m in result["mutations"] if m["op"] == "put_item"]
+        # Untitled URL → stub_item still fires for background summarization.
+        put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"]
         assert any(m["id"] == "https://example.com" for m in put_muts)
 
     def test_doc_links_dict_with_title(self):
@@ -241,10 +241,10 @@ class TestExtractLinksAction:
         tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
         refs = tag_mut[0]["tags"]["references"]
         assert "[[https://example.com|Example Site]]" in refs
-        # Titled URL → no put_item; edge processor will auto-vivify with name.
+        # Titled URL → no stub_item; edge processor will auto-vivify with name.
         put_muts = [
             m for m in result["mutations"]
-            if m["op"] == "put_item" and m["id"] == "https://example.com"
+            if m["op"] == "stub_item" and m["id"] == "https://example.com"
         ]
         assert put_muts == []
 
@@ -261,7 +261,7 @@ class TestExtractLinksAction:
 
         tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
         assert tag_mut[0]["tags"]["references"] == ["https://example.com"]
-        put_muts = [m for m in result["mutations"] if m["op"] == "put_item"]
+        put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"]
         assert any(m["id"] == "https://example.com" for m in put_muts)
 
     def test_no_links_skipped(self):
@@ -295,8 +295,8 @@ class TestExtractLinksAction:
 
         # URL still resolves (external URLs are always accepted)
         assert "https://missing.com" in result["resolved"]
-        # But no put_item mutation
-        put_muts = [m for m in result["mutations"] if m["op"] == "put_item"]
+        # But no stub_item mutation
+        put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"]
         assert len(put_muts) == 0
 
     def test_create_targets_false_strips_titles(self):
@@ -328,8 +328,8 @@ class TestExtractLinksAction:
         # Alias is stripped — bare URL only.
         assert "https://example.com" in refs
         assert "[[https://example.com|Example Site]]" not in refs
-        # No put_item either.
-        put_muts = [m for m in result["mutations"] if m["op"] == "put_item"]
+        # No stub_item either.
+        put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"]
         assert put_muts == []
 
     def test_auto_vivify_internal(self):
@@ -343,7 +343,7 @@ class TestExtractLinksAction:
         result = ExtractLinks().run({"item_id": "file:///vault/a.md"}, ctx)
 
         assert not result.get("skipped")
-        put_muts = [m for m in result["mutations"] if m["op"] == "put_item"
+        put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"
                      and m["id"] != ".vault/None"]  # exclude vault registration
         assert len(put_muts) == 1
         assert put_muts[0]["id"] == "file:///vault/missing-note.md"
