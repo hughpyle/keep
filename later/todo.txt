@@ -1,4 +1,7 @@
 
+* rss/opml
+    - daily fetch
+
 * input sanitization, protect against logging keys etc
 
 * input valence (good/bad/neutral) as a fast-path tagger
