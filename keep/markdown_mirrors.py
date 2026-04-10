@@ -15,15 +15,24 @@ import yaml
 
 from .dependencies import NoteDependencyService
 from .markdown_export import (
-    _bundle_export_refs,
-    _export_ref_from_rel_path,
-    _get_edge_data,
-    _get_export_doc,
-    _id_to_rel_path,
-    _render_doc_bundle,
-    _write_markdown_export,
+    bundle_export_refs,
+    get_edge_data,
+    get_export_doc,
+    local_edge_tag_resolver,
+    render_doc_bundle,
+    resolve_remote_render_bundle,
+    supports_local_markdown_export_graph,
+    write_markdown_export,
 )
-from .processors import _content_hash
+from .markdown_sync import (
+    DOC_STRUCTURAL_MUTATIONS,
+    DOC_UPDATE_MUTATION,
+    EDGE_MUTATIONS,
+    PART_MUTATIONS,
+    VERSION_EDGE_MUTATIONS,
+    VERSION_MUTATIONS,
+    decode_sync_event_payload,
+)
 from .types import file_uri_to_path, utc_now as _utc_now
 from .watches import _DEFAULT_INTERVAL, _DOC_COLLECTION, load_watches, parse_duration
 
@@ -56,6 +65,7 @@ class MarkdownMirrorEntry:
     pending_note_ids: list[str] = field(default_factory=list)
     last_run: str = ""
     last_error: str = ""
+    source_cursor: str = ""
 
     def is_due(self, now: datetime | None = None) -> bool:
         if not self.enabled:
@@ -98,6 +108,11 @@ def _mirror_to_dict(entry: MarkdownMirrorEntry) -> dict[str, Any]:
 def _dict_to_mirror(data: dict[str, Any]) -> MarkdownMirrorEntry:
     known = {f.name for f in MarkdownMirrorEntry.__dataclass_fields__.values()}
     filtered = {k: v for k, v in data.items() if k in known}
+    for key, value in list(filtered.items()):
+        if isinstance(value, datetime):
+            filtered[key] = value.isoformat()
+    if isinstance(filtered.get("pending_note_ids"), tuple):
+        filtered["pending_note_ids"] = list(filtered["pending_note_ids"])
     return MarkdownMirrorEntry(**filtered)
 
 
@@ -106,6 +121,22 @@ def _resolve_root(root: str | Path) -> Path:
     if raw.startswith("file://"):
         raw = file_uri_to_path(raw)
     return Path(raw).expanduser().resolve()
+
+
+def _mirror_registry_path(keeper) -> Path:
+    config = getattr(keeper, "config", None) or getattr(keeper, "_config", None)
+    candidates = [
+        getattr(config, "config_dir", None),
+        getattr(config, "path", None),
+        getattr(keeper, "_store_path", None),
+    ]
+    config_dir = next(
+        (candidate for candidate in candidates if isinstance(candidate, (str, Path))),
+        None,
+    )
+    if config_dir is None:
+        raise ValueError("markdown mirror registry requires a local config directory")
+    return Path(config_dir).expanduser().resolve() / "markdown-mirrors.yaml"
 
 
 def _paths_overlap(a: str | Path, b: str | Path) -> bool:
@@ -123,7 +154,9 @@ def _paths_overlap(a: str | Path, b: str | Path) -> bool:
         return False
 
 
-def load_markdown_mirrors(keeper: Keeper) -> list[MarkdownMirrorEntry]:
+def _load_markdown_mirrors_legacy_store(keeper: Keeper) -> list[MarkdownMirrorEntry]:
+    if not hasattr(keeper, "_document_store"):
+        return []
     rec = keeper._document_store.get(_DOC_COLLECTION, _MIRRORS_ID)
     if rec is None or not rec.summary:
         return []
@@ -141,25 +174,52 @@ def load_markdown_mirrors(keeper: Keeper) -> list[MarkdownMirrorEntry]:
     ]
 
 
+def load_markdown_mirrors(keeper: Keeper) -> list[MarkdownMirrorEntry]:
+    registry_path = _mirror_registry_path(keeper)
+    if registry_path.exists():
+        try:
+            items = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            logger.warning("Failed to parse markdown mirror registry: %s", registry_path)
+            return []
+        if not isinstance(items, list):
+            return []
+        return [
+            _dict_to_mirror(item)
+            for item in items
+            if isinstance(item, dict)
+        ]
+    return _load_markdown_mirrors_legacy_store(keeper)
+
+
 def save_markdown_mirrors(keeper: Keeper, entries: list[MarkdownMirrorEntry]) -> None:
-
-
     payload = [_mirror_to_dict(entry) for entry in entries]
-    content = yaml.safe_dump(payload, default_flow_style=False) if payload else ""
-    now_ts = _utc_now()
-    tags = {
-        "category": "system",
-        "_source": "inline",
-        "_updated": now_ts,
-    }
-    keeper._document_store.upsert(
-        collection=_DOC_COLLECTION,
-        id=_MIRRORS_ID,
-        summary=content,
-        tags=tags,
-        content_hash=_content_hash(content),
-        archive=False,
-    )
+    registry_path = _mirror_registry_path(keeper)
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    if payload:
+        content = yaml.safe_dump(payload, default_flow_style=False)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=registry_path.parent,
+            prefix="markdown-mirrors-",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+        tmp_path.replace(registry_path)
+    else:
+        try:
+            registry_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    if hasattr(keeper, "_document_store"):
+        try:
+            keeper._document_store.delete(_DOC_COLLECTION, _MIRRORS_ID)
+        except Exception:
+            logger.debug("Failed to clean up legacy mirror registry doc", exc_info=True)
 
 
 def list_markdown_mirrors(keeper: Keeper) -> list[MarkdownMirrorEntry]:
@@ -196,6 +256,7 @@ def record_markdown_mirror_export_success(
     root: str | Path,
     *,
     error: str = "",
+    source_cursor: str | None = None,
 ) -> bool:
 
 
@@ -211,6 +272,8 @@ def record_markdown_mirror_export_success(
         entry.pending_full_replan = False
         entry.pending_note_ids = []
         entry.last_error = error
+        if source_cursor is not None:
+            entry.source_cursor = str(source_cursor)
         changed = True
         break
     if changed:
@@ -435,54 +498,98 @@ def _delete_rel_path(root: Path, rel_path: Path) -> None:
 
 
 def _current_store_info(keeper: Keeper, *, include_system: bool) -> dict[str, Any]:
-    doc_coll = keeper._resolve_doc_collection()
-    doc_ids = keeper._document_store.list_ids(doc_coll)
-    if not include_system:
-        doc_ids = [doc_id for doc_id in doc_ids if not doc_id.startswith(".")]
-    return {
-        "document_count": len(doc_ids),
-        "version_count": sum(
-            keeper._document_store.version_count(doc_coll, doc_id)
-            for doc_id in doc_ids
-        ),
-        "part_count": sum(
-            keeper._document_store.part_count(doc_coll, doc_id)
-            for doc_id in doc_ids
-        ),
-        "collection": doc_coll,
-    }
+    it = keeper.export_iter(include_system=include_system)
+    try:
+        header = next(it)
+        return dict(header.get("store_info") or {})
+    finally:
+        close = getattr(it, "close", None)
+        if callable(close):
+            close()
 
 
-def _edge_tag_resolver(keeper: Keeper):
-    doc_coll = keeper._resolve_doc_collection()
-    edge_tag_cache: dict[str, bool] = {}
-
-    def is_edge_tag(key: str) -> bool:
-        if key.startswith("_"):
-            return False
-        cached = edge_tag_cache.get(key)
-        if cached is not None:
-            return cached
-        tagdoc = keeper._document_store.get(doc_coll, f".tag/{key}")
-        is_edge = bool(tagdoc and tagdoc.tags.get("_inverse"))
-        edge_tag_cache[key] = is_edge
-        return is_edge
-
-    return is_edge_tag
+_FULL_REPLAN = object()
+_SKIP_EVENT = object()
 
 
-def _plan_markdown_mirror_update(
-    keeper: Keeper,
+def _resolve_local_markdown_sync_targets(
+    dependencies: NoteDependencyService,
+    *,
+    mutation: str,
+    doc_id: str,
+    payload: dict[str, Any],
+    include_system: bool,
+    expanded_targets: dict[str, list[str]],
+    row: dict[str, Any],
+):
+    if mutation in DOC_STRUCTURAL_MUTATIONS:
+        if _is_exported_note_id(doc_id, include_system=include_system):
+            return _FULL_REPLAN
+        return _SKIP_EVENT
+
+    if mutation == DOC_UPDATE_MUTATION:
+        if doc_id not in expanded_targets:
+            expanded_targets[doc_id] = dependencies.all_target_ids(doc_id)
+        return [doc_id, *expanded_targets[doc_id]]
+
+    if mutation in PART_MUTATIONS or mutation in VERSION_MUTATIONS:
+        return [doc_id]
+
+    if mutation in EDGE_MUTATIONS or mutation in VERSION_EDGE_MUTATIONS:
+        return [
+            doc_id,
+            str(payload.get("target_id") or ""),
+            str(payload.get("old_target_id") or ""),
+        ]
+
+    return _FULL_REPLAN
+
+
+def _resolve_remote_markdown_sync_targets(
+    *,
+    mutation: str,
+    doc_id: str,
+    payload: dict[str, Any],
+    include_system: bool,
+    expanded_targets: dict[str, list[str]],
+    row: dict[str, Any],
+):
+    if mutation in DOC_STRUCTURAL_MUTATIONS:
+        if _is_exported_note_id(doc_id, include_system=include_system):
+            return _FULL_REPLAN
+        return _SKIP_EVENT
+
+    affected_note_ids = row.get("affected_note_ids")
+    if not isinstance(affected_note_ids, list):
+        affected_note_ids = []
+    affected_note_ids = [str(note_id) for note_id in affected_note_ids if note_id]
+
+    if mutation == DOC_UPDATE_MUTATION:
+        return affected_note_ids or _FULL_REPLAN
+
+    if mutation in PART_MUTATIONS or mutation in VERSION_MUTATIONS:
+        return affected_note_ids or [doc_id]
+
+    if mutation in EDGE_MUTATIONS or mutation in VERSION_EDGE_MUTATIONS:
+        return affected_note_ids or [
+            doc_id,
+            str(payload.get("target_id") or ""),
+            str(payload.get("old_target_id") or ""),
+        ]
+
+    return _FULL_REPLAN
+
+
+def _plan_markdown_mirror_update_common(
     entry: MarkdownMirrorEntry,
     events: list[dict[str, Any]],
+    *,
+    resolve_targets,
 ) -> MarkdownMirrorUpdatePlan:
     if not events:
         return MarkdownMirrorUpdatePlan(full_replan=True, note_ids=())
-
-    doc_coll = keeper._resolve_doc_collection()
-    dependencies = NoteDependencyService(keeper._document_store, doc_coll)
     note_ids: set[str] = set()
-    _expanded_targets: set[str] = set()
+    expanded_targets: dict[str, list[str]] = {}
 
     def _maybe_add(doc_id: str) -> None:
         if not doc_id:
@@ -495,57 +602,53 @@ def _plan_markdown_mirror_update(
             continue
         mutation = str(row.get("mutation") or "")
         doc_id = str(row.get("entity_id") or "")
-        payload = row.get("payload_json")
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except json.JSONDecodeError:
-                payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-
-        if mutation in {"doc_insert", "doc_delete"}:
-            if _is_exported_note_id(doc_id, include_system=entry.include_system):
-                return MarkdownMirrorUpdatePlan(full_replan=True, note_ids=())
+        payload = decode_sync_event_payload(row.get("payload_json"))
+        resolved = resolve_targets(
+            mutation=mutation,
+            doc_id=doc_id,
+            payload=payload,
+            include_system=entry.include_system,
+            expanded_targets=expanded_targets,
+            row=row,
+        )
+        if resolved is _FULL_REPLAN:
+            return MarkdownMirrorUpdatePlan(full_replan=True, note_ids=())
+        if resolved is _SKIP_EVENT:
             continue
-
-        if mutation == "doc_update":
-            _maybe_add(doc_id)
-            if doc_id not in _expanded_targets:
-                _expanded_targets.add(doc_id)
-                for target_id in dependencies.all_target_ids(doc_id):
-                    _maybe_add(target_id)
-            continue
-
-        if mutation in {"part_insert", "part_update", "part_delete"}:
-            _maybe_add(doc_id)
-            continue
-
-        if mutation in {"version_insert", "version_update", "version_delete"}:
-            _maybe_add(doc_id)
-            continue
-
-        if mutation in {"edge_insert", "edge_update", "edge_delete"}:
-            _maybe_add(doc_id)
-            _maybe_add(str(payload.get("target_id") or ""))
-            _maybe_add(str(payload.get("old_target_id") or ""))
-            continue
-
-        if mutation in {
-            "version_edge_insert",
-            "version_edge_update",
-            "version_edge_delete",
-        }:
-            _maybe_add(doc_id)
-            _maybe_add(str(payload.get("target_id") or ""))
-            _maybe_add(str(payload.get("old_target_id") or ""))
-            continue
-
-        return MarkdownMirrorUpdatePlan(full_replan=True, note_ids=())
+        for note_id in resolved:
+            _maybe_add(note_id)
 
     return MarkdownMirrorUpdatePlan(
         full_replan=False,
         note_ids=tuple(sorted(note_ids)),
+    )
+
+
+def _plan_markdown_mirror_update(
+    keeper: Keeper,
+    entry: MarkdownMirrorEntry,
+    events: list[dict[str, Any]],
+) -> MarkdownMirrorUpdatePlan:
+    doc_coll = keeper._resolve_doc_collection()
+    dependencies = NoteDependencyService(keeper._document_store, doc_coll)
+    return _plan_markdown_mirror_update_common(
+        entry,
+        events,
+        resolve_targets=lambda **kwargs: _resolve_local_markdown_sync_targets(
+            dependencies,
+            **kwargs,
+        ),
+    )
+
+
+def _plan_markdown_mirror_update_remote(
+    entry: MarkdownMirrorEntry,
+    events: list[dict[str, Any]],
+) -> MarkdownMirrorUpdatePlan:
+    return _plan_markdown_mirror_update_common(
+        entry,
+        events,
+        resolve_targets=_resolve_remote_markdown_sync_targets,
     )
 
 
@@ -567,10 +670,17 @@ def run_markdown_export_incremental(
     existing_map = _load_map(out_dir)
     reverse_map = _map_reverse(existing_map)
     export_refs = dict(reverse_map)
-    is_edge_tag = _edge_tag_resolver(keeper)
-    current_inverse, version_inverse = _get_edge_data(
-        keeper, export_refs=export_refs,
-    )
+    local_graph = supports_local_markdown_export_graph(keeper)
+    if local_graph:
+        local_is_edge_tag = local_edge_tag_resolver(keeper)
+        current_inverse_lookup, version_inverse_lookup = get_edge_data(
+            keeper, export_refs=export_refs,
+        )
+    elif not hasattr(keeper, "export_bundle"):
+        raise ValueError(
+            "incremental markdown export requires a host with either local "
+            "graph access or export_bundle() support"
+        )
 
     updated_entries = dict(existing_map)
     rewritten = 0
@@ -582,15 +692,42 @@ def run_markdown_export_incremental(
                 f"incremental export missing namespace mapping for {doc_id}"
             )
         rel_path = Path(f"{existing_export_ref}.md")
-        doc = _get_export_doc(keeper, doc_id)
-        if doc is None:
-            raise _IncrementalExportNeedsFullReplan(
-                f"incremental export missing note {doc_id}"
+        if local_graph:
+            doc = get_export_doc(keeper, doc_id)
+            if doc is None:
+                raise _IncrementalExportNeedsFullReplan(
+                    f"incremental export missing note {doc_id}"
+                )
+            current_inverse = current_inverse_lookup(doc_id)
+            version_inverse = version_inverse_lookup(doc_id)
+            is_edge_tag = local_is_edge_tag
+        else:
+            bundle = keeper.export_bundle(
+                doc_id,
+                include_system=include_system,
+                include_parts=include_parts,
+                include_versions=include_versions,
             )
+            if not isinstance(bundle, dict):
+                raise _IncrementalExportNeedsFullReplan(
+                    f"incremental export missing note bundle for {doc_id}"
+                )
+            remote_bundle = resolve_remote_render_bundle(
+                bundle,
+                export_refs=export_refs,
+            )
+            if not isinstance(remote_bundle.document, dict):
+                raise _IncrementalExportNeedsFullReplan(
+                    f"incremental export missing document payload for {doc_id}"
+                )
+            doc = remote_bundle.document
+            current_inverse = remote_bundle.current_inverse
+            version_inverse = remote_bundle.version_inverse
+            is_edge_tag = remote_bundle.is_edge_tag
         if not _is_exported_note_id(doc_id, include_system=include_system):
             continue
 
-        bundle_refs = _bundle_export_refs(
+        bundle_refs = bundle_export_refs(
             doc,
             rel_path,
             include_parts=include_parts,
@@ -602,7 +739,7 @@ def run_markdown_export_incremental(
             for keep_id, export_ref in bundle_refs.items()
             if keep_id == doc_id or "@P{" in keep_id or "@V{" in keep_id
         }
-        files = _render_doc_bundle(
+        files = render_doc_bundle(
             keeper,
             doc,
             rel_path,
@@ -610,8 +747,8 @@ def run_markdown_export_incremental(
             include_parts=include_parts,
             include_versions=include_versions,
             export_refs=export_refs,
-            current_inverse=current_inverse,
-            version_inverse=version_inverse,
+            current_inverse=lambda _doc_id, edges=current_inverse: edges,
+            version_inverse=lambda _doc_id, edges=version_inverse: edges,
             is_edge_tag=is_edge_tag,
         )
         for file_rel, text in files.items():
@@ -663,7 +800,7 @@ def run_markdown_export_once(
         tmpdir = Path(tmp)
         new_map: dict[str, str] = {}
         new_paths: set[Path] = set()
-        count, info = _write_markdown_export(
+        count, info = write_markdown_export(
             keeper,
             tmpdir,
             include_system=include_system,
@@ -735,44 +872,124 @@ def clear_sync_outbox(keeper: Keeper) -> int:
     return discarded
 
 
-def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
+def _supports_export_change_feed(keeper: Any) -> bool:
+    if hasattr(keeper, "supports_capability"):
+        try:
+            return bool(keeper.supports_capability("export_changes"))
+        except Exception:
+            return False
+    return hasattr(keeper, "export_changes")
+
+
+def poll_markdown_mirrors(keeper: Keeper, *, source_keeper=None) -> dict[str, int]:
     # v1 uses the sync outbox only as a precise trigger boundary. Any activity
     # is coalesced by the mirror interval. Structural changes still force a
     # whole-mirror replan; ordinary note/part/version/edge changes can now be
     # handled as bounded incremental rewrites through the shared dependency
     # service.
+    source_keeper = source_keeper or keeper
     entries = load_markdown_mirrors(keeper)
 
 
     if not entries:
-        _events, discarded = _drain_sync_outbox(keeper, discard=True)
+        if source_keeper is keeper:
+            _events, discarded = _drain_sync_outbox(keeper, discard=True)
+        else:
+            discarded = 0
         return {"checked": 0, "exported": 0, "errors": 0, "discarded": discarded}
 
     now = datetime.now(timezone.utc)
     now_ts = _utc_now()
     dirty = False
     stats = {"checked": 0, "exported": 0, "errors": 0, "discarded": 0}
-    events, _discarded = _drain_sync_outbox(
-        keeper,
-        discard=False,
-        max_rows=_SYNC_OUTBOX_MAX_EVENTS_PER_POLL,
-    )
-    if events:
+    if source_keeper is keeper:
+        events, _discarded = _drain_sync_outbox(
+            keeper,
+            discard=False,
+            max_rows=_SYNC_OUTBOX_MAX_EVENTS_PER_POLL,
+        )
+        if events:
+            for entry in entries:
+                if not entry.enabled:
+                    continue
+                plan = _plan_markdown_mirror_update(keeper, entry, events)
+                if not plan.full_replan and not plan.note_ids:
+                    continue
+                event_times = [
+                    (row.get("created_at") or now_ts)
+                    for row in events
+                    if row.get("collection") == _DOC_COLLECTION
+                ]
+                pending_since = min(
+                    [entry.pending_since] + event_times
+                    if entry.pending_since else event_times
+                )
+                if entry.pending_since != pending_since:
+                    entry.pending_since = pending_since
+                if plan.full_replan:
+                    entry.pending_full_replan = True
+                    entry.pending_note_ids = []
+                elif not entry.pending_full_replan:
+                    merged = set(entry.pending_note_ids)
+                    merged.update(plan.note_ids)
+                    entry.pending_note_ids = sorted(merged)
+                dirty = True
+    elif _supports_export_change_feed(source_keeper):
         for entry in entries:
             if not entry.enabled:
                 continue
-            plan = _plan_markdown_mirror_update(keeper, entry, events)
-            if not plan.full_replan and not plan.note_ids:
+            try:
+                feed = source_keeper.export_changes(
+                    cursor=entry.source_cursor or "0",
+                    limit=_SYNC_OUTBOX_MAX_EVENTS_PER_POLL,
+                )
+            except Exception as exc:
+                entry.last_error = str(exc)
+                stats["errors"] += 1
+                dirty = True
                 continue
+
+            if not isinstance(feed, dict):
+                entry.last_error = "invalid export change feed response"
+                stats["errors"] += 1
+                dirty = True
+                continue
+
+            head_cursor = str(feed.get("head_cursor") or entry.source_cursor or "0")
+            next_cursor = str(feed.get("cursor") or entry.source_cursor or head_cursor)
+            compacted = bool(feed.get("compacted"))
+            truncated = bool(feed.get("truncated"))
+            events = feed.get("events")
+            if not isinstance(events, list):
+                events = []
+
+            target_cursor = head_cursor if (compacted or truncated) else next_cursor
+            if entry.source_cursor != target_cursor:
+                entry.source_cursor = target_cursor
+                dirty = True
+
+            if not compacted and not truncated and not events:
+                continue
+
+            if compacted or truncated:
+                plan = MarkdownMirrorUpdatePlan(full_replan=True, note_ids=())
+            else:
+                plan = _plan_markdown_mirror_update_remote(entry, events)
+                if not plan.full_replan and not plan.note_ids:
+                    continue
+
             event_times = [
-                (row.get("created_at") or now_ts)
+                str(row.get("created_at") or now_ts)
                 for row in events
-                if row.get("collection") == _DOC_COLLECTION
+                if isinstance(row, dict)
             ]
-            pending_since = min(
-                [entry.pending_since] + event_times
-                if entry.pending_since else event_times
-            )
+            if event_times:
+                pending_since = min(
+                    [entry.pending_since] + event_times
+                    if entry.pending_since else event_times
+                )
+            else:
+                pending_since = entry.pending_since or entry.last_run or entry.added_at or now_ts
             if entry.pending_since != pending_since:
                 entry.pending_since = pending_since
             if plan.full_replan:
@@ -782,11 +999,21 @@ def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
                 merged = set(entry.pending_note_ids)
                 merged.update(plan.note_ids)
                 entry.pending_note_ids = sorted(merged)
+            entry.last_error = ""
             dirty = True
-    for entry in entries:
-        if entry.pending_since and not entry.pending_full_replan and not entry.pending_note_ids:
-            entry.pending_since = ""
-            dirty = True
+    else:
+        for entry in entries:
+            if not entry.enabled:
+                continue
+            pending_since = entry.pending_since or entry.last_run or entry.added_at or now_ts
+            if entry.pending_since != pending_since:
+                entry.pending_since = pending_since
+                dirty = True
+    if source_keeper is keeper:
+        for entry in entries:
+            if entry.pending_since and not entry.pending_full_replan and not entry.pending_note_ids:
+                entry.pending_since = ""
+                dirty = True
     for entry in entries:
         if not entry.is_due(now):
             continue
@@ -805,7 +1032,7 @@ def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
         try:
             if plan.full_replan:
                 run_markdown_export_once(
-                    keeper,
+                    source_keeper,
                     entry.root,
                     include_system=entry.include_system,
                     include_parts=entry.include_parts,
@@ -815,7 +1042,7 @@ def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
                 )
             else:
                 run_markdown_export_incremental(
-                    keeper,
+                    source_keeper,
                     entry.root,
                     note_ids=list(plan.note_ids),
                     include_system=entry.include_system,
@@ -831,7 +1058,7 @@ def poll_markdown_mirrors(keeper: Keeper) -> dict[str, int]:
             stats["exported"] += 1
         except _IncrementalExportNeedsFullReplan:
             run_markdown_export_once(
-                keeper,
+                source_keeper,
                 entry.root,
                 include_system=entry.include_system,
                 include_parts=entry.include_parts,

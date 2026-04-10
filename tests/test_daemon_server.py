@@ -6,6 +6,7 @@ Tests both raw HTTP and RemoteKeeper round-trip.
 
 import json
 import socket
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -50,6 +51,10 @@ def test_ready(http):
     assert "store" in body
     assert "needs_setup" in body
     assert "warnings" in body
+    assert body["capabilities"]["export_snapshot"] is True
+    assert body["capabilities"]["export_bundle"] is True
+    assert body["capabilities"]["export_changes"] is True
+    assert body["network"]["mode"] == "local"
     assert "item_count" not in body
 
 
@@ -65,6 +70,150 @@ def test_health(http):
     assert "needs_setup" in body
     assert "warnings" in body
     assert isinstance(body["warnings"], list)
+    assert body["capabilities"]["remote_incremental_markdown_sync"] is True
+    assert body["network"]["bind_host"] == "127.0.0.1"
+
+
+def test_export_endpoint(http):
+    http.post("/v1/notes", json={"content": "user note", "id": "export-1"})
+    http.post("/v1/notes", json={"content": "system note", "id": ".system-export"})
+
+    r = http.get("/v1/export")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["format"] == "keep-export"
+    ids = {doc["id"] for doc in data["documents"]}
+    assert "export-1" in ids
+    assert ".system-export" in ids
+
+    r = http.get("/v1/export", params={"include_system": "false"})
+    assert r.status_code == 200
+    data = r.json()
+    ids = {doc["id"] for doc in data["documents"]}
+    assert "export-1" in ids
+    assert ".system-export" not in ids
+
+
+def test_export_endpoint_stream_ndjson(http):
+    http.post("/v1/notes", json={"content": "user note", "id": "export-stream-1"})
+    http.post("/v1/notes", json={"content": "system note", "id": ".system-export-stream"})
+
+    with http.stream(
+        "GET",
+        "/v1/export",
+        params={"include_system": "false", "stream": "ndjson"},
+    ) as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].split(";", 1)[0] == "application/x-ndjson"
+        rows = [
+            json.loads(line)
+            for line in r.iter_lines()
+            if line
+        ]
+
+    assert rows[0]["format"] == "keep-export"
+    ids = {row["id"] for row in rows[1:]}
+    assert "export-stream-1" in ids
+    assert ".system-export-stream" not in ids
+
+
+def test_export_bundle_endpoint(http):
+    http.post("/v1/notes", json={"content": "person note", "id": "alice"})
+    http.post("/v1/notes", json={
+        "content": "Conversation note. " * 40,
+        "id": "conv-1",
+        "tags": {"speaker": "alice"},
+    })
+    with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_analyze:
+        mock_analyze.return_value = [
+            {"summary": "Opening exchange", "tags": {"speaker": "alice"}},
+            {"summary": "Follow-up exchange"},
+        ]
+        http.post(
+            "/v1/analyze",
+            json={"id": "conv-1", "foreground": True, "force": True},
+        )
+
+    r = http.get("/v1/export/bundles/conv-1")
+    assert r.status_code == 200
+    bundle = r.json()
+    assert bundle["document"]["id"] == "conv-1"
+    assert "parts" in bundle["document"]
+    assert "speaker" in bundle["edge_tag_keys"]
+    assert bundle["current_inverse"] == []
+
+    r = http.get("/v1/export/bundles/alice")
+    assert r.status_code == 200
+    bundle = r.json()
+    assert any(edge[0] == "said" for edge in bundle["current_inverse"])
+
+    r = http.get("/v1/export/bundles/conv-1", params={"include_parts": "false"})
+    assert r.status_code == 200
+    bundle = r.json()
+    assert "parts" not in bundle["document"]
+
+    r = http.get("/v1/export/bundles/nonexistent")
+    assert r.status_code == 404
+
+
+def test_export_changes_endpoint(http):
+    http.post("/v1/notes", json={"content": "first body", "id": "changes-1"})
+    http.post("/v1/notes", json={"content": "updated body", "id": "changes-1"})
+
+    r = http.get("/v1/export/changes", params={"cursor": "0", "limit": "500"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["format"] == "keep-export-changes"
+    assert data["version"] == 1
+    assert data["compacted"] is False
+    event = next(row for row in data["events"] if row["entity_id"] == "changes-1")
+    assert event["affected_note_ids"] == ["changes-1"]
+    cursor = data["cursor"]
+
+    r = http.get("/v1/export/changes", params={"cursor": cursor, "limit": "500"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["events"] == []
+
+    r = http.get("/v1/export/changes", params={"cursor": "bad"})
+    assert r.status_code == 400
+
+
+def test_export_changes_endpoint_caps_limit(http, daemon):
+    server, kp, port = daemon
+    with patch.object(kp, "export_changes", wraps=kp.export_changes) as wrapped:
+        r = httpx.get(
+            f"http://127.0.0.1:{port}/v1/export/changes?cursor=0&limit=999999999",
+            headers={"Authorization": f"Bearer {server.auth_token}"},
+            timeout=5,
+        )
+    assert r.status_code == 200
+    assert wrapped.call_args.kwargs["limit"] == 10_000
+
+
+def test_export_changes_endpoint_includes_dependent_targets_for_doc_update(http):
+    http.post("/v1/notes", json={"content": "Joanna note", "id": "Joanna"})
+    http.post("/v1/notes", json={
+        "content": "Session body",
+        "id": "session-feed-1",
+        "tags": {"speaker": "Joanna"},
+    })
+    http.post("/v1/notes", json={
+        "content": "Session renamed",
+        "id": "session-feed-1",
+        "summary": "Session renamed",
+        "tags": {"speaker": "Joanna"},
+    })
+
+    r = http.get("/v1/export/changes", params={"cursor": "0", "limit": "500"})
+    assert r.status_code == 200
+    data = r.json()
+    event = next(
+        row for row in data["events"]
+        if row["entity_id"] == "session-feed-1" and row["mutation"] == "doc_update"
+    )
+    assert "session-feed-1" in event["affected_note_ids"]
+    assert "Joanna" in event["affected_note_ids"]
 
 
 def test_ready_avoids_expensive_count(daemon):
@@ -118,6 +267,86 @@ def test_401_without_token(daemon):
 def test_404_unknown_path(http):
     r = http.get("/v1/nonexistent")
     assert r.status_code == 404
+
+
+def test_local_daemon_rejects_non_loopback_host_header(daemon):
+    server, _, port = daemon
+    r = httpx.get(
+        f"http://127.0.0.1:{port}/v1/ready",
+        headers={
+            "Authorization": f"Bearer {server.auth_token}",
+            "Host": "keep.example.test",
+        },
+        timeout=5,
+    )
+    assert r.status_code == 403
+
+
+def test_remote_mode_accepts_advertised_host_header(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    server = DaemonServer(
+        kp,
+        port=0,
+        bind_host="0.0.0.0",
+        advertised_url="https://keep.example.test",
+        trusted_proxy=True,
+    )
+    port = server.start()
+    try:
+        r = httpx.get(
+            f"http://127.0.0.1:{port}/v1/ready",
+            headers={
+                "Authorization": f"Bearer {server.auth_token}",
+                "Host": "keep.example.test",
+            },
+            timeout=5,
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["network"]["mode"] == "remote"
+        assert body["network"]["advertised_url"] == "https://keep.example.test"
+
+        r = httpx.get(
+            f"http://127.0.0.1:{port}/v1/ready",
+            headers={
+                "Authorization": f"Bearer {server.auth_token}",
+                "Host": "evil.example.test",
+            },
+            timeout=5,
+        )
+        assert r.status_code == 403
+    finally:
+        server.stop()
+        kp.close()
+
+
+def test_remote_mode_requires_trusted_proxy(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    try:
+        server = DaemonServer(
+            kp,
+            port=0,
+            bind_host="192.0.2.10",
+        )
+        with pytest.raises(ValueError, match="trusted proxy mode"):
+            server.start()
+    finally:
+        kp.close()
+
+
+def test_wildcard_bind_requires_advertised_url(mock_providers, tmp_path):
+    kp = Keeper(store_path=tmp_path)
+    try:
+        server = DaemonServer(
+            kp,
+            port=0,
+            bind_host="0.0.0.0",
+            trusted_proxy=True,
+        )
+        with pytest.raises(ValueError, match="advertised-url"):
+            server.start()
+    finally:
+        kp.close()
 
 
 def test_flow_blank_budget_uses_default(http):
@@ -501,6 +730,111 @@ def test_remote_keeper_round_trip(daemon):
     assert client.exists("rt-1")
     assert not client.exists("nonexistent")
     assert client.delete("rt-1") is True
+
+    client.close()
+
+
+def test_remote_keeper_capabilities_round_trip(daemon):
+    server, kp, port = daemon
+    from keep.remote import RemoteKeeper
+
+    client = RemoteKeeper(
+        api_url=f"http://127.0.0.1:{port}",
+        api_key=server.auth_token, config=kp.config)
+
+    info = client.server_info()
+    assert info["network"]["mode"] == "local"
+    assert client.supports_capability("export_bundle") is True
+    assert client.supports_capability("export_changes") is True
+
+    client.close()
+
+
+def test_remote_keeper_export_round_trip(daemon):
+    server, kp, port = daemon
+    from keep.remote import RemoteKeeper
+
+    client = RemoteKeeper(
+        api_url=f"http://127.0.0.1:{port}",
+        api_key=server.auth_token, config=kp.config)
+
+    client.put(content="export body", id="export-remote-1", tags={"topic": "transport"})
+    client.put(content="system body", id=".system-remote-export")
+
+    data = client.export_data(include_system=False)
+    assert data["format"] == "keep-export"
+    ids = {doc["id"] for doc in data["documents"]}
+    assert "export-remote-1" in ids
+    assert ".system-remote-export" not in ids
+
+    chunks = list(client.export_iter(include_system=False))
+    assert chunks[0]["format"] == "keep-export"
+    ids = {doc["id"] for doc in chunks[1:]}
+    assert "export-remote-1" in ids
+    assert ".system-remote-export" not in ids
+
+    client.close()
+
+
+def test_remote_keeper_export_bundle_round_trip(daemon):
+    server, kp, port = daemon
+    from keep.remote import RemoteKeeper
+
+    client = RemoteKeeper(
+        api_url=f"http://127.0.0.1:{port}",
+        api_key=server.auth_token, config=kp.config)
+
+    client.put(content="person body", id="bob")
+    client.put(
+        content="Conversation body. " * 40,
+        id="conv-bundle-1",
+        tags={"speaker": "bob"},
+    )
+    with patch("keep.analyzers.SlidingWindowAnalyzer.analyze") as mock_analyze:
+        mock_analyze.return_value = [
+            {"summary": "Bundle opening", "tags": {"speaker": "bob"}},
+            {"summary": "Bundle follow-up"},
+        ]
+        client._client.post(
+            "/v1/analyze",
+            json={"id": "conv-bundle-1", "foreground": True, "force": True},
+        ).raise_for_status()
+
+    bundle = client.export_bundle("conv-bundle-1")
+    assert bundle is not None
+    assert "parts" in bundle["document"]
+    assert "speaker" in bundle["edge_tag_keys"]
+    assert bundle["current_inverse"] == []
+
+    bundle = client.export_bundle("conv-bundle-1", include_parts=False)
+    assert bundle is not None
+    assert bundle["document"]["id"] == "conv-bundle-1"
+    assert "parts" not in bundle["document"]
+    bundle = client.export_bundle("bob")
+    assert bundle is not None
+    assert any(edge[0] == "said" for edge in bundle["current_inverse"])
+
+    assert client.export_bundle("nonexistent") is None
+
+    client.close()
+
+
+def test_remote_keeper_export_changes_round_trip(daemon):
+    server, kp, port = daemon
+    from keep.remote import RemoteKeeper
+
+    client = RemoteKeeper(
+        api_url=f"http://127.0.0.1:{port}",
+        api_key=server.auth_token, config=kp.config)
+
+    client.put(content="change feed body", id="remote-changes-1")
+    feed = client.export_changes(cursor="0", limit=500)
+    assert feed["format"] == "keep-export-changes"
+    event = next(row for row in feed["events"] if row["entity_id"] == "remote-changes-1")
+    assert event["affected_note_ids"] == ["remote-changes-1"]
+
+    feed = client.export_changes(cursor=feed["cursor"], limit=500)
+    assert feed["events"] == []
 
     client.close()
 

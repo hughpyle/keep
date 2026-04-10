@@ -1441,6 +1441,230 @@ class TestMarkdownExport:
         assert r.exit_code != 0
         assert "not empty" in r.output
 
+    def test_cli_markdown_export_uses_bundle_host(self, tmp_path):
+        from typer.testing import CliRunner
+        from unittest.mock import MagicMock, patch
+        from keep.cli_app import app
+
+        out = tmp_path / "vault"
+
+        class RemoteMarkdownHost:
+            def __init__(self) -> None:
+                self.close = MagicMock()
+
+            def export_iter(self, *, include_system: bool = True):
+                yield {
+                    "format": "keep-export",
+                    "version": 3,
+                    "exported_at": "2026-04-09T18:00:00",
+                    "store_info": {
+                        "document_count": 2,
+                        "version_count": 0,
+                        "part_count": 0,
+                        "collection": "default",
+                    },
+                }
+                yield {
+                    "id": "Joanna",
+                    "summary": "Joanna note",
+                    "tags": {},
+                    "created_at": "2026-04-09T18:00:00",
+                    "updated_at": "2026-04-09T18:00:00",
+                    "accessed_at": "2026-04-09T18:00:00",
+                }
+                yield {
+                    "id": "sessions/one",
+                    "summary": "Session body",
+                    "tags": {"speaker": "Joanna"},
+                    "created_at": "2026-04-09T18:00:00",
+                    "updated_at": "2026-04-09T18:00:00",
+                    "accessed_at": "2026-04-09T18:00:00",
+                }
+
+            def export_bundle(
+                self,
+                id: str,
+                *,
+                include_system: bool = True,
+                include_parts: bool = True,
+                include_versions: bool = True,
+            ):
+                bundles = {
+                    "Joanna": {
+                        "document": {
+                            "id": "Joanna",
+                            "summary": "Joanna note",
+                            "tags": {},
+                            "created_at": "2026-04-09T18:00:00",
+                            "updated_at": "2026-04-09T18:00:00",
+                            "accessed_at": "2026-04-09T18:00:00",
+                        },
+                        "current_inverse": [["said", "sessions/one"]],
+                        "version_inverse": [],
+                        "edge_tag_keys": [],
+                    },
+                    "sessions/one": {
+                        "document": {
+                            "id": "sessions/one",
+                            "summary": "Session body",
+                            "tags": {"speaker": "Joanna"},
+                            "created_at": "2026-04-09T18:00:00",
+                            "updated_at": "2026-04-09T18:00:00",
+                            "accessed_at": "2026-04-09T18:00:00",
+                        },
+                        "current_inverse": [],
+                        "version_inverse": [],
+                        "edge_tag_keys": ["speaker"],
+                    },
+                }
+                return bundles.get(id)
+
+        remote_host = RemoteMarkdownHost()
+
+        with patch("keep.cli_app._get_export_host", return_value=remote_host):
+            r = CliRunner().invoke(
+                app, ["--store", str(tmp_path), "data", "export", str(out), "--format", "md"],
+            )
+
+        assert r.exit_code == 0
+        assert (out / "Joanna.md").is_file()
+        assert (out / "sessions" / "one.md").is_file()
+        assert "[[sessions/one]]" in (out / "Joanna.md").read_text(encoding="utf-8")
+        assert 'speaker: "[[Joanna]]"' in (out / "sessions" / "one.md").read_text(encoding="utf-8")
+        remote_host.close.assert_called_once()
+
+    def test_cli_markdown_sync_uses_remote_export_host(self, tmp_path):
+        from typer.testing import CliRunner
+        from unittest.mock import MagicMock, patch
+        from keep.cli_app import app
+
+        class RemoteSyncHost:
+            def __init__(self) -> None:
+                self.close = MagicMock()
+
+            def export_iter(self, *, include_system: bool = True):
+                yield {
+                    "format": "keep-export",
+                    "version": 3,
+                    "exported_at": "2026-04-09T18:00:00",
+                    "store_info": {
+                        "document_count": 1,
+                        "version_count": 0,
+                        "part_count": 0,
+                        "collection": "default",
+                    },
+                }
+                yield {
+                    "id": "remote-sync-doc",
+                    "summary": "Remote sync body",
+                    "tags": {},
+                    "created_at": "2026-04-09T18:00:00",
+                    "updated_at": "2026-04-09T18:00:00",
+                    "accessed_at": "2026-04-09T18:00:00",
+                }
+
+            def export_bundle(
+                self,
+                id: str,
+                *,
+                include_system: bool = True,
+                include_parts: bool = True,
+                include_versions: bool = True,
+            ):
+                if id == "remote-sync-doc":
+                    return {
+                        "document": {
+                            "id": "remote-sync-doc",
+                            "summary": "Remote sync body",
+                            "tags": {},
+                            "created_at": "2026-04-09T18:00:00",
+                            "updated_at": "2026-04-09T18:00:00",
+                            "accessed_at": "2026-04-09T18:00:00",
+                        },
+                        "current_inverse": [],
+                        "version_inverse": [],
+                        "edge_tag_keys": [],
+                    }
+                return None
+
+            def export_changes(self, *, cursor: str | None = None, limit: int = 1000):
+                return {
+                    "format": "keep-export-changes",
+                    "version": 1,
+                    "cursor": "42",
+                    "head_cursor": "42",
+                    "compacted": False,
+                    "truncated": False,
+                    "events": [],
+                }
+
+        remote_host = RemoteSyncHost()
+
+        with patch("keep.cli_app._get_export_host", return_value=remote_host), \
+             patch("keep.cli_app._get_port", return_value=1234), \
+             patch("keep.cli_app._daemon_request", side_effect=[
+                 (200, {"validated": True, "root": str((tmp_path / "vault").resolve())}),
+                 (200, {"sync": {"root": str((tmp_path / "vault").resolve())}}),
+             ]) as daemon_request:
+            r = CliRunner().invoke(
+                app,
+                [
+                    "--store", str(tmp_path), "data", "export",
+                    str(tmp_path / "vault"), "--format", "md", "--sync",
+                ],
+            )
+
+        assert r.exit_code == 0
+        assert (tmp_path / "vault" / "remote-sync-doc.md").is_file()
+        assert "Markdown sync active:" in r.output
+        register_body = daemon_request.call_args_list[1].args[3]
+        assert register_body["source_cursor"] == "42"
+        remote_host.close.assert_called_once()
+
+    def test_cli_json_export_uses_export_host(self, tmp_path):
+        from typer.testing import CliRunner
+        from unittest.mock import MagicMock, patch
+        from keep.cli_app import app
+
+        out = tmp_path / "remote-export.json"
+
+        class ExportHost:
+            def __init__(self) -> None:
+                self.close = MagicMock()
+
+            def export_iter(self, *, include_system: bool = True):
+                yield {
+                    "format": "keep-export",
+                    "version": 3,
+                    "exported_at": "2026-04-09T17:00:00",
+                    "store_info": {
+                        "document_count": 1,
+                        "version_count": 0,
+                        "part_count": 0,
+                        "collection": "default",
+                    },
+                }
+                yield {
+                    "id": "remote-doc",
+                    "summary": "Remote export body",
+                    "tags": {"topic": "transport"},
+                    "created_at": "2026-04-09T17:00:00",
+                    "updated_at": "2026-04-09T17:00:00",
+                    "accessed_at": "2026-04-09T17:00:00",
+                }
+
+        host = ExportHost()
+
+        with patch("keep.cli_app._get_export_host", return_value=host):
+            r = CliRunner().invoke(
+                app, ["--store", str(tmp_path), "data", "export", str(out)],
+            )
+
+        assert r.exit_code == 0
+        data = json.loads(out.read_text(encoding="utf-8"))
+        assert data["documents"][0]["id"] == "remote-doc"
+        host.close.assert_called_once()
+
     def test_cli_rejects_stop_without_sync(self, tmp_path):
         from typer.testing import CliRunner
         from keep.cli_app import app

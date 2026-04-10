@@ -238,6 +238,22 @@ class KeeperProtocol(FlowHostProtocol, Protocol):
 
     def export_data(self, *, include_system: bool = True) -> dict: ...
 
+    def export_bundle(
+        self,
+        id: str,
+        *,
+        include_system: bool = True,
+        include_parts: bool = True,
+        include_versions: bool = True,
+    ) -> dict | None: ...
+
+    def export_changes(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 1000,
+    ) -> dict: ...
+
     def import_data(self, data: dict, *, mode: str = "merge") -> dict: ...
 
     def close(self) -> None: ...

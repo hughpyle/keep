@@ -418,7 +418,7 @@ except Exception as e:
 Common errors:
 - Missing provider configuration (no API key or local models)
 - Invalid URI format
-- Embedding provider changes (auto-enqueued, use `keep pending --reindex` or `kp.enqueue_reindex()`)
+- Embedding provider changes (auto-enqueued, use `keep daemon --reindex` or `kp.enqueue_reindex()`)
 
 ## LangChain / LangGraph
 

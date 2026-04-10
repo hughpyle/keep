@@ -17,6 +17,8 @@ Usage::
 from __future__ import annotations
 
 import json
+import hmac
+import ipaddress
 import logging
 import os
 import re
@@ -47,6 +49,8 @@ from .markdown_mirrors import (
     run_markdown_export_once,
     validate_markdown_mirror,
 )
+from .markdown_export import _get_export_bundle
+from . import markdown_export as _markdown_export
 from .watches import add_watch, remove_watch
 
 
@@ -80,6 +84,9 @@ def _items_response(items) -> dict:
 _ROUTES: list[tuple[str, str, str]] = [
     ("GET",    r"^/v1/ready$",                        "_handle_ready"),
     ("GET",    r"^/v1/health$",                       "_handle_health"),
+    ("GET",    r"^/v1/export/changes$",              "_handle_export_changes"),
+    ("GET",    r"^/v1/export/bundles/(?P<id>.+)$",    "_handle_export_bundle"),
+    ("GET",    r"^/v1/export$",                       "_handle_export"),
     ("POST",   r"^/v1/search$",                       "_handle_find"),
     ("POST",   r"^/v1/flow$",                         "_handle_flow"),
     ("POST",   r"^/v1/analyze$",                      "_handle_analyze"),
@@ -96,28 +103,92 @@ _COMPILED_ROUTES = [
     (method, re.compile(pattern), handler)
     for method, pattern, handler in _ROUTES
 ]
+from .api import _MAX_EXPORT_CHANGES_LIMIT
+
+
+def _normalize_host(value: str) -> str:
+    host = (value or "").strip().lower()
+    if host.startswith("[") and "]" in host:
+        host = host[1:host.index("]")]
+    elif ":" in host:
+        host = host.split(":", 1)[0]
+    return host
+
+
+def _is_loopback_host(value: str) -> bool:
+    host = _normalize_host(value)
+    if host in ("", "localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_wildcard_bind_host(value: str) -> bool:
+    return _normalize_host(value) in ("", "0.0.0.0", "::")
+
+
+def _allowed_hosts_for_mode(bind_host: str, advertised_url: str | None) -> set[str]:
+    bind_host = _normalize_host(bind_host)
+    loopbacks = {"", "127.0.0.1", "localhost", "::1"}
+    if _is_loopback_host(bind_host):
+        return loopbacks
+
+    allowed = set(loopbacks)
+    if bind_host and not _is_wildcard_bind_host(bind_host):
+        allowed.add(bind_host)
+    if advertised_url:
+        advertised_host = _normalize_host(urlparse(advertised_url).hostname or "")
+        if advertised_host:
+            allowed.add(advertised_host)
+    return allowed
+
+
+def _validate_remote_bind_policy(
+    bind_host: str,
+    advertised_url: str | None,
+    *,
+    trusted_proxy: bool,
+) -> None:
+    if _is_loopback_host(bind_host):
+        return
+    if not trusted_proxy:
+        raise ValueError(
+            "non-loopback daemon bind requires explicit trusted proxy mode; "
+            "pass --trusted-proxy or set KEEP_DAEMON_TRUSTED_PROXY=1"
+        )
+    if _is_wildcard_bind_host(bind_host) and not advertised_url:
+        raise ValueError(
+            "wildcard daemon bind requires --advertised-url to preserve "
+            "Host-header protection"
+        )
 
 
 class DaemonRequestHandler(BaseHTTPRequestHandler):
     """Routes requests to Keeper methods."""
 
     keeper: "Keeper"
+    export_keeper: Any = None
     auth_token: str = ""
+    allowed_hosts: set[str] = {"", "127.0.0.1", "localhost", "::1"}
+    bind_host: str = "127.0.0.1"
+    advertised_url: str | None = None
 
     def log_message(self, format, *args):
         logger.debug("HTTP %s", format % args)
 
     def _dispatch(self, method: str):
         # Host header check — reject DNS rebinding attempts
-        host = (self.headers.get("Host") or "").split(":")[0]
-        if host and host not in ("127.0.0.1", "localhost", "::1", ""):
+        host = _normalize_host(self.headers.get("Host") or "")
+        if host not in self.allowed_hosts:
             self._json(403, {"error": "forbidden"})
             return
 
         # Auth token check
         if DaemonRequestHandler.auth_token:
             provided = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
-            if provided != DaemonRequestHandler.auth_token:
+            if not hmac.compare_digest(provided, DaemonRequestHandler.auth_token):
                 self._json(401, {"error": "unauthorized"})
                 return
 
@@ -177,6 +248,20 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _stream_ndjson(self, status: int, rows) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            for row in rows:
+                line = json.dumps(row, ensure_ascii=False, default=str).encode("utf-8")
+                self.wfile.write(line + b"\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            logger.debug("NDJSON stream closed by client")
+
     def _read_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0))
         if length == 0:
@@ -230,6 +315,19 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             "summarization": summarization,
             "needs_setup": needs_setup,
             "warnings": warnings,
+            "capabilities": {
+                "api_version": 1,
+                "export_snapshot": True,
+                "export_stream_ndjson": True,
+                "export_bundle": True,
+                "export_changes": True,
+                "remote_incremental_markdown_sync": True,
+            },
+            "network": {
+                "mode": "local" if _is_loopback_host(self.bind_host) else "remote",
+                "bind_host": self.bind_host,
+                "advertised_url": self.advertised_url,
+            },
         }
         if include_item_count:
             try:
@@ -245,6 +343,70 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_health(self, groups: dict):
         self._json(200, self._daemon_status(include_item_count=True))
+
+    def _handle_export(self, groups: dict):
+        export_keeper = self.export_keeper or self.keeper
+        qs = urlparse(self.path).query
+        params = parse_qs(qs, keep_blank_values=True)
+        raw_include_system = params.get("include_system", ["true"])[0].strip().lower()
+        include_system = raw_include_system not in ("false", "0", "no")
+        raw_stream = params.get("stream", [""])[0].strip().lower()
+        if raw_stream in ("ndjson", "jsonl", "stream", "true", "1", "yes"):
+            self._stream_ndjson(
+                200,
+                export_keeper.export_iter(include_system=include_system),
+            )
+            return
+        self._json(200, export_keeper.export_data(include_system=include_system))
+
+    def _handle_export_changes(self, groups: dict):
+        export_keeper = self.export_keeper or self.keeper
+        qs = urlparse(self.path).query
+        params = parse_qs(qs, keep_blank_values=True)
+        raw_limit = params.get("limit", ["1000"])[0].strip()
+        try:
+            limit = max(0, min(int(raw_limit), _MAX_EXPORT_CHANGES_LIMIT))
+        except ValueError:
+            self._json(400, {"error": f"invalid limit: {raw_limit}"})
+            return
+        try:
+            payload = export_keeper.export_changes(
+                cursor=params.get("cursor", ["0"])[0].strip() or "0",
+                limit=limit,
+            )
+        except ValueError as exc:
+            self._json(400, {"error": str(exc)})
+            return
+        self._json(200, payload)
+
+    def _handle_export_bundle(self, groups: dict):
+        export_keeper = self.export_keeper or self.keeper
+        qs = urlparse(self.path).query
+        params = parse_qs(qs, keep_blank_values=True)
+
+        def _bool(key: str, default: bool = True) -> bool:
+            raw = params.get(key, [str(default).lower()])[0].strip().lower()
+            return raw not in ("false", "0", "no")
+
+        if _markdown_export.supports_local_markdown_export_graph(export_keeper):
+            bundle = _get_export_bundle(
+                export_keeper,
+                groups["id"],
+                include_system=_bool("include_system", True),
+                include_parts=_bool("include_parts", True),
+                include_versions=_bool("include_versions", True),
+            )
+        else:
+            bundle = export_keeper.export_bundle(
+                groups["id"],
+                include_system=_bool("include_system", True),
+                include_parts=_bool("include_parts", True),
+                include_versions=_bool("include_versions", True),
+            )
+        if bundle is None:
+            self._json(404, {"error": "not found"})
+            return
+        self._json(200, bundle)
 
     def _handle_get(self, groups: dict):
         item = flow_get_item(self.keeper, groups["id"])
@@ -366,6 +528,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_markdown_export(self, groups: dict):
         body = self._read_body()
+        export_keeper = self.export_keeper or self.keeper
         if body.get("list"):
             from .markdown_mirrors import list_markdown_mirrors
 
@@ -403,6 +566,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         validate_only = bool(body.get("validate_only", False))
         baseline_complete = bool(body.get("baseline_complete", False))
         interval = str(body.get("interval") or "PT30S")
+        source_cursor = str(body.get("source_cursor") or "")
 
         try:
             if stop:
@@ -433,8 +597,13 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 )
                 if register_only:
                     if baseline_complete:
-                        clear_sync_outbox(self.keeper)
-                        record_markdown_mirror_export_success(self.keeper, entry.root)
+                        if export_keeper is self.keeper:
+                            clear_sync_outbox(self.keeper)
+                        record_markdown_mirror_export_success(
+                            self.keeper,
+                            entry.root,
+                            source_cursor=source_cursor or None,
+                        )
                     self._json(200, {
                         "sync": {
                             "root": entry.root,
@@ -446,7 +615,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     })
                     return
                 count, info = run_markdown_export_once(
-                    self.keeper,
+                    export_keeper,
                     entry.root,
                     include_system=entry.include_system,
                     include_parts=entry.include_parts,
@@ -454,7 +623,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     allow_existing=True,
                     mirror_entry=entry,
                 )
-                clear_sync_outbox(self.keeper)
+                if export_keeper is self.keeper:
+                    clear_sync_outbox(self.keeper)
                 record_markdown_mirror_export_success(self.keeper, entry.root)
                 self._json(200, {
                     "sync": {
@@ -469,7 +639,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 return
 
             count, info = run_markdown_export_once(
-                self.keeper,
+                export_keeper,
                 root,
                 include_system=include_system,
                 include_parts=include_parts,
@@ -612,9 +782,22 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 class DaemonServer:
     """HTTP server lifecycle for the daemon."""
 
-    def __init__(self, keeper: "Keeper", port: int = DAEMON_PORT):
+    def __init__(
+        self,
+        keeper: "Keeper",
+        port: int = DAEMON_PORT,
+        *,
+        export_keeper: Any = None,
+        bind_host: str = "127.0.0.1",
+        advertised_url: str | None = None,
+        trusted_proxy: bool = False,
+    ):
         self._keeper = keeper
+        self._export_keeper = export_keeper
         self._preferred_port = port
+        self._bind_host = bind_host
+        self._advertised_url = advertised_url
+        self._trusted_proxy = trusted_proxy
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self.auth_token: str = ""
@@ -622,21 +805,42 @@ class DaemonServer:
     def start(self) -> int:
         """Start the HTTP server. Returns the actual bound port."""
         self.auth_token = secrets.token_urlsafe(32)
+        if not self.auth_token:
+            raise RuntimeError("auth_token must be non-empty before starting daemon server")
+        _validate_remote_bind_policy(
+            self._bind_host,
+            self._advertised_url,
+            trusted_proxy=self._trusted_proxy,
+        )
+        if not _is_loopback_host(self._bind_host):
+            logger.warning(
+                "Remote daemon mode enabled on %s without in-process TLS; "
+                "assuming TLS termination by a trusted proxy. Bearer credentials "
+                "are not protected in transit by keep itself.",
+                self._bind_host,
+            )
         DaemonRequestHandler.keeper = self._keeper
+        DaemonRequestHandler.export_keeper = self._export_keeper or self._keeper
         DaemonRequestHandler.auth_token = self.auth_token
+        DaemonRequestHandler.bind_host = self._bind_host
+        DaemonRequestHandler.advertised_url = self._advertised_url
+        DaemonRequestHandler.allowed_hosts = _allowed_hosts_for_mode(
+            self._bind_host,
+            self._advertised_url,
+        )
         try:
             self._server = ThreadingHTTPServer(
-                ("127.0.0.1", self._preferred_port), DaemonRequestHandler)
+                (self._bind_host, self._preferred_port), DaemonRequestHandler)
         except OSError:
             logger.info("Port %d in use, using OS-assigned port", self._preferred_port)
             self._server = ThreadingHTTPServer(
-                ("127.0.0.1", 0), DaemonRequestHandler)
+                (self._bind_host, 0), DaemonRequestHandler)
 
         port = self._server.server_address[1]
         self._thread = threading.Thread(
             target=self._server.serve_forever, daemon=True, name="daemon-http")
         self._thread.start()
-        logger.info("Query server listening on 127.0.0.1:%d", port)
+        logger.info("Query server listening on %s:%d", self._bind_host, port)
         return port
 
     def stop(self):

@@ -22,7 +22,7 @@ note, and run a semantic search.
 - **[keep flow](KEEP-FLOW.md)** — Run multi-step workflows that chain keep operations with LLM processing.
 - **[keep prompt](KEEP-PROMPT.md)** — Render agent prompts with context injected from reflective memory. Drive reflection, session starts, and more.
 - **[keep data](KEEP-DATA.md)** — Export, import, and continuously mirror keep stores. Markdown export produces Obsidian-compatible vaults with wikilink-based navigation.
-- **[keep pending](KEEP-PENDING.md)** — Manage the background daemon and its work queues: embedding, summarization, analysis, watches, and markdown sync mirrors.
+- **[keep daemon](KEEP-DAEMON.md)** — Manage the background daemon and its work queues: embedding, summarization, analysis, watches, and markdown sync mirrors.
 - **[keep config](KEEP-CONFIG.md)** — Configure embedding providers, storage backends, similarity thresholds, and environment variables.
 
 ## Concepts
@@ -66,7 +66,7 @@ Complete listing with summaries:
 | [keep flow](KEEP-FLOW.md) | Run multi-step workflows that chain keep operations with LLM processing. |
 | [keep prompt](KEEP-PROMPT.md) | Render agent prompts with context injected from reflective memory. Built-in prompts for reflection, session starts, and conversation analysis — or create custom prompts. |
 | [keep data](KEEP-DATA.md) | Export, import, and continuously mirror keep stores. Markdown mode produces an Obsidian-compatible vault with wikilink navigation, inverse-edge frontmatter, and chain-linked parts/versions. Supports one-shot export or daemon-driven continuous sync. |
-| [keep pending](KEEP-PENDING.md) | Manage the background daemon and its work queues. Process embeddings, summarization, analysis, OCR. Services file watches and markdown sync mirrors. Flags for reindex, retry, purge, list, and stop. |
+| [keep daemon](KEEP-DAEMON.md) | Manage the background daemon and its work queues. Process embeddings, summarization, analysis, OCR. Services file watches and markdown sync mirrors. Flags for reindex, retry, purge, list, and stop. |
 | [keep config](KEEP-CONFIG.md) | Configure storage backend (SQLite local, PostgreSQL cloud), embedding provider and model, OpenAI vs OpenRouter vs local `base_url` choices, similarity thresholds, and other settings via environment variables or `~/.keep/keep.toml`. |
 | [Tagging](TAGGING.md) | Structured key-value tags: `domain: healthcare`, `thread: margaret`, `facet: metabolic`. Tags enable precise filtering alongside semantic search. Thread-level tags provide hard links that similarity alone can't maintain. |
 | [System Tags](SYSTEM-TAGS.md) | Automatic tags managed by keep: `_created`, `_updated`, `_accessed` (UTC `YYYY-MM-DDTHH:MM:SS`), `_source` (`inline`, `uri`, `langchain`, `auto-vivify`), `_content_type`, plus internal pipeline and projection tags. Cannot be manually set. |
@@ -79,7 +79,7 @@ Complete listing with summaries:
 | [Versioning](VERSIONING.md) | Every `keep put` to an existing ID creates a new version. List versions, retrieve any version by number, compare across versions. Content-hash deduplication skips unchanged updates. |
 | [Analysis](ANALYSIS.md) | How document analysis decomposes long content into individually searchable structural parts. Each part gets its own embedding and tags, improving retrieval for large documents. |
 | [Output Format](OUTPUT.md) | Keep outputs YAML frontmatter (tags, metadata, meta-tags) followed by content body. Supports `--format json` for machine parsing, `--compact` for single-line summaries, and full (default) for human reading. |
-| [CLI Reference](REFERENCE.md) | Complete command reference: `put`, `get`, `find`, `list`, `now`, `move`, `analyze`, `tag`, `del`, `flow`, `prompt`, `data`, `config`, `pending`, `mcp`. Every flag, option, and environment variable documented with examples. |
+| [CLI Reference](REFERENCE.md) | Complete command reference: `put`, `get`, `find`, `list`, `now`, `move`, `analyze`, `tag`, `del`, `flow`, `prompt`, `data`, `config`, `daemon`, `mcp`. Every flag, option, and environment variable documented with examples. |
 | [Architecture](ARCHITECTURE.md) | Technical internals: surface clients (CLI, MCP, LangChain) over the daemon HTTP layer; Keeper composed of provider/storage/background mixins; state-doc flow runtime; pluggable storage backends (local SQLite + ChromaDB, hosted PostgreSQL + pgvector); pluggable providers for embedding, summarization, documents, OCR, media, and analysis. |
 | [Agent Guide](AGENT-GUIDE.md) | Patterns for AI agents using keep effectively: store decisions and learnings (not raw logs), use `now` for session continuity, let meta-tags surface context automatically, reflect before and after significant actions. |
 | [MCP (keep CLI)](KEEP-MCP.md) | Local MCP stdio server for AI agent integration. Connect Claude Code, Cursor, and other MCP-compatible clients directly to your local keep store. |

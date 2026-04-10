@@ -24,12 +24,12 @@ from .types import note_display_name
 
 _ExportCollisionError = _markdown_export._ExportCollisionError
 _MAX_FILENAME_BYTES = _markdown_export._MAX_FILENAME_BYTES
-_id_to_rel_path = _markdown_export._id_to_rel_path
+_id_to_rel_path = _markdown_export.id_to_rel_path
 _md_link_target = _markdown_export._md_link_target
 _render_doc_markdown = _markdown_export._render_doc_markdown
 _render_part_markdown = _markdown_export._render_part_markdown
 _render_version_markdown = _markdown_export._render_version_markdown
-_write_markdown_export = _markdown_export._write_markdown_export
+_write_markdown_export = _markdown_export.write_markdown_export
 
 app = typer.Typer(
     name="keep",
@@ -148,6 +148,41 @@ def _read_stdin_text() -> str:
     if any(0xDC80 <= ord(ch) <= 0xDCFF for ch in text):
         raise ValueError("stdin contains surrogate-escaped bytes")
     return text
+
+
+def _get_export_host():
+    from .console_support import _get_keeper
+
+    store = Path(_global_store).resolve() if _global_store else None
+    return _get_keeper(store)
+
+
+def _supports_local_markdown_export(host: object) -> bool:
+    return _markdown_export.supports_local_markdown_export_graph(host)
+
+
+def _supports_markdown_export(host: object) -> bool:
+    if _supports_local_markdown_export(host):
+        return True
+    if hasattr(host, "supports_capability"):
+        try:
+            return bool(host.supports_capability("export_bundle"))
+        except Exception:
+            return False
+    return hasattr(host, "export_bundle")
+
+
+def _require_markdown_export_host():
+    host = _get_export_host()
+    if _supports_markdown_export(host):
+        return host
+    host.close()
+    typer.echo(
+        "Error: markdown export requires a host with local markdown access "
+        "or note-bundle export support.",
+        err=True,
+    )
+    raise SystemExit(1)
 
 
 def _get(port: int, path: str) -> dict:
@@ -1516,16 +1551,19 @@ def help_cmd(
 # Delegate commands — these stay with the full CLI
 # ---------------------------------------------------------------------------
 
-@app.command()
-def pending(
+def _daemon_command_impl(
+    *,
     stop: Annotated[bool, typer.Option("--stop", help="Stop the background daemon")] = False,
     list_items: Annotated[bool, typer.Option("--list", "-l", help="List pending work items")] = False,
     reindex: Annotated[bool, typer.Option("--reindex", help="Enqueue all items for re-embedding")] = False,
     retry: Annotated[bool, typer.Option("--retry", help="Reset failed items back to pending")] = False,
     purge: Annotated[bool, typer.Option("--purge", help="Delete all pending work items")] = False,
-    daemon: Annotated[bool, typer.Option("--daemon", hidden=True, help="Run as background daemon")] = False,
-):
-    """Process pending background tasks."""
+    daemon: bool = False,
+    bind_host: str | None = None,
+    advertised_url: str | None = None,
+    trusted_proxy: bool = False,
+    interactive: bool = True,
+) -> None:
     if stop:
         import signal
         import time as _time
@@ -1582,40 +1620,107 @@ def pending(
 
     if daemon:
         from .console_support import run_pending_daemon
-        run_pending_daemon(kp)
+        run_pending_daemon(
+            kp,
+            bind_host=bind_host,
+            advertised_url=advertised_url,
+            trusted_proxy=trusted_proxy,
+        )
         return
 
-    if purge:
-        wq = kp._get_work_queue()
-        n = wq.purge()
-        typer.echo(f"Purged {n} pending work items.", err=True)
-        kp.close()
-        return
-
-    if retry:
-        n = kp._pending_queue.retry_failed()
-        if n:
-            typer.echo(f"Reset {n} failed items back to pending.", err=True)
-        else:
-            typer.echo("No failed items to retry.", err=True)
-            kp.close()
+    try:
+        if purge:
+            wq = kp._get_work_queue()
+            n = wq.purge()
+            typer.echo(f"Purged {n} pending work items.", err=True)
             return
 
-    if reindex:
-        count = kp.count()
-        if count == 0:
-            typer.echo("No notes to reindex.")
-            kp.close()
-            raise typer.Exit(0)
-        typer.echo(f"Enqueuing {count} notes for reindex...", err=True)
-        stats = kp.enqueue_reindex()
-        typer.echo(f"Enqueued {stats['enqueued']} items + {stats['versions']} versions", err=True)
+        if retry:
+            n = kp._pending_queue.retry_failed()
+            if n:
+                typer.echo(f"Reset {n} failed items back to pending.", err=True)
+            else:
+                typer.echo("No failed items to retry.", err=True)
+                return
+
+        if reindex:
+            count = kp.count()
+            if count == 0:
+                typer.echo("No notes to reindex.")
+                raise typer.Exit(0)
+            typer.echo(f"Enqueuing {count} notes for reindex...", err=True)
+            stats = kp.enqueue_reindex()
+            typer.echo(f"Enqueued {stats['enqueued']} items + {stats['versions']} versions", err=True)
+
+        if interactive:
+            # Interactive mode: show status, ensure daemon running, tail log
+            from .console_support import print_pending_interactive
+
+            print_pending_interactive(kp)
+        else:
+            from .console_support import run_pending_daemon
+
+            run_pending_daemon(
+                kp,
+                bind_host=bind_host,
+                advertised_url=advertised_url,
+                trusted_proxy=trusted_proxy,
+            )
+    finally:
+        kp.close()
 
 
-    # Interactive mode: show status, ensure daemon running, tail log
-    from .console_support import print_pending_interactive
-    print_pending_interactive(kp)
-    kp.close()
+@app.command()
+def daemon(
+    stop: Annotated[bool, typer.Option("--stop", help="Stop the background daemon")] = False,
+    list_items: Annotated[bool, typer.Option("--list", "-l", help="List pending work items")] = False,
+    reindex: Annotated[bool, typer.Option("--reindex", help="Enqueue all items for re-embedding")] = False,
+    retry: Annotated[bool, typer.Option("--retry", help="Reset failed items back to pending")] = False,
+    purge: Annotated[bool, typer.Option("--purge", help="Delete all pending work items")] = False,
+    bind: Annotated[Optional[str], typer.Option("--bind", help="Bind host for the daemon HTTP server")] = None,
+    advertised_url: Annotated[Optional[str], typer.Option(
+        "--advertised-url",
+        help="Advertised base URL used for remote-mode host allowlisting",
+    )] = None,
+    trusted_proxy: Annotated[bool, typer.Option(
+        "--trusted-proxy",
+        help="Acknowledge that TLS is terminated by a trusted reverse proxy",
+    )] = False,
+):
+    """Run or manage the background daemon."""
+    _daemon_command_impl(
+        stop=stop,
+        list_items=list_items,
+        reindex=reindex,
+        retry=retry,
+        purge=purge,
+        daemon=not any((stop, list_items, reindex, retry, purge)),
+        bind_host=bind,
+        advertised_url=advertised_url,
+        trusted_proxy=trusted_proxy,
+        interactive=retry or reindex,
+    )
+
+
+@app.command("pending", hidden=True)
+def pending(
+    stop: Annotated[bool, typer.Option("--stop", help="Stop the background daemon")] = False,
+    list_items: Annotated[bool, typer.Option("--list", "-l", help="List pending work items")] = False,
+    reindex: Annotated[bool, typer.Option("--reindex", help="Enqueue all items for re-embedding")] = False,
+    retry: Annotated[bool, typer.Option("--retry", help="Reset failed items back to pending")] = False,
+    purge: Annotated[bool, typer.Option("--purge", help="Delete all pending work items")] = False,
+    daemon: Annotated[bool, typer.Option("--daemon", hidden=True, help="Run as background daemon")] = False,
+):
+    """Hidden compatibility alias for older daemon workflows."""
+    _daemon_command_impl(
+        stop=stop,
+        list_items=list_items,
+        reindex=reindex,
+        retry=retry,
+        purge=purge,
+        daemon=daemon,
+        interactive=not daemon,
+    )
 
 
 @app.command()
@@ -1845,6 +1950,7 @@ def data_export(
             raise SystemExit(1)
         if sync:
             count = 0
+            source_cursor = ""
             if not stop:
                 if output == "-":
                     typer.echo("Error: markdown export requires a directory path, not '-'", err=True)
@@ -1867,11 +1973,9 @@ def data_export(
                     typer.echo(f"Error: {data.get('error', 'markdown sync failed')}", err=True)
                     raise SystemExit(1)
                 from .console_support import _progress_bar
-                from .daemon_client import resolve_store_path
-                from .api import Keeper
                 from .markdown_mirrors import run_markdown_export_once
 
-                kp = Keeper(store_path=resolve_store_path(_global_store))
+                kp = _require_markdown_export_host()
                 is_tty = sys.stderr.isatty()
                 progress = None
                 if is_tty:
@@ -1900,6 +2004,13 @@ def data_export(
                             err=True,
                         )
                         raise SystemExit(1) from None
+                    if (
+                        not _supports_local_markdown_export(kp)
+                        and hasattr(kp, "export_changes")
+                    ):
+                        feed = kp.export_changes(limit=0)
+                        if isinstance(feed, dict):
+                            source_cursor = str(feed.get("cursor") or "")
                 finally:
                     kp.close()
 
@@ -1920,6 +2031,7 @@ def data_export(
                     "stop": stop,
                     "register_only": True,
                     "baseline_complete": not stop,
+                    "source_cursor": source_cursor,
                 },
             )
             if status >= 400:
@@ -1963,9 +2075,7 @@ def data_export(
         raise SystemExit(1)
 
     from .console_support import _progress_bar
-    from .daemon_client import resolve_store_path
-    from .api import Keeper
-    kp = Keeper(store_path=resolve_store_path(_global_store))
+    kp = _get_export_host()
     it = kp.export_iter(include_system=include_system)
     header = next(it)
     info = header["store_info"]
@@ -2037,9 +2147,7 @@ def _data_export_markdown(
         out_dir.mkdir(parents=True)
 
     from .console_support import _progress_bar
-    from .daemon_client import resolve_store_path
-    from .api import Keeper
-    kp = Keeper(store_path=resolve_store_path(_global_store))
+    kp = _require_markdown_export_host()
 
     is_tty = sys.stderr.isatty()
     progress = None
@@ -2130,7 +2238,7 @@ def data_import(
         err=True,
     )
     if stats["queued"] > 0:
-        typer.echo("Run 'keep pending' to process embeddings.", err=True)
+        typer.echo("Run 'keep daemon' to process embeddings.", err=True)
 
 
 def main():

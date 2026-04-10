@@ -22,6 +22,12 @@ Exports all user documents, versions, and parts as JSON. **System documents (dot
 
 Markdown mode writes a **directory** with one `.md` file per note. The directory is created if it doesn't exist; for a one-shot export it must be empty, but `--sync` allows writing into an existing directory.
 
+One-shot markdown export uses the configured authoritative store. If
+`remote_store` is configured, `keep data export ~/vault --format md` exports
+from that remote store through the remote export and note-bundle APIs. Continuous
+`--sync` also works with a remote authoritative store, but the daemon still
+owns the local mirror root and writes files only on this machine.
+
 Each file has flat YAML frontmatter followed by the note summary as the body. The frontmatter is one flat map — no nested `tags:` block — with three kinds of keys:
 
 - **Reserved export metadata** (underscore-prefixed, read-only): `_id`, `_content_hash`, `_content_hash_full`, `_created`, `_updated`, `_accessed`, `_part_num`, `_version`, `_version_offset`, `_prev_part`, `_next_part`, `_prev_version`, `_next_version`.
@@ -127,10 +133,15 @@ keep data export ~/vault --sync --stop                 # Stop mirroring
 keep data export --list                                # List active mirrors
 ```
 
-`--sync` performs an immediate one-shot markdown export with progress, then registers the directory as a **daemon-owned continuous mirror**. The daemon watches for keep mutations (note creates, updates, deletes, tag changes, edge changes, part/version changes) via a trigger-based sync outbox and automatically re-exports affected notes on a debounced interval.
+`--sync` performs an immediate one-shot markdown export with progress, then registers the directory as a **daemon-owned continuous mirror**.
+
+- With a local authoritative store, the daemon watches keep mutations (note creates, updates, deletes, tag changes, edge changes, part/version changes) via a trigger-based sync outbox and automatically re-exports affected note bundles on a debounced interval.
+- With a remote authoritative store, the local daemon owns the mirror registration and local files. It polls the remote export change feed when available and rewrites only the affected note bundles for ordinary updates. Structural changes or feed gaps still trigger a debounced whole-mirror rebuild. If the remote endpoint does not support the change feed yet, the local daemon falls back to coarse interval-based full re-exports.
 
 - **Incremental updates**: ordinary content, tag, and edge changes rewrite only the affected note bundles (the changed note plus any notes whose inverse-edge frontmatter depends on it). A note insert or delete triggers a full re-export pass.
 - **Mirror state**: the exported directory contains a `.keep-sync/` subdirectory with `map.tsv` (vault-path → keep-id mapping, plaintext, diffable) and `state.json` (operational bookkeeping).
+- **Mirror registration**: the daemon stores registered mirrors as local runtime state in the keep config directory (for example `~/.keep/markdown-mirrors.yaml`), not as notes in the authoritative store.
+- **Remote cursors**: for remote authoritative stores, the local mirror runtime also stores the last observed remote change cursor locally.
 - **Path exclusivity**: a sync directory cannot overlap with a `keep put --watch` directory, and vice versa. `keep put` of files inside a sync root is rejected.
 - **Stop**: `--sync --stop` removes the mirror registration but does not delete the exported files.
 - **List**: `--list` shows all active sync directories with their status (last run, pending, errors).
@@ -138,7 +149,7 @@ keep data export --list                                # List active mirrors
 Check sync status:
 
 ```bash
-keep pending                   # Shows "Markdown mirrors active: N" when mirrors are registered
+keep daemon                    # Shows "Markdown mirrors active: N" when mirrors are registered
 ```
 
 ### Markdown mode vs JSON mode
@@ -170,7 +181,7 @@ keep data import -                           # Read from stdin
 Imported documents, versions, and parts are queued for re-embedding. Run:
 
 ```bash
-keep pending    # Process embeddings in background
+keep daemon     # Process embeddings in background
 ```
 
 Until embeddings are processed, imported documents are retrievable by ID (`keep get`) and visible in `keep list`, but won't appear in semantic search (`keep find`).

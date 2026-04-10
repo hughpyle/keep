@@ -58,6 +58,7 @@ def test_start_deferred_startup_maintenance_starts_once(mock_providers, tmp_path
 
 def test_daemon_entrypoint_uses_deferred_startup_maintenance(tmp_path):
     captured: dict[str, object] = {}
+    daemon_run: dict[str, object] = {}
 
     class DummyKeeper:
         def __init__(self, *args, **kwargs):
@@ -66,7 +67,7 @@ def test_daemon_entrypoint_uses_deferred_startup_maintenance(tmp_path):
 
     with (
         patch("keep.api.Keeper", DummyKeeper),
-        patch("keep.console_support.run_pending_daemon"),
+        patch("keep.console_support.run_pending_daemon", side_effect=lambda *args, **kwargs: daemon_run.update(kwargs)),
         patch.object(sys, "argv", ["python", "--store", str(tmp_path)]),
     ):
         from keep import daemon
@@ -76,10 +77,14 @@ def test_daemon_entrypoint_uses_deferred_startup_maintenance(tmp_path):
     kwargs = captured["kwargs"]
     assert kwargs["store_path"] == str(tmp_path)
     assert kwargs["defer_startup_maintenance"] is True
+    assert daemon_run["bind_host"] is None
+    assert daemon_run["advertised_url"] is None
+    assert daemon_run["trusted_proxy"] is False
 
 
 def test_daemon_script_entrypoint_supports_direct_python_execution(tmp_path):
     captured: dict[str, object] = {}
+    daemon_run: dict[str, object] = {}
 
     class DummyKeeper:
         def __init__(self, *args, **kwargs):
@@ -88,7 +93,7 @@ def test_daemon_script_entrypoint_supports_direct_python_execution(tmp_path):
 
     with (
         patch("keep.api.Keeper", DummyKeeper),
-        patch("keep.console_support.run_pending_daemon"),
+        patch("keep.console_support.run_pending_daemon", side_effect=lambda *args, **kwargs: daemon_run.update(kwargs)),
         patch.object(sys, "argv", ["python", "--store", str(tmp_path)]),
     ):
         run_path("keep/daemon.py", run_name="__main__")
@@ -96,6 +101,40 @@ def test_daemon_script_entrypoint_supports_direct_python_execution(tmp_path):
     kwargs = captured["kwargs"]
     assert kwargs["store_path"] == str(tmp_path)
     assert kwargs["defer_startup_maintenance"] is True
+    assert daemon_run["bind_host"] is None
+    assert daemon_run["advertised_url"] is None
+    assert daemon_run["trusted_proxy"] is False
+
+
+def test_daemon_entrypoint_passes_remote_transport_options(tmp_path):
+    daemon_run: dict[str, object] = {}
+
+    class DummyKeeper:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    with (
+        patch("keep.api.Keeper", DummyKeeper),
+        patch("keep.console_support.run_pending_daemon", side_effect=lambda *args, **kwargs: daemon_run.update(kwargs)),
+        patch.object(
+            sys,
+            "argv",
+            [
+                "python",
+                "--store", str(tmp_path),
+                "--bind", "0.0.0.0",
+                "--advertised-url", "https://keep.example.test",
+                "--trusted-proxy",
+            ],
+        ),
+    ):
+        from keep import daemon
+
+        daemon.main()
+
+    assert daemon_run["bind_host"] == "0.0.0.0"
+    assert daemon_run["advertised_url"] == "https://keep.example.test"
+    assert daemon_run["trusted_proxy"] is True
 
 
 def test_daemon_startup_logs_markdown_mirror_count(mock_providers, tmp_path):

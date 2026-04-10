@@ -47,7 +47,7 @@ keep analyze doc:1                    # Returns immediately, runs in background
 keep analyze doc:1 --fg               # Waits for completion
 ```
 
-Background tasks are processed by the same queue as `keep pending` summaries.
+Background tasks are processed by the same queue as `keep daemon` summaries.
 
 ## Part addressing
 

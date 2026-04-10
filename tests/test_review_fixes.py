@@ -266,6 +266,61 @@ class TestEmbeddingProviderAbsent:
         config_file = tmp_path / "keep.toml"
         assert config_file.exists()
 
+    def test_load_config_treats_legacy_remote_as_remote_store(self, tmp_path) -> None:
+        """Legacy [remote] config still routes the authoritative store."""
+        from keep.config import load_config
+
+        (tmp_path / "keep.toml").write_text(
+            """
+[store]
+version = 2
+
+[remote]
+api_url = "https://api.example.test"
+api_key = "kn_test_123"
+project = "demo"
+""".strip() + "\n",
+            encoding="utf-8",
+        )
+
+        config = load_config(tmp_path)
+
+        assert config.remote is None
+        assert config.remote_store is not None
+        assert config.remote_store.api_url == "https://api.example.test"
+        assert config.remote_store.api_key == "kn_test_123"
+        assert config.remote_store.project == "demo"
+
+    def test_save_config_writes_remote_store_and_remote_task_sections(self, tmp_path) -> None:
+        """save_config persists authoritative-store and task delegation separately."""
+        from keep.config import RemoteConfig, StoreConfig, save_config
+
+        config = StoreConfig(
+            path=tmp_path,
+            config_dir=tmp_path,
+            embedding=None,
+            remote_store=RemoteConfig(
+                api_url="https://store.example.test",
+                api_key="kn_store",
+                project="alpha",
+            ),
+            remote=RemoteConfig(
+                api_url="https://tasks.example.test",
+                api_key="kn_tasks",
+                project="beta",
+            ),
+        )
+
+        save_config(config)
+
+        saved = (tmp_path / "keep.toml").read_text(encoding="utf-8")
+        assert "[remote_store]" in saved
+        assert 'api_url = "https://store.example.test"' in saved
+        assert 'project = "alpha"' in saved
+        assert "[remote_task]" in saved
+        assert 'api_url = "https://tasks.example.test"' in saved
+        assert 'project = "beta"' in saved
+
 
 class TestLabeledRefMigration:
     """Startup migration to canonical labeled-ref storage."""

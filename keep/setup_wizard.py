@@ -476,18 +476,13 @@ def run_wizard(
     print(f"  keep config store -> {display_path}", file=sys.stderr)
     print(file=sys.stderr)
 
-    # Non-interactive: fall back to silent auto-detect
+    # Non-interactive: fall back to silent config creation only.
+    # Tool integrations are never installed implicitly.
     if not _is_interactive():
         print("  (non-interactive mode, using auto-detected defaults)", file=sys.stderr)
         from .config import create_default_config
         config = create_default_config(config_dir, store_path)
         save_config(config)
-        # Silent tool integration install
-        from .integrations import check_and_install
-        try:
-            check_and_install(config)
-        except (OSError, ValueError):
-            pass
         return config
 
     # Load existing config if re-running setup

@@ -252,7 +252,7 @@ On first use, `keep` detects coding tools and installs hooks into their configur
 
 Hooks inject `keep now` context at key moments (session start, prompt submit) so the agent always has current intentions and relevant context.
 
-Run `keep config` to see integration status. Set `KEEP_NO_SETUP=1` to skip auto-install.
+Run `keep config` to see integration status.
 
 ## Next steps
 

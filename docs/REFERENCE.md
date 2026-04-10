@@ -24,7 +24,7 @@
 | `keep flow` | Run or inspect a state-machine flow | — |
 | `keep data export` | Export store to JSON (default) or markdown directory (`--format md`) | [KEEP-DATA.md](KEEP-DATA.md) |
 | `keep data import` | Import documents from JSON export file | [KEEP-DATA.md](KEEP-DATA.md) |
-| `keep pending` | Process pending tasks (summarize, embed, OCR, analyze, reindex) | — |
+| `keep daemon` | Run or manage the background daemon and its work queues | `keep pending` (hidden compatibility alias) |
 
 ## Global Flags
 
@@ -152,12 +152,13 @@ keep data import backup.json         # Import (merge, skip existing)
 keep data import backup.json -m replace  # Import (replace all)
 
 # Maintenance
-keep pending                         # Start daemon, process tasks, tail progress
-keep pending --list                  # Show queue status + active mirrors
-keep pending --reindex               # Enqueue all notes for re-embedding
-keep pending --retry                 # Reset failed items back to pending
-keep pending --purge                 # Delete all pending work items
-keep pending --stop                  # Stop daemon
+keep daemon                          # Start daemon, process tasks
+keep daemon --list                   # Show queue status + active mirrors
+keep daemon --reindex                # Enqueue all notes for re-embedding
+keep daemon --retry                  # Reset failed items back to pending
+keep daemon --purge                  # Delete all pending work items
+keep daemon --stop                   # Stop daemon
+keepd --store ~/.keep                # Direct foreground daemon runner
 
 # Config
 keep config                          # Show configuration

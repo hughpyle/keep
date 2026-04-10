@@ -1,4 +1,4 @@
-"""Daemon entry point: python -m keep.daemon --store PATH.
+"""Daemon entry point for ``keepd`` or ``python -m keep.daemon --store PATH``.
 
 Minimal argument parsing — no typer, no CLI framework.
 Starts a Keeper and runs the daemon loop directly.
@@ -30,11 +30,27 @@ def _load_daemon_runtime():
 def main():
     parser = argparse.ArgumentParser(description="keep daemon")
     parser.add_argument("--store", required=True, help="Store path")
+    parser.add_argument("--bind", default=None, help="Bind host for the daemon HTTP server")
+    parser.add_argument(
+        "--advertised-url",
+        default=None,
+        help="Advertised base URL used for remote-mode host allowlisting",
+    )
+    parser.add_argument(
+        "--trusted-proxy",
+        action="store_true",
+        help="Acknowledge that TLS is terminated by a trusted reverse proxy",
+    )
     args = parser.parse_args()
 
     Keeper, run_pending_daemon = _load_daemon_runtime()
     kp = Keeper(store_path=args.store, defer_startup_maintenance=True)
-    run_pending_daemon(kp)
+    run_pending_daemon(
+        kp,
+        bind_host=args.bind,
+        advertised_url=args.advertised_url,
+        trusted_proxy=args.trusted_proxy,
+    )
 
 
 if __name__ == "__main__":

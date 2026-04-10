@@ -170,8 +170,8 @@ def test_data_export_list_treats_unknown_daemon_endpoint_as_empty(capsys):
 
 
 def test_data_export_sync_implies_markdown_mode(capsys):
-    with patch("keep.api.Keeper"), \
-         patch("keep.daemon_client.resolve_store_path", return_value="/tmp/store"), \
+    host = MagicMock()
+    with patch("keep.cli_app._get_export_host", return_value=host), \
          patch("keep.markdown_mirrors.run_markdown_export_once", return_value=(12, {})) as run_export, \
          patch("keep.cli_app._get_port", return_value=1234), \
          patch("keep.cli_app._daemon_request", side_effect=[
@@ -191,6 +191,7 @@ def test_data_export_sync_implies_markdown_mode(capsys):
     assert register_args[3]["register_only"] is True
     assert register_args[3]["baseline_complete"] is True
     run_export.assert_called_once()
+    host.close.assert_called_once()
 
 
 def test_data_export_stop_implies_markdown_mode(capsys):

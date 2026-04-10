@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import posixpath
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 from urllib.parse import quote
 
 import yaml
@@ -23,6 +24,25 @@ from .types import format_ref, note_display_name, parse_ref
 # path component at 255 bytes (ext4, HFS+, APFS, NTFS); we stay under
 # that with headroom for unusual encodings.
 _MAX_FILENAME_BYTES = 200
+
+
+@dataclass(frozen=True)
+class RenderBundleState:
+    """Rendered note-bundle metadata used by markdown export writers."""
+
+    document: dict[str, Any]
+    current_inverse: list[tuple[str, str]]
+    version_inverse: list[tuple[str, str]]
+    is_edge_tag: Callable[[str], bool]
+
+
+@runtime_checkable
+class LocalMarkdownExportHost(Protocol):
+    """Host with direct local graph access for markdown export helpers."""
+
+    _document_store: Any
+
+    def _resolve_doc_collection(self) -> str: ...
 
 
 def _encode_path_component(component: str) -> str:
@@ -240,6 +260,188 @@ def _get_export_doc(
         doc_dict["parts"] = parts
 
     return doc_dict
+
+
+def _filter_inverse_edges(
+    inverse_edges: list[tuple[str, str]],
+    *,
+    include_system: bool,
+) -> list[tuple[str, str]]:
+    """Return filtered, deduplicated inverse-edge pairs."""
+    filtered: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for inverse, source in inverse_edges:
+        if not source:
+            continue
+        bare_id, _alias = parse_ref(source)
+        if not include_system and bare_id.startswith("."):
+            continue
+        key = (inverse, source)
+        if key in seen:
+            continue
+        seen.add(key)
+        filtered.append(key)
+    return filtered
+
+
+def _get_export_bundle(
+    keeper,
+    doc_id: str,
+    *,
+    include_system: bool = True,
+    include_parts: bool = True,
+    include_versions: bool = True,
+) -> dict | None:
+    """Return one export bundle plus rendering metadata for a note."""
+    doc = _get_export_doc(keeper, doc_id)
+    if doc is None:
+        return None
+    if not include_parts:
+        doc.pop("parts", None)
+    if not include_versions:
+        doc.pop("versions", None)
+
+    try:
+        doc_coll = keeper._resolve_doc_collection()
+        ds = keeper._document_store
+    except AttributeError:
+        return {
+            "document": doc,
+            "current_inverse": [],
+            "version_inverse": [],
+            "edge_tag_keys": [],
+        }
+
+    current_inverse_lookup, version_inverse_lookup = _get_edge_data(keeper)
+    current_inverse = _filter_inverse_edges(
+        current_inverse_lookup(doc_id),
+        include_system=include_system,
+    )
+    version_inverse = _filter_inverse_edges(
+        version_inverse_lookup(doc_id),
+        include_system=include_system,
+    ) if include_versions else []
+
+    candidate_keys: set[str] = set()
+    for tag_key in doc.get("tags", {}) or {}:
+        if not str(tag_key).startswith("_"):
+            candidate_keys.add(str(tag_key))
+    if include_parts:
+        for part in doc.get("parts", []) or []:
+            for tag_key in part.get("tags", {}) or {}:
+                if not str(tag_key).startswith("_"):
+                    candidate_keys.add(str(tag_key))
+    if include_versions:
+        for version in doc.get("versions", []) or []:
+            for tag_key in version.get("tags", {}) or {}:
+                if not str(tag_key).startswith("_"):
+                    candidate_keys.add(str(tag_key))
+
+    edge_tag_keys: list[str] = []
+    for key in sorted(candidate_keys):
+        tagdoc = ds.get(doc_coll, f".tag/{key}")
+        if tagdoc and tagdoc.tags.get("_inverse"):
+            edge_tag_keys.append(key)
+
+    return {
+        "document": doc,
+        "current_inverse": current_inverse,
+        "version_inverse": version_inverse,
+        "edge_tag_keys": edge_tag_keys,
+    }
+
+
+def _supports_local_markdown_export_graph(keeper: object) -> bool:
+    return isinstance(keeper, LocalMarkdownExportHost)
+
+
+def _local_edge_tag_resolver(keeper):
+    doc_coll = keeper._resolve_doc_collection()
+    edge_tag_cache: dict[str, bool] = {}
+
+    def is_edge_tag(key: str) -> bool:
+        if key.startswith("_"):
+            return False
+        cached = edge_tag_cache.get(key)
+        if cached is not None:
+            return cached
+        tagdoc = keeper._document_store.get(doc_coll, f".tag/{key}")
+        is_edge = bool(tagdoc and tagdoc.tags.get("_inverse"))
+        edge_tag_cache[key] = is_edge
+        return is_edge
+
+    return is_edge_tag
+
+
+def _normalize_bundle_inverse_edges(value: Any) -> list[tuple[str, str]]:
+    normalized: list[tuple[str, str]] = []
+    if not isinstance(value, list):
+        return normalized
+    for edge in value:
+        if not isinstance(edge, (list, tuple)) or len(edge) != 2:
+            continue
+        predicate, source = edge
+        normalized.append((str(predicate), str(source)))
+    return normalized
+
+
+def _rewrite_export_refs_in_inverse_edges(
+    inverse_edges: list[tuple[str, str]],
+    *,
+    export_refs: Mapping[str, str],
+) -> list[tuple[str, str]]:
+    rewritten: list[tuple[str, str]] = []
+    for predicate, source in inverse_edges:
+        rewritten.append(
+            (predicate, _rewrite_export_ref_value(source, export_refs)),
+        )
+    return rewritten
+
+
+def _bundle_edge_tag_resolver(bundle: Mapping[str, Any]):
+    edge_tag_keys = {
+        str(key)
+        for key in bundle.get("edge_tag_keys", [])
+        if isinstance(key, str) and not key.startswith("_")
+    }
+
+    def is_edge_tag(key: str) -> bool:
+        return key in edge_tag_keys
+
+    return is_edge_tag
+
+
+def resolve_remote_render_bundle(
+    bundle: Mapping[str, Any],
+    *,
+    export_refs: Mapping[str, str],
+    fallback_document: Mapping[str, Any] | None = None,
+) -> RenderBundleState:
+    """Normalize a remote note bundle into markdown rendering inputs."""
+    render_doc = dict(fallback_document or {})
+    bundled_doc = bundle.get("document")
+    if isinstance(bundled_doc, dict):
+        render_doc = bundled_doc
+    current_inverse = normalize_bundle_inverse_edges(
+        bundle.get("current_inverse"),
+    )
+    version_inverse = normalize_bundle_inverse_edges(
+        bundle.get("version_inverse"),
+    )
+    current_inverse = rewrite_export_refs_in_inverse_edges(
+        current_inverse,
+        export_refs=export_refs,
+    )
+    version_inverse = rewrite_export_refs_in_inverse_edges(
+        version_inverse,
+        export_refs=export_refs,
+    )
+    return RenderBundleState(
+        document=render_doc,
+        current_inverse=current_inverse,
+        version_inverse=version_inverse,
+        is_edge_tag=bundle_edge_tag_resolver(bundle),
+    )
 
 
 def _group_inverse_edges_to_tags(
@@ -724,6 +926,8 @@ def _write_markdown_export(
     version_offsets_by_id: dict[str, list[int]] = {}
 
     for doc in it:
+        if not isinstance(doc, dict):
+            continue
         doc_id = doc["id"]
         canonical = _id_to_rel_path(doc_id)
         sorted_parts = sorted(
@@ -757,9 +961,6 @@ def _write_markdown_export(
 
     del slots
 
-    doc_coll = keeper._resolve_doc_collection()
-    edge_tag_cache: dict[str, bool] = {}
-
     export_refs: dict[str, str] = {}
     for doc_id, rel_path in final_paths.items():
         export_refs[doc_id] = _export_ref_from_rel_path(rel_path)
@@ -775,48 +976,71 @@ def _write_markdown_export(
                 sidecar_dir / f"@V{{{offset}}}.md",
             )
 
-    current_inverse, version_inverse = _get_edge_data(
-        keeper, export_refs=export_refs,
-    )
-
-    def is_edge_tag(key: str) -> bool:
-        if key.startswith("_"):
-            return False
-        cached = edge_tag_cache.get(key)
-        if cached is not None:
-            return cached
-        tagdoc = keeper._document_store.get(doc_coll, f".tag/{key}")
-        is_edge = bool(tagdoc and tagdoc.tags.get("_inverse"))
-        edge_tag_cache[key] = is_edge
-        return is_edge
+    local_graph = supports_local_markdown_export_graph(keeper)
+    if local_graph:
+        current_inverse_lookup, version_inverse_lookup = get_edge_data(
+            keeper, export_refs=export_refs,
+        )
+        local_is_edge_tag = local_edge_tag_resolver(keeper)
+    elif not hasattr(keeper, "export_bundle"):
+        raise ValueError(
+            "markdown export requires a host with either local graph access "
+            "or export_bundle() support"
+        )
 
     def write(rel_path: Path, text: str) -> None:
         dest = out_dir / rel_path
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
 
+    count = 0
     it2 = keeper.export_iter(include_system=include_system)
     next(it2)
-    count = 0
     for doc in it2:
+        if not isinstance(doc, dict):
+            continue
         doc_id = doc["id"]
         rel_path = final_paths[doc_id]
-        bundle_refs = _bundle_export_refs(
-            doc,
+        render_doc = doc
+        if local_graph:
+            current_inverse = current_inverse_lookup(doc_id)
+            version_inverse = version_inverse_lookup(doc_id)
+            is_edge_tag = local_is_edge_tag
+        else:
+            bundle = keeper.export_bundle(
+                doc_id,
+                include_system=include_system,
+                include_parts=include_parts,
+                include_versions=include_versions,
+            )
+            if not isinstance(bundle, dict):
+                raise ValueError(f"markdown export missing note bundle for {doc_id}")
+            remote_bundle = resolve_remote_render_bundle(
+                bundle,
+                export_refs=export_refs,
+                fallback_document=doc,
+            )
+            render_doc = remote_bundle.document
+            current_inverse = remote_bundle.current_inverse
+            version_inverse = remote_bundle.version_inverse
+            is_edge_tag = remote_bundle.is_edge_tag
+
+        bundle_refs = bundle_export_refs(
+            render_doc,
             rel_path,
             include_parts=include_parts,
             include_versions=include_versions,
         )
-        bundle_files = _render_doc_bundle(
+        bundle_files = render_doc_bundle(
             keeper,
-            doc,
+            render_doc,
             rel_path,
             include_system=include_system,
             include_parts=include_parts,
             include_versions=include_versions,
             export_refs=export_refs,
-            current_inverse=current_inverse,
-            version_inverse=version_inverse,
+            current_inverse=lambda _doc_id, edges=current_inverse: edges,
+            version_inverse=lambda _doc_id, edges=version_inverse: edges,
             is_edge_tag=is_edge_tag,
         )
         for bundle_rel, text in bundle_files.items():
@@ -832,3 +1056,18 @@ def _write_markdown_export(
         if progress is not None:
             progress(count, total, doc_id)
     return count, header["store_info"]
+
+
+# Public helper surface shared by markdown_mirrors and CLI code.
+id_to_rel_path = _id_to_rel_path
+export_ref_from_rel_path = _export_ref_from_rel_path
+get_edge_data = _get_edge_data
+get_export_doc = _get_export_doc
+supports_local_markdown_export_graph = _supports_local_markdown_export_graph
+local_edge_tag_resolver = _local_edge_tag_resolver
+normalize_bundle_inverse_edges = _normalize_bundle_inverse_edges
+rewrite_export_refs_in_inverse_edges = _rewrite_export_refs_in_inverse_edges
+bundle_edge_tag_resolver = _bundle_edge_tag_resolver
+bundle_export_refs = _bundle_export_refs
+render_doc_bundle = _render_doc_bundle
+write_markdown_export = _write_markdown_export

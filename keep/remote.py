@@ -5,6 +5,7 @@ keepnotes.ai service. The stable interface is ``run_flow()``; higher-
 level helpers delegate through the shared flow client layer.
 """
 
+import json
 import logging
 import os
 import re
@@ -47,7 +48,7 @@ class RemoteKeeper:
 
         self.project = (
             project
-            or (config.remote.project if config.remote else None)
+            or (config.remote_store.project if config.remote_store else None)
             or os.environ.get("KEEPNOTES_PROJECT")
             or None
         )
@@ -78,6 +79,7 @@ class RemoteKeeper:
 
         self._client = httpx.Client(
             base_url=self.api_url, headers=headers, timeout=DEFAULT_TIMEOUT)
+        self._server_info_cache: dict[str, Any] | None = None
 
     # -- HTTP helpers --
 
@@ -144,6 +146,91 @@ class RemoteKeeper:
 
     def get(self, id: str) -> Optional[Item]:
         return flow_get_item(self, id)
+
+    def export_iter(self, *, include_system: bool = True):
+        with self._client.stream(
+            "GET",
+            "/v1/export",
+            params={
+                "include_system": str(include_system).lower(),
+                "stream": "ndjson",
+            },
+        ) as resp:
+            resp.raise_for_status()
+            content_type = (resp.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if content_type == "application/x-ndjson":
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    if isinstance(row, dict):
+                        yield row
+                return
+
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError(f"Expected dict export payload, got {type(data).__name__}")
+            header = {
+                "format": data.get("format"),
+                "version": data.get("version"),
+                "exported_at": data.get("exported_at"),
+                "store_info": data.get("store_info", {}),
+            }
+            yield header
+            for doc in data.get("documents", []):
+                if isinstance(doc, dict):
+                    yield doc
+
+    def export_data(self, *, include_system: bool = True) -> dict:
+        it = self.export_iter(include_system=include_system)
+        header = next(it)
+        if not isinstance(header, dict):
+            raise ValueError(f"Expected dict export header, got {type(header).__name__}")
+        header["documents"] = list(it)
+        return header
+
+    def export_bundle(
+        self,
+        id: str,
+        *,
+        include_system: bool = True,
+        include_parts: bool = True,
+        include_versions: bool = True,
+    ) -> dict | None:
+        resp = self._client.get(
+            f"/v1/export/bundles/{self._q(id)}",
+            params={
+                "include_system": str(include_system).lower(),
+                "include_parts": str(include_parts).lower(),
+                "include_versions": str(include_versions).lower(),
+            },
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected dict export bundle payload, got {type(data).__name__}")
+        return data
+
+    def export_changes(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 1000,
+    ) -> dict:
+        resp = self._client.get(
+            "/v1/export/changes",
+            params={
+                "cursor": cursor or "0",
+                "limit": str(limit),
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected dict export changes payload, got {type(data).__name__}")
+        return data
 
     def put(
         self,
@@ -315,6 +402,25 @@ class RemoteKeeper:
         except Exception:
             pass
         return 0
+
+    def server_info(self, *, refresh: bool = False) -> dict[str, Any]:
+        if self._server_info_cache is not None and not refresh:
+            return dict(self._server_info_cache)
+        resp = self._client.get("/v1/ready")
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected dict server info payload, got {type(data).__name__}")
+        self._server_info_cache = dict(data)
+        return dict(self._server_info_cache)
+
+    def capabilities(self, *, refresh: bool = False) -> dict[str, Any]:
+        info = self.server_info(refresh=refresh)
+        caps = info.get("capabilities")
+        return dict(caps) if isinstance(caps, dict) else {}
+
+    def supports_capability(self, name: str, *, refresh: bool = False) -> bool:
+        return bool(self.capabilities(refresh=refresh).get(name))
 
     def close(self) -> None:
         self._client.close()

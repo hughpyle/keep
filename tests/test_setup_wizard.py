@@ -161,11 +161,10 @@ class TestDetectSummarizationChoices:
 class TestRunWizardNonInteractive:
     """Tests for non-interactive wizard fallback."""
     def test_non_interactive_fallback(self, tmp_path, monkeypatch, mock_providers):
-        """Non-interactive mode falls back to silent auto-detect."""
+        """Non-interactive mode creates config without installing integrations."""
         monkeypatch.setattr("keep.setup_wizard._is_interactive", lambda: False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setenv("KEEP_NO_SETUP", "1")  # Skip tool install
-
-        config = run_wizard(tmp_path)
+        with patch("keep.integrations.check_and_install", side_effect=AssertionError("should not be called")):
+            config = run_wizard(tmp_path)
         assert config is not None
         assert (tmp_path / "keep.toml").exists()

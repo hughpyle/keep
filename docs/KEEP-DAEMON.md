@@ -1,21 +1,31 @@
-# keep pending
+# keep daemon
 
 Manage the background daemon and its work queues.
+
+For directly running the daemon in the foreground, use `keepd --store PATH`.
 
 ## Usage
 
 ```bash
-keep pending                  # Start the daemon, process work, tail progress
-keep pending --list           # Show queue status + active mirrors
-keep pending --reindex        # Enqueue all notes for re-embedding
-keep pending --retry          # Reset failed items back to pending
-keep pending --purge          # Delete all pending work items
-keep pending --stop           # Stop the daemon
+keep daemon                   # Start the daemon and process work
+keep daemon --list            # Show queue status + active mirrors
+keep daemon --reindex         # Enqueue all notes for re-embedding, then show progress
+keep daemon --retry           # Reset failed items back to pending, then show progress
+keep daemon --purge           # Delete all pending work items
+keep daemon --stop            # Stop the daemon
+
+keepd --store ~/.keep         # Direct foreground daemon runner
 ```
 
 ## What it does
 
-`keep pending` starts the background daemon (if not already running) and processes queued work: embedding, summarization, analysis, OCR, link extraction, and edge processing. It tails progress to the terminal so you can watch items being processed.
+`keep daemon` starts the background daemon and processes queued work:
+embedding, summarization, analysis, OCR, link extraction, and edge
+processing.
+
+`keepd` is the smallest direct entrypoint when you want to run the daemon
+explicitly in the foreground. `keep daemon` is the full CLI management
+command.
 
 The daemon also services:
 
@@ -32,7 +42,7 @@ When there's no work and no active watches or mirrors, the daemon exits after an
 Show the current state of the work queue without starting the daemon:
 
 ```bash
-keep pending --list
+keep daemon --list
 ```
 
 Output includes:
@@ -45,17 +55,18 @@ Output includes:
 Enqueue every note in the store for re-embedding. Use this after changing embedding providers or models, or to rebuild the search index from scratch:
 
 ```bash
-keep pending --reindex
+keep daemon --reindex
 ```
 
-This queues work — it doesn't block. Run `keep pending` afterward (or let an existing daemon pick it up) to process the queue.
+This queues work and then shows progress. You can also let an existing daemon
+pick it up.
 
 ### `--retry`
 
 Reset failed items back to pending so they'll be retried:
 
 ```bash
-keep pending --retry
+keep daemon --retry
 ```
 
 Useful after fixing a transient issue (e.g., a provider was down, Ollama wasn't running) that caused items to fail.
@@ -65,7 +76,7 @@ Useful after fixing a transient issue (e.g., a provider was down, Ollama wasn't 
 Delete all pending work items from the queue:
 
 ```bash
-keep pending --purge
+keep daemon --purge
 ```
 
 Use with care — this discards queued work permanently. Items that were already processed are unaffected.
@@ -75,14 +86,16 @@ Use with care — this discards queued work permanently. Items that were already
 Stop the background daemon:
 
 ```bash
-keep pending --stop
+keep daemon --stop
 ```
 
 Sends SIGTERM and waits up to 10 seconds for graceful shutdown. If the daemon is stuck, it falls back to SIGKILL. Also cleans up stale discovery files (port, token, PID).
 
 ## Markdown mirrors
 
-When markdown sync mirrors are registered (`keep data export --sync`), the daemon services them automatically. `keep pending` and `keep pending --list` report the number of active mirrors:
+When markdown sync mirrors are registered (`keep data export --sync`), the
+daemon services them automatically. `keep daemon` and `keep daemon --list`
+report the number of active mirrors:
 
 ```
 Markdown mirrors active: 1
@@ -102,28 +115,28 @@ See [keep data](KEEP-DATA.md) for full sync documentation.
 
 ```bash
 keep data import backup.json
-keep pending                    # Process embeddings for imported notes
+keep daemon                     # Process embeddings for imported notes
 ```
 
 ### After changing embedding provider
 
 ```bash
 keep config --setup             # Change provider
-keep pending --reindex          # Queue re-embedding for all notes
-keep pending                    # Process
+keep daemon --reindex           # Queue re-embedding for all notes
+keep daemon                     # Process
 ```
 
 ### Troubleshooting failed items
 
 ```bash
-keep pending --list             # Check for failed items
-keep pending --retry            # Reset them to pending
-keep pending                    # Reprocess
+keep daemon --list              # Check for failed items
+keep daemon --retry             # Reset them to pending
+keep daemon                     # Reprocess
 ```
 
 ### Restarting the daemon
 
 ```bash
-keep pending --stop
-keep pending                    # Fresh start
+keep daemon --stop
+keep daemon                     # Fresh start
 ```

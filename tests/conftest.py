@@ -1137,6 +1137,21 @@ class MockDocumentStore:
     def sync_outbox_depth(self) -> int:
         return len(self._sync_outbox)
 
+    def sync_outbox_bounds(self) -> tuple[int | None, int | None]:
+        if not self._sync_outbox:
+            return None, None
+        ids = [row["outbox_id"] for row in self._sync_outbox]
+        return min(ids), max(ids)
+
+    def list_sync_outbox_since(
+        self, *, after_outbox_id: int = 0, limit: int = 50,
+    ) -> list[dict]:
+        rows = [
+            row for row in self._sync_outbox
+            if row["outbox_id"] > after_outbox_id
+        ]
+        return list(rows[:limit])
+
     def dequeue_sync_outbox(
         self, limit: int = 50, claim_id: str | None = None
     ) -> list[dict]:

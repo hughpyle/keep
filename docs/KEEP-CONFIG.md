@@ -79,6 +79,16 @@ project = "my-project"                 # Default tags applied to all new items
 owner = "alice"
 required = ["user"]                    # Tags that must be present on every put()
 namespace_keys = ["category", "user"]  # LangGraph namespace-to-tag mapping
+
+[remote_store]
+api_url = "https://api.keepnotes.ai"   # Optional: authoritative remote store
+api_key = "kn_..."
+project = "my-project"
+
+[remote_task]
+api_url = "https://api.keepnotes.ai"   # Optional: hosted background task delegation
+api_key = "kn_..."
+project = "my-project"
 ```
 
 ### Tags section details
@@ -101,6 +111,11 @@ keep put "test"                    # That's it — storage, search, and summariz
 ```
 
 Works across all your tools (Claude Code, Kiro, Codex) with the same API key. Project isolation, media pipelines, and backups are managed for you.
+
+Environment variables `KEEPNOTES_API_URL`, `KEEPNOTES_API_KEY`, and
+`KEEPNOTES_PROJECT` target the remote authoritative store. In `keep.toml`, the
+authoritative store is configured under `[remote_store]`. Hosted background task
+delegation, when configured separately, uses `[remote_task]`.
 
 ### Ollama (Recommended Local Option)
 
@@ -282,7 +297,6 @@ KEEP_STORE_PATH=/path/to/store       # Override store location
 KEEP_CONFIG=/path/to/.keep           # Override config directory
 KEEP_TAG_PROJECT=myapp               # Auto-apply tags (any KEEP_TAG_* variable)
 KEEP_VERBOSE=1                       # Debug logging to stderr
-KEEP_NO_SETUP=1                      # Skip auto-install of tool integrations
 OLLAMA_HOST=http://localhost:11434   # Ollama server URL (auto-detected)
 OPENROUTER_API_KEY=...               # For OpenRouter (embeddings + summarization)
 OPENAI_API_KEY=sk-...                # For OpenAI (embeddings + summarization)
@@ -327,7 +341,7 @@ keep doctor                           # Check providers, store, integrations
 
 **ChromaDB errors:** Delete `~/.keep/chroma/` to reset.
 
-**Slow local summarization:** Large content is summarized in the background automatically. Use `keep pending` to monitor progress.
+**Slow local summarization:** Large content is summarized in the background automatically. Use `keep daemon` to monitor progress.
 
 **Claude Code hooks need `jq`:** The prompt-submit hook uses `jq` to extract context. Install with your package manager (e.g., `brew install jq`). Hooks are fail-safe without it, but prompt context won't be captured.
 

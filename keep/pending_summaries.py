@@ -60,7 +60,7 @@ class PendingSummaryQueue:
     """SQLite-backed queue for pending background work.
 
     Items are added during fast indexing (with truncated placeholder summary)
-    or by enqueue_analyze, and processed later by `keep pending`
+    or by enqueue_analyze, and processed later by `keep daemon`
     or programmatically. All work is serialized to prevent concurrent
     ML model loading.
     """

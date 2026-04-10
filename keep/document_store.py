@@ -4461,6 +4461,48 @@ class DocumentStore:
         """Count unclaimed markdown-sync outbox rows."""
         return self._outbox_depth("sync_outbox")
 
+    def sync_outbox_bounds(self) -> tuple[int | None, int | None]:
+        """Return the oldest and newest markdown-sync outbox IDs."""
+        row = self._execute(
+            "SELECT MIN(outbox_id), MAX(outbox_id) FROM sync_outbox",
+        ).fetchone()
+        if row is None:
+            return None, None
+        oldest, newest = row
+        return oldest, newest
+
+    def list_sync_outbox_since(
+        self,
+        *,
+        after_outbox_id: int = 0,
+        limit: int = 50,
+    ) -> list[dict]:
+        """List markdown-sync outbox rows newer than ``after_outbox_id``."""
+        if limit <= 0:
+            return []
+        rows = self._execute(
+            """
+            SELECT outbox_id, mutation, entity_id, collection,
+                   payload_json, created_at
+            FROM sync_outbox
+            WHERE outbox_id > ?
+            ORDER BY outbox_id ASC
+            LIMIT ?
+            """,
+            (after_outbox_id, limit),
+        ).fetchall()
+        return [
+            {
+                "outbox_id": r[0],
+                "mutation": r[1],
+                "entity_id": r[2],
+                "collection": r[3],
+                "payload_json": r[4],
+                "created_at": r[5],
+            }
+            for r in rows
+        ]
+
     def dequeue_sync_outbox(
         self, limit: int = 50, claim_id: str | None = None,
     ) -> list[dict]:

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
-from keep.config import StoreConfig
+from keep.config import StoreConfig, create_default_config, save_config
 from keep.integrations import PROTOCOL_BLOCK_MARKER, check_and_install, install_codex
 
 
@@ -28,3 +29,19 @@ def test_check_and_install_does_not_modify_cwd_agents_md(tmp_path, monkeypatch):
 
     assert cwd_agents.read_text(encoding="utf-8") == "# Repo instructions\n"
     assert PROTOCOL_BLOCK_MARKER not in cwd_agents.read_text(encoding="utf-8")
+
+
+def test_get_keeper_does_not_auto_install_integrations(mock_providers, tmp_path, monkeypatch):
+    config = create_default_config(tmp_path)
+    save_config(config)
+    monkeypatch.setenv("KEEP_CONFIG", str(tmp_path))
+
+    with patch("keep.integrations.check_and_install", side_effect=AssertionError("should not be called")):
+        from keep.console_support import _get_keeper
+
+        kp = _get_keeper(tmp_path)
+
+    try:
+        assert kp is not None
+    finally:
+        kp.close()

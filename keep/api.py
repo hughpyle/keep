@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 logger = logging.getLogger(__name__)
+_MAX_EXPORT_CHANGES_LIMIT = 10_000
 
 from .utils import (
     _parse_date_param,
@@ -42,6 +43,15 @@ import os
 import sys
 
 from .config import load_or_create_config, save_config, StoreConfig, EmbeddingIdentity
+from .markdown_sync import (
+    DOC_STRUCTURAL_MUTATIONS,
+    DOC_UPDATE_MUTATION,
+    EDGE_MUTATIONS,
+    PART_MUTATIONS,
+    VERSION_EDGE_MUTATIONS,
+    VERSION_MUTATIONS,
+    decode_sync_event_payload,
+)
 from .body_policy import (
     BODY_AUTHORITY_DERIVED,
     BODY_AUTHORITY_MARKDOWN,
@@ -123,6 +133,8 @@ from .system_docs import (
     _load_frontmatter,
 )
 
+from .dependencies import NoteDependencyService
+from .markdown_export import _get_export_bundle
 from .processors import _content_hash, _content_hash_full
 
 
@@ -271,14 +283,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 print(
                     f"Search index migrated to cosine similarity.\n"
                     f"Search is unavailable until reindex completes.\n"
-                    f"Run: keep pending",
+                    f"Run: keep daemon",
                     file=sys.stderr,
                 )
             except Exception as e:
                 logger.error("Failed to enqueue reindex after cosine migration: %s", e)
                 print(
                     f"ERROR: Search index migration failed. Search may not work.\n"
-                    f"Try: keep pending --force\n"
+                    f"Try: keep daemon --reindex\n"
                     f"Details: {e}",
                     file=sys.stderr,
                 )
@@ -923,7 +935,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 print(
                     "WARNING: tag metadata migration failed; "
                     "tag-filtered semantic search may be incomplete.\n"
-                    "Run: keep pending --reindex",
+                    "Run: keep daemon --reindex",
                     file=sys.stderr,
                 )
         elif marker_migration_state is False:
@@ -1353,7 +1365,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                         f"Embedding model changed.{dim_msg}\n"
                         f"Enqueued {stats['enqueued']} items for reindex.\n"
                         f"Search is unavailable until reindex completes.\n"
-                        f"Run: keep pending",
+                        f"Run: keep daemon",
                         file=sys.stderr,
                     )
                 except Exception as e:
@@ -1361,7 +1373,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     print(
                         f"ERROR: Embedding model changed but reindex failed.\n"
                         f"Search will not work until reindex completes.\n"
-                        f"Try: keep pending --force\n"
+                        f"Try: keep daemon --reindex\n"
                         f"Details: {e}",
                         file=sys.stderr,
                     )
@@ -1543,6 +1555,111 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         header = next(it)
         header["documents"] = list(it)
         return header
+
+    def export_bundle(
+        self,
+        id: str,
+        *,
+        include_system: bool = True,
+        include_parts: bool = True,
+        include_versions: bool = True,
+    ) -> dict | None:
+        """Export one note bundle with metadata needed for markdown rendering."""
+        return _get_export_bundle(
+            self,
+            id,
+            include_system=include_system,
+            include_parts=include_parts,
+            include_versions=include_versions,
+        )
+
+    def export_changes(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 1000,
+    ) -> dict:
+        """Return a non-destructive cursor-based sync change feed."""
+        try:
+            after_outbox_id = int(str(cursor or "0"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid export change cursor: {cursor!r}") from exc
+        if after_outbox_id < 0:
+            raise ValueError(f"invalid export change cursor: {cursor!r}")
+        limit = max(0, min(int(limit), _MAX_EXPORT_CHANGES_LIMIT))
+
+        oldest_id, newest_id = self._document_store.sync_outbox_bounds()
+        compacted = (
+            after_outbox_id > 0
+            and oldest_id is not None
+            and oldest_id > after_outbox_id + 1
+        )
+        events = self._document_store.list_sync_outbox_since(
+            after_outbox_id=after_outbox_id,
+            limit=limit,
+        )
+        if events:
+            doc_coll = self._resolve_doc_collection()
+            dependencies = NoteDependencyService(self._document_store, doc_coll)
+            _expanded_targets: dict[str, list[str]] = {}
+
+            def _dedupe_note_ids(values: list[str]) -> list[str]:
+                seen: set[str] = set()
+                deduped: list[str] = []
+                for value in values:
+                    if not value or value in seen:
+                        continue
+                    seen.add(value)
+                    deduped.append(value)
+                return deduped
+
+            for row in events:
+                mutation = str(row.get("mutation") or "")
+                doc_id = str(row.get("entity_id") or "")
+                payload = decode_sync_event_payload(row.get("payload_json"))
+                affected_note_ids: list[str] = []
+
+                if mutation == DOC_UPDATE_MUTATION:
+                    affected_note_ids = [doc_id]
+                    if doc_id not in _expanded_targets:
+                        _expanded_targets[doc_id] = dependencies.all_target_ids(doc_id)
+                    affected_note_ids.extend(_expanded_targets[doc_id])
+                elif mutation in PART_MUTATIONS:
+                    affected_note_ids = [doc_id]
+                elif mutation in VERSION_MUTATIONS:
+                    affected_note_ids = [doc_id]
+                elif mutation in EDGE_MUTATIONS:
+                    affected_note_ids = [
+                        doc_id,
+                        str(payload.get("target_id") or ""),
+                        str(payload.get("old_target_id") or ""),
+                    ]
+                elif mutation in VERSION_EDGE_MUTATIONS:
+                    affected_note_ids = [
+                        doc_id,
+                        str(payload.get("target_id") or ""),
+                        str(payload.get("old_target_id") or ""),
+                    ]
+                elif mutation in DOC_STRUCTURAL_MUTATIONS:
+                    affected_note_ids = [doc_id]
+
+                row["affected_note_ids"] = _dedupe_note_ids(affected_note_ids)
+        head_cursor = newest_id or after_outbox_id
+        next_cursor = events[-1]["outbox_id"] if events else head_cursor
+        truncated = (
+            bool(events)
+            and newest_id is not None
+            and events[-1]["outbox_id"] < newest_id
+        )
+        return {
+            "format": "keep-export-changes",
+            "version": 1,
+            "cursor": str(next_cursor),
+            "head_cursor": str(head_cursor),
+            "compacted": compacted,
+            "truncated": truncated,
+            "events": events,
+        }
 
     def import_data(self, data: dict, *, mode: str = "merge") -> dict:
         """Import documents from an export dict.

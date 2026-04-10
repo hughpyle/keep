@@ -1,6 +1,6 @@
 """Daemon timer state persistence.
 
-Tracks last-run timestamps for periodic daemon tasks so ``keep pending --list``
+Tracks last-run timestamps for periodic daemon tasks so ``keep daemon --list``
 can show when each timer event last ran and when it's next scheduled.
 
 The state file (``.timer_state.json``) lives alongside the store.

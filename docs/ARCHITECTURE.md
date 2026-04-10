@@ -112,17 +112,26 @@ Background work runs out-of-band on the daemon's queues.
 ### 2. Daemon layer
 
 **[daemon.py](keep/daemon.py)** — Daemon entry point
-- Minimal `python -m keep.daemon --store PATH` runner
+- Minimal `keepd --store PATH` or `python -m keep.daemon --store PATH` runner
 - Constructs a `Keeper` with `defer_startup_maintenance=True` and runs the
   pending-work daemon loop
 
 **[daemon_server.py](keep/daemon_server.py)** — HTTP query server
-- `DaemonServer` exposes a localhost HTTP API with the routes shown above
+- `DaemonServer` exposes the daemon HTTP API with the routes shown above
 - Auth: bearer token in `Authorization` header (random per daemon, persisted
   in `~/.keep/.processor.token`)
-- Defense-in-depth: `Host` header check rejects non-loopback hosts (DNS
-  rebinding protection); request handlers refuse new work while shutdown is
-  in progress
+- Local mode defaults to loopback bind + strict loopback `Host` allowlist
+- Remote mode is explicit (`--bind` / `KEEP_DAEMON_BIND_HOST`, optional
+  `--advertised-url` / `KEEP_DAEMON_ADVERTISED_URL`) and uses a mode-aware
+  `Host` allowlist derived from the bind host and advertised URL
+- Non-loopback binds require explicit trusted-proxy acknowledgment
+  (`--trusted-proxy` / `KEEP_DAEMON_TRUSTED_PROXY=1`); keep does not provide
+  in-process TLS for the daemon HTTP server
+- Wildcard remote binds (`0.0.0.0` / `::`) require `advertised_url` so the
+  `Host` check remains active
+- `GET /v1/ready` and `GET /v1/health` publish capability and network
+  descriptors so remote clients can negotiate support explicitly
+- Request handlers refuse new work while shutdown is in progress
 - OpenTelemetry trace context is propagated from CLI/MCP into daemon spans
 
 **[daemon_client.py](keep/daemon_client.py)** — Daemon discovery and HTTP
@@ -244,7 +253,7 @@ and continue on the background work queue.
 — Hosted task delegation
 - When `config.remote` is set, expensive processing can be delegated to the
   hosted backend rather than run locally
-- Initialized from `Keeper.__init__` when remote is configured
+- Initialized from `Keeper.__init__` when remote task delegation is configured
 
 **[planner_stats.py](keep/planner_stats.py)** — Flow discriminator priors
 - Precomputed statistics for flow planning
@@ -377,14 +386,14 @@ Extract text from scanned PDFs and images via optical character recognition.
 - **ollama**: Uses `glm-ocr` model (auto-pulled on first use)
 - **mlx**: Apple Silicon — uses `mlx-vlm` vision models
 
-OCR runs in the background via the pending queue (`keep pending`), not
+OCR runs in the background via the pending queue (`keep daemon`), not
 during `put()`. The flow:
 
 1. During `put()`, content regularization detects scanned PDF pages (no
    extractable text) or image files
 2. A placeholder is stored immediately so the item is indexed right away
 3. The pages/image are enqueued for background OCR processing
-4. `keep pending` picks up the OCR task, renders pages to images, runs OCR,
+4. `keep daemon` picks up the OCR task, renders pages to images, runs OCR,
    cleans and scores the text
 5. The full OCR text replaces the placeholder and the item is re-embedded
 

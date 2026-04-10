@@ -53,7 +53,7 @@ keep put ./notes/ -r --watch -x "*.log"    # With exclude patterns
 keep put https://example.com/doc --watch   # Watch a URL for changes
 ```
 
-Watches persist across sessions — the daemon polls for changes in the background. Use `keep pending` to see active watches. Excludes are captured at watch-creation time.
+Watches persist across sessions — the daemon polls for changes in the background. Use `keep daemon` to see active watches. Excludes are captured at watch-creation time.
 
 For git repositories, directory watches also track the resolved `HEAD` commit. That means commit-only events such as empty commits, checkouts, branch switches, resets, and rebases can trigger reprocessing even when no watched file changed. Tag-only git changes are still not watched.
 
@@ -83,7 +83,7 @@ Same content = same ID = enables versioning through tag changes.
 ## Smart summary behavior
 
 - **Short content** (under `max_summary_length`, default 1000 chars): stored verbatim as its own summary
-- **Long content**: truncated placeholder stored immediately, real summary generated in background by `keep pending`
+- **Long content**: truncated placeholder stored immediately, real summary generated in background by `keep daemon`
 - **`--summary` provided**: used as-is, skips auto-summarization
 
 The LLM prompt used for summarization is configurable. Create a `.prompt/summarize/*` document whose match rules target specific tags, and its `## Prompt` section replaces the default summarization prompt for matching documents. See [PROMPTS.md](PROMPTS.md) for details.
@@ -152,7 +152,7 @@ keep get 'git://myproject@v1.0'               # A specific release
 
 \* When a media description provider is configured (`[media]` in `keep.toml`), images get vision-model descriptions and audio files get speech-to-text transcription, appended to the extracted metadata. See [QUICKSTART.md](QUICKSTART.md#media-description-optional) for setup.
 
-† **OCR (optical character recognition):** Scanned PDF pages (pages with no extractable text) and all image files are automatically queued for background OCR when an OCR provider is available. Keep auto-detects Ollama (using `glm-ocr`, pulled automatically on first use) or MLX (`mlx-vlm` on Apple Silicon). A placeholder is stored immediately so the item is indexed right away; the full OCR text replaces it once background processing completes via `keep pending`. No configuration needed — if Ollama is running, OCR just works.
+† **OCR (optical character recognition):** Scanned PDF pages (pages with no extractable text) and all image files are automatically queued for background OCR when an OCR provider is available. Keep auto-detects Ollama (using `glm-ocr`, pulled automatically on first use) or MLX (`mlx-vlm` on Apple Silicon). A placeholder is stored immediately so the item is indexed right away; the full OCR text replaces it once background processing completes via `keep daemon`. No configuration needed — if Ollama is running, OCR just works.
 
 Auto-extracted tags merge with user-provided tags. User tags win on collision:
 

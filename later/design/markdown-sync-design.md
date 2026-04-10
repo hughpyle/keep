@@ -762,6 +762,25 @@ If a user moves an exported markdown file within the vault:
 So the vault is not a user-controlled filing cabinet in v1. The keep id drives
 layout.
 
+### Git/VCS rewinds
+
+If the synced vault is also a git repository, version-control operations such
+as checkout, reset, restore, or branch switching can rewrite many markdown
+files at once without representing ordinary user edits.
+
+This is a distinct case from normal bidirectional sync and should not be
+treated as a simple "latest mtime wins" situation.
+
+Design implication for future inbound sync work:
+
+- bulk vault rewinds caused by VCS operations must be detected or treated as a
+  guarded import mode
+- the importer must not blindly convert an older branch snapshot into the new
+  keep head for every affected note
+
+The exact behavior is deferred, but this case must be handled explicitly during
+bidirectional sync design and implementation.
+
 ## 11. Reconciliation Semantics
 
 V1 should not use blocking conflicts as the normal sync model.

@@ -51,6 +51,8 @@
     - show: task name, interval, last run, next run, status
     - replaces the current "watchers" section
 
+* url risk
+
 * claude-desktop mcpb (no local components at all, only remote MCP)
     - just ship this as a pre-built thing
 

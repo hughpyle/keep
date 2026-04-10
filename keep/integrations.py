@@ -1,10 +1,11 @@
-"""Auto-install hooks and protocol block for coding tools.
+"""Install hooks and protocol blocks for coding tools.
 
 Detects installed tools (Claude Code, Codex, Kiro) and installs
 the keep protocol block and hooks into their global configuration.
 
 Tracked in keep.toml [integrations] so each tool is handled once.
-Set KEEP_NO_SETUP=1 to skip entirely.
+These installers are for explicit setup flows only; normal commands must not
+modify unrelated tool configuration without consent.
 """
 
 import json
@@ -477,7 +478,7 @@ def install_github_copilot(config_dir: Path) -> list[str]:
 
 
 def check_and_install(config: "StoreConfig") -> None:
-    """Check for coding tools and install integrations if needed.
+    """Explicitly check for coding tools and install integrations if needed.
 
     Fast path: one stat per unknown tool (tools already in config are skipped).
     When all tools in TOOL_CONFIGS are accounted for, this does zero I/O.
