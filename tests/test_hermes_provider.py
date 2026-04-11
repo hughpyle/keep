@@ -164,6 +164,42 @@ class TestSyncTurn:
         assert item.tags["user_name"] == "Alice"
         p.shutdown()
 
+    def test_sync_turn_uses_cached_turn_identity_when_sync_args_absent(self, mock_providers, tmp_path):
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="discord",
+                     agent_identity="test")
+        p.on_turn_start(
+            1,
+            "ping",
+            user_id="42",
+            user_name="Alice",
+        )
+        p.sync_turn("ping", "pong")
+        if p._sync_thread:
+            p._sync_thread.join(timeout=5.0)
+        item = p._keeper.get(p._session_item_id)
+        assert item is not None
+        assert item.tags["user_id"] == "[[contact:discord:42|Alice]]"
+        assert item.tags["user_name"] == "Alice"
+        p.shutdown()
+
+    def test_sync_turn_includes_cached_session_title(self, mock_providers, tmp_path):
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="discord",
+                     agent_identity="test")
+        p.on_turn_start(
+            1,
+            "ping",
+            session_title="Research Thread",
+        )
+        p.sync_turn("ping", "pong")
+        if p._sync_thread:
+            p._sync_thread.join(timeout=5.0)
+        item = p._keeper.get(p._session_item_id)
+        assert item is not None
+        assert item.tags["title"] == "Research Thread"
+        p.shutdown()
+
     def test_sync_turn_skips_when_not_initialized(self):
         p = KeepMemoryProvider()
         # Should not raise
@@ -409,6 +445,36 @@ class TestKeepPrompt:
 
 class TestObservationHooks:
     """on_memory_write, on_pre_compress, on_delegation."""
+
+    def test_on_turn_start_updates_session_title_and_turn_identity(self):
+        p = KeepMemoryProvider()
+        p._session_tags = {"source": "hermes", "platform": "telegram", "agent_identity": "coder"}
+        p._session_id = "old-session"
+        p._session_item_id = "coder:telegram:old-session"
+
+        p.on_turn_start(
+            3,
+            "hello",
+            session_id="new-session",
+            session_title="Planning",
+            user_id="42",
+            user_name="Alice",
+        )
+
+        assert p._turn_count == 3
+        assert p._turn_user_id == "42"
+        assert p._turn_user_name == "Alice"
+        assert p._session_id == "new-session"
+        assert p._session_item_id == "coder:telegram:new-session"
+        assert p._session_tags["title"] == "Planning"
+
+    def test_on_turn_start_clears_title_when_explicitly_empty(self):
+        p = KeepMemoryProvider()
+        p._session_tags = {"source": "hermes", "title": "Old Title"}
+
+        p.on_turn_start(1, "hello", session_title="")
+
+        assert "title" not in p._session_tags
 
     def test_on_memory_write(self, mock_providers, tmp_path):
         p = KeepMemoryProvider()

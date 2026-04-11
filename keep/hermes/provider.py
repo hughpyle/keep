@@ -95,6 +95,10 @@ class KeepMemoryProvider:
         self._session_id = ""
         self._session_item_id = ""
         self._session_tags: Dict[str, str] = {"source": "hermes"}
+        # Hermes may supply user identity only via on_turn_start(); cache it
+        # so sync_turn can still tag notes when the write hook gets text only.
+        self._turn_user_id = ""
+        self._turn_user_name = ""
         self._setup_required = False
         self._system_prompt_token_budget = 1200
         self._prefetch_token_budget = 1200
@@ -240,6 +244,7 @@ class KeepMemoryProvider:
 
         self._session_item_id = self._build_session_item_id(session_id, **kwargs)
         self._session_tags = self._build_session_tags(session_id, **kwargs)
+        self._apply_session_title(kwargs.get("session_title"), update_when_missing=False)
         self._configure_token_budgets(**kwargs)
 
         # Per-profile CLI command (hermes creates wrapper aliases per profile)
@@ -404,8 +409,8 @@ class KeepMemoryProvider:
         item_id = self._session_item_id or f"hermes:{self._session_id}"
         tags = dict(self._session_tags)
         platform = str(tags.get("platform") or "").strip()
-        raw_user_id = str(user_id or "").strip()
-        turn_user_name = str(user_name or "").strip()
+        raw_user_id = str(user_id or self._turn_user_id or "").strip()
+        turn_user_name = str(user_name or self._turn_user_name or "").strip()
         if raw_user_id:
             tags["user_id"] = _contact_ref(
                 platform=platform or "hermes",
@@ -439,6 +444,22 @@ class KeepMemoryProvider:
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
         self._turn_count = turn_number
+        self._turn_user_id = str(kwargs.get("user_id") or "").strip()
+        self._turn_user_name = str(kwargs.get("user_name") or "").strip()
+
+        session_id = str(kwargs.get("session_id") or "").strip()
+        if session_id and session_id != self._session_id:
+            self._session_id = session_id
+            self._session_item_id = self._build_session_item_id(
+                session_id,
+                platform=self._session_tags.get("platform"),
+                agent_identity=self._session_tags.get("agent_identity"),
+            )
+
+        self._apply_session_title(
+            kwargs.get("session_title"),
+            update_when_missing="session_title" in kwargs,
+        )
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         if self._sync_thread and self._sync_thread.is_alive():
@@ -702,6 +723,19 @@ class KeepMemoryProvider:
             if value:
                 tags[key] = str(value)
         return tags
+
+    def _apply_session_title(self, title: Any, *, update_when_missing: bool = True) -> None:
+        """Overlay mutable session title metadata without breaking old Hermes builds."""
+        if title is None:
+            if update_when_missing:
+                self._session_tags.pop("title", None)
+            return
+
+        normalized = str(title).strip()
+        if normalized:
+            self._session_tags["title"] = normalized
+        else:
+            self._session_tags.pop("title", None)
 
     def _configure_token_budgets(self, **kwargs) -> None:
         memory_char_limit = kwargs.get("memory_char_limit")
