@@ -1306,7 +1306,7 @@ def list_cmd(
         keep list --sort accessed      # By access time
         keep list -t project=myapp     # Filter by tag
         keep list --since P7D          # Last 7 days
-        keep list --ids                # IDs only (for piping)
+        keep --ids list                # IDs only (for piping)
     """
     port = _get_port()
     tag_dict, tag_keys = _parse_tag_args(tag)
@@ -1926,6 +1926,7 @@ def data_export(
     list_sync: Annotated[bool, typer.Option("--list", help="List active markdown sync directories.")] = False,
     sync: Annotated[bool, typer.Option("--sync", help="Markdown mode: continuously mirror from keep for this directory.")] = False,
     stop: Annotated[bool, typer.Option("--stop", help="With --sync, stop mirroring this directory.")] = False,
+    interval: Annotated[Optional[str], typer.Option("--interval", help="Sync poll interval as ISO 8601 duration (default PT30S, e.g. PT60S, PT5M)")] = None,
     format: Annotated[str, typer.Option("--format", "-f", help="Export format: 'json' (default) or 'md' (markdown directory, one file per note)")] = "json",
 ):
     """Export the store for backup or migration.
@@ -1987,6 +1988,9 @@ def data_export(
                 status_bits.append("versions")
             if entry.get("include_system"):
                 status_bits.append("system")
+            entry_interval = entry.get("interval", "PT30S")
+            if entry_interval != "PT30S":
+                status_bits.append(f"interval={entry_interval}")
             typer.echo(f"{entry.get('root', '')} ({', '.join(status_bits)})")
         return
 
@@ -1995,8 +1999,14 @@ def data_export(
         raise SystemExit(1)
 
     fmt = format.lower()
+    # --interval implies --sync for markdown exports
+    if interval and not sync and not stop:
+        sync = True
     if (sync or stop) and fmt == "json":
         fmt = "md"
+    if interval and fmt not in ("md", "markdown"):
+        typer.echo("Error: --interval requires markdown sync mode (--sync or --format md)", err=True)
+        raise SystemExit(1)
     if fmt in ("md", "markdown"):
         if stop and not sync:
             typer.echo("Error: --stop requires --sync", err=True)
@@ -2020,6 +2030,7 @@ def data_export(
                         "include_versions": include_versions,
                         "sync": True,
                         "validate_only": True,
+                        **({"interval": interval} if interval else {}),
                     },
                 )
                 if status >= 400:
@@ -2085,6 +2096,7 @@ def data_export(
                     "register_only": True,
                     "baseline_complete": not stop,
                     "source_cursor": source_cursor,
+                    **({"interval": interval} if interval else {}),
                 },
             )
             if status >= 400:
@@ -2097,9 +2109,11 @@ def data_export(
                     typer.echo(f"Not syncing: {output}", err=True)
                 return
             sync_info = data.get("sync", {})
+            sync_interval = sync_info.get("interval", "PT30S")
+            interval_suffix = f", interval={sync_interval}" if sync_interval != "PT30S" else ""
             typer.echo(
                 f"Markdown sync active: {sync_info.get('root', output)} "
-                f"({count} notes exported)",
+                f"({count} notes exported{interval_suffix})",
                 err=True,
             )
             return

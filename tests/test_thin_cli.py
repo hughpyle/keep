@@ -194,6 +194,45 @@ def test_data_export_sync_implies_markdown_mode(capsys):
     host.close.assert_called_once()
 
 
+def test_data_export_interval_implies_sync(capsys):
+    """--interval without --sync should imply --sync."""
+    host = MagicMock()
+    with patch("keep.cli_app._get_export_host", return_value=host), \
+         patch("keep.markdown_mirrors.run_markdown_export_once", return_value=(5, {})), \
+         patch("keep.cli_app._get_port", return_value=1234), \
+         patch("keep.cli_app._daemon_request", side_effect=[
+             (200, {"validated": True, "root": "/tmp/vault"}),
+             (200, {"sync": {"root": "/tmp/vault", "interval": "PT5M"}}),
+         ]) as daemon_request:
+        data_export(output="/tmp/vault", interval="PT5M")
+
+    captured = capsys.readouterr()
+    assert "Markdown sync active" in captured.err
+    assert "interval=PT5M" in captured.err
+    # Both requests should carry the interval
+    validate_body = daemon_request.call_args_list[0].args[3]
+    register_body = daemon_request.call_args_list[1].args[3]
+    assert validate_body["interval"] == "PT5M"
+    assert register_body["interval"] == "PT5M"
+    host.close.assert_called_once()
+
+
+def test_data_export_interval_updates_existing_mirror(capsys):
+    """--interval on an already-synced directory should update the interval."""
+    host = MagicMock()
+    with patch("keep.cli_app._get_export_host", return_value=host), \
+         patch("keep.markdown_mirrors.run_markdown_export_once", return_value=(0, {})), \
+         patch("keep.cli_app._get_port", return_value=1234), \
+         patch("keep.cli_app._daemon_request", side_effect=[
+             (200, {"validated": True, "root": "/tmp/vault"}),
+             (200, {"sync": {"root": "/tmp/vault", "interval": "PT2M"}}),
+         ]) as daemon_request:
+        data_export(output="/tmp/vault", sync=True, interval="PT2M")
+
+    register_body = daemon_request.call_args_list[1].args[3]
+    assert register_body["interval"] == "PT2M"
+
+
 def test_data_export_stop_implies_markdown_mode(capsys):
     with patch("keep.cli_app._get_port", return_value=1234), \
          patch("keep.cli_app._daemon_request", return_value=(200, {"stopped": True})):
