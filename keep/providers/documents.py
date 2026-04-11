@@ -1197,14 +1197,15 @@ def _is_extractable_binary(content_type: str, url_suffix: str) -> bool:
 
 def _extract_via_file_provider(
     data: bytes, uri: str, content_type: str, url_suffix: str,
-) -> tuple[str, str]:
-    """Write bytes to a temp file and extract text using FileDocumentProvider.
+) -> Document:
+    """Write bytes to a temp file and extract content using FileDocumentProvider.
 
     Uses a temp file inside the user's home directory so that
     FileDocumentProvider's path-traversal guard is satisfied.
     The temp file is deleted after extraction.
 
-    Returns (extracted_content, content_type).
+    Returns a document rooted at the original URI. Only extraction metadata
+    that still applies to the remote artifact is preserved.
     """
     ext = _EXTRACTABLE_TYPES.get(content_type) or _EXTRACTABLE_SUFFIXES.get(url_suffix, "")
 
@@ -1220,7 +1221,18 @@ def _extract_via_file_provider(
 
         provider = FileDocumentProvider()
         doc = provider.fetch(tmp.name)
-        return doc.content, doc.content_type
+        extracted_metadata = {
+            key: value
+            for key, value in (doc.metadata or {}).items()
+            if isinstance(key, str) and key.startswith("_")
+        }
+        return Document(
+            uri=uri,
+            content=doc.content,
+            content_type=doc.content_type,
+            metadata=extracted_metadata or None,
+            tags=dict(doc.tags or {}) or None,
+        )
 
 
 class HttpDocumentProvider:
@@ -1338,6 +1350,8 @@ class HttpDocumentProvider:
 
                 # Detect content type from URL suffix as fallback
                 url_suffix = uri.lower().rsplit("?", 1)[0].rsplit(".", 1)[-1]
+                extracted_tags: dict[str, str] | None = None
+                extracted_metadata: dict[str, Any] = {}
 
                 # Extract content based on type
                 if content_type == "text/html":
@@ -1347,9 +1361,13 @@ class HttpDocumentProvider:
                 elif _is_extractable_binary(content_type, url_suffix):
                     # Binary type with text extraction support —
                     # write to temp file and use FileDocumentProvider
-                    content, content_type = _extract_via_file_provider(
+                    extracted = _extract_via_file_provider(
                         raw, uri, content_type, url_suffix,
                     )
+                    content = extracted.content
+                    content_type = extracted.content_type or content_type
+                    extracted_tags = extracted.tags or None
+                    extracted_metadata = dict(extracted.metadata or {})
                 elif _is_binary_content_type(content_type):
                     # Binary type we can't extract text from —
                     # return a placeholder instead of decoded garbage
@@ -1369,7 +1387,9 @@ class HttpDocumentProvider:
                     metadata={
                         "status_code": resp.status_code,
                         "headers": dict(resp.headers),
+                        **extracted_metadata,
                     },
+                    tags=extracted_tags,
                 )
         except requests.RequestException as e:
             raise IOError(f"Failed to fetch {uri}: {e}")

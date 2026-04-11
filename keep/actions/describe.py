@@ -14,6 +14,17 @@ from ._item_scope import resolve_item
 logger = logging.getLogger(__name__)
 
 
+def _resolve_local_media_path(uri: str) -> Path | None:
+    """Return a local media path for ``describe``, or ``None`` if unsupported."""
+    if not uri:
+        return None
+    if uri.startswith("file://"):
+        return Path(file_uri_to_path(uri)).resolve()
+    if uri.startswith("/"):
+        return Path(uri).resolve()
+    return None
+
+
 @action(id="describe", priority=5, async_action=True)
 class Describe:
     """Generate a text description of media content (images, audio, video)."""
@@ -39,9 +50,11 @@ class Describe:
         if not callable(describe_fn):
             return {"description": "", "skipped": True}
 
-        # Resolve file path
-        file_path = file_uri_to_path(uri) if uri.startswith("file://") else uri
-        path = Path(file_path).resolve()
+        path = _resolve_local_media_path(uri)
+        if path is None:
+            logger.info("Describe requires a local file URI/path, skipping: %s", uri)
+            return {"description": "", "skipped": True, "reason": "non_local_uri"}
+
         if not path.exists():
             logger.warning("File no longer exists for describe: %s", path)
             return {"description": "", "skipped": True, "reason": "missing_file"}

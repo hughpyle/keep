@@ -47,7 +47,7 @@ core rules; additional rules are loaded from builtin fragments at
 | Rule | Condition | Action |
 |------|-----------|--------|
 | `summary` | Content exceeds max summary length and no summary exists | `summarize` |
-| `described` | Item has a URI, media content, and a media provider configured | `describe` |
+| `described` | Item has a URI, local describable media content, and a media provider configured | `describe` |
 
 **Builtin fragments** (`keep/data/system/state-after-write/`):
 
@@ -55,7 +55,7 @@ core rules; additional rules are loaded from builtin fragments at
 |----------|---------|-----------------|--------|
 | `analyze` | `analyzed` | `!item.is_system_note` | `analyze` (decompose into parts) |
 | `duplicates` | `find-duplicates` | `!item.is_system_note && item.has_content` | `resolve_duplicates` (link identical content via edges) |
-| `links` | `linked` | `!item.is_system_note && item.has_content && content_type ∈ {markdown, html, message/rfc822, pdf, docx, pptx}` | `extract_links` (wiki/markdown links → `references` edges) |
+| `links` | `linked` | `!item.is_system_note && item.has_content && content_type ∈ {markdown, html, message/rfc822, pdf, docx, pptx}` | `extract_links` (wiki/markdown links, URLs, emails, structured doc links → `references` edges) |
 | `ocr` | `extracted` | `'_ocr_pages' in item.tags && item.has_uri` | `ocr` |
 | `resolve-stubs` | `resolve_stubs` | `item.has_uri && !item.is_system_note && item.tags._source != 'link'` | `resolve_stubs` (fetch URI for stub items) |
 | `tag` | `tagged` | `!item.is_system_note && item.has_content` | `auto_tag` (classify against `.tag/*` specs) |
@@ -68,10 +68,17 @@ below).
 
 The `links` fragment handles every text-bearing content type, not just
 markdown — it covers HTML, RFC 822 email, PDF, DOCX, and PPTX as well, so
-link extraction works on indexed documents from many sources. The
+link extraction works on indexed documents from many sources. Provider-
+extracted structured links (such as PDF annotations) are passed through the
+after-write flow to `extract_links`, and email targets are normalized to bare
+email-address note IDs. The
 `resolve-stubs` fragment runs for any URI-backed item that isn't a `link`-
 sourced stub, which includes both edge-target stubs and other URI items
 that came in as placeholders.
+
+Remote HTTP(S) binary fetches do not trigger `describe`. The fetcher may
+use temporary files during extraction, but those files are not durable once
+the asynchronous `after-write` flow begins.
 
 ---
 

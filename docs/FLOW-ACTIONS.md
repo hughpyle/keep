@@ -293,7 +293,7 @@ Decompose a target item into structural parts.
 
 ### describe
 
-Extract text description from images or media content.
+Extract text description from local images or other local media content.
 
 ```yaml
 - do: describe
@@ -317,7 +317,9 @@ Detect items with identical content and link them via edge tags.
 
 ### extract_links
 
-Extract markdown links from content and create edge relationships.
+Extract internal links, external URLs, and email references from content and
+create edge relationships. Structured document links passed from providers
+(for example PDF annotations) are also merged.
 
 ```yaml
 - do: extract_links

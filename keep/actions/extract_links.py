@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-"""Extract wiki-style and markdown-style links from markdown content."""
+"""Extract internal, URL, and email references from item content."""
 
 import logging
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from ..types import file_uri_to_path, format_ref
 from . import action
@@ -29,6 +30,13 @@ _MD_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)')
 # Bare URLs (http/https) — used for non-markdown content
 _URL_RE = re.compile(r'https?://[^\s<>\"\')]+')
 
+# Bare email addresses — used for non-markdown content.
+_EMAIL_RE = re.compile(
+    r'(?<![A-Za-z0-9._%+-])'
+    r'([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})'
+    r'(?![A-Za-z0-9_%+-])',
+)
+
 # Directories that mark a vault root
 _VAULT_MARKERS = (".obsidian", ".logseq", ".git")
 
@@ -37,7 +45,7 @@ def _parse_links(content: str, *, content_type: str = "text/markdown") -> list[d
     """Extract links from content.
 
     For markdown: extracts wiki-links, markdown links, and images.
-    For other types (HTML, email, etc.): extracts bare URLs.
+    For other types (HTML, email, etc.): extracts bare URLs and email addresses.
 
     Returns a list of dicts with 'target' and 'style' keys.
     """
@@ -65,21 +73,56 @@ def _parse_links(content: str, *, content_type: str = "text/markdown") -> list[d
 
         for m in _MD_LINK_RE.finditer(content):
             target = m.group(2).strip()
-            # Skip anchors, mailto, and empty
-            if not target or target.startswith("#") or target.startswith("mailto:"):
+            title = m.group(1).strip()
+            if not target or target.startswith("#"):
+                continue
+            normalized_email = _normalize_email_target(target)
+            if normalized_email:
+                if normalized_email not in seen:
+                    seen.add(normalized_email)
+                    link = {"target": normalized_email, "style": "email"}
+                    if title and title != normalized_email:
+                        link["title"] = title
+                    links.append(link)
                 continue
             if target not in seen:
                 seen.add(target)
                 links.append({"target": target, "style": "markdown"})
     else:
-        # Non-markdown: extract bare URLs
+        # Non-markdown: extract bare URLs and bare email addresses.
         for m in _URL_RE.finditer(content):
             target = m.group(0).rstrip(".,;:!?)")
             if target and target not in seen:
                 seen.add(target)
                 links.append({"target": target, "style": "url"})
+        for m in _EMAIL_RE.finditer(content):
+            target = m.group(1).strip().lower()
+            if target and target not in seen:
+                seen.add(target)
+                links.append({"target": target, "style": "email"})
 
     return links
+
+
+def _normalize_email_target(target: str) -> str | None:
+    """Normalize bare-email and mailto targets to keep's email item ID form."""
+    raw = str(target or "").strip()
+    if not raw:
+        return None
+    if raw.lower().startswith("mailto:"):
+        raw = unquote(urlparse(raw).path or "").strip()
+    normalized = raw.lower()
+    return normalized if _EMAIL_RE.fullmatch(normalized) else None
+
+
+def _safe_link_title(title: Any, target: str) -> str | None:
+    """Return a safe alias for a resolved external target."""
+    label = " ".join(str(title or "").split()).strip()
+    if not label or label == target:
+        return None
+    if "|" in label or "]]" in label:
+        return None
+    return label
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +179,10 @@ def _get_vault_root(source_id: str, context: Any) -> str | None:
 
 def _is_url(target: str) -> bool:
     return target.startswith("http://") or target.startswith("https://")
+
+
+def _is_email(target: str) -> bool:
+    return _normalize_email_target(target) == target
 
 
 def _resolve_internal_link(
@@ -240,12 +287,17 @@ class ExtractLinks:
                 else:
                     url = entry
                     title = None
-                if not url or url in seen:
+                raw_target = str(url or "").strip()
+                normalized_target = raw_target
+                if not _is_url(raw_target):
+                    normalized_target = _normalize_email_target(raw_target) or ""
+                if not normalized_target or normalized_target in seen:
                     continue
-                seen.add(url)
-                link: dict[str, str] = {"target": url, "style": "structured"}
-                if title:
-                    link["title"] = title
+                seen.add(normalized_target)
+                link: dict[str, str] = {"target": normalized_target, "style": "structured"}
+                safe_title = _safe_link_title(title, normalized_target)
+                if safe_title:
+                    link["title"] = safe_title
                 links.append(link)
 
         if not links:
@@ -297,6 +349,21 @@ class ExtractLinks:
                 if create_targets and not title:
                     # Untitled URL — keep the legacy put_item so the stub
                     # gets queued for background summarization.
+                    existing = context.get(target)
+                    if existing is None:
+                        mutations.append({
+                            "op": "stub_item",
+                            "id": target,
+                            "content": target,
+                            "summary": target,
+                            "tags": {"_source": "link"},
+                            "queue_background_tasks": True,
+                        })
+            elif _is_email(target):
+                title = _safe_link_title(link.get("title"), target)
+                ref_value = format_ref(target, title)
+                resolved_targets.append(ref_value)
+                if create_targets and not title:
                     existing = context.get(target)
                     if existing is None:
                         mutations.append({

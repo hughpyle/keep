@@ -12,3 +12,4 @@ rules:
     with:
       tag: references
       create_targets: "true"
+      doc_links: "{params.metadata.doc_links}"

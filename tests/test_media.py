@@ -153,6 +153,7 @@ class TestAfterWriteStateDoc:
             "content_length": 50,
             "has_summary": False,
             "has_uri": False,
+            "uri": "",
             "is_system_note": False,
             "tags": {},
             "has_media_content": False,
@@ -222,6 +223,17 @@ class TestAfterWriteStateDoc:
                              has_uri=True, has_media_content=False)
         assert "describe" not in actions
 
+    def test_remote_binary_uri_skips_describe(self, after_write_doc):
+        """Remote binary URIs skip describe because no local media path survives."""
+        actions = self._eval(
+            after_write_doc,
+            has_uri=True,
+            uri="https://example.com/policy.pdf",
+            content_type="application/pdf",
+            has_media_content=False,
+        )
+        assert "describe" not in actions
+
     def test_ocr_pages_fires_ocr(self, after_write_doc):
         """Items with _ocr_pages tag and URI fire OCR."""
         actions = self._eval(after_write_doc,
@@ -243,6 +255,34 @@ class TestAfterWriteStateDoc:
         """Non-markdown content does NOT fire extract_links."""
         actions = self._eval(after_write_doc, content_type="text/plain")
         assert "extract_links" not in actions
+
+    def test_pdf_extract_links_receives_doc_links(self, after_write_doc):
+        """PDF after-write passes provider-extracted doc_links into extract_links."""
+        from keep.state_doc import evaluate_state_doc
+
+        ctx = {
+            "item": {
+                "content_length": 50,
+                "has_summary": False,
+                "has_uri": True,
+                "uri": "https://example.com/policy.pdf",
+                "is_system_note": False,
+                "tags": {},
+                "has_media_content": False,
+                "has_content": True,
+                "content_type": "application/pdf",
+            },
+            "params": {
+                "max_summary_length": 2000,
+                "metadata": {
+                    "doc_links": ["https://travel.example.com"],
+                },
+            },
+            "system": {"has_media_provider": True},
+        }
+        result = evaluate_state_doc(after_write_doc, ctx, run_action=None)
+        linked = next(action for action in result.actions if action["action"] == "extract_links")
+        assert linked["params"]["doc_links"] == ["https://travel.example.com"]
 
 
 # -----------------------------------------------------------------------------
@@ -356,6 +396,30 @@ class TestAfterWriteDispatch:
         ctx = _flow_item_context(kp)
         assert ctx is not None
         assert ctx["has_media_content"] is True
+        kp.close()
+
+    def test_remote_pdf_put_skips_describe_context(self, mock_providers, tmp_path):
+        """Remote PDFs should not advertise describe-ready media context."""
+        from keep.api import Keeper
+
+        mock_doc = _make_mock_doc(
+            "https://example.com/policy.pdf",
+            "Corporate travel policy",
+            "application/pdf",
+        )
+        mock_providers["document"].fetch = lambda uri: mock_doc
+
+        kp = Keeper(store_path=tmp_path)
+        _keeper_bootstrap_sysdocs(kp)
+        kp._config.media = ProviderConfig("ollama", {"model": "test"})
+
+        kp.put(uri="https://example.com/policy.pdf")
+
+        ctx = _flow_item_context(kp)
+        assert ctx is not None
+        assert ctx["has_uri"] is True
+        assert ctx["content_type"] == "application/pdf"
+        assert ctx["has_media_content"] is False
         kp.close()
 
     def test_text_uri_context(self, mock_providers, tmp_path):
@@ -508,6 +572,33 @@ class TestDescribeTaskWorkflow:
         # Original summary unchanged
         item = kp.get("img1")
         assert "Description:" not in item.summary
+        kp.close()
+
+    def test_describe_skips_non_local_uri(self, mock_providers, tmp_path):
+        """Describe rejects remote URIs instead of resolving them as local paths."""
+        from keep.api import Keeper
+        from keep.task_workflows import TaskRequest, run_local_task
+
+        kp = Keeper(store_path=tmp_path)
+        _keeper_bootstrap_sysdocs(kp)
+        kp.put("Original summary", id="img1")
+
+        mock_describer = MagicMock()
+        kp._media_describer = mock_describer
+        kp._config.media = ProviderConfig("ollama", {"model": "test"})
+
+        req = TaskRequest(
+            task_type="describe",
+            id="img1",
+            collection=kp._resolve_doc_collection(),
+            content="",
+            metadata={"uri": "https://example.com/test.jpg", "content_type": "image/jpeg"},
+        )
+        result = run_local_task(kp, req)
+
+        assert result.status == "skipped"
+        assert result.details["reason"] == "non_local_uri"
+        mock_describer.describe.assert_not_called()
         kp.close()
 
     def test_describe_does_not_overwrite_markdown_authored_body(

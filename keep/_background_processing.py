@@ -35,6 +35,8 @@ from .tracing import get_tracer
 
 logger = logging.getLogger(__name__)
 
+_DESCRIBABLE_MEDIA_PREFIXES = ("image/", "audio/", "video/")
+
 
 def _is_action_output(value: Any) -> bool:
     """Return whether a completed remote payload already looks like action output."""
@@ -58,6 +60,21 @@ def _size_priority_bump(content_len: int) -> int:
     if content_len > 10_000:
         return 1
     return 0
+
+
+def _has_local_describable_media(uri: str, content_type: str) -> bool:
+    """Return whether after-write can safely run ``describe``.
+
+    Media describers operate on durable local filesystem paths. Remote
+    HTTP(S) fetches may use temporary files during extraction, but those
+    files are deleted before after-write runs, so only local file URIs
+    and absolute paths are describable here.
+    """
+    if not uri or not content_type:
+        return False
+    if not (uri.startswith("file://") or uri.startswith("/")):
+        return False
+    return content_type.startswith(_DESCRIBABLE_MEDIA_PREFIXES)
 
 
 class BackgroundProcessingMixin:
@@ -241,8 +258,11 @@ class BackgroundProcessingMixin:
                 "content_type": content_type or "",
                 "is_system_note": item_id.startswith("."),
                 "tags": all_tags,
-                "has_media_content": bool(
-                    content_type and not content_type.startswith("text/")
+                # ``describe`` needs a durable local media path, not just any
+                # non-text content type. Remote binary fetches are extracted
+                # via temp files that no longer exist once after-write starts.
+                "has_media_content": _has_local_describable_media(
+                    uri or "", content_type or "",
                 ),
                 "has_content": bool(content),
             },

@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 from typing import Any
 
 import pytest
 
 from keep.actions.extract_links import (
+    _normalize_email_target,
     _parse_links,
     _resolve_internal_link,
     _detect_vault_root,
     ExtractLinks,
 )
-from keep.providers.documents import FileDocumentProvider
+from keep.providers.base import Document
+from keep.providers.documents import FileDocumentProvider, HttpDocumentProvider
 from keep.types import normalize_edge_value, parse_ref
 
 
@@ -70,11 +72,38 @@ class TestParseLinks:
 
     def test_skip_mailto(self):
         links = _parse_links("[email](mailto:x@y.com)")
-        assert len(links) == 0
+        assert len(links) == 1
+        assert links[0]["target"] == "x@y.com"
+        assert links[0]["title"] == "email"
+
+    def test_non_markdown_bare_email(self):
+        links = _parse_links(
+            "Contact travel@acme-corp.example.com for support.",
+            content_type="application/pdf",
+        )
+        assert links == [
+            {"target": "travel@acme-corp.example.com", "style": "email"},
+        ]
 
     def test_empty_content(self):
         assert _parse_links("") == []
         assert _parse_links("No links here.") == []
+
+
+class TestNormalizeEmailTarget:
+    """Tests for mailto/bare-email normalization."""
+
+    def test_mailto_normalizes_to_bare_address(self):
+        assert _normalize_email_target("mailto:Travel@Example.com") == "travel@example.com"
+
+    def test_mailto_query_string_is_ignored(self):
+        assert (
+            _normalize_email_target("mailto:Travel@Example.com?subject=Hello")
+            == "travel@example.com"
+        )
+
+    def test_bare_email_normalizes_lowercase(self):
+        assert _normalize_email_target("Travel@Example.com") == "travel@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +292,43 @@ class TestExtractLinksAction:
         assert tag_mut[0]["tags"]["references"] == ["https://example.com"]
         put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"]
         assert any(m["id"] == "https://example.com" for m in put_muts)
+
+    def test_doc_links_mailto_normalizes_to_email_target(self):
+        """Structured mailto links are stored as bare email references."""
+        source = _make_item("a.pdf", "PDF body")
+        ctx = _make_context({"a.pdf": source}, item_id="a.pdf")
+        ctx.item_content = source.content
+
+        result = ExtractLinks().run(
+            {
+                "item_id": "a.pdf",
+                "doc_links": [{"url": "mailto:Travel@Example.com", "title": "Travel Desk"}],
+            },
+            ctx,
+        )
+
+        tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
+        refs = tag_mut[0]["tags"]["references"]
+        assert "[[travel@example.com|Travel Desk]]" in refs
+        put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"]
+        assert put_muts == []
+
+    def test_bare_email_in_pdf_content_creates_email_reference(self):
+        """Bare email addresses in non-markdown content become references."""
+        source = _make_item(
+            "a.pdf",
+            "Questions: travel@acme-corp.example.com.",
+            tags={"_content_type": "application/pdf"},
+        )
+        ctx = _make_context({"a.pdf": source}, item_id="a.pdf")
+        ctx.item_content = source.content
+
+        result = ExtractLinks().run({"item_id": "a.pdf"}, ctx)
+
+        tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
+        assert tag_mut[0]["tags"]["references"] == ["travel@acme-corp.example.com"]
+        put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"]
+        assert any(m["id"] == "travel@acme-corp.example.com" for m in put_muts)
 
     def test_no_links_skipped(self):
         source = _make_item("a.md", "No links here.")
@@ -649,3 +715,44 @@ class TestExtractHtmlLinks:
             {"url": "https://a.com", "title": "A"},
             {"url": "https://b.com", "title": "B"},
         ]
+
+
+class TestHttpDocumentProviderExtraction:
+    """Tests for preserving extracted metadata through remote fetches."""
+
+    def test_remote_extractable_binary_preserves_links_and_tags(self):
+        provider = HttpDocumentProvider()
+        mock_resp = MagicMock()
+        mock_resp.is_redirect = False
+        mock_resp.headers = {
+            "content-type": "application/pdf",
+            "content-length": "12",
+        }
+        mock_resp.iter_content.return_value = [b"%PDF-1.7 data"]
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.__exit__.return_value = False
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
+
+        extracted = Document(
+            uri="https://example.com/doc.pdf",
+            content="Extracted content",
+            content_type="application/pdf",
+            metadata={"_links": ["mailto:travel@example.com", "https://travel.example.com"]},
+            tags={"topic": "travel"},
+        )
+
+        with (
+            patch("keep.providers.documents._http_mod.http_session", return_value=mock_session),
+            patch("keep.providers.documents._extract_via_file_provider", return_value=extracted),
+        ):
+            doc = provider.fetch("https://example.com/doc.pdf")
+
+        assert doc.content == "Extracted content"
+        assert doc.metadata["_links"] == [
+            "mailto:travel@example.com",
+            "https://travel.example.com",
+        ]
+        assert doc.tags == {"topic": "travel"}
