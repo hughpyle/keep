@@ -47,6 +47,17 @@ logger = logging.getLogger(__name__)
 _MEMORY_CHARS_PER_TOKEN = 2.75
 
 
+def _read_env_var(env_path: Path, key: str) -> str | None:
+    """Read a single env var from a .env file, or None if absent."""
+    if not env_path.exists():
+        return None
+    prefix = f"{key}="
+    for line in env_path.read_text().splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):]
+    return None
+
+
 def _write_env_var(env_path: Path, key: str, value: str) -> None:
     """Set a single env var in a .env file (append or update)."""
     env_path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,9 +211,13 @@ class KeepMemoryProvider:
         if embedding is None:
             raise ValueError(EMBEDDING_MISSING_ERROR)
 
-        # Always use profile-scoped path for setup — ignore inherited
-        # KEEP_STORE_PATH to prevent cross-profile store binding.
-        store_path = Path(hermes_home, "keep").resolve()
+        # Honour an existing KEEP_STORE_PATH from the .env file (or
+        # environment) so that re-running setup doesn't overwrite a
+        # user-configured path.  Fall back to hermes_home/keep.
+        existing_store = os.environ.get("KEEP_STORE_PATH") or _read_env_var(
+            Path(hermes_home) / ".env", "KEEP_STORE_PATH"
+        )
+        store_path = Path(existing_store).resolve() if existing_store else Path(hermes_home, "keep").resolve()
         config = create_default_config(store_path)
         config.embedding = embedding
         if summarization is not None:

@@ -5,6 +5,8 @@ Tests cover the full MemoryProvider protocol surface.
 """
 
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -697,3 +699,101 @@ class TestSetupCommand:
         p.initialize("s1", hermes_home=str(tmp_path), platform="cli",
                      agent_identity="default")
         assert p._setup_cmd == "hermes memory setup"
+
+
+class TestReadWriteEnvVar:
+    """_read_env_var / _write_env_var round-trip and edge cases."""
+
+    def test_read_missing_file(self, tmp_path):
+        from keep.hermes.provider import _read_env_var
+        assert _read_env_var(tmp_path / ".env", "FOO") is None
+
+    def test_read_missing_key(self, tmp_path):
+        from keep.hermes.provider import _read_env_var
+        env = tmp_path / ".env"
+        env.write_text("BAR=123\n")
+        assert _read_env_var(env, "FOO") is None
+
+    def test_write_then_read(self, tmp_path):
+        from keep.hermes.provider import _read_env_var, _write_env_var
+        env = tmp_path / ".env"
+        _write_env_var(env, "KEEP_STORE_PATH", "/custom/path")
+        assert _read_env_var(env, "KEEP_STORE_PATH") == "/custom/path"
+
+    def test_write_updates_existing(self, tmp_path):
+        from keep.hermes.provider import _read_env_var, _write_env_var
+        env = tmp_path / ".env"
+        env.write_text("KEEP_STORE_PATH=/old/path\nOTHER=1\n")
+        _write_env_var(env, "KEEP_STORE_PATH", "/new/path")
+        assert _read_env_var(env, "KEEP_STORE_PATH") == "/new/path"
+        # Other vars preserved
+        assert _read_env_var(env, "OTHER") == "1"
+
+
+class TestSetupStorePathPreservation:
+    """hermes memory setup should honour an existing KEEP_STORE_PATH."""
+
+    def test_setup_preserves_env_store_path(self, mock_providers, tmp_path):
+        """If KEEP_STORE_PATH is already in .env, save_config should use it."""
+        from keep.hermes.provider import _read_env_var, _write_env_var
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        env_path = hermes_home / ".env"
+        custom_path = str(tmp_path / "my-custom-keep")
+        _write_env_var(env_path, "KEEP_STORE_PATH", custom_path)
+
+        p = KeepMemoryProvider()
+        # Stub the provider resolution chain that save_config uses
+        with patch.object(p, "_current_keep_providers", return_value=(None, None)), \
+             patch.object(p, "_setup_choices", return_value=(
+                 [{"name": "Ollama (nomic-embed-text)", "value": "ollama|nomic-embed-text"}],
+                 [{"name": "Skip", "value": None}],
+             )), \
+             patch.object(p, "_provider_config_from_choice", side_effect=[
+                 SimpleNamespace(name="ollama", params={"model": "nomic-embed-text"}),
+                 None,
+             ]), \
+             patch("keep.config.create_default_config") as mock_create, \
+             patch("keep.config.save_config"), \
+             patch.dict(os.environ, {}, clear=False):
+            # Remove KEEP_STORE_PATH from env so only .env file is the source
+            os.environ.pop("KEEP_STORE_PATH", None)
+            p.save_config(
+                {"embedding_choice": "Ollama (nomic-embed-text)",
+                 "summarization_choice": "Skip"},
+                hermes_home=str(hermes_home),
+            )
+
+        # create_default_config should have received the custom path, not default
+        call_path = mock_create.call_args[0][0]
+        assert str(call_path) == str(Path(custom_path).resolve())
+        # .env should still have the custom path
+        assert _read_env_var(env_path, "KEEP_STORE_PATH") == str(Path(custom_path).resolve())
+
+    def test_setup_defaults_when_no_existing_path(self, mock_providers, tmp_path):
+        """Without existing KEEP_STORE_PATH, save_config uses hermes_home/keep."""
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+
+        p = KeepMemoryProvider()
+        with patch.object(p, "_current_keep_providers", return_value=(None, None)), \
+             patch.object(p, "_setup_choices", return_value=(
+                 [{"name": "Ollama (nomic-embed-text)", "value": "ollama|nomic-embed-text"}],
+                 [{"name": "Skip", "value": None}],
+             )), \
+             patch.object(p, "_provider_config_from_choice", side_effect=[
+                 SimpleNamespace(name="ollama", params={"model": "nomic-embed-text"}),
+                 None,
+             ]), \
+             patch("keep.config.create_default_config") as mock_create, \
+             patch("keep.config.save_config"), \
+             patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("KEEP_STORE_PATH", None)
+            p.save_config(
+                {"embedding_choice": "Ollama (nomic-embed-text)",
+                 "summarization_choice": "Skip"},
+                hermes_home=str(hermes_home),
+            )
+
+        call_path = mock_create.call_args[0][0]
+        assert str(call_path) == str((hermes_home / "keep").resolve())
