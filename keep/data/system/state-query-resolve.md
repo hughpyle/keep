@@ -7,6 +7,12 @@ tags:
 # and routes to branch/explore states when results are ambiguous.
 match: sequence
 rules:
+  - when: "!(has(params.query) && params.query != '' && params.query != null)"
+    # Query flows require a non-empty search string.
+    return:
+      status: error
+      with:
+        reason: "query required"
   - id: search
     # Primary search
     do: find

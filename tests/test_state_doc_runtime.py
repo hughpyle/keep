@@ -888,26 +888,41 @@ class TestCELPredicates:
         assert "traverse" in calls
         assert "related" in result.bindings
 
-    def test_find_deep_skips_traverse_when_search_errors(self, kp):
-        """find-deep short-circuits when search action fails (no count key)."""
+    @pytest.mark.parametrize(
+        ("state", "params"),
+        [
+            ("find-deep", {"query": "", "limit": 10, "deep_limit": 5}),
+            ("memory-search", {"query": "", "limit": 10}),
+            ("query-resolve", {"query": ""}),
+            ("query-explore", {"query": ""}),
+            ("query-branch", {"query": ""}),
+        ],
+    )
+    def test_query_flows_error_on_blank_query_without_find_warnings(
+        self, kp, caplog, state, params,
+    ):
+        """Query-only flows fail fast on blank input instead of looping or logging find errors."""
         loader = _store_loader(kp)
         calls = []
 
         def _runner(action_name, params):
             calls.append(action_name)
-            if action_name == "find":
-                raise ValueError("find requires one of query, similar_to, tags, prefix, or since")
-            return {"groups": {}, "count": 0}
+            return {"results": [], "count": 0}
 
-        result = run_flow(
-            "find-deep",
-            {"query": "", "limit": 10, "deep_limit": 5},
-            load_state_doc=loader, run_action=_runner,
-        )
-        assert result.status == "done"
-        # Only find should have been called; traverse skipped because
-        # search binding has no count key and the predicate handles it.
-        assert calls == ["find"]
+        with caplog.at_level("WARNING"):
+            result = run_flow(
+                state,
+                params,
+                load_state_doc=loader,
+                run_action=_runner,
+            )
+
+        assert result.status == "error"
+        assert result.data == {"reason": "query required"}
+        assert result.history == [state]
+        assert calls == []
+        assert "Action find failed" not in caplog.text
+        assert "Predicate eval error" not in caplog.text
 
 
 class TestQueryResolveFlow:
