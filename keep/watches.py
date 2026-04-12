@@ -17,7 +17,10 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from .git_ingest import discover_git_roots
+from .ignore import merge_excludes
 from .types import file_uri_to_path
+from .utils import _list_directory_files
 
 if TYPE_CHECKING:
     from .api import Keeper
@@ -720,8 +723,6 @@ def enqueue_git_ingest_for_files(keeper: Keeper, files: list[Path]) -> list[str]
     if not files:
         return []
 
-    from .git_ingest import discover_git_roots
-
     queued_roots: list[str] = []
     git_roots = sorted(discover_git_roots(files))
     for root_str in git_roots:
@@ -747,9 +748,6 @@ def enqueue_git_ingest_for_directory(
     extra_exclude: list[str] | None = None,
 ) -> list[str]:
     """Walk a directory and queue git ingest for any repos in the tree."""
-    from .ignore import merge_excludes
-    from .utils import _list_directory_files
-
     combined = merge_excludes(extra_exclude or [], exclude or []) or None
     files = _list_directory_files(directory, recurse=recurse, exclude=combined)
     return enqueue_git_ingest_for_files(keeper, files)

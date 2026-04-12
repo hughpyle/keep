@@ -596,6 +596,14 @@ class ContextResolutionMixin:
                 raise ValueError(
                     f"prompt state flow {state_doc!r} failed: {flow_result.status}: {flow_result.data}"
                 )
+        elif flow_result.status == "error":
+            reason = str((flow_result.data or {}).get("reason") or "")
+            if reason != "query required":
+                raise ValueError(
+                    f"prompt state flow {state_doc!r} failed: {flow_result.status}: {flow_result.data}"
+                )
+            # No query provided — render template with empty bindings so the
+            # prompt structure is still usable (e.g. MCP prompt previews).
         elif flow_result.status != "done":
             raise ValueError(
                 f"prompt state flow {state_doc!r} failed: {flow_result.status}: {flow_result.data}"
