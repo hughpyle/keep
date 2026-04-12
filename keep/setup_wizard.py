@@ -22,6 +22,7 @@ from .config import (
     get_default_provider_model,
     save_config,
 )
+from .daemon_client import stop_daemon
 from .integrations import HOOKS_VERSION, TOOL_CONFIGS, detect_new_tools, install_claude_code, install_codex, install_github_copilot, install_kiro, install_openclaw
 
 
@@ -564,6 +565,9 @@ def _run_interactive_setup(
         content_extractor=detected.get("content_extractor"),
     )
     save_config(config)
+
+    # Stop any running daemon so it picks up the new config on next start
+    stop_daemon(config.path, force=True)
 
     # --- Install tool integrations ---
     installers = {

@@ -770,6 +770,40 @@ class TestSetupStorePathPreservation:
         # .env should still have the custom path
         assert _read_env_var(env_path, "KEEP_STORE_PATH") == str(Path(custom_path).resolve())
 
+    def test_setup_prefers_profile_env_over_process_env(self, mock_providers, tmp_path):
+        """Profile .env must win over an inherited process KEEP_STORE_PATH."""
+        from keep.hermes.provider import _read_env_var, _write_env_var
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        env_path = hermes_home / ".env"
+        profile_path = str(tmp_path / "profile-store")
+        inherited_path = str(tmp_path / "inherited-store")
+        _write_env_var(env_path, "KEEP_STORE_PATH", profile_path)
+
+        p = KeepMemoryProvider()
+        with patch.object(p, "_current_keep_providers", return_value=(None, None)), \
+             patch.object(p, "_setup_choices", return_value=(
+                 [{"name": "Ollama (nomic-embed-text)", "value": "ollama|nomic-embed-text"}],
+                 [{"name": "Skip", "value": None}],
+             )), \
+             patch.object(p, "_provider_config_from_choice", side_effect=[
+                 SimpleNamespace(name="ollama", params={"model": "nomic-embed-text"}),
+                 None,
+             ]), \
+             patch("keep.config.create_default_config") as mock_create, \
+             patch("keep.config.save_config"), \
+             patch.dict(os.environ, {"KEEP_STORE_PATH": inherited_path}, clear=False):
+            p.save_config(
+                {"embedding_choice": "Ollama (nomic-embed-text)",
+                 "summarization_choice": "Skip"},
+                hermes_home=str(hermes_home),
+            )
+
+        call_path = mock_create.call_args[0][0]
+        assert str(call_path) == str(Path(profile_path).resolve())
+        assert _read_env_var(env_path, "KEEP_STORE_PATH") == str(Path(profile_path).resolve())
+
     def test_setup_defaults_when_no_existing_path(self, mock_providers, tmp_path):
         """Without existing KEEP_STORE_PATH, save_config uses hermes_home/keep."""
         hermes_home = tmp_path / "hermes"
@@ -797,3 +831,19 @@ class TestSetupStorePathPreservation:
 
         call_path = mock_create.call_args[0][0]
         assert str(call_path) == str((hermes_home / "keep").resolve())
+
+    def test_initialize_prefers_profile_env_over_process_env(self, tmp_path):
+        """initialize() must use the profile store when both sources exist."""
+        from keep.hermes.provider import _write_env_var
+
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+        profile_path = (tmp_path / "profile-store").resolve()
+        inherited_path = (tmp_path / "inherited-store").resolve()
+        _write_env_var(hermes_home / ".env", "KEEP_STORE_PATH", str(profile_path))
+
+        p = KeepMemoryProvider()
+        with patch.dict(os.environ, {"KEEP_STORE_PATH": str(inherited_path)}, clear=False):
+            p.initialize("s1", hermes_home=str(hermes_home), platform="cron")
+
+        assert p._store_path == str(profile_path)

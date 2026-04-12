@@ -40,11 +40,17 @@ from keep.hermes.const import (
     TOOL_ERROR_SETUP_HINT,
     TOOL_ERROR_SETUP_REQUIRED,
 )
+from keep.daemon_client import stop_daemon
 from keep.types import format_ref
 
 logger = logging.getLogger(__name__)
 
 _MEMORY_CHARS_PER_TOKEN = 2.75
+
+
+def _stop_daemon(store_path: Path) -> None:
+    """Stop a running keep daemon for *store_path* so it restarts with fresh config."""
+    stop_daemon(store_path, force=True)
 
 
 def _read_env_var(env_path: Path, key: str) -> str | None:
@@ -79,6 +85,26 @@ def _display_path(path: Path) -> str:
         return str(Path("~") / path.resolve().relative_to(Path.home()))
     except Exception:
         return str(path)
+
+
+def _resolve_hermes_store_path(hermes_home: str | Path | None) -> Path | None:
+    """Resolve the active Keep store for a Hermes profile.
+
+    Prefer the profile-local ``.env`` binding over the process environment so
+    one profile cannot silently overwrite another profile's configured store.
+    """
+    env_path: Path | None = None
+    if hermes_home:
+        env_path = Path(hermes_home) / ".env"
+    existing_store = _read_env_var(env_path, "KEEP_STORE_PATH") if env_path else None
+    if existing_store:
+        return Path(existing_store).resolve()
+    env_store = os.environ.get("KEEP_STORE_PATH")
+    if env_store:
+        return Path(env_store).resolve()
+    if hermes_home:
+        return Path(hermes_home, "keep").resolve()
+    return None
 
 
 def _contact_ref(*, platform: str, user_id: str, user_name: str = "") -> str:
@@ -211,19 +237,20 @@ class KeepMemoryProvider:
         if embedding is None:
             raise ValueError(EMBEDDING_MISSING_ERROR)
 
-        # Honour an existing KEEP_STORE_PATH from the .env file (or
-        # environment) so that re-running setup doesn't overwrite a
-        # user-configured path.  Fall back to hermes_home/keep.
-        existing_store = os.environ.get("KEEP_STORE_PATH") or _read_env_var(
-            Path(hermes_home) / ".env", "KEEP_STORE_PATH"
-        )
-        store_path = Path(existing_store).resolve() if existing_store else Path(hermes_home, "keep").resolve()
+        # Prefer the profile-local binding so re-running setup does not
+        # replace a profile store with an inherited shell-level store.
+        store_path = _resolve_hermes_store_path(hermes_home)
+        if store_path is None:
+            store_path = Path(hermes_home, "keep").resolve()
         config = create_default_config(store_path)
         config.embedding = embedding
         if summarization is not None:
             config.summarization = summarization
 
         save_config(config)
+
+        # Stop any running daemon so it picks up the new config on next start
+        _stop_daemon(store_path)
 
         # Persist KEEP_STORE_PATH in .env so the daemon can find this store
         env_path = Path(hermes_home) / ".env"
@@ -251,11 +278,11 @@ class KeepMemoryProvider:
         self._session_id = session_id
         hermes_home = kwargs.get("hermes_home")
         if hermes_home:
-            self._store_path = os.environ.get("KEEP_STORE_PATH") or str(
-                Path(hermes_home) / "keep"
-            )
+            store_path = _resolve_hermes_store_path(hermes_home)
+            self._store_path = str(store_path) if store_path else None
         else:
-            self._store_path = os.environ.get("KEEP_STORE_PATH") or None
+            store_path = _resolve_hermes_store_path(None)
+            self._store_path = str(store_path) if store_path else None
 
         self._session_item_id = self._build_session_item_id(session_id, **kwargs)
         self._session_tags = self._build_session_tags(session_id, **kwargs)
@@ -783,10 +810,10 @@ class KeepMemoryProvider:
     def _current_keep_providers(self):
         try:
             from keep.config import load_config
-            store_path = Path(
-                os.environ.get("KEEP_STORE_PATH")
-                or Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))) / "keep"
-            ).resolve()
+            hermes_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+            store_path = _resolve_hermes_store_path(hermes_home)
+            if store_path is None:
+                return None, None
             config = load_config(store_path)
             embed = config.embedding.name if config.embedding else None
             summ = config.summarization.name if config.summarization else None

@@ -7,6 +7,7 @@ auto-start, health check, and HTTP request with retry.
 import http.client
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -152,6 +153,68 @@ def check_health(port: int) -> bool:
         raise
     except Exception:
         return False
+
+
+def stop_daemon(store_path: Path | str, *, timeout: float = 5.0, force: bool = False) -> bool:
+    """Stop a running daemon for *store_path* via SIGTERM.
+
+    No-op if no daemon is running. Waits up to *timeout* seconds for a
+    graceful shutdown. If *force* is true, escalates to SIGKILL when the
+    process does not exit in time. Returns True once the daemon is gone or
+    no daemon was running; returns False when the process is still alive.
+    """
+    store_path = Path(store_path)
+    pid_file = store_path / "processor.pid"
+    if not pid_file.exists():
+        return True
+    try:
+        pid = int(pid_file.read_text().strip())
+    except (ValueError, OSError):
+        pid_file.unlink(missing_ok=True)
+        return True
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pid_file.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pid_file.unlink(missing_ok=True)
+            return True
+        except OSError:
+            return False
+        time.sleep(0.2)
+
+    if force:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pid_file.unlink(missing_ok=True)
+            return True
+        except OSError:
+            return False
+
+        deadline = time.monotonic() + min(timeout, 2.0)
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pid_file.unlink(missing_ok=True)
+                return True
+            except OSError:
+                return False
+            time.sleep(0.05)
+
+    # Leave the PID file in place while the daemon is still alive so later
+    # callers do not mistake an active daemon for a stale one.
+    return False
 
 
 def start_daemon(store_path: Path) -> None:

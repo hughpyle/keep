@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from keep.setup_wizard import (
+    _run_interactive_setup,
     needs_wizard,
     detect_embedding_choices,
     detect_summarization_choices,
@@ -170,3 +171,42 @@ class TestRunWizardNonInteractive:
             config = run_wizard(tmp_path)
         assert config is not None
         assert (tmp_path / "keep.toml").exists()
+
+
+class TestInteractiveSetup:
+    """Interactive setup behavior around daemon restart."""
+
+    def test_explicit_store_restarts_daemon_for_store_path(self, tmp_path):
+        """Explicit store configs must restart the daemon for the real store."""
+        config_dir = tmp_path / "config"
+        actual_store = tmp_path / "store"
+        config_dir.mkdir()
+        actual_store.mkdir()
+
+        with (
+            patch("keep.setup_wizard.detect_tool_choices", return_value=[]),
+            patch(
+                "keep.setup_wizard.detect_embedding_choices",
+                return_value=[{"name": "Embed", "available": True, "value": ("ollama", {"model": "m"})}],
+            ),
+            patch(
+                "keep.setup_wizard.detect_summarization_choices",
+                return_value=[{"name": "Skip", "available": True, "value": None}],
+            ),
+            patch(
+                "keep.setup_wizard._run_provider_selection",
+                side_effect=[("ollama", {"model": "m"}), None],
+            ),
+            patch("keep.setup_wizard.detect_default_providers", return_value={}),
+            patch("keep.setup_wizard.save_config"),
+            patch("keep.setup_wizard.stop_daemon") as mock_stop,
+        ):
+            config = _run_interactive_setup(
+                config_dir=config_dir,
+                store_path=actual_store,
+                actual_store=actual_store,
+                existing=None,
+            )
+
+        assert config.path == actual_store
+        mock_stop.assert_called_once_with(actual_store, force=True)

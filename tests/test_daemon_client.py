@@ -1,6 +1,7 @@
 """Tests for daemon client discovery and auto-start logic."""
 
 import sys
+import signal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -211,3 +212,58 @@ class TestCheckHealth:
             "body": None,
             "headers": {"Authorization": "Bearer test-token"},
         }
+
+
+class TestStopDaemon:
+    """Daemon stop helper should preserve accurate liveness state."""
+
+    def test_stop_daemon_accepts_string_store_path_and_force_kills(self, tmp_path):
+        """String paths should work, and force mode should remove a stuck daemon."""
+        from keep.daemon_client import stop_daemon
+
+        store = tmp_path / "store"
+        store.mkdir()
+        pid_file = store / "processor.pid"
+        pid_file.write_text("12345")
+        signals = []
+        alive = {"value": True}
+        times = iter([0.0, 0.0, 0.6, 0.6, 0.6])
+
+        def fake_kill(pid, sig):
+            signals.append(sig)
+            if sig == 0:
+                if alive["value"]:
+                    return None
+                raise ProcessLookupError
+            if sig == signal.SIGKILL:
+                alive["value"] = False
+            return None
+
+        with (
+            patch("keep.daemon_client.os.kill", side_effect=fake_kill),
+            patch("keep.daemon_client.time.monotonic", side_effect=lambda: next(times)),
+            patch("keep.daemon_client.time.sleep"),
+        ):
+            assert stop_daemon(str(store), timeout=0.5, force=True) is True
+
+        assert not pid_file.exists()
+        assert signals == [signal.SIGTERM, 0, signal.SIGKILL, 0]
+
+    def test_stop_daemon_keeps_pid_file_if_process_survives(self, tmp_path):
+        """A live daemon must keep its PID file when shutdown times out."""
+        from keep.daemon_client import stop_daemon
+
+        store = tmp_path / "store"
+        store.mkdir()
+        pid_file = store / "processor.pid"
+        pid_file.write_text("12345")
+        times = iter([0.0, 0.0, 0.6])
+
+        with (
+            patch("keep.daemon_client.os.kill", return_value=None),
+            patch("keep.daemon_client.time.monotonic", side_effect=lambda: next(times)),
+            patch("keep.daemon_client.time.sleep"),
+        ):
+            assert stop_daemon(store, timeout=0.5) is False
+
+        assert pid_file.exists()
