@@ -100,8 +100,9 @@ or `tags={"_source": "uri"}` to find indexed documents.
 
 ### `_content_type`
 
-MIME type of the document content. Set by `Keeper.put()` only for URI-based
-documents (the document provider returns it). Not set for inline content.
+MIME type of the document content. Set by `Keeper.put()` for URI-based
+documents (the document provider returns it) and for inline content
+(defaults to `text/markdown`).
 
 ```
 "_content_type": "text/markdown"

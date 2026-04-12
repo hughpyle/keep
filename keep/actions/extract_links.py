@@ -27,10 +27,10 @@ _MD_LINK_RE = re.compile(r'(?<!!)\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)')
 # ![alt](src) or ![alt](src "title")
 _MD_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)')
 
-# Bare URLs (http/https) — used for non-markdown content
+# Bare URLs (http/https) — scanned in all content types
 _URL_RE = re.compile(r'https?://[^\s<>\"\')]+')
 
-# Bare email addresses — used for non-markdown content.
+# Bare email addresses — scanned in all content types.
 _EMAIL_RE = re.compile(
     r'(?<![A-Za-z0-9._%+-])'
     r'([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})'
@@ -44,7 +44,7 @@ _VAULT_MARKERS = (".obsidian", ".logseq", ".git")
 def _parse_links(content: str, *, content_type: str = "text/markdown") -> list[dict[str, str]]:
     """Extract links from content.
 
-    For markdown: extracts wiki-links, markdown links, and images.
+    For markdown: extracts wiki-links, markdown links, images, and bare URLs/emails.
     For other types (HTML, email, etc.): extracts bare URLs and email addresses.
 
     Returns a list of dicts with 'target' and 'style' keys.
@@ -88,18 +88,18 @@ def _parse_links(content: str, *, content_type: str = "text/markdown") -> list[d
             if target not in seen:
                 seen.add(target)
                 links.append({"target": target, "style": "markdown"})
-    else:
-        # Non-markdown: extract bare URLs and bare email addresses.
-        for m in _URL_RE.finditer(content):
-            target = m.group(0).rstrip(".,;:!?)")
-            if target and target not in seen:
-                seen.add(target)
-                links.append({"target": target, "style": "url"})
-        for m in _EMAIL_RE.finditer(content):
-            target = m.group(1).strip().lower()
-            if target and target not in seen:
-                seen.add(target)
-                links.append({"target": target, "style": "email"})
+    # Markdown notes often contain bare URLs in list items or prose.
+    # Scan every text-bearing payload so those references still become edges.
+    for m in _URL_RE.finditer(content):
+        target = m.group(0).rstrip(".,;:!?)")
+        if target and target not in seen:
+            seen.add(target)
+            links.append({"target": target, "style": "url"})
+    for m in _EMAIL_RE.finditer(content):
+        target = m.group(1).strip().lower()
+        if target and target not in seen:
+            seen.add(target)
+            links.append({"target": target, "style": "email"})
 
     return links
 
@@ -258,8 +258,8 @@ def _resolve_internal_link(
 class ExtractLinks:
     """Extract links from content and create reference edges.
 
-    For markdown: wiki-links, markdown links, and images.
-    For HTML/email/other: bare URLs (http/https).
+    For markdown: wiki-links, markdown links, images, and bare URLs/emails.
+    For HTML/email/other: bare URLs and email addresses.
     """
 
     def run(self, params: dict[str, Any], context: Any) -> dict[str, Any]:

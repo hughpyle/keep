@@ -457,6 +457,7 @@ class TestAfterWriteDispatch:
         assert ctx["has_content"] is True
         assert ctx["has_uri"] is False
         assert ctx["has_media_content"] is False
+        assert ctx["content_type"] == "text/markdown"
         kp.close()
 
     def test_system_note_enqueues_nothing(self, mock_providers, tmp_path):

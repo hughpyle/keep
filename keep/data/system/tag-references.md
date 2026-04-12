@@ -6,7 +6,7 @@ tags:
 ---
 # Tag: `references` — Document Links
 
-The `references` tag links a document to items it references via explicit links (wiki-style `[[links]]` or markdown-style `[text](url)`) and bare URLs or email addresses in plain text. It is populated automatically by the `extract_links` action when enabled as an after-write fragment.
+The `references` tag links a document to items it references via explicit links (wiki-style `[[links]]` or markdown-style `[text](url)`) and bare URLs or email addresses in text-bearing content, including markdown and plain text. It is populated automatically by the `extract_links` action when enabled as an after-write fragment.
 
 The `_inverse` declaration means this tag creates a navigable relationship edge. If document A has `references: B`, then `get B` will show A under `referenced_by:`.
 

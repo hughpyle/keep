@@ -3334,10 +3334,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             else:
                 id = normalize_id(id)
 
+            inline_content_type = "text/markdown"
             result = self._upsert(
                 id, content,
                 tags=tags, summary=summary,
-                system_tags={"_source": "inline"},
+                system_tags={
+                    "_source": "inline",
+                    "_content_type": inline_content_type,
+                },
                 created_at=created_at,
                 force=force,
                 queue_summarize=queue_background_tasks,
@@ -3350,7 +3354,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                         "content": str(content or ""),
                         "uri": "",
                         "ocr_pages": [],
-                        "content_type": "",
+                        "content_type": inline_content_type,
                     },
                 )
             # Post-write background tasks are driven by the after-write
@@ -3361,6 +3365,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 self._dispatch_after_write_flow(
                     item_id=result.id,
                     content=str(content or ""),
+                    content_type=inline_content_type,
                     tags=tags,
                     summary=summary,
                 )

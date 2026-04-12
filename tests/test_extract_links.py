@@ -49,6 +49,18 @@ class TestParseLinks:
         assert len(links) == 1
         assert links[0]["target"] == "https://example.com"
 
+    def test_markdown_bare_url(self):
+        links = _parse_links("See https://example.com/path?x=1 for details.")
+        assert links == [
+            {"target": "https://example.com/path?x=1", "style": "url"},
+        ]
+
+    def test_markdown_bare_email(self):
+        links = _parse_links("Contact Travel@Example.com for support.")
+        assert links == [
+            {"target": "travel@example.com", "style": "email"},
+        ]
+
     def test_image_captured(self):
         links = _parse_links("![alt](image.png)")
         assert len(links) == 1
@@ -243,6 +255,17 @@ class TestExtractLinksAction:
         put_muts = [m for m in result["mutations"] if m["op"] == "stub_item"]
         assert len(put_muts) == 1
         assert put_muts[0]["id"] == "https://example.com"
+
+    def test_markdown_bare_url_creates_reference_edge(self):
+        source = _make_item("a.md", "See https://example.com/path?x=1 for details.")
+        ctx = _make_context({"a.md": source}, item_id="a.md")
+        ctx.item_content = source.content
+
+        result = ExtractLinks().run({"item_id": "a.md"}, ctx)
+
+        assert result["resolved"] == ["https://example.com/path?x=1"]
+        tag_mut = [m for m in result["mutations"] if m["op"] == "set_tags"]
+        assert tag_mut[0]["tags"]["references"] == ["https://example.com/path?x=1"]
 
     def test_doc_links_string_form(self):
         """Legacy string-form doc_links still merge as bare URLs."""
