@@ -251,10 +251,10 @@ class TestAfterWriteStateDoc:
         actions = self._eval(after_write_doc, content_type="text/markdown")
         assert "extract_links" in actions
 
-    def test_non_markdown_skips_extract_links(self, after_write_doc):
-        """Non-markdown content does NOT fire extract_links."""
+    def test_plain_text_fires_extract_links(self, after_write_doc):
+        """Plain text content fires extract_links for bare URLs and emails."""
         actions = self._eval(after_write_doc, content_type="text/plain")
-        assert "extract_links" not in actions
+        assert "extract_links" in actions
 
     def test_pdf_extract_links_receives_doc_links(self, after_write_doc):
         """PDF after-write passes provider-extracted doc_links into extract_links."""

@@ -85,6 +85,15 @@ class TestParseLinks:
             {"target": "travel@acme-corp.example.com", "style": "email"},
         ]
 
+    def test_plain_text_bare_url(self):
+        links = _parse_links(
+            "See https://example.com/path?x=1 for details.",
+            content_type="text/plain",
+        )
+        assert links == [
+            {"target": "https://example.com/path?x=1", "style": "url"},
+        ]
+
     def test_empty_content(self):
         assert _parse_links("") == []
         assert _parse_links("No links here.") == []
