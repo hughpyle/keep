@@ -25,6 +25,7 @@ import re
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -51,7 +52,7 @@ from .markdown_mirrors import (
 )
 from .markdown_export import _get_export_bundle
 from . import markdown_export as _markdown_export
-from .watches import add_watch, remove_watch
+from .watches import add_watch, enqueue_git_ingest_for_directory, remove_watch
 
 
 def _item_to_dict(item) -> dict:
@@ -461,13 +462,14 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         body = self._read_body()
         watch = body.get("watch", False)
         unwatch = body.get("unwatch", False)
+        enqueue_git = body.get("enqueue_git", False)
         watch_kind = body.get("watch_kind", "file")
 
         # Directory watches do not correspond to a single document: the CLI
         # walked the directory and posted each child file individually before
         # this request. Skip flow_put_item entirely and go straight to watch
         # registration, otherwise the put would blow up on "Not a file".
-        if (watch or unwatch) and watch_kind == "directory":
+        if (watch or unwatch or enqueue_git) and watch_kind == "directory":
             # Directory watch entries store a bare filesystem path, not a URI.
             from .types import file_uri_to_path
             raw_uri = body.get("uri") or ""
@@ -488,6 +490,15 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                     max_watches=self.keeper.config.max_watches,
                 )
                 resp["watch"] = {"source": entry.source, "interval": entry.interval}
+            if enqueue_git and not unwatch:
+                roots = enqueue_git_ingest_for_directory(
+                    self.keeper,
+                    Path(source),
+                    recurse=bool(body.get("recurse", False)),
+                    exclude=body.get("exclude") or [],
+                    extra_exclude=self.keeper._load_ignore_patterns(),
+                )
+                resp["git"] = {"queued": len(roots)}
             self._json(200, resp)
             return
 

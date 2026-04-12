@@ -705,22 +705,54 @@ def _reput_source(keeper: Keeper, entry: WatchEntry) -> None:
                 keeper.put(uri=file_uri, tags=tags)
             except Exception as e:
                 logger.warning("Watch re-put failed for %s: %s", file_uri, e)
-        # Git changelog: enqueue ingest for repos in the tree
-        from .git_ingest import discover_git_roots
-        git_roots = discover_git_roots(files)
-        for root_str in git_roots:
-            try:
-                keeper._get_work_queue().enqueue(
-                    "ingest_git",
-                    {"item_id": f"file://{root_str}", "directory": root_str},
-                    supersede_key=f"git:{root_str}",
-                    priority=1,
-                )
-            except Exception as e:
-                logger.warning("Git ingest enqueue failed for %s: %s", root_str, e)
+        enqueue_git_ingest_for_files(keeper, files)
 
     elif entry.kind == "url":
         keeper.put(uri=entry.source, tags=tags, force=True)
+
+
+def enqueue_git_ingest_for_files(keeper: Keeper, files: list[Path]) -> list[str]:
+    """Enqueue incremental git-history ingest for any repos containing *files*.
+
+    The queue work is idempotent via ``supersede_key`` so callers can safely
+    invoke this after the initial directory import and on later watch refreshes.
+    """
+    if not files:
+        return []
+
+    from .git_ingest import discover_git_roots
+
+    queued_roots: list[str] = []
+    git_roots = sorted(discover_git_roots(files))
+    for root_str in git_roots:
+        try:
+            keeper._get_work_queue().enqueue(
+                "ingest_git",
+                {"item_id": f"file://{root_str}", "directory": root_str},
+                supersede_key=f"git:{root_str}",
+                priority=1,
+            )
+            queued_roots.append(root_str)
+        except Exception as e:
+            logger.warning("Git ingest enqueue failed for %s: %s", root_str, e)
+    return queued_roots
+
+
+def enqueue_git_ingest_for_directory(
+    keeper: Keeper,
+    directory: Path,
+    *,
+    recurse: bool,
+    exclude: list[str] | None = None,
+    extra_exclude: list[str] | None = None,
+) -> list[str]:
+    """Walk a directory and queue git ingest for any repos in the tree."""
+    from .ignore import merge_excludes
+    from .utils import _list_directory_files
+
+    combined = merge_excludes(extra_exclude or [], exclude or []) or None
+    files = _list_directory_files(directory, recurse=recurse, exclude=combined)
+    return enqueue_git_ingest_for_files(keeper, files)
 
 
 # ---------------------------------------------------------------------------

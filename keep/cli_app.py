@@ -899,15 +899,21 @@ def _put_directory(
     for e in errors:
         typer.echo(f"  error: {e}", err=True)
 
+    # Queue initial git-history ingest for any repos under the imported tree.
+    # This is separate from file indexing because commit items are background
+    # work owned by the daemon, not inline CLI work.
+    dir_body: dict = {
+        "uri": f"file://{resolved_path}",
+        "tags": parsed_tags or None,
+        "force": None,
+        "watch_kind": "directory",
+    }
+
     # Watch management
     if watch or unwatch:
-        watch_body: dict = {
-            "uri": f"file://{resolved_path}",
-            "tags": parsed_tags or None,
-            "force": None,
-        }
-        watch_body["watch_kind"] = "directory"
+        watch_body = dict(dir_body)
         if watch:
+            watch_body["enqueue_git"] = True
             watch_body["watch"] = True
             watch_body["recurse"] = recurse
             watch_body["exclude"] = exclude
@@ -918,6 +924,8 @@ def _put_directory(
         try:
             status, data = _daemon_request("POST", port, "/v1/notes", watch_body)
             if status == 200:
+                if data.get("git", {}).get("queued"):
+                    typer.echo("git: changelog ingest queued", err=True)
                 if watch and data.get("watch"):
                     typer.echo(
                         f"watching {resolved_path}/ "
@@ -938,6 +946,27 @@ def _put_directory(
         except Exception as e:
             typer.echo(
                 f"Warning: watch registration failed: {e}",
+                err=True,
+            )
+    else:
+        git_body = dict(dir_body)
+        git_body["enqueue_git"] = True
+        git_body["recurse"] = recurse
+        git_body["exclude"] = exclude
+        try:
+            status, data = _daemon_request("POST", port, "/v1/notes", git_body)
+            if status == 200:
+                if data.get("git", {}).get("queued"):
+                    typer.echo("git: changelog ingest queued", err=True)
+            else:
+                err = data.get("error") if isinstance(data, dict) else str(data)
+                typer.echo(
+                    f"Warning: git ingest enqueue failed: {err or 'unknown error'}",
+                    err=True,
+                )
+        except Exception as e:
+            typer.echo(
+                f"Warning: git ingest enqueue failed: {e}",
                 err=True,
             )
 

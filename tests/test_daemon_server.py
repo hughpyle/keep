@@ -5,7 +5,9 @@ Tests both raw HTTP and RemoteKeeper round-trip.
 """
 
 import json
+import os
 import socket
+import subprocess
 from unittest.mock import patch
 
 import httpx
@@ -461,6 +463,35 @@ def test_put_directory_watch_does_not_create_document(daemon, http, tmp_path):
     # No document with the directory URI should exist.
     assert kp.get(f"file://{d}") is None
     assert len(list_watches(kp)) == 1
+
+
+def test_put_directory_enqueue_git_queues_work(daemon, http, tmp_path):
+    """Directory control requests can queue initial git-history ingest."""
+    server, kp, port = daemon
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("hello\n")
+
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True, env=env)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True, env=env)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo, check=True, capture_output=True, env=env)
+
+    r = http.post("/v1/notes", json={
+        "uri": f"file://{repo}",
+        "watch_kind": "directory",
+        "enqueue_git": True,
+        "recurse": True,
+    })
+    assert r.status_code == 200, r.text
+    assert r.json().get("git", {}).get("queued") == 1
+    assert kp._get_work_queue().count_by_kind().get("ingest_git") == 1
 
 
 def test_put_directory_unwatch(daemon, http, tmp_path):

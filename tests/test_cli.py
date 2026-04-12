@@ -925,7 +925,7 @@ class TestPutDirectory:
         assert "no eligible files" in result.stderr
 
     def test_put_directory_watch_sends_directory_kind(self, tmp_path, monkeypatch):
-        """`keep put <dir> --watch` posts watch_kind=directory to the daemon."""
+        """`keep put <dir> --watch` posts watch_kind=directory and enqueue_git."""
         from keep import cli_app
 
         (tmp_path / "a.txt").write_text("hello")
@@ -950,6 +950,38 @@ class TestPutDirectory:
         body = watch_calls[0][2]
         assert body["watch"] is True
         assert body["watch_kind"] == "directory"
+        assert body["enqueue_git"] is True
+
+    def test_put_directory_enqueues_git_ingest_without_watch(self, tmp_path, monkeypatch):
+        """Plain directory imports still request initial git-history ingest."""
+        from keep import cli_app
+
+        (tmp_path / "a.txt").write_text("hello")
+        captured: list[tuple[str, str, dict | None]] = []
+
+        def fake_request(method, port, path, body=None):
+            captured.append((method, path, body))
+            if method == "GET":
+                return 404, {}
+            return 200, {"id": body.get("uri", ""), "git": {"queued": 0}}
+
+        monkeypatch.setattr(cli_app, "_daemon_request", fake_request)
+        cli_app._put_directory(
+            port=0, resolved_path=tmp_path, parsed_tags={},
+            recurse=True, exclude=None,
+            watch=False, unwatch=False, interval=None,
+            force=False, json_output=False,
+        )
+
+        git_calls = [
+            c for c in captured
+            if c[1] == "/v1/notes" and c[2] and c[2].get("enqueue_git")
+        ]
+        assert len(git_calls) == 1
+        body = git_calls[0][2]
+        assert body["watch_kind"] == "directory"
+        assert body["enqueue_git"] is True
+        assert body["recurse"] is True
 
     def test_put_directory_unwatch_sends_directory_kind(self, tmp_path, monkeypatch):
         """Unwatching a directory must post watch_kind=directory.
