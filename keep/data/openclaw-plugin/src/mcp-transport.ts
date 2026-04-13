@@ -73,6 +73,36 @@ export type KeepPromptParams = {
   token_budget?: number;
 };
 
+export type KeepMcpLaunch = {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+};
+
+const FORWARDED_ENV_KEYS = new Set([
+  "ANTHROPIC_API_KEY",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_CLOUD_PROJECT",
+  "HERMES_HOME",
+  "KEEP_CONFIG",
+  "KEEP_EMBED_PROBE",
+  "KEEP_LOCAL_ONLY",
+  "KEEP_STORE_PATH",
+  "KEEP_TRACE",
+  "KEEP_VERBOSE",
+  "KEEPNOTES_API_KEY",
+  "KEEPNOTES_API_URL",
+  "KEEPNOTES_PROJECT",
+  "MISTRAL_API_KEY",
+  "OLLAMA_HOST",
+  "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "VOYAGE_API_KEY",
+]);
+
 // ---------------------------------------------------------------------------
 // Timeout helper
 // ---------------------------------------------------------------------------
@@ -88,6 +118,30 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       (err) => { clearTimeout(timer); reject(err); },
     );
   });
+}
+
+export function buildKeepMcpLaunch(
+  keepCommand: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): KeepMcpLaunch {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (typeof value !== "string" || value.trim() === "") continue;
+    if (key.startsWith("KEEP_") || FORWARDED_ENV_KEYS.has(key)) {
+      env[key] = value;
+    }
+  }
+
+  const args = ["mcp"];
+  const storePath = (baseEnv.KEEP_STORE_PATH || "").trim();
+  if (storePath) {
+    // Pass the store explicitly because many MCP hosts only inherit a
+    // minimal safe environment into stdio children.
+    args.unshift(storePath);
+    args.unshift("--store");
+  }
+
+  return { command: keepCommand, args, env };
 }
 
 // ---------------------------------------------------------------------------
@@ -136,12 +190,14 @@ export class KeepMcpTransport {
       await this.disconnect();
     }
 
-    this.logger.info("Spawning keep mcp process");
+    const launch = buildKeepMcpLaunch(this.keepCommand);
+    this.logger.info(
+      launch.args[0] === "--store"
+        ? `Spawning keep mcp process (store=${launch.args[1]})`
+        : "Spawning keep mcp process",
+    );
 
-    this.transport = new StdioClientTransport({
-      command: this.keepCommand,
-      args: ["mcp"],
-    });
+    this.transport = new StdioClientTransport(launch);
 
     this.client = new Client(
       { name: "keep-openclaw-plugin", version: "0.136.8" },

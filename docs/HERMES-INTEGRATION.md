@@ -70,6 +70,12 @@ keep get now
 keep flow stats
 ```
 
+When configuring external MCP hosts such as Codex or VS Code against the Hermes
+store, first set `KEEP_STORE_PATH` to the Hermes store and then bake that value
+into the launched command, for example `keep --store "$KEEP_STORE_PATH" mcp`.
+Many MCP hosts do not inherit arbitrary shell environment variables into stdio
+child processes.
+
 ## Architecture
 
 - **In-process Keeper** handles reads (search, get, prompt rendering) and writes directly — no RPC overhead

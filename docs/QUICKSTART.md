@@ -245,12 +245,16 @@ On first use, `keep` detects coding tools and installs hooks into their configur
 | Tool | What happens |
 |------|-------------|
 | **Claude Code** | Plugin: `/plugin marketplace add https://github.com/keepnotes-ai/keep.git` then `/plugin install keep@keepnotes-ai` |
-| **VS Code Copilot** | MCP: `code --add-mcp '{"name":"keep","command":"keep","args":["mcp"]}'` |
-| **Kiro** | Practice prompt + agent hooks. MCP: `kiro-cli mcp add --name keep --scope global -- keep mcp` |
-| **OpenAI Codex** | Practice prompt in `AGENTS.md`. MCP: `codex mcp add keep -- keep mcp` |
+| **VS Code Copilot** | MCP: `export KEEP_STORE_PATH=...` then `code --add-mcp "{\"name\":\"keep\",\"command\":\"keep\",\"args\":[\"--store\",\"$KEEP_STORE_PATH\",\"mcp\"]}"` |
+| **Kiro** | Practice prompt + agent hooks. MCP: `export KEEP_STORE_PATH=...` then `kiro-cli mcp add --name keep --scope global -- keep --store "$KEEP_STORE_PATH" mcp` |
+| **OpenAI Codex** | Practice prompt in `AGENTS.md`. MCP: `export KEEP_STORE_PATH=...` then `codex mcp add keep -- keep --store "$KEEP_STORE_PATH" mcp` |
 | **OpenClaw** | Practice prompt + [plugin](OPENCLAW-INTEGRATION.md) |
 
 Hooks inject `keep now` context at key moments (session start, prompt submit) so the agent always has current intentions and relevant context.
+
+Manual MCP setup should use `KEEP_STORE_PATH` as the source of truth and pass
+that resolved value via `--store`; see [KEEP-MCP.md](KEEP-MCP.md) for the full
+launcher patterns.
 
 Run `keep config` to see integration status.
 

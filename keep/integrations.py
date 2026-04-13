@@ -114,7 +114,7 @@ TOOL_CONFIGS = {
     "codex": ".codex",
     "kiro": ".kiro",
     "openclaw": ".openclaw",
-    "github_copilot": ".config/github-copilot",
+    "github_copilot": ".copilot",
 }
 
 
@@ -446,12 +446,15 @@ def install_openclaw(config_dir: Path) -> list[str]:
 def install_github_copilot(config_dir: Path) -> list[str]:
     """Install MCP server config for GitHub Copilot CLI.
 
-    Adds/updates the keep entry in ~/.config/github-copilot/mcp.json.
+    Adds/updates the keep entry in ~/.copilot/mcp-config.json.
     Returns list of actions taken.
     """
+    from .daemon_client import resolve_store_path
+
     actions = []
 
-    mcp_json = config_dir / "mcp.json"
+    # Current Copilot CLI uses ~/.copilot/mcp-config.json for MCP servers.
+    mcp_json = config_dir / "mcp-config.json"
     data: dict[str, Any] = {}
     if mcp_json.exists():
         try:
@@ -464,7 +467,9 @@ def install_github_copilot(config_dir: Path) -> list[str]:
     keep_entry = {
         "type": "local",
         "command": "keep",
-        "args": ["mcp"],
+        # Bake in the resolved store because MCP hosts often launch stdio
+        # servers with a scrubbed environment.
+        "args": ["--store", str(resolve_store_path()), "mcp"],
         "tools": ["*"],
     }
     if servers.get("keep") == keep_entry:

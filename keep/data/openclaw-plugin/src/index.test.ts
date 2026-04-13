@@ -7,6 +7,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { buildKeepMcpLaunch } from "./mcp-transport.js";
 
 // ---------------------------------------------------------------------------
 // We can't import from the plugin directly (it calls execFileSync at module
@@ -213,6 +214,33 @@ describe("estimateTokens", () => {
 
   it("rounds up", () => {
     assert.equal(estimateTokens("hi"), 1);
+  });
+});
+
+describe("buildKeepMcpLaunch", () => {
+  it("passes the store path explicitly when KEEP_STORE_PATH is set", () => {
+    const launch = buildKeepMcpLaunch("keep", {
+      KEEP_STORE_PATH: "/tmp/hermes-keep",
+      KEEP_EMBED_PROBE: "1",
+      OLLAMA_HOST: "http://127.0.0.1:11434",
+      UNRELATED_SECRET: "ignore-me",
+    });
+
+    assert.equal(launch.command, "keep");
+    assert.deepEqual(launch.args, ["--store", "/tmp/hermes-keep", "mcp"]);
+    assert.equal(launch.env?.KEEP_STORE_PATH, "/tmp/hermes-keep");
+    assert.equal(launch.env?.KEEP_EMBED_PROBE, "1");
+    assert.equal(launch.env?.OLLAMA_HOST, "http://127.0.0.1:11434");
+    assert.equal(launch.env?.UNRELATED_SECRET, undefined);
+  });
+
+  it("uses the default mcp args when no explicit store is configured", () => {
+    const launch = buildKeepMcpLaunch("keep", {
+      OPENAI_API_KEY: "test-key",
+    });
+
+    assert.deepEqual(launch.args, ["mcp"]);
+    assert.equal(launch.env?.OPENAI_API_KEY, "test-key");
   });
 });
 

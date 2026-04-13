@@ -4,7 +4,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from keep.config import StoreConfig, create_default_config, save_config
-from keep.integrations import PROTOCOL_BLOCK_MARKER, check_and_install, install_codex
+from keep.integrations import (
+    PROTOCOL_BLOCK_MARKER,
+    check_and_install,
+    install_codex,
+    install_github_copilot,
+)
 
 
 def test_install_codex_writes_global_codex_agents_file(tmp_path):
@@ -45,3 +50,29 @@ def test_get_keeper_does_not_auto_install_integrations(mock_providers, tmp_path,
         assert kp is not None
     finally:
         kp.close()
+
+
+def test_install_github_copilot_bakes_in_resolved_store_path(tmp_path, monkeypatch):
+    copilot_dir = tmp_path / ".copilot"
+    expected_store = str(Path("/tmp/hermes-store").resolve())
+    monkeypatch.setenv("KEEP_STORE_PATH", "/tmp/hermes-store")
+
+    actions = install_github_copilot(copilot_dir)
+
+    assert actions == ["MCP server"]
+    mcp_json = copilot_dir / "mcp-config.json"
+    assert mcp_json.exists()
+    content = mcp_json.read_text(encoding="utf-8")
+    assert '"command": "keep"' in content
+    assert '"args": [' in content
+    assert '"--store"' in content
+    assert f'"{expected_store}"' in content
+    assert '"mcp"' in content
+
+
+def test_install_github_copilot_is_idempotent_when_entry_is_current(tmp_path, monkeypatch):
+    copilot_dir = tmp_path / ".copilot"
+    monkeypatch.setenv("KEEP_STORE_PATH", "/tmp/hermes-store")
+
+    assert install_github_copilot(copilot_dir) == ["MCP server"]
+    assert install_github_copilot(copilot_dir) == []

@@ -7,9 +7,14 @@ Provides MCP access to keep's reflective memory, using a local interface (stdio)
 ## Quick Start
 
 ```bash
-keep mcp                    # Start stdio server
-keep --store ~/mystore mcp  # Custom store path
+export KEEP_STORE_PATH=~/.keep
+keep --store "$KEEP_STORE_PATH" mcp
 ```
+
+Many MCP hosts launch stdio servers with a scrubbed environment. If you use a
+non-default store, prefer an explicit `--store` command or a host-specific
+`KEEP_STORE_PATH` setting instead of assuming your shell environment will be
+inherited.
 
 ### Claude Desktop
 
@@ -31,28 +36,63 @@ The first command registers the marketplace, the second installs the plugin (MCP
 Alternatively, add just the MCP server manually:
 
 ```bash
-claude mcp add --scope user keep -- keep mcp
+claude mcp add --scope user keep -- keep --store "$KEEP_STORE_PATH" mcp
 ```
 
 ### Kiro
 
 ```bash
-kiro-cli mcp add --name keep --scope global -- keep mcp
+kiro-cli mcp add --name keep --scope global -- keep --store "$KEEP_STORE_PATH" mcp
 ```
 
 ### Codex
 
 ```bash
-codex mcp add keep -- keep mcp
+codex mcp add keep -- keep --store "$KEEP_STORE_PATH" mcp
+codex mcp add keep --env KEEP_STORE_PATH="$KEEP_STORE_PATH" -- keep mcp
 ```
 
 ### VS Code
 
 ```bash
-code --add-mcp '{"name":"keep","command":"keep","args":["mcp"]}'
+code --add-mcp "{\"name\":\"keep\",\"command\":\"keep\",\"args\":[\"--store\",\"$KEEP_STORE_PATH\",\"mcp\"]}"
 ```
 
-The server respects the `KEEP_STORE_PATH` environment variable for store location.
+The server respects the `KEEP_STORE_PATH` environment variable for store
+location, but explicit `--store` is more reliable when the MCP host sanitizes
+child-process environments.
+
+## Maintainer Checks
+
+For host integrations, `keep mcp` itself should stay boring: one stdio server,
+same tools everywhere. What varies is the host-native attachment point.
+
+Current native MCP attachment targets:
+
+- `Codex` — `~/.codex/config.toml` with `[mcp_servers.keep]`
+- `Claude Code` — `claude mcp add --scope user keep -- keep --store "$KEEP_STORE_PATH" mcp`
+- `Kiro` — `kiro-cli mcp add --name keep --scope global -- keep --store "$KEEP_STORE_PATH" mcp`
+- `GitHub Copilot CLI` — `~/.copilot/mcp-config.json`
+- `VS Code` — workspace or user `mcp.json`
+- `OpenClaw` — installed `keep` plugin bundle, including the bundled `.mcp.json`
+
+Regular tests should cover only:
+
+- `keep mcp` server behavior
+- installer output shape
+
+Occasional real-host checks should stay explicit and opt-in because they depend
+on external CLIs, real auth, and host-side behavior. Use:
+
+```bash
+uv run python scripts/check_host_mcp.py --host codex --host claude --run
+uv run python scripts/check_host_mcp.py --host kiro --run
+uv run python scripts/check_host_mcp.py --host github_copilot
+```
+
+The script does not join the normal `pytest` run. It validates host-native
+config locations and, when `--run` is supplied, runs the best available
+host-side smoke command for each selected tool.
 
 ## Tools
 

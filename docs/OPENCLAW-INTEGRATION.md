@@ -300,9 +300,11 @@ OpenClaw Gateway (Node.js)
 
 The MCP transport is a `Symbol.for` global singleton that survives gateway
 soft restarts (SIGUSR1). It spawns `keep mcp` as a persistent stdio process
-at gateway start. If the MCP process exits between turns, the plugin
-auto-reconnects on the next operation. All operations have per-type timeouts
-(8s for assemble/prompts, 15s for writes, 30s for queries).
+at gateway start, passing the active keep store explicitly so OpenClaw's safe
+stdio environment filtering cannot silently fall back to `~/.keep`. If the MCP
+process exits between turns, the plugin auto-reconnects on the next operation.
+All operations have per-type timeouts (8s for assemble/prompts, 15s for
+writes, 30s for queries).
 
 ---
 
@@ -336,7 +338,7 @@ openclaw keep doctor           # Run health check
 The plugin auto-reconnects MCP on each operation. If the MCP process keeps
 dying, check `keep mcp` stderr output or run it manually:
 ```bash
-keep mcp                       # Should start and wait on stdin
+keep --store "$KEEP_STORE_PATH" mcp   # Should start and wait on stdin
 ```
 
 **Context engine not activating:**
