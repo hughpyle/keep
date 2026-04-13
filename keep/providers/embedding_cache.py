@@ -10,6 +10,8 @@ import logging
 import sqlite3
 import struct
 import threading
+import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -20,6 +22,11 @@ from ..tracing import get_tracer
 from .base import EmbedTask, EmbeddingProvider
 
 logger = logging.getLogger(__name__)
+
+SUMMARY_INTERVAL_S = 60.0
+SUMMARY_TEXT_THRESHOLD = 100
+WORKING_SET_SHORT_WINDOW_S = 5 * 60.0
+WORKING_SET_LONG_WINDOW_S = 30 * 60.0
 
 
 class EmbeddingCache:
@@ -133,11 +140,13 @@ class EmbeddingCache:
         model_name: str,
         content: str,
         embedding: list[float]
-    ) -> None:
+    ) -> int:
         """Cache an embedding.
 
         Also flushes deferred last_accessed updates from get() hits.
         Evicts oldest entries if cache exceeds max_entries.
+
+        Returns number of entries evicted during this write.
         """
         content_hash = self._hash_key(model_name, content)
         now = datetime.now(timezone.utc).isoformat()
@@ -145,7 +154,7 @@ class EmbeddingCache:
 
         with self._lock:
             if self._conn is None:
-                return
+                return 0
             self._flush_touches()
             self._conn.execute("""
                 INSERT OR REPLACE INTO embedding_cache
@@ -155,13 +164,16 @@ class EmbeddingCache:
             self._conn.commit()
 
             # Evict old entries if needed
-            self._maybe_evict()
+            return self._maybe_evict()
     
-    def _maybe_evict(self) -> None:
-        """Evict oldest entries if cache exceeds max size."""
+    def _maybe_evict(self) -> int:
+        """Evict oldest entries if cache exceeds max size.
+
+        Returns number of entries evicted.
+        """
         with self._lock:
             if self._conn is None:
-                return
+                return 0
             cursor = self._conn.execute("SELECT COUNT(*) FROM embedding_cache")
             count = cursor.fetchone()[0]
 
@@ -177,6 +189,8 @@ class EmbeddingCache:
                     )
                 """, (evict_count,))
                 self._conn.commit()
+                return evict_count
+            return 0
     
     def stats(self) -> dict:
         """Get cache statistics."""
@@ -199,6 +213,10 @@ class EmbeddingCache:
                 "max_entries": self._max_entries,
                 "cache_path": str(self._cache_path),
             }
+            try:
+                result["db_bytes"] = self._cache_path.stat().st_size
+            except OSError:
+                result["db_bytes"] = 0
             cursor = self._conn.execute(
                 "SELECT COUNT(*) FROM embedding_cache WHERE typeof(embedding) = 'text'"
             )
@@ -278,13 +296,31 @@ class CachingEmbeddingProvider:
         self,
         provider: EmbeddingProvider,
         cache_path: Path,
-        max_entries: int = 50000
+        max_entries: int = 50000,
+        provider_name: str | None = None,
     ):
         self._provider = provider
         self._cache = EmbeddingCache(cache_path, max_entries)
+        self._provider_name = provider_name or type(provider).__name__.lower()
         self._hits = 0
         self._misses = 0
+        self._requests = 0
+        self._batch_requests = 0
+        self._texts = 0
+        self._inserts = 0
+        self._evictions = 0
         self._stats_lock = threading.Lock()
+        self._started_at = time.monotonic()
+        self._last_summary_at = self._started_at
+        self._last_summary_texts = 0
+        # Track recent requested keys in memory so we can estimate the hot
+        # working set without persisting any content-derived identifiers.
+        self._recent_keys: deque[tuple[float, str]] = deque()
+
+    @property
+    def provider_name(self) -> str:
+        """Configured provider family name."""
+        return self._provider_name
     
     @property
     def model_name(self) -> str:
@@ -300,6 +336,146 @@ class CachingEmbeddingProvider:
         """Cache key model name, scoped by task so document/query don't collide."""
         return f"{self.model_name}:{task.value}"
 
+    def _record_request(self, cache_model: str, texts: list[str], *, batch: bool) -> None:
+        """Track request volume and recent key activity for cache summaries."""
+        now = time.monotonic()
+        with self._stats_lock:
+            self._requests += 1
+            if batch:
+                self._batch_requests += 1
+            self._texts += len(texts)
+            for text in texts:
+                key = self._cache._hash_key(cache_model, text)
+                self._recent_keys.append((now, key))
+            self._prune_recent_keys_locked(now)
+
+    def _prune_recent_keys_locked(self, now: float) -> None:
+        """Drop working-set observations older than the long summary window."""
+        cutoff = now - WORKING_SET_LONG_WINDOW_S
+        while self._recent_keys and self._recent_keys[0][0] < cutoff:
+            self._recent_keys.popleft()
+
+    def _working_set_sizes_locked(self, now: float) -> tuple[int, int]:
+        """Return distinct keys touched in the recent 5m and 30m windows."""
+        self._prune_recent_keys_locked(now)
+        short_cutoff = now - WORKING_SET_SHORT_WINDOW_S
+        short_keys: set[str] = set()
+        long_keys: set[str] = set()
+        for seen_at, key in self._recent_keys:
+            long_keys.add(key)
+            if seen_at >= short_cutoff:
+                short_keys.add(key)
+        return len(short_keys), len(long_keys)
+
+    def snapshot(self) -> dict:
+        """Return a structured summary for investigation and status output."""
+        cache_stats = self._cache.stats()
+        now = time.monotonic()
+        with self._stats_lock:
+            hits = self._hits
+            misses = self._misses
+            requests = self._requests
+            batch_requests = self._batch_requests
+            texts = self._texts
+            inserts = self._inserts
+            evictions = self._evictions
+            working_set_5m, working_set_30m = self._working_set_sizes_locked(now)
+
+        total = hits + misses
+        hit_rate = hits / total if total > 0 else 0.0
+        return {
+            **cache_stats,
+            "provider": self.provider_name,
+            "model": self.model_name,
+            "requests": requests,
+            "batch_requests": batch_requests,
+            "texts": texts,
+            "hits": hits,
+            "misses": misses,
+            "hit_rate": f"{hit_rate:.1%}",
+            "hit_rate_value": hit_rate,
+            "inserts": inserts,
+            "evictions": evictions,
+            "uptime_s": round(now - self._started_at, 1),
+            "working_set_5m": working_set_5m,
+            "working_set_30m": working_set_30m,
+        }
+
+    def log_summary(self, reason: str, *, force: bool = False) -> None:
+        """Emit a bounded info log with the cache working-set summary."""
+        now = time.monotonic()
+        with self._stats_lock:
+            texts = self._texts
+            if not force:
+                if texts == 0:
+                    return
+                enough_time = (now - self._last_summary_at) >= SUMMARY_INTERVAL_S
+                enough_texts = (texts - self._last_summary_texts) >= SUMMARY_TEXT_THRESHOLD
+                if not (enough_time or enough_texts):
+                    return
+            self._last_summary_at = now
+            self._last_summary_texts = texts
+
+        snapshot = self.snapshot()
+
+        logger.info(
+            "Embedding cache summary "
+            "reason=%s provider=%s model=%s instance_requests=%d "
+            "instance_batch_requests=%d instance_texts=%d instance_hits=%d "
+            "instance_misses=%d hit_rate=%s instance_inserts=%d "
+            "instance_evictions=%d working_set_5m=%d working_set_30m=%d "
+            "db_entries=%d cache_capacity=%d db_models=%d db_bytes=%d "
+            "uptime_s=%.1f",
+            reason,
+            snapshot["provider"],
+            snapshot["model"],
+            snapshot["requests"],
+            snapshot["batch_requests"],
+            snapshot["texts"],
+            snapshot["hits"],
+            snapshot["misses"],
+            snapshot["hit_rate"],
+            snapshot["inserts"],
+            snapshot["evictions"],
+            snapshot["working_set_5m"],
+            snapshot["working_set_30m"],
+            snapshot["entries"],
+            snapshot["max_entries"],
+            snapshot["models"],
+            snapshot.get("db_bytes", 0),
+            snapshot["uptime_s"],
+        )
+
+    def _span_attrs(self, *, task: EmbedTask, batch_size: int) -> dict[str, object]:
+        """Stable request attributes for embed tracing."""
+        return {
+            "provider": self.provider_name,
+            "model": self.model_name,
+            "task": task.value,
+            "batch_size": batch_size,
+        }
+
+    def _set_request_summary_attrs(
+        self,
+        span,
+        *,
+        hit_count: int,
+        miss_count: int,
+    ) -> None:
+        """Attach investigation attributes to a request span."""
+        now = time.monotonic()
+        with self._stats_lock:
+            working_set_5m, working_set_30m = self._working_set_sizes_locked(now)
+        uptime_s = round(now - self._started_at, 1)
+        source = "cached" if miss_count == 0 else "computed" if hit_count == 0 else "mixed"
+        span.set_attribute("source", source)
+        span.set_attribute("hit_count", hit_count)
+        span.set_attribute("miss_count", miss_count)
+        span.set_attribute("process_uptime_s", uptime_s)
+        span.set_attribute("working_set_5m", working_set_5m)
+        span.set_attribute("working_set_30m", working_set_30m)
+        span.set_attribute("max_entries", self._cache._max_entries)
+
     def embed(self, text: str, *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[float]:
         """Get embedding, using cache when available.
 
@@ -308,35 +484,45 @@ class CachingEmbeddingProvider:
         _tracer = get_tracer("embed")
 
         cache_model = self._cache_key_model(task)
+        self._record_request(cache_model, [text], batch=False)
 
-        # Check cache (fail-safe)
-        try:
-            cached = self._cache.get(cache_model, text)
-            if cached is not None:
-                with self._stats_lock:
-                    self._hits += 1
-                span = _tracer.start_span("embed.cache_hit")
-                span.end()
-                return cached
-        except Exception as e:
-            logger.debug("Embedding cache read failed: %s", e)
-
-        # Cache miss - compute embedding
-        with self._stats_lock:
-            self._misses += 1
         with _tracer.start_as_current_span(
-            "embed.compute",
-            attributes={"model": self.model_name, "task": task.value},
-        ):
-            embedding = self._provider.embed(text, task=task)
+            "embed.request",
+            attributes=self._span_attrs(task=task, batch_size=1),
+        ) as span:
+            # Check cache (fail-safe)
+            try:
+                cached = self._cache.get(cache_model, text)
+                if cached is not None:
+                    with self._stats_lock:
+                        self._hits += 1
+                    self._set_request_summary_attrs(span, hit_count=1, miss_count=0)
+                    self.log_summary("interval")
+                    return cached
+            except Exception as e:
+                logger.debug("Embedding cache read failed: %s", e)
 
-        # Store in cache (fail-safe)
-        try:
-            self._cache.put(cache_model, text, embedding)
-        except Exception as e:
-            logger.debug("Embedding cache write failed: %s", e)
+            # Cache miss - compute embedding
+            with self._stats_lock:
+                self._misses += 1
+            with _tracer.start_as_current_span(
+                "embed.compute",
+                attributes=self._span_attrs(task=task, batch_size=1),
+            ):
+                embedding = self._provider.embed(text, task=task)
 
-        return embedding
+            # Store in cache (fail-safe)
+            try:
+                evicted = self._cache.put(cache_model, text, embedding)
+                with self._stats_lock:
+                    self._inserts += 1
+                    self._evictions += evicted
+            except Exception as e:
+                logger.debug("Embedding cache write failed: %s", e)
+
+            self._set_request_summary_attrs(span, hit_count=0, miss_count=1)
+            self.log_summary("interval")
+            return embedding
 
     def embed_batch(self, texts: list[str], *, task: EmbedTask = EmbedTask.DOCUMENT) -> list[list[float]]:
         """Get embeddings for batch, using cache where available.
@@ -344,51 +530,67 @@ class CachingEmbeddingProvider:
         Only computes embeddings for cache misses. Cache failures
         are non-fatal — falls through to the real provider.
         """
+        _tracer = get_tracer("embed")
         results: list[Optional[list[float]]] = [None] * len(texts)
         to_embed: list[tuple[int, str]] = []
 
         cache_model = self._cache_key_model(task)
+        self._record_request(cache_model, texts, batch=True)
 
-        # Check cache for each text (fail-safe)
-        for i, text in enumerate(texts):
-            try:
-                cached = self._cache.get(cache_model, text)
-                if cached is not None:
-                    with self._stats_lock:
-                        self._hits += 1
-                    results[i] = cached
-                    continue
-            except Exception as e:
-                logger.debug("Embedding cache read failed: %s", e)
-            with self._stats_lock:
-                self._misses += 1
-            to_embed.append((i, text))
-
-        # Batch embed cache misses
-        if to_embed:
-            indices, texts_to_embed = zip(*to_embed)
-            embeddings = self._provider.embed_batch(list(texts_to_embed), task=task)
-
-            for idx, text, embedding in zip(indices, texts_to_embed, embeddings):
-                results[idx] = embedding
+        with _tracer.start_as_current_span(
+            "embed.batch",
+            attributes=self._span_attrs(task=task, batch_size=len(texts)),
+        ) as span:
+            # Check cache for each text (fail-safe)
+            for i, text in enumerate(texts):
                 try:
-                    self._cache.put(cache_model, text, embedding)
+                    cached = self._cache.get(cache_model, text)
+                    if cached is not None:
+                        with self._stats_lock:
+                            self._hits += 1
+                        results[i] = cached
+                        continue
                 except Exception as e:
-                    logger.debug("Embedding cache write failed: %s", e)
+                    logger.debug("Embedding cache read failed: %s", e)
+                with self._stats_lock:
+                    self._misses += 1
+                to_embed.append((i, text))
 
-        return results  # type: ignore
+            # Batch embed cache misses
+            if to_embed:
+                indices, texts_to_embed = zip(*to_embed)
+                with _tracer.start_as_current_span(
+                    "embed.compute",
+                    attributes={
+                        **self._span_attrs(task=task, batch_size=len(texts)),
+                        "count": len(texts_to_embed),
+                    },
+                ):
+                    embeddings = self._provider.embed_batch(list(texts_to_embed), task=task)
+
+                for idx, text, embedding in zip(indices, texts_to_embed, embeddings):
+                    results[idx] = embedding
+                    try:
+                        evicted = self._cache.put(cache_model, text, embedding)
+                        with self._stats_lock:
+                            self._inserts += 1
+                            self._evictions += evicted
+                    except Exception as e:
+                        logger.debug("Embedding cache write failed: %s", e)
+
+            self._set_request_summary_attrs(
+                span,
+                hit_count=len(texts) - len(to_embed),
+                miss_count=len(to_embed),
+            )
+            self.log_summary("interval")
+            return results  # type: ignore
     
     def stats(self) -> dict:
         """Get cache and hit/miss statistics."""
-        cache_stats = self._cache.stats()
-        with self._stats_lock:
-            hits = self._hits
-            misses = self._misses
-        total = hits + misses
-        hit_rate = hits / total if total > 0 else 0.0
-        return {
-            **cache_stats,
-            "hits": hits,
-            "misses": misses,
-            "hit_rate": f"{hit_rate:.1%}",
-        }
+        return self.snapshot()
+
+    def close(self) -> None:
+        """Flush a final summary and close the underlying cache."""
+        self.log_summary("close", force=True)
+        self._cache.close()

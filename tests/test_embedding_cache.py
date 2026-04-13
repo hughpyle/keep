@@ -1,7 +1,9 @@
 """Tests for embedding cache."""
 
-import pytest
+import logging
 from pathlib import Path
+
+import pytest
 
 from keep.providers.embedding_cache import EmbeddingCache, CachingEmbeddingProvider
 
@@ -226,7 +228,8 @@ class TestCachingEmbeddingProvider:
     ) -> CachingEmbeddingProvider:
         return CachingEmbeddingProvider(
             mock_provider,
-            cache_path=tmp_path / "cache.db"
+            cache_path=tmp_path / "cache.db",
+            provider_name="mock",
         )
     
     def test_first_call_is_cache_miss(
@@ -317,3 +320,42 @@ class TestCachingEmbeddingProvider:
         
         stats = cached_provider.stats()
         assert stats["hit_rate"] == "66.7%"
+
+    def test_stats_include_investigation_fields(
+        self, cached_provider: CachingEmbeddingProvider
+    ) -> None:
+        """Stats expose working-set and request-volume fields for investigation."""
+        cached_provider.embed("alpha")
+        cached_provider.embed("alpha")
+        cached_provider.embed_batch(["alpha", "beta"])
+
+        stats = cached_provider.stats()
+        assert stats["provider"] == "mock"
+        assert stats["model"] == "mock-model"
+        assert stats["requests"] == 3
+        assert stats["batch_requests"] == 1
+        assert stats["texts"] == 4
+        assert stats["hits"] == 2
+        assert stats["misses"] == 2
+        assert stats["inserts"] == 2
+        assert stats["working_set_5m"] == 2
+        assert stats["working_set_30m"] == 2
+        assert "db_bytes" in stats
+
+    def test_close_logs_summary(
+        self,
+        cached_provider: CachingEmbeddingProvider,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """close() emits a final investigation summary log."""
+        cached_provider.embed("hello")
+        cached_provider.embed("hello")
+
+        with caplog.at_level(logging.INFO, logger="keep.providers.embedding_cache"):
+            cached_provider.close()
+
+        assert "Embedding cache summary" in caplog.text
+        assert "reason=close" in caplog.text
+        assert "provider=mock" in caplog.text
+        assert "hits=1" in caplog.text
+        assert "misses=1" in caplog.text

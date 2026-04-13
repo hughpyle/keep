@@ -85,6 +85,7 @@ class ProviderLifecycleMixin:
                 self._embedding_provider = CachingEmbeddingProvider(
                     base_provider,
                     cache_path=cache_path,
+                    provider_name=self._config.embedding.name,
                 )
             else:
                 self._embedding_provider = base_provider
@@ -190,7 +191,9 @@ class ProviderLifecycleMixin:
             if hasattr(inner, 'release'):
                 inner.release()
             # Close the embedding cache
-            if hasattr(provider, '_cache'):
+            if hasattr(provider, 'close'):
+                provider.close()
+            elif hasattr(provider, '_cache'):
                 cache = provider._cache
                 if hasattr(cache, 'close'):
                     cache.close()
