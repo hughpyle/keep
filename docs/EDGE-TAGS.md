@@ -1,8 +1,8 @@
 # Edge Tags
 
-Edge tags turn ordinary tags into navigable relationships.  Usually if a note has tag `speaker: Kate`, this is just a label.  But when `speaker` is an _edge tag_, this becomes a reference (a graph edge) between the note and another note "Kate".  Moreover, that note "Kate" has edges pointing back to all the notes where it was tagged.
+Edge tags turn ordinary tags into navigable relationships.  Usually if a note has tag `speaker: Kate`, this is just a label.  But when `speaker` is an *edge tag*, this becomes a reference (a graph edge) between the note and another note "Kate".  Moreover, that note "Kate" has edges pointing back to all the notes where it was tagged.
 
-This behavior is defined by the _tagdoc_: the note that defines the tag, which has id like `.tag/*`.  When a `.tag/KEY` document declares `_inverse: VERB`, any document tagged with `KEY=target` creates a link to the target — and the target gets an automatic inverse listing under the `VERB` key in the unified `tags:` block.
+This behavior is defined by the *tagdoc*: the note that defines the tag, which has id like `.tag/*`.  When a `.tag/KEY` document declares `_inverse: VERB`, any document tagged with `KEY=target` creates a link to the target — and the target gets an automatic inverse listing under the `VERB` key in the unified `tags:` block.
 
 Edge definitions are user-editable on purpose. They let you decide which relationships matter enough to become first-class navigation for you and your agent.
 
@@ -84,7 +84,7 @@ When you add `_inverse` to an existing tagdoc, keep automatically backfills edge
 | `user_id` | `user_id_of` | `user_id: contact:telegram:42` on a Hermes note | `get contact:telegram:42` → `user_id_of:` entries |
 | `informs` | `informed_by` | `informs: auth-decision` on a URL | `get auth-decision` → `informed_by:` entries |
 | `references` | `referenced_by` | `references: other-note` via link extraction | `get other-note` → `referenced_by:` entries |
-| `cites` | `cited_by` | `cites: [[arxiv:2403.04782|Title]]` on a paper | `get arxiv:2403.04782` → `cited_by:` entries |
+| `cites` | `cited_by` | `cites: [[arxiv:2403.04782\|Title]]` on a paper | `get arxiv:2403.04782` → `cited_by:` entries |
 | `duplicates` | `duplicates` | `duplicates: notes-v1` on a duplicate | Symmetric: both sides show `duplicates:` |
 | `author` | `authored` | `author: alice@example.com` on a git commit | `get alice@example.com` → `authored:` entries |
 
