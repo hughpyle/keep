@@ -3566,16 +3566,28 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     }
 
         if similar_to:
-            # Similar-to mode: use stored embedding from existing item
+            # Similar-to mode: resolve the anchor from the canonical
+            # document store first. Fresh notes can exist there before
+            # the embedding index catches up, so ChromaDB alone is not
+            # a safe existence check.
             similar_to = normalize_id(similar_to)
+            anchor = self._document_store.get(doc_coll, similar_to)
             item = self._store.get(chroma_coll, similar_to)
-            if item is None:
+            if anchor is None and item is None:
                 raise KeyError(f"Item not found: {similar_to}")
 
             embedding = self._store.get_embedding(chroma_coll, similar_to)
             if embedding is None:
+                anchor_summary = (
+                    anchor.summary
+                    if anchor is not None
+                    else (item.summary if item is not None else "")
+                )
                 with _get_tracer("keeper").start_as_current_span("embed"):
-                    embedding = self._get_embedding_provider().embed(item.summary, task=EmbedTask.QUERY)
+                    embedding = self._get_embedding_provider().embed(
+                        anchor_summary,
+                        task=EmbedTask.QUERY,
+                    )
             actual_limit = (limit + 1 if not include_self else limit) * 3
             if deep:
                 actual_limit = max(actual_limit, 30)

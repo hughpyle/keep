@@ -193,6 +193,23 @@ class TestFindSinceFilter:
         results = kp.find(similar_to="test:ref", since="P1D")
         assert any(r.id == "test:sim" for r in results)
 
+    def test_find_similar_to_uses_canonical_anchor_when_index_missing(
+        self, mock_providers, tmp_path,
+    ):
+        """Fresh content-addressed notes must not depend on immediate index visibility."""
+        kp = Keeper(store_path=tmp_path)
+        kp._get_embedding_provider()
+
+        anchor = kp.put("Shared text for similar-to anchor")
+        kp.put("Shared text for similar-to anchor", id="test:match")
+
+        assert anchor.id.startswith("%")
+        chroma_coll = kp._resolve_chroma_collection()
+        kp._store.delete(chroma_coll, anchor.id)
+
+        results = kp.find(similar_to=anchor.id, limit=5)
+        assert any(r.id == "test:match" for r in results)
+
     def test_find_until_excludes_recent(self, mock_providers, tmp_path):
         """find(until=<yesterday>) excludes items stored today."""
         kp = Keeper(store_path=tmp_path)
