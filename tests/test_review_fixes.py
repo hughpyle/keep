@@ -758,6 +758,156 @@ class TestTagMutations:
         assert result is not None
         assert tag_values(result.tags, "status") == ["published"]
 
+    def test_regex_constrained_edge_tag_validates_canonical_target_id(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.types import utc_now
+
+        kp = Keeper(store_path=tmp_path)
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+
+        kp._document_store.upsert(
+            doc_coll,
+            ".tag/frame",
+            summary="frame",
+            tags={
+                "_inverse": "frames",
+                "_value_regex": r"^.+\?$",
+                "_created": now,
+                "_updated": now,
+                "_source": "inline",
+            },
+        )
+
+        kp.put("Investigate restart", id="frame:ok:1", tags={"frame": "debugging?"})
+        kp.put(
+            "Investigate restart again",
+            id="frame:ok:2",
+            tags={"frame": "[[repair?|Repair frame]]"},
+        )
+
+        with pytest.raises(ValueError, match=r"Value must match regex"):
+            kp.put("Bad frame", id="frame:bad:1", tags={"frame": "debugging"})
+
+        with pytest.raises(ValueError, match=r"Value must match regex"):
+            kp.put(
+                "Bad labeled frame",
+                id="frame:bad:2",
+                tags={"frame": "[[debugging|Debugging frame]]"},
+            )
+
+    def test_regex_constrained_edge_tag_rejects_system_doc_targets(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.types import utc_now
+
+        kp = Keeper(store_path=tmp_path)
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+
+        kp._document_store.upsert(
+            doc_coll,
+            ".tag/frame",
+            summary="frame",
+            tags={
+                "_inverse": "frames",
+                "_value_regex": r"^.+\?$",
+                "_created": now,
+                "_updated": now,
+                "_source": "inline",
+            },
+        )
+
+        with pytest.raises(ValueError, match="system document"):
+            kp.put("Bad frame", id="frame:bad:sysdoc", tags={"frame": ".meta/todo?"})
+
+    def test_value_regex_honors_requires_gating(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.types import utc_now
+
+        kp = Keeper(store_path=tmp_path)
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+
+        kp._document_store.upsert(
+            doc_coll,
+            ".tag/channel",
+            summary="channel",
+            tags={
+                "_value_regex": r"^#[a-z]+$",
+                "_requires": "act",
+                "_created": now,
+                "_updated": now,
+                "_source": "inline",
+            },
+        )
+
+        kp.put("No act means no regex gate", id="regex:req:1", tags={"channel": "ops"})
+        ok = kp.get("regex:req:1")
+        assert ok is not None
+        assert tag_values(ok.tags, "channel") == ["ops"]
+
+        kp.put("Act present with valid channel", id="regex:req:2", tags={"act": "commitment", "channel": "#ops"})
+
+        with pytest.raises(ValueError, match=r"Value must match regex"):
+            kp.put("Act present with invalid channel", id="regex:req:3", tags={"act": "commitment", "channel": "ops"})
+
+    def test_import_bypasses_value_regex_validation(self, mock_embedding_provider, tmp_path):
+        from keep.api import Keeper
+        from tests.conftest import MockChromaStore, MockDocumentProvider, MockSummarizationProvider
+
+        mock_reg = MagicMock()
+        mock_reg.create_embedding.return_value = mock_embedding_provider
+        mock_reg.create_summarization.return_value = MockSummarizationProvider()
+        mock_reg.create_document.return_value = MockDocumentProvider()
+
+        with patch("keep.api.get_registry", return_value=mock_reg), \
+             patch("keep._provider_lifecycle.get_registry", return_value=mock_reg), \
+             patch("keep.api.CachingEmbeddingProvider", side_effect=lambda p, **kw: p), \
+             patch("keep._provider_lifecycle.CachingEmbeddingProvider", side_effect=lambda p, **kw: p), \
+             patch("keep.store.ChromaStore", MockChromaStore), \
+             patch("keep.api.Keeper._spawn_processor", return_value=False):
+            kp = Keeper(store_path=tmp_path)
+
+            data = {
+                "format": "keep-export",
+                "version": 3,
+                "documents": [
+                    {
+                        "id": ".tag/frame",
+                        "summary": "frame",
+                        "tags": {
+                            "_inverse": "frames",
+                            "_value_regex": r"^.+\?$",
+                            "_created": "2026-01-01T00:00:00",
+                            "_updated": "2026-01-01T00:00:00",
+                            "_source": "inline",
+                        },
+                        "created_at": "2026-01-01T00:00:00",
+                        "updated_at": "2026-01-01T00:00:00",
+                        "accessed_at": "2026-01-01T00:00:00",
+                        "versions": [],
+                        "parts": [],
+                    },
+                    {
+                        "id": "import:frame:1",
+                        "summary": "Imported frame value bypasses regex validation",
+                        "tags": {"frame": "debugging"},
+                        "created_at": "2026-01-01T00:00:00",
+                        "updated_at": "2026-01-01T00:00:00",
+                        "accessed_at": "2026-01-01T00:00:00",
+                        "versions": [],
+                        "parts": [],
+                    },
+                ],
+            }
+
+            result = kp.import_data(data)
+            assert result["imported"] == 2
+
+            imported = kp.get("import:frame:1")
+            assert imported is not None
+            assert tag_values(imported.tags, "frame") == ["debugging"]
+
 
 class TestVersionContextNavigation:
     """Regression tests for offset-based version navigation in get_context()."""

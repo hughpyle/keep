@@ -198,6 +198,43 @@ class TestEdgeIntegration:
             for e in ctx.edges["cited_by"]
         )
 
+    def test_bundled_frame_tagdoc_creates_frames_inverse(self, kp):
+        """The bundled .tag/frame tagdoc wires frame ↔ frames edges."""
+        kp.put("migration trigger", id="_frame-test-trigger")
+        kp.delete("_frame-test-trigger")
+
+        kp.put(
+            content="Investigate why the daemon is not restarting.",
+            id="restart-debug",
+            summary="Restart investigation",
+            tags={"frame": "debugging?"},
+        )
+
+        target = kp.get("debugging?")
+        assert target is not None
+        assert target.tags.get("_source") == "auto-vivify"
+
+        ctx = kp.get_context("debugging?")
+        assert "frames" in ctx.edges
+        assert any(edge.source_id == "restart-debug" for edge in ctx.edges["frames"])
+
+    def test_tag_adds_frame_edge_via_flow_tag_path(self, kp):
+        """Tagging a note later should normalize edge values and create edges."""
+        kp.put("migration trigger", id="_frame-tag-trigger")
+        kp.delete("_frame-tag-trigger")
+
+        kp.put("Investigate restart behavior.", id="restart-debug", summary="Restart behavior")
+        kp.tag("restart-debug", tags={"frame": "[[repair?|Repair frame]]"})
+
+        target = kp.get("repair?")
+        assert target is not None
+        name_values = target.tags.get("name")
+        assert name_values == "Repair frame" or "Repair frame" in (name_values or [])
+
+        ctx = kp.get_context("repair?")
+        assert "frames" in ctx.edges
+        assert any(edge.source_id == "restart-debug" for edge in ctx.edges["frames"])
+
     def test_edge_target_uri_value_is_normalized(self, kp):
         """Edge target values that are HTTP URIs use canonical ID normalization."""
         self._create_tagdoc(kp, "speaker", "said")

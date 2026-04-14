@@ -100,6 +100,41 @@ class TestTagValidation:
         )
         assert any("## Prompt" in d.message for d in r.warnings)
 
+    def test_value_regex_valid_parent(self):
+        r = validate_system_doc(
+            ".tag/frame",
+            "Frame tag",
+            {"_value_regex": r"^.+\?$"},
+        )
+        assert r.ok
+
+    def test_value_regex_empty_errors(self):
+        r = validate_system_doc(
+            ".tag/frame",
+            "Frame tag",
+            {"_value_regex": ""},
+        )
+        assert not r.ok
+        assert any("_value_regex" in d.message for d in r.errors)
+
+    def test_value_regex_invalid_regex_errors(self):
+        r = validate_system_doc(
+            ".tag/frame",
+            "Frame tag",
+            {"_value_regex": "["},
+        )
+        assert not r.ok
+        assert any("_value_regex" in d.message for d in r.errors)
+
+    def test_constrained_and_value_regex_conflict_errors(self):
+        r = validate_system_doc(
+            ".tag/frame",
+            "Frame tag\n\n## Prompt\nClassify.",
+            {"_constrained": "true", "_value_regex": r"^.+\?$"},
+        )
+        assert not r.ok
+        assert any("must not both be present" in d.message for d in r.errors)
+
     def test_valid_value_doc(self):
         r = validate_system_doc(".tag/act/commitment", "A binding promise")
         assert r.ok
@@ -107,6 +142,15 @@ class TestTagValidation:
     def test_value_doc_empty_prompt_warns(self):
         r = validate_system_doc(".tag/act/commitment", "Desc.\n\n## Prompt\n")
         assert any("empty" in d.message.lower() for d in r.warnings)
+
+    def test_value_regex_on_child_doc_warns(self):
+        r = validate_system_doc(
+            ".tag/frame/debugging?",
+            "Frame value doc",
+            {"_value_regex": r"^.+\?$"},
+        )
+        assert r.ok
+        assert any("_value_regex" in d.message for d in r.warnings)
 
     def test_empty_content_warns(self):
         r = validate_system_doc(".tag/act", "")

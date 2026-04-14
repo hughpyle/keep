@@ -2016,24 +2016,50 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                         f"{source}: Tag value too long (max {MAX_TAG_VALUE_LENGTH}): {key!r}"
                     )
         if check_constraints:
-            self._validate_constrained_tags(normalized)
+            self._validate_tagdoc_value_constraints(normalized)
         return normalized
 
     def _validate_write_tags(self, tags: dict) -> dict:
-        """Casefold, validate keys/lengths, and check constrained values.
+        """Casefold, validate keys/lengths, and check tagdoc value constraints.
 
         Returns the casefolded tags dict.  Used by put(), tag(), tag_part().
         """
         return self._validate_tag_map(tags, source="Tags", check_constraints=True)
 
-    def _validate_constrained_tags(
+    def _get_tagdoc_tags(
+        self, key: str, doc_coll: str,
+    ) -> Optional[dict[str, Any]]:
+        """Return cached parent tagdoc tags for one key, if present."""
+        if key not in self._tagdoc_cache:
+            parent = self._document_store.get(doc_coll, f".tag/{key}")
+            self._tagdoc_cache[key] = parent.tags if parent else None
+        return self._tagdoc_cache[key]
+
+    def _normalize_valid_edge_target(
+        self, value: str,
+    ) -> tuple[str, str | None]:
+        """Return the canonical target ID for an edge-tag value.
+
+        Raises ValueError when the parsed target is not a valid ordinary-note
+        edge target. This is the single owner of edge-target validity for
+        write-time validation and edge creation.
+        """
+        target_id, target_label = parse_ref(value)
+        normalized_target = normalize_id(target_id)
+        if normalized_target.startswith("."):
+            raise ValueError(
+                f"Edge target {normalized_target!r} is a system document and cannot be used as an edge target"
+            )
+        return normalized_target, target_label
+
+    def _validate_tagdoc_value_constraints(
         self, tags: dict, existing_tags: dict | None = None,
     ) -> None:
-        """Check constrained tag values against sub-doc existence.
+        """Check tag values against tagdoc-defined write-time constraints.
 
         For each user tag, looks up `.tag/KEY`. If that doc exists and has
-        `_constrained=true`, checks that `.tag/KEY/VALUE` exists. Raises
-        ValueError with valid values listed if not.
+        `_constrained=true`, checks that `.tag/KEY/VALUE` exists. If it has
+        `_value_regex`, validates the assigned values against that regex.
 
         If the tag doc has ``_requires``, the constraint only applies when
         the required tag is present in either *tags* or *existing_tags*.
@@ -2045,28 +2071,63 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             values = tag_values(tags, key)
             if not values:
                 continue
-            parent_id = f".tag/{key}"
-            parent = self._document_store.get(doc_coll, parent_id)
-            if parent is None:
+            td_tags = self._get_tagdoc_tags(key, doc_coll)
+            if td_tags is None:
                 continue  # no tag doc → unconstrained
-            if parent.tags.get("_constrained") != "true":
-                continue  # tag doc exists but not constrained
+            constrained = td_tags.get("_constrained") == "true"
+            raw_value_regex = td_tags.get("_value_regex")
+            has_value_regex = raw_value_regex is not None and str(raw_value_regex).strip() != ""
+            if not constrained and not has_value_regex:
+                continue
+            if constrained and has_value_regex:
+                raise ValueError(
+                    f"Tagdoc '.tag/{key}' cannot declare both _constrained: true and _value_regex"
+                )
             # _requires: only enforce constraint when the required tag is present
-            requires = parent.tags.get("_requires")
+            requires = td_tags.get("_requires")
             if requires:
                 in_new = requires in tags
                 in_existing = bool(existing_tags and requires in existing_tags)
                 if not in_new and not in_existing:
                     continue
+            value_regex: re.Pattern[str] | None = None
+            if has_value_regex:
+                if not isinstance(raw_value_regex, str):
+                    raise ValueError(
+                        f"Tagdoc '.tag/{key}' has invalid _value_regex: expected non-empty string"
+                    )
+                try:
+                    value_regex = re.compile(raw_value_regex)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Tagdoc '.tag/{key}' has invalid _value_regex: {exc}"
+                    ) from exc
+            is_edge_tag = bool(td_tags.get("_inverse"))
             for value in values:
                 if value == "":
                     continue  # deletion, no validation needed
-                value_id = f".tag/{key}/{value}"
-                if not self._document_store.get(doc_coll, value_id):
-                    valid = self._list_constrained_values(key)
+                if constrained:
+                    value_id = f".tag/{key}/{value}"
+                    if not self._document_store.get(doc_coll, value_id):
+                        valid = self._list_constrained_values(key)
+                        raise ValueError(
+                            f"Invalid value for constrained tag '{key}': {value!r}. "
+                            f"Valid values: {', '.join(sorted(valid))}"
+                        )
+                if value_regex is None:
+                    continue
+                validation_value = value
+                if is_edge_tag:
+                    try:
+                        validation_value, _ = self._normalize_valid_edge_target(value)
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"Invalid value for tag '{key}': {value!r}. {exc}"
+                        ) from exc
+                if not value_regex.fullmatch(validation_value):
                     raise ValueError(
-                        f"Invalid value for constrained tag '{key}': {value!r}. "
-                        f"Valid values: {', '.join(sorted(valid))}"
+                        f"Invalid value for tag '{key}': {validation_value!r}. "
+                        f"Value must match regex {value_regex.pattern!r}"
                     )
 
     def _list_constrained_values(self, key: str) -> list[str]:
@@ -2130,10 +2191,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 continue
             value = merged_tags[key]
             # Only proceed if this key is actually an edge tag.
-            if key not in self._tagdoc_cache:
-                parent = self._document_store.get(doc_coll, f".tag/{key}")
-                self._tagdoc_cache[key] = parent.tags if parent else None
-            td_tags = self._tagdoc_cache[key]
+            td_tags = self._get_tagdoc_tags(key, doc_coll)
             if td_tags is None or not td_tags.get("_inverse"):
                 continue
             if isinstance(value, list):
@@ -2185,12 +2243,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if not all_keys:
             return  # no user tags → no edges possible
 
-        def _get_tagdoc_tags(key: str) -> Optional[dict[str, str]]:
-            if key not in self._tagdoc_cache:
-                parent = self._document_store.get(doc_coll, f".tag/{key}")
-                self._tagdoc_cache[key] = parent.tags if parent else None
-            return self._tagdoc_cache[key]
-
         # Collect batch operations across all edge-tag keys
         edges_to_delete: list[tuple[str, str, str]] = []  # (source_id, predicate, target_id)
         edges_to_add: list[tuple[str, str, str, str, str]] = []  # (source_id, predicate, target_id, inverse, created)
@@ -2206,7 +2258,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 names.append(label)
 
         for key in all_keys:
-            td_tags = _get_tagdoc_tags(key)
+            td_tags = self._get_tagdoc_tags(key, doc_coll)
             if td_tags is None:
                 continue
             inverse = td_tags.get("_inverse")
@@ -2236,13 +2288,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             for current_value in added_values:
                 if not current_value:
                     continue
-                raw_target_id, target_label = parse_ref(current_value)
                 try:
-                    target_id = normalize_id(raw_target_id)
+                    target_id, target_label = self._normalize_valid_edge_target(current_value)
                 except ValueError:
                     logger.debug("Skipping invalid edge target for tag %r: %r", key, current_value)
-                    continue
-                if target_id.startswith("."):
                     continue
                 _queue_target_name(target_id, target_label)
                 # Auto-vivify: create target as empty doc if it doesn't exist.
@@ -2634,9 +2683,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         if tags:
             user_tags = casefold_tags(filter_non_system_tags(tags))
-            # Validate constrained tags (only user-provided, not existing/env)
-            self._validate_constrained_tags(user_tags)
-            # Validate constrained tags
+            # Validate tagdoc-defined constraints against user-provided values
+            # and already-present tags (_requires may depend on existing state).
+            self._validate_tagdoc_value_constraints(user_tags, existing_tags=merged_tags)
             singular_keys = self._get_singular_keys(
                 k for k in user_tags if tag_values(user_tags, k) != [""]
             )
@@ -4890,7 +4939,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         # Apply tag changes (filter out system tags from input)
         if add_changes:
-            self._validate_constrained_tags(add_changes, existing_tags=current_tags)
+            self._validate_tagdoc_value_constraints(add_changes, existing_tags=current_tags)
             singular_keys = self._get_singular_keys(add_changes)
             if singular_keys:
                 self._validate_singular_tags(add_changes, singular_keys)
@@ -4906,10 +4955,13 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         # Merge back: user tags + system tags
         final_tags = {**user_tags, **system_tags}
+        self._normalize_edge_tag_values(final_tags, doc_coll)
 
         # Dual-write: SQLite gets original values, ChromaDB gets casefolded
         self._document_store.update_tags(doc_coll, id, final_tags)
         self._store.update_tags(chroma_coll, id, casefold_tags_for_index(final_tags))
+
+        self._process_edge_tags(id, final_tags, current_tags, doc_coll)
 
         # Tag changes can affect meta-doc resolution (tag-based queries)
         self._context_cache.notify_write(
@@ -4998,7 +5050,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 if not k.startswith(SYSTEM_TAG_PREFIX)
             }
         if add_changes:
-            self._validate_constrained_tags(add_changes, existing_tags=merged)
+            self._validate_tagdoc_value_constraints(add_changes, existing_tags=merged)
             singular_keys = self._get_singular_keys(add_changes)
             if singular_keys:
                 self._validate_singular_tags(add_changes, singular_keys)

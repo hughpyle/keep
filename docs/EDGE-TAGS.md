@@ -66,6 +66,10 @@ EOF
 
 Now `contains=item-B` on document A creates an edge, and `get item-B` shows `contents: A [date] "summary"` in its `tags:` block.
 
+Edge tagdocs can also add write-time value constraints. For example, the bundled
+`frame` tag declares both `_inverse: frames` and `_value_regex: '^.+\?$'`, so
+its targets must be ordinary note IDs ending in `?`.
+
 ### Symmetric tagdocs
 
 When `.tag/contains` declares `_inverse: contents`, keep automatically creates `.tag/contents` with `_inverse: contains` (if it doesn't already exist). This makes the relationship navigable in both directions — tagging with either key creates edges that the other key can resolve. If `.tag/contents` already exists with a different `_inverse`, that's a conflict error.
@@ -87,6 +91,7 @@ When you add `_inverse` to an existing tagdoc, keep automatically backfills edge
 | `cites` | `cited_by` | `cites: [[arxiv:2403.04782\|Title]]` on a paper | `get arxiv:2403.04782` → `cited_by:` entries |
 | `duplicates` | `duplicates` | `duplicates: notes-v1` on a duplicate | Symmetric: both sides show `duplicates:` |
 | `author` | `authored` | `author: alice@example.com` on a git commit | `get alice@example.com` → `authored:` entries |
+| `frame` | `frames` | `frame: debugging?` on a work note | `get debugging?` → `frames:` entries |
 
 ### Email
 
@@ -111,6 +116,7 @@ When you add `_inverse` to an existing tagdoc, keep automatically backfills edge
 - **Multi-valued**: A document can have multiple values per edge tag (e.g., `speaker: [alice, bob]`). Each value creates a separate edge. Multiple documents can point at the same target.
 - **Singular edge tags**: An edge tag with `_singular: true` on its tagdoc replaces the old value (and its edge) when a new value is set. For example, an `assignee` edge tag that is singular would reassign the edge rather than accumulating multiple assignees.
 - **System doc targets skipped**: Tag values starting with `.` (like `.meta/todo`) don't create edges.
+- **Regex-constrained edges validate the target ID**: if an edge tagdoc sets `_value_regex`, the regex is checked against the canonical target note ID after ref parsing/normalization. For `frame`, both `frame: debugging?` and `frame: [[debugging?|debugging?]]` are valid because the target ID is `debugging?`.
 - **Removal**: Setting a tag to empty (`-t speaker=`) deletes that edge without affecting other edges on the document.
 
 ## When to promote a tag to an edge tag

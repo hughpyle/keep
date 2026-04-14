@@ -191,6 +191,28 @@ keep put "Active work in progress." --id .tag/status/working
 # Now status=working is accepted
 ```
 
+### Pattern-constrained values
+
+Some tags are open-ended but still validated against a pattern. When a
+`.tag/KEY` document has `_value_regex: '...'`, keep validates each assigned
+value against that regular expression.
+
+Unlike `_constrained: true`, pattern-constrained tags do **not** require child
+docs at `.tag/KEY/VALUE`. `_constrained` and `_value_regex` are mutually
+exclusive on one tagdoc.
+
+For edge tags, regex validation applies to the canonical target note ID, not
+the literal surface form of a labeled ref.
+
+```bash
+keep put "Investigate restart behavior" --id restart-debug -t frame='debugging?'
+keep put "Investigate restart behavior" --id restart-debug -t frame='debugging'
+# ✗ ValueError: Invalid value for tag 'frame': 'debugging'. Value must match regex '^.+\?$'
+```
+
+The bundled `frame` tag uses this to require note IDs ending in `?`, so
+`frame: debugging?` is valid but `frame: debugging` is not.
+
 ### Singular values
 
 Some tags are **singular** — at most one value is allowed per key. When a `.tag/KEY` document has `_singular: true` in its tags, new values replace old ones instead of accumulating via set-union.
@@ -239,6 +261,9 @@ keep ships with these tag descriptions:
 Constrained tags (`act`, `status`) also have individual sub-documents (e.g., `.tag/act/commitment`, `.tag/status/open`) that describe each value in detail.
 
 Unconstrained tags (`type`, `project`, `topic`) accept any value. Their descriptions document conventions but don't enforce them.
+
+The bundled `frame` tag is pattern-constrained rather than enumerated: it is an
+edge tag whose target note ID must end in `?`.
 
 Some tags also define **edges** — navigable relationships between documents. See [EDGE-TAGS.md](EDGE-TAGS.md) for details.
 

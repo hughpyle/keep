@@ -185,7 +185,7 @@ def _validate_tag_doc(
     if is_parent:
         _validate_tag_parent(result, content, tags)
     elif is_value:
-        _validate_tag_value(result, content)
+        _validate_tag_value(result, content, tags)
 
     return result
 
@@ -199,6 +199,7 @@ def _validate_tag_parent(
     constrained = tags.get("_constrained")
     singular = tags.get("_singular")
     inverse = tags.get("_inverse")
+    value_regex = tags.get("_value_regex")
 
     if constrained == "true":
         prompt = _PROMPT_SECTION_RE.search(content)
@@ -210,6 +211,14 @@ def _validate_tag_parent(
                     "## Prompt section",
                 )
             )
+
+    if constrained == "true" and value_regex is not None:
+        result.diagnostics.append(
+            Diagnostic(
+                "error",
+                "_constrained: true and _value_regex must not both be present",
+            )
+        )
 
     if inverse is not None:
         if not isinstance(inverse, str) or not inverse.strip():
@@ -223,6 +232,22 @@ def _validate_tag_parent(
                     f"_inverse value {inverse!r} is not a valid tag key identifier",
                 )
             )
+
+    if value_regex is not None:
+        if not isinstance(value_regex, str) or not value_regex.strip():
+            result.diagnostics.append(
+                Diagnostic("error", "_value_regex must be a non-empty string")
+            )
+        else:
+            try:
+                re.compile(value_regex)
+            except re.error as exc:
+                result.diagnostics.append(
+                    Diagnostic(
+                        "error",
+                        f"_value_regex failed to compile: {exc}",
+                    )
+                )
 
     if singular is not None and singular != "true":
         result.diagnostics.append(
@@ -238,12 +263,20 @@ def _validate_tag_parent(
 def _validate_tag_value(
     result: ValidationResult,
     content: str,
+    tags: dict[str, Any],
 ) -> None:
     """Validate a tag value doc (.tag/key/value)."""
     prompt = _PROMPT_SECTION_RE.search(content)
     if prompt and not prompt.group(1).strip():
         result.diagnostics.append(
             Diagnostic("warning", "## Prompt section is present but empty")
+        )
+    if "_value_regex" in tags:
+        result.diagnostics.append(
+            Diagnostic(
+                "warning",
+                "_value_regex only applies to parent tag docs (.tag/key), not value docs",
+            )
         )
 
 
