@@ -181,17 +181,13 @@ echo "--- Creating GitHub release ---"
 
 # Generate release notes based on type
 if [ "$RELEASE_TYPE" = "minor" ]; then
-  # Minor: structured format with ## What's new header
-  # Collect commits since the last minor version tag (x.Y.0)
-  PREV_MINOR="v$MAJOR.$((MINOR)).0"
-  if ! git tag -l "$PREV_MINOR" | grep -q .; then
-    PREV_MINOR="$LAST_TAG"
-  fi
-
+  # Minor: structured format with ## What's new header.
+  # Use LAST_TAG (most recent tag of any kind) so patch-release commits
+  # that already have their own release notes are not repeated here.
   RELEASE_BODY=$(cat <<NOTES
 ## What's new
 
-$(git log "$PREV_MINOR".."$TAG" --pretty=format:'- %s' | grep -v "^- v[0-9]" || true)
+$(git log "$LAST_TAG".."$TAG" --pretty=format:'- %s' | grep -v "^- v[0-9]" || true)
 NOTES
 )
 else
