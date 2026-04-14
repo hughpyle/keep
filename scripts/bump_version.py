@@ -21,6 +21,7 @@ TARGETS = [
     ("SKILL.md",                                       r'(version:\s*)\S+'),
     ("keep/data/openclaw-plugin/openclaw.plugin.json", r'("version":\s*)"[^"]+"'),
     ("keep/data/openclaw-plugin/package.json",         r'("version":\s*)"[^"]+"'),
+    ("keep/data/openclaw-plugin/package-lock.json",    r'("version":\s*)"[^"]+"', 2),
     ("keep/data/openclaw-plugin/src/index.ts",             r'(version:\s*)"[^"]+"', 0),
     ("keep/data/openclaw-plugin/src/mcp-transport.ts",   r'(version:\s*)"[^"]+"'),
     ("claude-code-plugin/.claude-plugin/plugin.json",    r'("version":\s*)"[^"]+"'),

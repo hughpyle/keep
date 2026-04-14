@@ -120,6 +120,7 @@ git add \
     SKILL.md \
     keep/data/openclaw-plugin/openclaw.plugin.json \
     keep/data/openclaw-plugin/package.json \
+    keep/data/openclaw-plugin/package-lock.json \
     keep/data/openclaw-plugin/src/index.ts \
     keep/data/openclaw-plugin/src/mcp-transport.ts \
     claude-code-plugin/.claude-plugin/plugin.json

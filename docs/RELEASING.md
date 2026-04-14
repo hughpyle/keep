@@ -60,8 +60,10 @@ scripts/release.sh 0.131.0        # explicit version
 `release.sh` runs six steps in order, exiting on the first failure:
 
 1. **Bump version** via `scripts/bump_version.py`. Updates `pyproject.toml`,
-   `uv.lock`, `SKILL.md`, the four openclaw-plugin manifests, and the
-   Claude Code plugin manifest.
+   `uv.lock`, `SKILL.md`, the OpenClaw plugin manifests and source files
+   (`openclaw.plugin.json`, `package.json`, `package-lock.json`,
+   `src/index.ts`, `src/mcp-transport.ts`), and the Claude Code plugin
+   manifest.
 2. **Commit and tag.** Stages an explicit list of files (not `git add -A`)
    so unrelated working-tree changes can't sneak into the release commit.
    Builds the commit subject from the previous tag's commit message.

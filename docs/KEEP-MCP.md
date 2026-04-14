@@ -49,8 +49,11 @@ kiro-cli mcp add --name keep --scope global -- keep --store "$KEEP_STORE_PATH" m
 
 ```bash
 codex mcp add keep -- keep --store "$KEEP_STORE_PATH" mcp
-codex mcp add keep --env KEEP_STORE_PATH="$KEEP_STORE_PATH" -- keep mcp
 ```
+
+Prefer the explicit `--store` form above. Use `--env KEEP_STORE_PATH=...`
+only if you specifically need Codex to launch `keep mcp` without embedded
+command arguments.
 
 ### VS Code
 
