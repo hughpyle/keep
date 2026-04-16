@@ -16,6 +16,7 @@ from keep.cli_app import (
     _write_markdown_export,
 )
 from keep.config import StoreConfig, ProviderConfig
+from keep.markdown_import import load_markdown_import
 
 
 @pytest.fixture
@@ -178,6 +179,134 @@ class TestExportImport:
         # Verify versions imported
         versions = fresh_keeper.list_versions("notes")
         assert len(versions) >= 1
+
+    def test_import_markdown_honors_id_and_source_uri(self, keeper, tmp_path):
+        source = tmp_path / "cwe.md"
+        source.write_text(
+            """---
+_id: CWE-9999
+title: Example Weakness
+_source_uri: https://cwe.mitre.org/data/definitions/9999.html
+status: Draft
+taxonomy_mappings:
+  taxonomy_name: Foo
+tags:
+  topic: security
+  _content_type: text/markdown
+---
+Example markdown body.
+""",
+            encoding="utf-8",
+        )
+
+        stats = keeper.import_markdown(source)
+
+        item = keeper.get("CWE-9999")
+        assert stats["imported"] == 1
+        assert item is not None
+        assert item.summary == "Example markdown body.\n"
+        assert item.tags["title"] == "Example Weakness"
+        assert item.tags["_source_uri"] == "https://cwe.mitre.org/data/definitions/9999.html"
+        assert item.tags["topic"] == "security"
+        assert item.tags["_content_type"] == "text/markdown"
+        assert "taxonomy_mappings" not in item.tags
+
+    def test_import_markdown_rewrites_export_local_edge_refs(self, keeper, tmp_path):
+        paper_dir = tmp_path / "https" / "example.com"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "paper.md").write_text(
+            """---
+_id: https://example.com/paper
+title: Example Paper
+---
+Reference body.
+""",
+            encoding="utf-8",
+        )
+        (tmp_path / "note.md").write_text(
+            """---
+_id: source-note
+title: Source Note
+references:
+  - "[[https/example.com/paper|Example Paper]]"
+---
+Source body.
+""",
+            encoding="utf-8",
+        )
+
+        keeper.import_markdown(tmp_path)
+
+        item = keeper.get("source-note")
+        assert item is not None
+        assert item.tags["references"] == "[[https://example.com/paper|Example Paper]]"
+
+    def test_import_markdown_restores_versions_and_parts(self, keeper, tmp_path):
+        (tmp_path / "doc.md").write_text(
+            """---
+_id: doc
+_created: 2026-01-01T00:00:00
+_updated: 2026-01-02T00:00:00
+---
+Current body.
+""",
+            encoding="utf-8",
+        )
+        sidecar_dir = tmp_path / "doc"
+        sidecar_dir.mkdir()
+        (sidecar_dir / "@P{1}.md").write_text(
+            """---
+_id: doc
+_part_num: 1
+_created: 2026-01-03T00:00:00
+---
+Part body.
+""",
+            encoding="utf-8",
+        )
+        (sidecar_dir / "@V{1}.md").write_text(
+            """---
+_id: doc
+_version: 7
+_version_offset: 1
+_created: 2025-12-31T00:00:00
+---
+Older body.
+""",
+            encoding="utf-8",
+        )
+
+        stats = keeper.import_markdown(tmp_path)
+
+        assert stats["imported"] == 1
+        versions = keeper.list_versions("doc")
+        assert len(versions) == 1
+        assert versions[0].summary == "Older body.\n"
+        part = keeper._document_store.get_part(
+            keeper._resolve_doc_collection(),
+            "doc",
+            1,
+        )
+        assert part is not None
+        assert part.summary == "Part body.\n"
+
+    def test_load_markdown_import_reports_progress(self, tmp_path):
+        (tmp_path / "one.md").write_text("---\n_id: one\n---\nOne.\n", encoding="utf-8")
+        subdir = tmp_path / "nested"
+        subdir.mkdir()
+        (subdir / "two.md").write_text("---\n_id: two\n---\nTwo.\n", encoding="utf-8")
+
+        events: list[tuple[int, int, str]] = []
+        documents, _ref_map = load_markdown_import(
+            tmp_path,
+            progress=lambda cur, total, label: events.append((cur, total, label)),
+        )
+
+        assert [doc["id"] for doc in documents] == ["one", "two"]
+        assert events == [
+            (1, 2, "nested/two.md"),
+            (2, 2, "one.md"),
+        ]
 
     def test_merge_skips_existing(self, keeper):
         """Merge mode skips documents with existing IDs."""

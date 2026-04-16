@@ -2296,35 +2296,92 @@ def _data_export_markdown(
 
 @data_app.command("import")
 def data_import(
-    file: Annotated[str, typer.Argument(help="JSON export file to import")],
+    file: Annotated[str, typer.Argument(help="JSON export file, markdown file, or markdown directory to import")],
     mode: Annotated[str, typer.Option("--mode", "-m", help="merge or replace")] = "merge",
+    format: Annotated[str, typer.Option("--format", "-f", help="auto, json, or md")] = "auto",
 ):
-    """Import documents from a JSON export file."""
+    """Import documents from a JSON export or recursive markdown source."""
     if mode not in ("merge", "replace"):
         typer.echo(f"Error: --mode must be 'merge' or 'replace', got '{mode}'", err=True)
         raise SystemExit(1)
+    if format not in ("auto", "json", "md"):
+        typer.echo(
+            f"Error: --format must be 'auto', 'json', or 'md', got '{format}'",
+            err=True,
+        )
+        raise SystemExit(1)
 
-    if file == "-":
-        data = json.loads(sys.stdin.read())
-    else:
+    p: Path | None = None
+    if file != "-":
         p = Path(file)
         if not p.exists():
             typer.echo(f"Error: file not found: {file}", err=True)
             raise SystemExit(1)
-        data = json.loads(p.read_text(encoding="utf-8"))
+
+    import_format = format
+    if import_format == "auto":
+        if file == "-":
+            import_format = "json"
+        elif p is not None and (p.is_dir() or p.suffix.lower() == ".md"):
+            import_format = "md"
+        else:
+            import_format = "json"
 
     if mode == "replace":
-        doc_count = len(data.get("documents", []))
-        if not typer.confirm(
-            f"This will delete all existing documents and import {doc_count} from {file}. Continue?"
-        ):
-            raise SystemExit(0)
+        if import_format == "json":
+            if file == "-":
+                data = json.loads(sys.stdin.read())
+            else:
+                assert p is not None
+                data = json.loads(p.read_text(encoding="utf-8"))
+            doc_count = len(data.get("documents", []))
+            if not typer.confirm(
+                f"This will delete all existing documents and import {doc_count} from {file}. Continue?"
+            ):
+                raise SystemExit(0)
+        else:
+            if not typer.confirm(
+                f"This will delete all existing documents and import markdown from {file}. Continue?"
+            ):
+                raise SystemExit(0)
 
     from .daemon_client import resolve_store_path
     from .api import Keeper
     kp = Keeper(store_path=resolve_store_path(_global_store))
-    stats = kp.import_data(data, mode=mode)
-    kp.close()
+    try:
+        if import_format == "json":
+            if mode != "replace":
+                if file == "-":
+                    data = json.loads(sys.stdin.read())
+                else:
+                    assert p is not None
+                    data = json.loads(p.read_text(encoding="utf-8"))
+            stats = kp.import_data(data, mode=mode)
+        else:
+            if file == "-":
+                typer.echo("Error: markdown import does not support stdin", err=True)
+                raise SystemExit(1)
+            assert p is not None
+            from .markdown_import import count_markdown_import_files
+            show_progress = False
+            progress = None
+            total_files = count_markdown_import_files(p)
+            if total_files > 1 and sys.stderr.isatty():
+                from .console_support import _progress_bar
+
+                show_progress = True
+
+                def progress(current: int, total: int, label: str) -> None:
+                    if total > 1:
+                        _progress_bar(current, total, label, err=True)
+
+            try:
+                stats = kp.import_markdown(p, mode=mode, progress=progress)
+            finally:
+                if show_progress:
+                    _clear_progress_line()
+    finally:
+        kp.close()
 
     typer.echo(
         f"Imported {stats['imported']} documents "

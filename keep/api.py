@@ -43,6 +43,7 @@ import os
 import sys
 
 from .config import load_or_create_config, save_config, StoreConfig, EmbeddingIdentity
+from .markdown_import import load_markdown_import
 from .markdown_sync import (
     DOC_STRUCTURAL_MUTATIONS,
     DOC_UPDATE_MUTATION,
@@ -79,7 +80,7 @@ from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, EdgeRef, TagMap,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
-    iter_tag_pairs, note_display_name, normalize_edge_value, set_tag_values, tag_values, parse_ref,
+    iter_tag_pairs, note_display_name, normalize_edge_value, set_tag_values, tag_values, parse_ref, format_ref,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
     parse_utc_timestamp, validate_tag_key, validate_id, normalize_id, is_part_id,
     is_system_id, file_uri_to_path,
@@ -1681,9 +1682,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 f"Export format version {data['version']} is not supported "
                 f"(this version supports up to 3)"
             )
+        return self._import_documents(data.get("documents", []), mode=mode)
 
-        doc_coll = self._resolve_doc_collection()
-        documents = data.get("documents", [])
+    def _collect_import_edge_keys(self, documents: list[dict[str, Any]]) -> set[str]:
+        """Return edge-tag keys declared either in the batch or existing store."""
         incoming_edge_keys: set[str] = set()
         for doc in documents:
             doc_id = str(doc.get("id", ""))
@@ -1695,20 +1697,63 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             raw_tags = doc.get("tags", {})
             if isinstance(raw_tags, dict) and raw_tags.get("_inverse"):
                 incoming_edge_keys.add(key)
+        return incoming_edge_keys
 
-        def _normalize_import_edge_tags(tags: dict[str, Any]) -> None:
-            self._normalize_edge_tag_values(tags, doc_coll)
-            for key in incoming_edge_keys:
-                if key not in tags:
-                    continue
-                value = tags[key]
-                if isinstance(value, list):
-                    tags[key] = [
-                        normalize_edge_value(v) if isinstance(v, str) else v
-                        for v in value
-                    ]
-                elif isinstance(value, str):
-                    tags[key] = normalize_edge_value(value)
+    @staticmethod
+    def _rewrite_import_edge_ref(value: str, ref_map: dict[str, str] | None) -> str:
+        """Map exported vault-local refs back to canonical keep ids."""
+        if not ref_map or "[[" not in value:
+            return value
+        stripped = value.strip()
+        target, alias = parse_ref(stripped)
+        mapped = ref_map.get(target)
+        if mapped is None:
+            return stripped
+        return format_ref(mapped, alias)
+
+    def _normalize_import_edge_tags(
+        self,
+        tags: dict[str, Any],
+        *,
+        doc_coll: str,
+        incoming_edge_keys: set[str],
+        ref_map: dict[str, str] | None = None,
+    ) -> None:
+        """Normalize import-time edge tags, optionally remapping export refs."""
+        if not tags:
+            return
+        for key in list(tags.keys()):
+            if key.startswith(SYSTEM_TAG_PREFIX):
+                continue
+            is_edge_key = key in incoming_edge_keys
+            if not is_edge_key:
+                td_tags = self._get_tagdoc_tags(key, doc_coll)
+                is_edge_key = bool(td_tags and td_tags.get("_inverse"))
+            if not is_edge_key:
+                continue
+
+            value = tags[key]
+            if isinstance(value, list):
+                tags[key] = [
+                    normalize_edge_value(self._rewrite_import_edge_ref(v, ref_map))
+                    if isinstance(v, str)
+                    else v
+                    for v in value
+                ]
+            elif isinstance(value, str):
+                rewritten = self._rewrite_import_edge_ref(value, ref_map)
+                tags[key] = normalize_edge_value(rewritten)
+
+    def _import_documents(
+        self,
+        documents: list[dict[str, Any]],
+        *,
+        mode: str = "merge",
+        ref_map: dict[str, str] | None = None,
+    ) -> dict:
+        """Import already-parsed documents into the store."""
+        doc_coll = self._resolve_doc_collection()
+        incoming_edge_keys = self._collect_import_edge_keys(documents)
 
         if mode == "replace":
             self._document_store.delete_collection_all(doc_coll)
@@ -1731,7 +1776,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 source=f"Import document tags ({doc_id})",
                 check_constraints=False,
             )
-            _normalize_import_edge_tags(doc["tags"])
+            self._normalize_import_edge_tags(
+                doc["tags"],
+                doc_coll=doc_coll,
+                incoming_edge_keys=incoming_edge_keys,
+                ref_map=ref_map,
+            )
             for ver in doc.get("versions", []):
                 ver_num = ver.get("version", "?")
                 ver["tags"] = self._validate_tag_map(
@@ -1739,7 +1789,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     source=f"Import version tags ({doc_id}@v{ver_num})",
                     check_constraints=False,
                 )
-                _normalize_import_edge_tags(ver["tags"])
+                self._normalize_import_edge_tags(
+                    ver["tags"],
+                    doc_coll=doc_coll,
+                    incoming_edge_keys=incoming_edge_keys,
+                    ref_map=ref_map,
+                )
             for part in doc.get("parts", []):
                 part_num = part.get("part_num", "?")
                 part["tags"] = self._validate_tag_map(
@@ -1747,7 +1802,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     source=f"Import part tags ({doc_id}@p{part_num})",
                     check_constraints=False,
                 )
-                _normalize_import_edge_tags(part["tags"])
+                self._normalize_import_edge_tags(
+                    part["tags"],
+                    doc_coll=doc_coll,
+                    incoming_edge_keys=incoming_edge_keys,
+                    ref_map=ref_map,
+                )
                 part["summary"] = str(part.get("content") or part.get("summary") or "")
 
         # Filter to importable documents
@@ -1810,6 +1870,17 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             "parts": stats["parts"],
             "queued": queued,
         }
+
+    def import_markdown(
+        self,
+        source: str | Path,
+        *,
+        mode: str = "merge",
+        progress: Any | None = None,
+    ) -> dict:
+        """Import one markdown file or a recursive markdown directory tree."""
+        documents, ref_map = load_markdown_import(source, progress=progress)
+        return self._import_documents(documents, mode=mode, ref_map=ref_map)
 
     @property
     def embedding_identity(self) -> EmbeddingIdentity | None:
@@ -2032,7 +2103,21 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         """Return cached parent tagdoc tags for one key, if present."""
         if key not in self._tagdoc_cache:
             parent = self._document_store.get(doc_coll, f".tag/{key}")
-            self._tagdoc_cache[key] = parent.tags if parent else None
+            tags = parent.tags if parent else None
+            if tags is None:
+                try:
+                    from .system_docs import SYSTEM_DOC_DIR, SYSTEM_DOC_IDS, _load_frontmatter
+
+                    tagdoc_id = f".tag/{key}"
+                    rel_path = next(
+                        (rel for rel, doc_id in SYSTEM_DOC_IDS.items() if doc_id == tagdoc_id),
+                        None,
+                    )
+                    if rel_path is not None:
+                        _, tags = _load_frontmatter(SYSTEM_DOC_DIR / rel_path)
+                except Exception:
+                    tags = None
+            self._tagdoc_cache[key] = tags
         return self._tagdoc_cache[key]
 
     def _normalize_valid_edge_target(

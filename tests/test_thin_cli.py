@@ -21,6 +21,7 @@ from keep.cli_app import (
     _truncate,
     _date,
     data_export,
+    data_import,
     put,
 )
 
@@ -240,6 +241,39 @@ def test_data_export_stop_implies_markdown_mode(capsys):
 
     captured = capsys.readouterr()
     assert "Stopped markdown sync: /tmp/vault" in captured.err
+
+
+def test_data_import_markdown_shows_progress_for_multiple_files(tmp_path, capsys):
+    (tmp_path / "one.md").write_text("---\n_id: one\n---\nOne.\n", encoding="utf-8")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "two.md").write_text("---\n_id: two\n---\nTwo.\n", encoding="utf-8")
+
+    keeper = MagicMock()
+
+    def _fake_import_markdown(_path, *, mode="merge", progress=None):
+        assert mode == "merge"
+        assert progress is not None
+        progress(1, 2, "nested/two.md")
+        progress(2, 2, "one.md")
+        return {"imported": 2, "versions": 0, "parts": 0, "skipped": 0, "queued": 2}
+
+    keeper.import_markdown.side_effect = _fake_import_markdown
+    progress_calls: list[tuple[int, int, str]] = []
+
+    with patch("keep.daemon_client.resolve_store_path", return_value=tmp_path), \
+         patch("keep.api.Keeper", return_value=keeper), \
+         patch("keep.cli_app.sys.stderr.isatty", return_value=True), \
+         patch("keep.console_support._progress_bar", side_effect=lambda cur, total, label, err=True: progress_calls.append((cur, total, label))), \
+         patch("keep.cli_app._clear_progress_line"):
+        data_import(file=str(tmp_path), format="md")
+
+    captured = capsys.readouterr()
+    assert progress_calls == [
+        (1, 2, "nested/two.md"),
+        (2, 2, "one.md"),
+    ]
+    assert "Imported 2 documents" in captured.err
 
 
 def test_render_context_with_version():

@@ -6,7 +6,7 @@ Defines interface contracts at three levels:
 - VectorStoreProtocol / DocumentStoreProtocol: internal storage backends
 """
 
-from typing import Any, Iterator, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Iterator, Optional, Protocol, runtime_checkable
 
 from .document_store import DocumentRecord, PartInfo, VersionInfo
 from .pending_summaries import PendingSummary
@@ -255,6 +255,14 @@ class KeeperProtocol(FlowHostProtocol, Protocol):
     ) -> dict: ...
 
     def import_data(self, data: dict, *, mode: str = "merge") -> dict: ...
+
+    def import_markdown(
+        self,
+        source: str,
+        *,
+        mode: str = "merge",
+        progress: Callable[[int, int, str], None] | None = None,
+    ) -> dict: ...
 
     def close(self) -> None: ...
 

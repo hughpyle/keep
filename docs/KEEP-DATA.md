@@ -157,7 +157,7 @@ keep daemon                    # Shows "Markdown mirrors active: N" when mirrors
 | Feature | JSON (`--format json`) | Markdown (`--format md`) |
 |---|---|---|
 | Output | Single file | Directory of `.md` files |
-| Round-trip import | Yes (`keep data import`) | No (one-way export) |
+| Round-trip import | Yes (`keep data import`) | Yes (`keep data import PATH --format md`) |
 | Human browsable | No | Yes (grep, Obsidian, etc.) |
 | Continuous sync | No | Yes (`--sync`) |
 | Parts/versions | Always included | Opt-in (`--include-parts`, `--include-versions`) |
@@ -169,7 +169,15 @@ keep daemon                    # Shows "Markdown mirrors active: N" when mirrors
 keep data import backup.json                 # Merge: skip existing IDs
 keep data import backup.json --mode replace  # Replace: clear store first (prompts for confirmation)
 keep data import -                           # Read from stdin
+keep data import ~/vault --format md         # Recursive markdown import
+keep data import ~/vault                     # Auto-detect dir/.md as markdown
 ```
+
+Markdown import walks `.md` files recursively, honors `_id` and `_source_uri`,
+imports top-level scalar tags and scalar lists, and skips exporter-owned
+metadata such as `_content_hash`, `_version_offset`, and chain navigation
+frontmatter. Keep-export sidecars (`@P{N}.md`, `@V{N}.md`) are restored as
+parts and archived versions when present.
 
 ### Import Modes
 
@@ -255,5 +263,6 @@ data = kp.export_data(include_system=False)       # Skip system docs
 # Import
 stats = kp.import_data(data, mode="merge")        # Skip existing
 stats = kp.import_data(data, mode="replace")      # Clear first
+stats = kp.import_markdown("~/vault", mode="merge")  # Recursive markdown import
 # stats = {"imported": 10, "skipped": 2, "versions": 5, "parts": 3, "queued": 10}
 ```
