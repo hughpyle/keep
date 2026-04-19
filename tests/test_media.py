@@ -149,22 +149,23 @@ class TestAfterWriteStateDoc:
 
     def _eval(self, doc, system=None, **item_overrides):
         from keep.state_doc import evaluate_state_doc
+        # Unified item context shape
         item = {
+            "id": "%test-item",
+            "summary": "",
             "content_length": 50,
-            "has_summary": False,
-            "has_uri": False,
-            "uri": "",
-            "is_system_note": False,
-            "tags": {},
-            "has_media_content": False,
-            "has_content": True,
             "content_type": "",
+            "uri": "",
+            "created": "",
+            "updated": "",
+            "accessed": "",
+            "tags": {},
         }
         item.update(item_overrides)
         sys = {"has_media_provider": True}
         if system is not None:
             sys.update(system)
-        ctx = {"item": item, "params": {"max_summary_length": 2000}, "system": sys}
+        ctx = {"item": item, "params": {"max_summary_length": 2000, "item_id": item["id"]}, "system": sys}
         result = evaluate_state_doc(doc, ctx, run_action=None)
         return [a["action"] for a in result.actions]
 
@@ -206,7 +207,7 @@ class TestAfterWriteStateDoc:
 
     def test_system_note_skips_analyze_and_tag(self, after_write_doc):
         """System notes (dot-prefix IDs) skip analyze, auto_tag, and resolve_duplicates."""
-        actions = self._eval(after_write_doc, is_system_note=True)
+        actions = self._eval(after_write_doc, id=".meta/test")
         assert "analyze" not in actions
         assert "auto_tag" not in actions
         assert "resolve_duplicates" not in actions
@@ -214,35 +215,36 @@ class TestAfterWriteStateDoc:
     def test_image_uri_fires_describe(self, after_write_doc):
         """URI-backed image content fires describe."""
         actions = self._eval(after_write_doc,
-                             has_uri=True, has_media_content=True)
+                             uri="file:///tmp/photo.jpg",
+                             content_type="image/jpeg")
         assert "describe" in actions
 
     def test_text_uri_skips_describe(self, after_write_doc):
         """URI-backed text content does NOT fire describe."""
         actions = self._eval(after_write_doc,
-                             has_uri=True, has_media_content=False)
+                             uri="file:///tmp/doc.txt",
+                             content_type="text/plain")
         assert "describe" not in actions
 
     def test_remote_binary_uri_skips_describe(self, after_write_doc):
         """Remote binary URIs skip describe because no local media path survives."""
         actions = self._eval(
             after_write_doc,
-            has_uri=True,
             uri="https://example.com/policy.pdf",
             content_type="application/pdf",
-            has_media_content=False,
         )
         assert "describe" not in actions
 
     def test_ocr_pages_fires_ocr(self, after_write_doc):
         """Items with _ocr_pages tag and URI fire OCR."""
         actions = self._eval(after_write_doc,
-                             has_uri=True, tags={"_ocr_pages": "[1,2]"})
+                             uri="file:///scan.pdf",
+                             tags={"_ocr_pages": "[1,2]"})
         assert "ocr" in actions
 
     def test_no_content_skips_tag(self, after_write_doc):
         """Empty inline content skips both auto_tag and analyze."""
-        actions = self._eval(after_write_doc, has_content=False)
+        actions = self._eval(after_write_doc, content_length=0)
         assert "auto_tag" not in actions
         assert "analyze" not in actions
 
@@ -262,17 +264,18 @@ class TestAfterWriteStateDoc:
 
         ctx = {
             "item": {
+                "id": "%pdf-test",
+                "summary": "",
                 "content_length": 50,
-                "has_summary": False,
-                "has_uri": True,
-                "uri": "https://example.com/policy.pdf",
-                "is_system_note": False,
-                "tags": {},
-                "has_media_content": False,
-                "has_content": True,
                 "content_type": "application/pdf",
+                "uri": "https://example.com/policy.pdf",
+                "created": "",
+                "updated": "",
+                "accessed": "",
+                "tags": {},
             },
             "params": {
+                "item_id": "%pdf-test",
                 "max_summary_length": 2000,
                 "metadata": {
                     "doc_links": ["https://travel.example.com"],
@@ -348,10 +351,8 @@ class TestAfterWriteDispatch:
 
         ctx = _flow_item_context(kp)
         assert ctx is not None, "Should enqueue a flow item"
-        assert ctx["has_media_content"] is True
-        assert ctx["has_uri"] is True
-        # Verify system context includes media provider flag
-        items = _claimed_flow_items(kp)  # already drained above
+        assert ctx["content_type"] == "image/jpeg"
+        assert ctx["uri"].startswith("file://")
         kp.close()
 
     def test_image_put_without_media_config(self, mock_providers, tmp_path):
@@ -395,7 +396,8 @@ class TestAfterWriteDispatch:
 
         ctx = _flow_item_context(kp)
         assert ctx is not None
-        assert ctx["has_media_content"] is True
+        assert ctx["content_type"] == "audio/mpeg"
+        assert ctx["uri"].startswith("file://")
         kp.close()
 
     def test_remote_pdf_put_skips_describe_context(self, mock_providers, tmp_path):
@@ -417,9 +419,8 @@ class TestAfterWriteDispatch:
 
         ctx = _flow_item_context(kp)
         assert ctx is not None
-        assert ctx["has_uri"] is True
+        assert ctx["uri"] == "https://example.com/policy.pdf"
         assert ctx["content_type"] == "application/pdf"
-        assert ctx["has_media_content"] is False
         kp.close()
 
     def test_text_uri_context(self, mock_providers, tmp_path):
@@ -439,7 +440,6 @@ class TestAfterWriteDispatch:
 
         ctx = _flow_item_context(kp)
         assert ctx is not None
-        assert ctx["has_media_content"] is False
         assert ctx["content_type"] == "text/markdown"
         kp.close()
 
@@ -454,9 +454,8 @@ class TestAfterWriteDispatch:
 
         ctx = _flow_item_context(kp)
         assert ctx is not None
-        assert ctx["has_content"] is True
-        assert ctx["has_uri"] is False
-        assert ctx["has_media_content"] is False
+        assert ctx["content_length"] > 0
+        assert ctx["uri"] == ""
         assert ctx["content_type"] == "text/markdown"
         kp.close()
 

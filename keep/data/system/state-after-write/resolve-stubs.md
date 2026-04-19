@@ -7,5 +7,5 @@ tags:
 # Skips link-sourced stubs (those are just reference placeholders).
 rules:
   - id: resolve_stubs
-    when: "item.has_uri && !item.is_system_note && !(has(item.tags._source) && item.tags._source == 'link')"
+    when: "item.uri != '' && !item.id.startsWith('.') && !(has(item.tags._source) && item.tags._source == 'link')"
     do: resolve_stubs

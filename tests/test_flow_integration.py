@@ -1288,8 +1288,10 @@ class TestFlowWorkItemExecution:
         params = item.input["params"]
         assert params["item_id"] == "shape-1"
         assert "item" in params
-        assert params["item"]["has_content"] is True
+        assert params["item"]["id"] == "shape-1"
         assert params["item"]["content_length"] > 0
+        assert "summary" in params["item"]
+        assert "tags" in params["item"]
         assert "system" in params
         assert "max_summary_length" in params
 

@@ -602,6 +602,52 @@ class Item:
 
 
 # ---------------------------------------------------------------------------
+# Unified item context for CEL evaluation
+# ---------------------------------------------------------------------------
+
+
+def build_item_context(
+    *,
+    id: str,
+    tags: dict[str, Any],
+    summary: str = "",
+    content_length: Optional[int] = None,
+    content_type: str = "",
+    uri: str = "",
+) -> dict[str, Any]:
+    """Build the canonical item context dict used in CEL evaluation.
+
+    This is the single source of truth for the ``item`` schema available
+    in ``when:`` predicates across state docs, prompt conditions, edge
+    conditions, and tag classifier conditions.
+
+    All callers — after-write flows, prompt resolution, edge
+    materialization — must use this builder so the item shape is
+    consistent everywhere.
+
+    ``content_length`` is ``None`` when content is not available (edge
+    and prompt evaluation contexts).  CEL expressions that compare
+    ``None > N`` will raise a type error, logged as a warning by
+    ``_eval_predicate`` — visible, safe, and actionable.
+    """
+    return {
+        # Identity
+        "id": id,
+        # Content metadata
+        "summary": summary,
+        "content_length": content_length,
+        "content_type": content_type,
+        "uri": uri,
+        # Timestamps (from system tags)
+        "created": tags.get("_created", ""),
+        "updated": tags.get("_updated", ""),
+        "accessed": tags.get("_accessed", ""),
+        # Full tag map
+        "tags": tags,
+    }
+
+
+# ---------------------------------------------------------------------------
 # ItemContext — assembled display context for a single item
 # ---------------------------------------------------------------------------
 

@@ -23,6 +23,7 @@ from .processors import _content_hash
 from .providers.base import EmbedTask
 from .types import (
     SYSTEM_TAG_PREFIX,
+    build_item_context,
     casefold_tags,
     casefold_tags_for_index,
     filter_non_system_tags,
@@ -35,15 +36,11 @@ from .tracing import get_tracer
 
 logger = logging.getLogger(__name__)
 
-_DESCRIBABLE_MEDIA_PREFIXES = ("image/", "audio/", "video/")
-
-
 def _is_action_output(value: Any) -> bool:
     """Return whether a completed remote payload already looks like action output."""
     if not isinstance(value, dict):
         return False
     return "mutations" in value or bool(value.get("skipped"))
-
 
 
 def _size_priority_bump(content_len: int) -> int:
@@ -62,19 +59,6 @@ def _size_priority_bump(content_len: int) -> int:
     return 0
 
 
-def _has_local_describable_media(uri: str, content_type: str) -> bool:
-    """Return whether after-write can safely run ``describe``.
-
-    Media describers operate on durable local filesystem paths. Remote
-    HTTP(S) fetches may use temporary files during extraction, but those
-    files are deleted before after-write runs, so only local file URIs
-    and absolute paths are describable here.
-    """
-    if not uri or not content_type:
-        return False
-    if not (uri.startswith("file://") or uri.startswith("/")):
-        return False
-    return content_type.startswith(_DESCRIBABLE_MEDIA_PREFIXES)
 
 
 class BackgroundProcessingMixin:
@@ -250,22 +234,14 @@ class BackgroundProcessingMixin:
 
         flow_params: dict[str, Any] = {
             "item_id": item_id,
-            "item": {
-                "content_length": len(content),
-                "has_summary": bool(summary),
-                "has_uri": bool(uri),
-                "uri": uri or "",
-                "content_type": content_type or "",
-                "is_system_note": item_id.startswith("."),
-                "tags": all_tags,
-                # ``describe`` needs a durable local media path, not just any
-                # non-text content type. Remote binary fetches are extracted
-                # via temp files that no longer exist once after-write starts.
-                "has_media_content": _has_local_describable_media(
-                    uri or "", content_type or "",
-                ),
-                "has_content": bool(content),
-            },
+            "item": build_item_context(
+                id=item_id,
+                tags=all_tags,
+                summary=summary or "",
+                content_length=len(content),
+                content_type=content_type or "",
+                uri=uri or "",
+            ),
             "max_summary_length": self._config.max_summary_length,
             "system": {
                 "has_media_provider": self._config.media is not None,

@@ -6,7 +6,7 @@ tags:
 # Flag near-duplicate notes after write.
 rules:
   - id: find-duplicates
-    when: "!item.is_system_note && item.has_content"
+    when: "!item.id.startsWith('.') && item.content_length > 0"
     do: resolve_duplicates
     with:
       tag: duplicates

@@ -406,15 +406,15 @@ rules:
         body = """
 match: sequence
 rules:
-  - when: "!item.has_summary"
+  - when: "item.summary == ''"
     do: summarize
   - return: done
 """
         doc = parse_state_doc("test", body)
-        r1 = evaluate_state_doc(doc, {"item": {"has_summary": False}})
+        r1 = evaluate_state_doc(doc, {"item": {"summary": ""}})
         assert len(r1.actions) == 1
 
-        r2 = evaluate_state_doc(doc, {"item": {"has_summary": True}})
+        r2 = evaluate_state_doc(doc, {"item": {"summary": "A summary"}})
         assert len(r2.actions) == 0
 
     def test_string_equality(self):
@@ -490,23 +490,23 @@ rules:
 
 
 class TestAfterWriteIntegration:
-    """Test a realistic after-write state doc."""
+    """Test a realistic after-write state doc using the unified item context."""
 
     AFTER_WRITE = """
 match: all
 rules:
-  - when: "item.content_length > params.max_summary_length && !item.has_summary"
+  - when: "item.content_length > params.max_summary_length && item.summary == ''"
     id: summary
     do: summarize
     with:
       item_id: "{params.item_id}"
       max_length: 500
-  - when: "!item.is_system_note"
+  - when: "!item.id.startsWith('.')"
     id: tags
     do: tag
     with:
       item_id: "{params.item_id}"
-  - when: 'item.source == "uri" && has(item.ocr_pages)'
+  - when: "item.uri != '' && has(item.tags._ocr_pages)"
     do: ocr
     with:
       item_id: "{params.item_id}"
@@ -518,10 +518,12 @@ post:
         doc = parse_state_doc("after-write", self.AFTER_WRITE)
         ctx = {
             "item": {
+                "id": "%abc123",
+                "summary": "",
                 "content_length": 5000,
-                "has_summary": False,
-                "is_system_note": False,
-                "source": "inline",
+                "content_type": "text/plain",
+                "uri": "",
+                "tags": {},
             },
             "params": {"item_id": "%abc123", "max_summary_length": 2000},
         }
@@ -546,10 +548,12 @@ post:
         doc = parse_state_doc("after-write", self.AFTER_WRITE)
         ctx = {
             "item": {
+                "id": "%abc123",
+                "summary": "",
                 "content_length": 100,
-                "has_summary": False,
-                "is_system_note": False,
-                "source": "inline",
+                "content_type": "text/plain",
+                "uri": "",
+                "tags": {},
             },
             "params": {"item_id": "%abc123", "max_summary_length": 2000},
         }
@@ -562,10 +566,12 @@ post:
         doc = parse_state_doc("after-write", self.AFTER_WRITE)
         ctx = {
             "item": {
+                "id": ".meta/test",
+                "summary": "",
                 "content_length": 5000,
-                "has_summary": False,
-                "is_system_note": True,
-                "source": "inline",
+                "content_type": "text/plain",
+                "uri": "",
+                "tags": {},
             },
             "params": {"item_id": ".meta/test", "max_summary_length": 2000},
         }
@@ -654,3 +660,229 @@ rules:
             doc = parse_state_doc("test", body)
         assert len(doc.rules) == 2
         assert "rules[1] is not a mapping" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# build_item_context
+# ---------------------------------------------------------------------------
+
+
+class TestBuildItemContext:
+    """Tests for the unified item context builder."""
+
+    def test_minimal(self):
+        from keep.types import build_item_context
+
+        ctx = build_item_context(id="test", tags={})
+        assert ctx["id"] == "test"
+        assert ctx["summary"] == ""
+        assert ctx["content_length"] is None
+        assert ctx["content_type"] == ""
+        assert ctx["uri"] == ""
+        assert ctx["created"] == ""
+        assert ctx["updated"] == ""
+        assert ctx["accessed"] == ""
+        assert ctx["tags"] == {}
+
+    def test_full(self):
+        from keep.types import build_item_context
+
+        tags = {
+            "_created": "2026-01-01T00:00:00Z",
+            "_updated": "2026-01-02T00:00:00Z",
+            "_accessed": "2026-01-03T00:00:00Z",
+            "topic": "auth",
+        }
+        ctx = build_item_context(
+            id="%abc123",
+            tags=tags,
+            summary="A note about auth",
+            content_length=500,
+            content_type="text/markdown",
+            uri="file:///tmp/note.md",
+        )
+        assert ctx["id"] == "%abc123"
+        assert ctx["summary"] == "A note about auth"
+        assert ctx["content_length"] == 500
+        assert ctx["content_type"] == "text/markdown"
+        assert ctx["uri"] == "file:///tmp/note.md"
+        assert ctx["created"] == "2026-01-01T00:00:00Z"
+        assert ctx["updated"] == "2026-01-02T00:00:00Z"
+        assert ctx["accessed"] == "2026-01-03T00:00:00Z"
+        assert ctx["tags"]["topic"] == "auth"
+
+    def test_tags_reference_is_shared(self):
+        """The tags dict in the context is the same object passed in."""
+        from keep.types import build_item_context
+
+        tags = {"topic": "test"}
+        ctx = build_item_context(id="x", tags=tags)
+        assert ctx["tags"] is tags
+
+
+# ---------------------------------------------------------------------------
+# Sysdoc CEL expression regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestSysdocCELExpressions:
+    """Verify each rewritten state-doc when: expression evaluates correctly.
+
+    These are regression tests against the unified item context shape.
+    If an expression is changed in a state doc, the corresponding test
+    here should be updated to match.
+    """
+
+    def _eval(self, when_expr: str, item: dict, **extra) -> bool:
+        """Compile and evaluate a single CEL expression."""
+        body = f'''
+match: sequence
+rules:
+  - when: "{when_expr}"
+    return: matched
+  - return: unmatched
+'''
+        doc = parse_state_doc("test", body)
+        ctx = {"item": item, **extra}
+        return evaluate_state_doc(doc, ctx).terminal == "matched"
+
+    # -- summarize gate (state-after-write.md) --
+
+    def test_summarize_fires_long_no_summary(self):
+        assert self._eval(
+            "item.content_length > params.max_summary_length && item.summary == ''",
+            {"content_length": 5000, "summary": ""},
+            params={"max_summary_length": 3000},
+        )
+
+    def test_summarize_skips_short(self):
+        assert not self._eval(
+            "item.content_length > params.max_summary_length && item.summary == ''",
+            {"content_length": 100, "summary": ""},
+            params={"max_summary_length": 3000},
+        )
+
+    def test_summarize_skips_has_summary(self):
+        assert not self._eval(
+            "item.content_length > params.max_summary_length && item.summary == ''",
+            {"content_length": 5000, "summary": "Already summarized"},
+            params={"max_summary_length": 3000},
+        )
+
+    # -- describe gate (state-after-write.md) --
+
+    def test_describe_fires_local_image(self):
+        assert self._eval(
+            "(item.uri.startsWith('file://') || item.uri.startsWith('/')) && (item.content_type.startsWith('image/') || item.content_type.startsWith('audio/') || item.content_type.startsWith('video/')) && system.has_media_provider",
+            {"uri": "file:///tmp/photo.jpg", "content_type": "image/jpeg"},
+            system={"has_media_provider": True},
+        )
+
+    def test_describe_skips_remote_uri(self):
+        assert not self._eval(
+            "(item.uri.startsWith('file://') || item.uri.startsWith('/')) && (item.content_type.startsWith('image/') || item.content_type.startsWith('audio/') || item.content_type.startsWith('video/')) && system.has_media_provider",
+            {"uri": "https://example.com/photo.jpg", "content_type": "image/jpeg"},
+            system={"has_media_provider": True},
+        )
+
+    def test_describe_skips_no_provider(self):
+        assert not self._eval(
+            "(item.uri.startsWith('file://') || item.uri.startsWith('/')) && (item.content_type.startsWith('image/') || item.content_type.startsWith('audio/') || item.content_type.startsWith('video/')) && system.has_media_provider",
+            {"uri": "file:///tmp/photo.jpg", "content_type": "image/jpeg"},
+            system={"has_media_provider": False},
+        )
+
+    def test_describe_fires_bare_path(self):
+        assert self._eval(
+            "(item.uri.startsWith('file://') || item.uri.startsWith('/')) && (item.content_type.startsWith('image/') || item.content_type.startsWith('audio/') || item.content_type.startsWith('video/')) && system.has_media_provider",
+            {"uri": "/tmp/song.mp3", "content_type": "audio/mpeg"},
+            system={"has_media_provider": True},
+        )
+
+    # -- system note check (tag, duplicates, links, analyze, resolve-stubs) --
+
+    def test_system_note_skipped(self):
+        assert not self._eval(
+            "!item.id.startsWith('.') && item.content_length > 0",
+            {"id": ".meta/test", "content_length": 500},
+        )
+
+    def test_user_note_passes(self):
+        assert self._eval(
+            "!item.id.startsWith('.') && item.content_length > 0",
+            {"id": "%abc123", "content_length": 500},
+        )
+
+    def test_empty_content_skipped(self):
+        assert not self._eval(
+            "!item.id.startsWith('.') && item.content_length > 0",
+            {"id": "%abc123", "content_length": 0},
+        )
+
+    # -- analyze gate --
+
+    def test_analyze_fires_long_content(self):
+        assert self._eval(
+            "!item.id.startsWith('.') && (item.content_length > 500 || item.uri != '') && !(has(item.tags._source) && item.tags._source == 'link') && !(has(item.tags._source) && item.tags._source == 'auto-vivify')",
+            {"id": "%abc", "content_length": 1000, "uri": "", "tags": {}},
+        )
+
+    def test_analyze_fires_with_uri(self):
+        assert self._eval(
+            "!item.id.startsWith('.') && (item.content_length > 500 || item.uri != '') && !(has(item.tags._source) && item.tags._source == 'link') && !(has(item.tags._source) && item.tags._source == 'auto-vivify')",
+            {"id": "%abc", "content_length": 100, "uri": "file:///doc.pdf", "tags": {}},
+        )
+
+    def test_analyze_skips_link_stub(self):
+        assert not self._eval(
+            "!item.id.startsWith('.') && (item.content_length > 500 || item.uri != '') && !(has(item.tags._source) && item.tags._source == 'link') && !(has(item.tags._source) && item.tags._source == 'auto-vivify')",
+            {"id": "%abc", "content_length": 1000, "uri": "", "tags": {"_source": "link"}},
+        )
+
+    def test_analyze_skips_auto_vivify(self):
+        assert not self._eval(
+            "!item.id.startsWith('.') && (item.content_length > 500 || item.uri != '') && !(has(item.tags._source) && item.tags._source == 'link') && !(has(item.tags._source) && item.tags._source == 'auto-vivify')",
+            {"id": "%abc", "content_length": 1000, "uri": "", "tags": {"_source": "auto-vivify"}},
+        )
+
+    # -- resolve-stubs gate --
+
+    def test_resolve_stubs_fires(self):
+        assert self._eval(
+            "item.uri != '' && !item.id.startsWith('.') && !(has(item.tags._source) && item.tags._source == 'link')",
+            {"id": "%abc", "uri": "file:///doc.pdf", "tags": {}},
+        )
+
+    def test_resolve_stubs_skips_no_uri(self):
+        assert not self._eval(
+            "item.uri != '' && !item.id.startsWith('.') && !(has(item.tags._source) && item.tags._source == 'link')",
+            {"id": "%abc", "uri": "", "tags": {}},
+        )
+
+    # -- OCR gate --
+
+    def test_ocr_fires(self):
+        assert self._eval(
+            "'_ocr_pages' in item.tags && item.uri != ''",
+            {"uri": "file:///scan.pdf", "tags": {"_ocr_pages": "1,2,3"}},
+        )
+
+    def test_ocr_skips_no_pages(self):
+        assert not self._eval(
+            "'_ocr_pages' in item.tags && item.uri != ''",
+            {"uri": "file:///scan.pdf", "tags": {}},
+        )
+
+    # -- links gate --
+
+    def test_links_fires_markdown(self):
+        assert self._eval(
+            "!item.id.startsWith('.') && item.content_length > 0 && (item.content_type == 'text/markdown' || item.content_type == 'text/plain')",
+            {"id": "%abc", "content_length": 100, "content_type": "text/markdown"},
+        )
+
+    def test_links_skips_binary(self):
+        assert not self._eval(
+            "!item.id.startsWith('.') && item.content_length > 0 && (item.content_type == 'text/markdown' || item.content_type == 'text/plain')",
+            {"id": "%abc", "content_length": 100, "content_type": "image/png"},
+        )

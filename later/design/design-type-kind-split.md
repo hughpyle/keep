@@ -1,6 +1,6 @@
-# Design: Split `type` into `type` (entity-type) + `kind` (content-kind)
+# Design: Tags, Conditions, and Item Context
 
-Status: **implemented** (v0.140.0)
+Status: **phase 1 implemented** (type/kind split); phase 2 in design (unified CEL conditions)
 
 ## Motivation
 
@@ -180,7 +180,7 @@ separate change but enabled by this split. The mechanism (option C from the
 initial analysis) would be an `_applies_when:` field in tag-act.md's
 frontmatter, evaluated by TagClassifier before classification.
 
-## Status
+## Phase 1 Status
 
 - [x] Create `tag-kind.md` with content-kind vocabulary
 - [x] Update `tag-type.md` to entity-type only
@@ -188,4 +188,529 @@ frontmatter, evaluated by TagClassifier before classification.
 - [x] Update all system docs and user docs (including library frontmatter)
 - [x] Update tests (test_core.py, test_meta_resolution.py)
 - [x] Implement daemon startup migration
-- [ ] (Future) Condition `act` classifier on `type=conversation`
+
+---
+
+# Phase 2: Unified Item Context and CEL Conditions
+
+## Motivation
+
+Three systems evaluate conditions against item properties, each using a
+different item representation:
+
+1. **State-doc CEL** (`when:` rules) — purpose-built `item` dict with
+   `has_*` booleans, no `id`, no `summary`, no timestamps
+2. **Prompt matching** — simple `key=value` DSL against tags only
+3. **Edge tag applicability** — no condition mechanism at all
+
+Meanwhile, the item's *expressed* shape (get output, export frontmatter) is
+different from the CEL shape. Writing a `_when` condition should feel natural
+to someone who has seen items in output — the internal and expressed shapes
+must converge.
+
+## Unified Item Context
+
+A single `item` dict shape used everywhere: CEL evaluation, prompt
+conditions, edge conditions, tag classifier conditions.
+
+```python
+item = {
+    # Identity
+    "id": str,                    # note ID
+
+    # Content metadata
+    "summary": str,               # summary text ("" if unset)
+    "content_length": int,        # length of content in chars
+    "content_type": str,          # MIME type ("" if unset)
+    "uri": str,                   # source URI ("" if none)
+
+    # Timestamps
+    "created": str,               # ISO timestamp
+    "updated": str,               # ISO timestamp
+    "accessed": str,              # ISO timestamp
+
+    # All tags
+    "tags": dict[str, Any],       # full tag map including system tags
+}
+```
+
+### What this eliminates
+
+| Old field | Replacement in CEL |
+|---|---|
+| `item.has_uri` | `item.uri != ""` |
+| `item.has_summary` | `item.summary != ""` |
+| `item.has_content` | `item.content_length > 0` |
+| `item.is_system_note` | `item.id.startsWith(".")` |
+| `item.has_media_content` | dropped — use `item.content_type` tests |
+| `params.item_id` | `item.id` |
+
+### Construction
+
+A single builder function `build_item_context(doc, content="")` produces
+this dict from either:
+- A stored `Item`/document record (for prompt matching, edge conditions)
+- Raw write params (for after-write state docs, as today)
+
+The builder lives in one place and is the single source of truth for the
+item schema.
+
+## CEL as the Unified Condition Language
+
+### `_when` on tagdocs
+
+Tagdocs (`.tag/{name}`) gain an optional `_when:` field in frontmatter.
+Evaluated against the **source note's** item context.
+
+```yaml
+# .tag/from
+tags:
+  _inverse: from_to
+  _when: "'email' in item.tags.type"
+```
+
+Edge materialization checks `_when` before creating the edge. For inverse
+edges, the condition is on the *source* node (the one with the tag), not
+the target — if the source doesn't meet the condition, the edge was never
+created and won't appear in either direction.
+
+### `_when` on tag classifiers
+
+Constrained tag specs gain `_when:` to control when classification applies:
+
+```yaml
+# .tag/act
+tags:
+  _constrained: "true"
+  _when: "'conversation' in item.tags.type"
+```
+
+TagClassifier evaluates `_when` before running classification for that tag.
+
+### `_when` on prompt docs
+
+Prompt docs (`.prompt/{prefix}/*`) replace the `key=value` match-rule DSL
+with a `_when:` frontmatter field:
+
+```yaml
+# .prompt/analyze/conversation
+tags:
+  category: system
+  context: prompt
+  _when: "'conversation' in item.tags.type"
+```
+
+`_resolve_prompt_doc()` evaluates `_when` instead of parsing match rules.
+Specificity is no longer needed — if multiple prompts match, the most
+specific `_when` (by convention) wins, or an explicit `_priority: N` field
+breaks ties.
+
+**Backwards compatibility**: existing `key=value` match rules in the doc
+body continue to work during a transition period. If `_when:` is present
+in frontmatter, it takes precedence.
+
+## State-doc CEL Expression Rewrites
+
+All existing `when:` expressions that reference `item.*` must be updated
+to match the new unified schema.
+
+### after-write rules
+
+| File | Current | New |
+|---|---|---|
+| `state-after-write.md` (summarize) | `item.content_length > params.max_summary_length && !item.has_summary` | `item.content_length > params.max_summary_length && item.summary == ""` |
+| `state-after-write.md` (describe) | `item.has_uri && item.has_media_content && system.has_media_provider` | `item.uri.startsWith("file://") && (item.content_type.startsWith("image/") \|\| item.content_type.startsWith("audio/") \|\| item.content_type.startsWith("video/")) && system.has_media_provider` |
+| `state-after-write/links.md` | `!item.is_system_note && item.has_content && (item.content_type == 'text/markdown' \|\| ...)` | `!item.id.startsWith(".") && item.content_length > 0 && (item.content_type == 'text/markdown' \|\| ...)` |
+| `state-after-write/analyze.md` | `!item.is_system_note && (item.content_length > 500 \|\| item.has_uri) && !(has(item.tags._source) && item.tags._source == 'link') && ...` | `!item.id.startsWith(".") && (item.content_length > 500 \|\| item.uri != "") && !(has(item.tags._source) && item.tags._source == 'link') && ...` |
+| `state-after-write/tag.md` | `!item.is_system_note && item.has_content` | `!item.id.startsWith(".") && item.content_length > 0` |
+| `state-after-write/duplicates.md` | `!item.is_system_note && item.has_content` | `!item.id.startsWith(".") && item.content_length > 0` |
+| `state-after-write/resolve-stubs.md` | `item.has_uri && !item.is_system_note && !(has(item.tags._source) && ...)` | `item.uri != "" && !item.id.startsWith(".") && !(has(item.tags._source) && ...)` |
+| `state-after-write/ocr.md` | `'_ocr_pages' in item.tags && item.has_uri` | `'_ocr_pages' in item.tags && item.uri != ""` |
+
+### tag-doc rules
+
+| File | Current | New |
+|---|---|---|
+| `tag-references.md` | `item.content_type == 'text/markdown' \|\| item.content_type == 'text/plain'` | unchanged (already uses unified field name) |
+
+### Non-item rules (NO CHANGE)
+
+These expressions don't reference `item.*` and are unaffected:
+
+- `state-query-resolve.md` — uses `params.*`, `search.*`
+- `state-query-branch.md` — uses `params.*`, `search.*`, `budget.*`
+- `state-query-explore.md` — uses `params.*`, `search.*`, `budget.*`
+- `state-find-deep.md` — uses `params.*`, `search.*`
+- `state-memory-search.md` — uses `params.*`
+- `state-get.md` — uses `params.*`
+- `state-get/openclaw.md` — uses `params.*`
+- `meta-genre.md`, `meta-album.md`, `meta-artist.md` — use `params.*`
+
+## Design Decisions
+
+### Verbose CEL over convenience booleans
+
+`has_media_content` is replaced by the full CEL expression testing
+`item.uri.startsWith("file://")` and content_type prefixes. The state doc
+is the source of truth for "when does this action run" — that logic should
+be visible in the expression, not hidden behind a function name.
+
+### `system.*` namespace retained
+
+`system.has_media_provider` is the only field. It's config/environment
+state, not item state. Kept as-is — harmless, and the namespace is ready
+if more capabilities are added (e.g. `system.has_content_extractor`).
+
+### `params.*` retained
+
+`params.item_id`, `params.max_summary_length`, etc. remain available
+alongside `item.*`. The `item` dict is promoted into the eval context as a
+top-level key; `params` continues to carry action-specific parameters and
+template values for `with:` blocks.
+
+## Phase 2 Status
+
+- [x] Create `build_item_context()` builder function
+- [x] Update `_background_processing.py` to use builder instead of inline dict
+- [x] Add tests: verify builder output matches expected schema
+- [x] Add tests: verify each state-doc `when:` expression evaluates correctly
+      against the new item context (regression coverage for rewrite)
+- [x] Rewrite all `item.*` CEL expressions in state docs
+- [x] Remove dead code (`_has_local_describable_media`, `_DESCRIBABLE_MEDIA_PREFIXES`)
+
+---
+
+# Phase 3: Conditional Edge Tags
+
+## Motivation
+
+Edge tags (tag keys with `_inverse` in their `.tag/{key}` definition)
+unconditionally materialize edges for every note that carries the tag.
+But some tag keys are edge-bearing only in certain contexts:
+
+- `from` is an email address in `type=email` content, but a date or
+  location in other content
+- `speaker` makes sense in `type=conversation`, not in `type=paper`
+- `author` applies to documents, not to conversation turns
+
+Without conditions, either (a) the tag is only used in appropriate
+contexts (fragile — depends on analyzer discipline), or (b) spurious
+edges appear in the graph.
+
+## Design
+
+### `_when` field on tagdocs
+
+A tagdoc with `_inverse` gains an optional `_when` tag in frontmatter.
+The value is a CEL expression evaluated against the **source note's**
+unified item context.
+
+```yaml
+# .tag/from
+tags:
+  _inverse: from_to
+  _when: "'email' in item.tags.type || 'message/rfc822' == item.content_type"
+```
+
+If `_when` is absent, the edge is unconditional (current behaviour).
+If `_when` evaluates to false for a source note, no edge is created
+and no target is auto-vivified.
+
+### Condition semantics
+
+- Conditions apply to the **source node** (the one carrying the tag).
+- For **inverse edges** (looking up "who points at me"): no separate
+  condition check is needed. If the source didn't meet `_when` at
+  write time, the edge row was never inserted, so it won't appear.
+- For **backfill** (re-scanning all versions after `_inverse` is
+  added or changed): the same `_when` is evaluated against each
+  version's tags to decide whether to create version-edge rows.
+
+### CEL context for edge evaluation
+
+The item context is built via `build_item_context()` from the source
+note's stored document record. At the point of edge materialization
+(`_restore_current_edges_without_backfill`), the source note's tags
+are available as `merged_tags` and its `id` is known. The builder
+needs:
+
+```python
+build_item_context(
+    id=source_id,
+    tags=merged_tags,
+    summary=source_doc.summary,       # from document_store.get()
+    content_length=...,               # from content or tags
+    content_type=merged_tags.get("_content_type", ""),
+    uri=merged_tags.get("_source_uri", ""),
+)
+```
+
+Note: `content_length` is not stored on the document record and isn't
+available at edge materialization time (content is not loaded). In edge
+and prompt contexts, `content_length` is set to `None` (not zero).
+
+If a `_when` expression accidentally references `item.content_length`
+in an edge context, the CEL evaluator will raise (e.g. `None > 500`
+is a type error), `_eval_predicate` will log a warning with the full
+expression source, and the predicate returns false (edge skipped).
+This is the right failure mode: visible, safe, and actionable.
+
+### Compiled predicate caching
+
+The tagdoc cache (`_tagdoc_cache`) already stores tagdoc tags per key.
+Add a parallel `_tagdoc_when_cache: dict[str, Any | None]` that stores
+the compiled CEL program (or `None` if no `_when`). Compiled once on
+first access, reused for all subsequent edge evaluations. Cache is
+cleared alongside `_tagdoc_cache` on tagdoc writes.
+
+## Implementation
+
+### 1. Parse and cache `_when` from tagdocs
+
+**File:** `keep/api.py` — `_restore_current_edges_without_backfill()`
+
+Current code (line ~544):
+```python
+if key not in self._tagdoc_cache:
+    parent = self._document_store.get(doc_coll, f".tag/{key}")
+    self._tagdoc_cache[key] = parent.tags if parent else None
+td_tags = self._tagdoc_cache[key]
+if td_tags is None or not td_tags.get("_inverse"):
+    continue
+```
+
+Add after the `_inverse` lookup:
+```python
+# Check _when condition on the tagdoc
+if key not in self._tagdoc_when_cache:
+    when_source = td_tags.get("_when", "")
+    if when_source:
+        self._tagdoc_when_cache[key] = _compile_predicate(when_source)
+    else:
+        self._tagdoc_when_cache[key] = None
+```
+
+### 2. Evaluate `_when` during edge materialization
+
+**File:** `keep/api.py` — `_restore_current_edges_without_backfill()`
+
+After the `_inverse` check and `_when` cache lookup, before iterating
+tag values:
+
+```python
+when_prog = self._tagdoc_when_cache.get(key)
+if when_prog is not None:
+    item_ctx = build_item_context(
+        id=id,
+        tags=merged_tags,
+        content_type=merged_tags.get("_content_type", ""),
+        uri=merged_tags.get("_source_uri", ""),
+    )
+    if not _eval_predicate(when_prog, {"item": item_ctx}):
+        continue  # skip this edge tag entirely
+```
+
+If `_when` is `None` (absent from tagdoc), no condition check — edges
+materialize unconditionally as today.
+
+### 3. Evaluate `_when` during version-edge backfill
+
+**File:** `keep/document_store.py` —
+`backfill_version_edges_for_predicate()`
+
+This method iterates all versions and creates version-edge rows. It
+currently has no access to tagdoc metadata — it receives only
+`predicate` and `inverse` strings.
+
+**Change:** Add an optional `when_source: str = ""` parameter. If
+provided, compile the CEL predicate and evaluate it against each
+version's tags before inserting the edge row.
+
+```python
+def backfill_version_edges_for_predicate(
+    self, collection: str, predicate: str, inverse: str,
+    *, when_source: str = "",
+) -> int:
+```
+
+The caller (`_enqueue_edges_backfill` or the backfill task processor)
+passes the `_when` value from the tagdoc.
+
+### 4. Cache invalidation
+
+**File:** `keep/api.py`
+
+When a tagdoc is written (`_process_tagdoc_inverse_change`), clear
+the corresponding entry from `_tagdoc_when_cache` alongside the
+existing `_tagdoc_cache` invalidation:
+
+```python
+self._tagdoc_cache.pop(tag_key, None)
+self._tagdoc_when_cache.pop(tag_key, None)
+```
+
+Also clear `_tagdoc_when_cache` wherever `_tagdoc_cache.clear()` is
+called (system doc migration).
+
+### 5. No change to edge deletion
+
+When a source note is deleted, its edges are deleted by source_id —
+the condition doesn't matter. When a target is deleted, its inverse
+edges are deleted by target_id. No condition check needed in either
+case.
+
+### 6. No change to `get_inverse_edges` query
+
+The SQLite `edges` table query is unchanged. If an edge wasn't created
+(because `_when` was false), the row doesn't exist, so it won't be
+returned. No runtime condition check on reads.
+
+## Tests
+
+### Unit tests (test_edges.py)
+
+```
+test_conditional_edge_created_when_condition_met
+    - Create .tag/from with _inverse=from_to and _when="'email' in item.tags.type"
+    - Put a note with type=email and from=alice
+    - Verify edge row exists, inverse visible on target
+
+test_conditional_edge_skipped_when_condition_not_met
+    - Same tagdoc setup
+    - Put a note WITHOUT type=email, but with from=2026-01-01
+    - Verify NO edge row, no auto-vivification of target
+
+test_unconditional_edge_still_works
+    - Create .tag/speaker with _inverse=said, NO _when
+    - Put a note with speaker=nate
+    - Verify edge exists (backward compat)
+
+test_conditional_edge_inverse_not_visible
+    - Create conditional edge tagdoc
+    - Put note that doesn't meet condition, with from=alice
+    - get_context("alice") → no "from_to" in edges
+
+test_conditional_edge_condition_on_content_type
+    - _when: "item.content_type == 'message/rfc822'"
+    - Put with content_type=message/rfc822 → edge created
+    - Put with content_type=text/markdown → no edge
+
+test_condition_with_multiple_matching_notes
+    - Two notes with same tag key; one meets condition, one doesn't
+    - Verify edge exists only for the matching note
+
+test_tagdoc_when_change_clears_cache
+    - Create tagdoc without _when, put note → edge created
+    - Update tagdoc to add _when, put another note that doesn't match
+    - Verify second note has no edge
+```
+
+### Integration tests
+
+```
+test_bundled_from_tagdoc_conditional_edge
+    - If .tag/from gets _when in a future release, verify it works
+      end-to-end with system doc migration
+
+test_backfill_respects_when_condition
+    - Create notes with tag values
+    - Add _inverse + _when to the tagdoc after the fact
+    - Trigger backfill
+    - Verify only matching notes have version-edge rows
+```
+
+## Fix: inverse edges queryable via `find`
+
+### Current asymmetry
+
+Outbound edges are stored as regular tags on the source document, so
+`keep find -t speaker=nate` works — Chroma and FTS5 both index the tag.
+
+Inverse edges (`said`, `cited_by`, `referenced_by`, etc.) exist only
+in the `edges` SQLite table. They are only visible through `get` on
+the target. `keep find -t cited_by=source_id` returns nothing.
+
+This is documented as a known limitation (EDGE-TAGS.md:150) but should
+be fixed as part of the edge system work.
+
+### Design
+
+Extend `_find_direct()` to detect inverse-edge tag keys in the `tags`
+filter and translate them to edges-table queries.
+
+**Detection**: when processing a tag filter like `{cited_by: source_id}`,
+look up `.tag/cited_by`. If it exists and has `_inverse` (meaning it
+*is* an inverse predicate), the filter is an inverse-edge query.
+
+**Query path**: use a new `DocumentStore.find_by_inverse_edge()` method:
+
+```sql
+SELECT target_id FROM edges
+WHERE collection = ? AND inverse = ? AND source_id = ?
+```
+
+This query is covered by the existing `idx_edges_target` index
+(which indexes `target_id, collection, inverse, created`). For the
+reverse lookup by `inverse + source_id`, a new index may be needed:
+
+```sql
+CREATE INDEX idx_edges_inverse_source
+ON edges (collection, inverse, source_id)
+```
+
+**Integration into find**: inverse-edge results are pre-filtered IDs.
+The find pipeline intersects these with the rest of the tag/query
+results, or uses them as the initial candidate set when no semantic
+query is provided.
+
+**Alternatively** — for `find` calls with *only* inverse-edge tags and
+no semantic query (like `keep find -t cited_by=X`), return the edge
+targets directly without going through the search pipeline.
+
+### What changes
+
+| Component | Change |
+|---|---|
+| `DocumentStore` | Add `find_by_inverse_edge(collection, inverse, source_id)` |
+| `DocumentStore` | Add index `idx_edges_inverse_source` (schema migration) |
+| `Keeper._find_direct` | Detect inverse-edge keys, split tag filter |
+| `docs/EDGE-TAGS.md` | Remove the "only visible through get" caveat |
+
+### Tests
+
+```
+test_find_by_inverse_edge_tag
+    - Create .tag/cites with _inverse=cited_by
+    - Source A cites target B
+    - find(tags={cited_by: A}) → returns B
+
+test_find_inverse_edge_with_semantic_query
+    - Same setup, add query="something"
+    - Results intersected: only B if it also matches the query
+
+test_find_inverse_edge_nonexistent_predicate
+    - find(tags={not_a_real_inverse: X}) → treated as regular tag,
+      returns nothing (no false positives)
+```
+
+## Sequence
+
+- [ ] Add `_tagdoc_when_cache` dict to Keeper.__init__
+- [ ] Parse `_when` from tagdoc tags during edge materialization
+- [ ] Evaluate `_when` in `_restore_current_edges_without_backfill`
+- [ ] Pass `when_source` through to backfill
+- [ ] Cache invalidation on tagdoc write
+- [ ] Add `find_by_inverse_edge` to DocumentStore + index migration
+- [ ] Detect inverse-edge keys in `_find_direct` tag filter
+- [ ] Tests: conditional edge created/skipped
+- [ ] Tests: inverse edge absent when condition not met
+- [ ] Tests: backfill respects condition
+- [ ] Tests: unconditional edges unchanged
+- [ ] Tests: find by inverse edge tag
+- [ ] Update EDGE-TAGS.md to remove asymmetry caveat
+
+## Future phases
+
+- [ ] Add `_when` evaluation to `_resolve_prompt_doc()`
+- [ ] Add `_when` evaluation to TagClassifier
+- [ ] Condition `act` classifier on `type=conversation`
