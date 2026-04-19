@@ -525,6 +525,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         id: str,
         merged_tags: dict[str, str],
         doc_coll: str,
+        *,
+        summary: str = "",
     ) -> None:
         """Upsert current edge rows and target labels without delete/backfill churn."""
         if id.startswith("."):
@@ -580,6 +582,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 item_ctx = build_item_context(
                     id=id,
                     tags=merged_tags,
+                    summary=summary,
                     content_type=merged_tags.get("_content_type", ""),
                     uri=merged_tags.get("_source_uri", ""),
                 )
@@ -670,6 +673,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 )
                 self._restore_current_edges_without_backfill(
                     doc_id, migrated_tags, doc_coll,
+                    summary=record.summary,
                 )
                 changed_docs += 1
 
@@ -729,6 +733,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         specs: list[dict],
         item_tags: dict[str, Any],
         item_id: str = "",
+        item_summary: str = "",
     ) -> list[dict]:
         """Remove tag specs whose ``_when`` condition is not met by the item."""
         result = []
@@ -742,6 +747,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 ctx = build_item_context(
                     id=item_id,
                     tags=item_tags,
+                    summary=item_summary,
                     content_type=item_tags.get("_content_type", ""),
                     uri=item_tags.get("_source_uri", ""),
                 )
@@ -1315,6 +1321,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         doc_tags: dict[str, str],
         *,
         item_id: str | None = None,
+        item_summary: str = "",
         required: bool = False,
     ) -> str | None:
         """Find a .prompt/* doc matching the given tags and return its prompt text.
@@ -1332,6 +1339,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             prefix: "analyze", "summarize", "supernode", etc.
             doc_tags: Tags of the document being processed
             item_id: Optional item ID for scope-glob matching
+            item_summary: Summary of the item being processed (for _when CEL)
             required: When True, raise if no matching prompt doc resolves.
 
         Returns:
@@ -1369,6 +1377,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     item_ctx = build_item_context(
                         id=item_id or "",
                         tags=doc_tags,
+                        summary=item_summary,
                         content_type=doc_tags.get("_content_type", ""),
                         uri=doc_tags.get("_source_uri", ""),
                     )
@@ -1398,18 +1407,20 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             elif scope and not item_id:
                 continue  # scope requires item_id
 
+            # If _when matched, it takes precedence over body match rules.
+            # Specificity 1 beats the bare default (0).
+            if when_matched:
+                if 1 > best_specificity:
+                    best_specificity = 1
+                    best_prompt = prompt_text
+                continue
+
             # Parse match rules from body (before ## Prompt)
             query_lines, _, _ = _parse_meta_doc(content)
 
             if not query_lines:
-                # No match rules: specificity depends on whether _when matched.
-                # _when match → specificity 1 (beats bare default).
-                # No _when → specificity 0 (fallback).
-                fallback_specificity = 1 if when_matched else 0
-                if fallback_specificity > best_specificity:
-                    best_prompt = prompt_text
-                    best_specificity = fallback_specificity
-                elif best_specificity < 0:
+                # No match rules = default/fallback (specificity 0)
+                if best_specificity < 0:
                     best_prompt = prompt_text
                     best_specificity = 0
                 continue
@@ -1417,8 +1428,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             # Check if any query line fully matches doc_tags
             for query in query_lines:
                 if all(v in tag_values(doc_tags, k) for k, v in query.items()):
-                    # _when match adds 1 to specificity over bare match rules
-                    specificity = len(query) + (1 if when_matched else 0)
+                    specificity = len(query)
                     if specificity > best_specificity:
                         best_specificity = specificity
                         best_prompt = prompt_text
@@ -2531,6 +2541,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         merged_tags: dict[str, str],
         existing_tags: dict[str, str],
         doc_coll: str,
+        *,
+        summary: str = "",
     ) -> None:
         """Create/update/delete edges based on tagdoc _inverse declarations.
 
@@ -2586,7 +2598,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if isinstance(inverse, list):
                 inverse = inverse[0]
 
-            # Evaluate _when condition from tagdoc against source note
+            # Evaluate _when condition from tagdoc against source note.
+            # When false, edge *creation* is suppressed but edge *removal*
+            # must still run — a previously-matching source may have stopped
+            # matching after a tag change.
+            when_allows_creation = True
             when_source = td_tags.get("_when", "")
             if when_source:
                 if key not in self._tagdoc_when_cache:
@@ -2606,19 +2622,26 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     item_ctx = build_item_context(
                         id=id,
                         tags=merged_tags,
+                        summary=summary,
                         content_type=merged_tags.get("_content_type", ""),
                         uri=merged_tags.get("_source_uri", ""),
                     )
                     if not _eval_predicate(when_prog, {"item": item_ctx}, when_src):
-                        continue  # condition not met — skip this edge tag
+                        when_allows_creation = False
 
             current_values = tag_values(merged_tags, key)
             previous_values = tag_values(existing_tags, key)
             previous_value_set = set(previous_values)
             current_value_set = set(current_values)
 
-            removed_values = [v for v in previous_values if v not in current_value_set]
-            added_values = [v for v in current_values if v not in previous_value_set]
+            if when_allows_creation:
+                removed_values = [v for v in previous_values if v not in current_value_set]
+                added_values = [v for v in current_values if v not in previous_value_set]
+            else:
+                # _when is false: delete ALL edges for this key (previous
+                # AND current values) and create nothing.
+                removed_values = list(dict.fromkeys(previous_values + current_values))
+                added_values = []
 
             # Tag values removed → queue edge deletions.
             for removed in removed_values:
@@ -3282,7 +3305,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             self._store.delete(chroma_coll, id, delete_versions=True)
 
         with _tracer.start_as_current_span("edge_tags"):
-            self._process_edge_tags(id, merged_tags, existing_tags, doc_coll)
+            self._process_edge_tags(
+                id, merged_tags, existing_tags, doc_coll,
+                summary=final_summary,
+            )
 
         # .ignore update: purge items matching current patterns
         if id == ".ignore":
@@ -5348,7 +5374,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._document_store.update_tags(doc_coll, id, final_tags)
         self._store.update_tags(chroma_coll, id, casefold_tags_for_index(final_tags))
 
-        self._process_edge_tags(id, final_tags, current_tags, doc_coll)
+        self._process_edge_tags(
+            id, final_tags, current_tags, doc_coll,
+            summary=existing.summary,
+        )
 
         # Tag changes can affect meta-doc resolution (tag-based queries)
         self._context_cache.notify_write(
@@ -5784,6 +5813,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 if tag_specs and new_parts:
                     filtered_specs = self._filter_tag_specs_by_when(
                         tag_specs, dict(doc_record.tags), id,
+                        doc_record.summary,
                     )
                     if filtered_specs:
                         try:
@@ -5818,6 +5848,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if tag_specs and raw_parts:
                 filtered_specs = self._filter_tag_specs_by_when(
                     tag_specs, dict(doc_record.tags), id,
+                    doc_record.summary,
                 )
                 if filtered_specs:
                     try:

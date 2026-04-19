@@ -4054,7 +4054,7 @@ class DocumentStore:
                 )
                 rows = self._execute(
                     """
-                    SELECT id, version, tags_json, created_at
+                    SELECT id, version, tags_json, created_at, summary
                     FROM document_versions
                     WHERE collection = ?
                     """,
@@ -4069,6 +4069,7 @@ class DocumentStore:
                         item_ctx = build_item_context(
                             id=row["id"],
                             tags=tags,
+                            summary=row["summary"] or "",
                             content_type=tags.get("_content_type", ""),
                             uri=tags.get("_source_uri", ""),
                         )

@@ -401,6 +401,80 @@ def test_prompt_doc_when_does_not_match(mock_providers, tmp_path):
         assert "email conversation" not in result
 
 
+def test_prompt_doc_when_takes_precedence_over_body_rules(mock_providers, tmp_path):
+    """_when takes precedence: body match rules are skipped when _when passes."""
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    # Create a prompt doc with _when=true AND body match rule type=paper.
+    # The _when should take precedence — this prompt should match items
+    # that do NOT match the body rule.
+    # Use a custom prefix to avoid competing with bundled prompts.
+    kp._document_store.upsert(
+        kp._resolve_doc_collection(),
+        ".prompt/test-when/always-match",
+        summary=(
+            "type=paper\n\n"
+            "## Prompt\n\n"
+            "Always-match prompt."
+        ),
+        tags={
+            "category": "system",
+            "context": "prompt",
+            "_when": "true",
+        },
+    )
+    kp._tagdoc_cache.clear()
+
+    # Item with type=conversation (does NOT match body rule type=paper)
+    # But _when=true should still select this prompt
+    result = kp._resolve_prompt_doc(
+        "test-when",
+        {"type": "conversation"},
+    )
+    assert result is not None
+    assert "Always-match prompt" in result
+
+
+def test_prompt_doc_summary_available_in_when(mock_providers, tmp_path):
+    """Item summary is available in _when expressions."""
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    kp._document_store.upsert(
+        kp._resolve_doc_collection(),
+        ".prompt/summarize/greeting-only",
+        summary=(
+            "## Prompt\n\n"
+            "Summarize this greeting."
+        ),
+        tags={
+            "category": "system",
+            "context": "prompt",
+            "_when": "item.summary == 'Hello world'",
+        },
+    )
+    kp._tagdoc_cache.clear()
+
+    # Matching summary
+    result = kp._resolve_prompt_doc(
+        "summarize",
+        {},
+        item_summary="Hello world",
+    )
+    assert result is not None
+    assert "greeting" in result
+
+    # Non-matching summary
+    result2 = kp._resolve_prompt_doc(
+        "summarize",
+        {},
+        item_summary="Something else",
+    )
+    if result2 is not None:
+        assert "greeting" not in result2
+
+
 # ---------------------------------------------------------------------------
 # _when on tag classifier specs
 # ---------------------------------------------------------------------------

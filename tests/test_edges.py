@@ -1077,6 +1077,24 @@ class TestConditionalEdges:
         ctx_bob = kp.get_context("bob")
         assert ctx_bob is None or "sent_by" not in ctx_bob.edges
 
+    def test_edge_removed_when_source_stops_matching(self, kp):
+        """Edges are cleaned up when source note no longer meets _when condition."""
+        self._create_tagdoc(kp, "sender", "sent_by",
+                            when="'email' in item.tags.type")
+
+        # Write with type=email → edge created
+        kp.put(content="Email from Alice", id="msg1", summary="Email",
+               tags={"sender": "alice", "type": "email"})
+        ctx = kp.get_context("alice")
+        assert ctx is not None
+        assert "sent_by" in ctx.edges
+
+        # Update: remove type=email → edge should be cleaned up
+        kp.put(content="Now a regular doc", id="msg1", summary="Doc",
+               tags={"sender": "alice", "type": "document"})
+        ctx2 = kp.get_context("alice")
+        assert ctx2 is None or "sent_by" not in ctx2.edges
+
 
 # ---------------------------------------------------------------------------
 # Inverse edge find

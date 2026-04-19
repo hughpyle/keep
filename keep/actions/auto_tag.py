@@ -48,9 +48,14 @@ class AutoTag:
             else:
                 item_tags = {}
 
+        item_summary = ""
+        if _item is not None:
+            item_summary = getattr(_item, "summary", "") or ""
+
         parts = [{"summary": str(content), "tags": {}}]
         classified = classify_parts_with_specs(
             parts, context, item_tags=item_tags, item_id=item_id,
+            item_summary=item_summary,
         )
         row = classified[0] if classified else {}
         raw_tags = row.get("tags") if isinstance(row, dict) else {}

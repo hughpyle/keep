@@ -98,6 +98,7 @@ class Analyze:
         """Analyze content, classify parts, and build storage mutations."""
         item_id, _item = resolve_item(params, context)
         item_tags = dict(getattr(_item, "tags", None) or {})
+        item_summary = str(getattr(_item, "summary", "") or "")
 
         if check_content_hash(params, context, item_id, "_analyzed_hash"):
             return {"skipped": True, "reason": "content unchanged"}
@@ -181,7 +182,7 @@ class Analyze:
         tag_specs = prepared.get("tag_specs")
         if isinstance(tag_specs, list) and tag_specs:
             # Filter specs by _when conditions against the item
-            tag_specs = _filter_specs_by_when(tag_specs, item_tags, item_id)
+            tag_specs = _filter_specs_by_when(tag_specs, item_tags, item_id, item_summary)
             if not tag_specs:
                 pass  # all specs filtered out — skip classification
             else:
@@ -201,6 +202,7 @@ class Analyze:
                     ):
                         parts = classify_parts_with_specs(
                             parts, context, item_tags=item_tags, item_id=item_id,
+                            item_summary=item_summary,
                         )
         else:
             with tracer.start_as_current_span(

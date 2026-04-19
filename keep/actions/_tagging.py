@@ -103,6 +103,7 @@ def _filter_specs_by_when(
     specs: list[dict[str, Any]],
     item_tags: dict[str, Any],
     item_id: str = "",
+    item_summary: str = "",
 ) -> list[dict[str, Any]]:
     """Remove specs whose ``_when`` condition is not met by the item."""
     from ..state_doc import _compile_predicate, _eval_predicate
@@ -121,6 +122,7 @@ def _filter_specs_by_when(
             ctx = build_item_context(
                 id=item_id,
                 tags=item_tags,
+                summary=item_summary,
                 content_type=item_tags.get("_content_type", ""),
                 uri=item_tags.get("_source_uri", ""),
             )
@@ -140,6 +142,7 @@ def classify_parts_with_specs(
     *,
     item_tags: dict[str, Any] | None = None,
     item_id: str = "",
+    item_summary: str = "",
 ) -> list[dict[str, Any]]:
     """Classify part summaries with constrained tag specs when available.
 
@@ -154,7 +157,7 @@ def classify_parts_with_specs(
         return parts
     # Filter specs by _when conditions if item context is available
     if item_tags is not None:
-        specs = _filter_specs_by_when(specs, item_tags, item_id)
+        specs = _filter_specs_by_when(specs, item_tags, item_id, item_summary)
         if not specs:
             return parts
     provider = context.resolve_provider("summarization")
