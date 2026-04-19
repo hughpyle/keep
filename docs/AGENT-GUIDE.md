@@ -27,7 +27,7 @@ keep_flow(state="query-resolve", params={"query": "this situation"})
 
 **Reflect after acting:** What happened? What did I learn?
 ```json
-keep_flow(state="put", params={"content": "what I learned", "tags": {"type": "learning"}})
+keep_flow(state="put", params={"content": "what I learned", "tags": {"kind": "learning"}})
 ```
 
 **Periodically:** Run a full structured reflection ([details](KEEP-PROMPT.md)):
@@ -52,7 +52,7 @@ keep_flow(state="put", params={"id": "now", "content": "Diagnosing flaky test in
 keep_flow(state="put", params={"id": "now", "content": "Found timing issue", "tags": {"project": "myapp"}})
 
 // 3. Record learnings
-keep_flow(state="put", params={"content": "Flaky timing fix: mock time instead of real assertions", "tags": {"topic": "testing", "type": "learning"}})
+keep_flow(state="put", params={"content": "Flaky timing fix: mock time instead of real assertions", "tags": {"topic": "testing", "kind": "learning"}})
 ```
 
 **Key insight:** The store remembers across sessions; working memory doesn't. When you resume, read context first. All updates create version history automatically.
@@ -103,7 +103,7 @@ Whenever you encounter documents important to the task, index them:
 
 ```json
 keep_flow(state="put", params={"uri": "https://docs.example.com/auth", "tags": {"topic": "auth", "project": "myapp"}})
-keep_flow(state="put", params={"uri": "file:///path/to/design.pdf", "tags": {"type": "reference", "topic": "architecture"}})
+keep_flow(state="put", params={"uri": "file:///path/to/design.pdf", "tags": {"kind": "reference", "topic": "architecture"}})
 ```
 
 Ask: what is this? Why is it important? Tag appropriately.
@@ -119,7 +119,7 @@ The ability to index, version, cross-reference and link external sources allows 
 When the normal flow is interrupted — an assumption has been revealed. **First:** complete the immediate conversation. **Then record:**
 
 ```json
-keep_flow(state="put", params={"content": "Assumed user wanted full rewrite. Actually: minimal patch.", "tags": {"type": "breakdown"}})
+keep_flow(state="put", params={"content": "Assumed user wanted full rewrite. Actually: minimal patch.", "tags": {"kind": "breakdown"}})
 ```
 
 Breakdowns are how agents learn.

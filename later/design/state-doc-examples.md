@@ -199,7 +199,7 @@ rules:
     with:
       content: "{params.learnings.text}"
       tags:
-        type: learning
+        kind: learning
         topic: reflection
         _session: "{params.session_id}"
   - when: "params.reminders"
@@ -300,7 +300,7 @@ rules:
     with:
       content: "{deep_reflection.text}"
       tags:
-        type: learning
+        kind: learning
         topic: "{params.topics[0]}"
         act: reflection
   - when: "size(params.topics) > 1"

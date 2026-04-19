@@ -112,14 +112,14 @@ class SimilarCache:
 
   ```
   .meta/todo queries:  act=commitment, act=request, status=open, ...
-  .meta/learnings:     type=learning, type=breakdown, type=gotcha
+  .meta/learnings:     kind=learning, kind=breakdown, kind=gotcha
   .meta/genre:         genre={params.genre}  (dynamic)
   ```
 
 - **Invalidation**: On write, check if the written item's tags intersect
   any meta dependency. If `act=assertion` is written, invalidate all
   cached entries that include the `learnings` section (because learnings
-  queries `type=learning` etc. — wait, that's a different tag).
+  queries `kind=learning` etc. — wait, that's a different tag).
 
   More precisely: invalidate entries where *any cached find rule's tag
   filter matches the written item's tags*. The cache stores the tag

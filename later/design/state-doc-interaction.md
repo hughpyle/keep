@@ -225,7 +225,7 @@ sequenceDiagram
     W->>R: report work result
 
     Note over R: tick 5 — persist (sync)
-    R->>S: put(content: reflection, tags: {type: learning})
+    R->>S: put(content: reflection, tags: {kind: learning})
     S-->>R: {id: "%abc123"}
     R-->>A: {status: done, id: "%abc123"}
 ```

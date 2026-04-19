@@ -691,6 +691,141 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             "parts": changed_parts,
         }
 
+    # Content-kind values that should live under ``kind`` instead of ``type``.
+    # Entity-type values (conversation, paper, vulnerability, …) stay in ``type``.
+    _TYPE_TO_KIND_VALUES: frozenset[str] = frozenset({
+        "learning", "breakdown", "gotcha", "reference", "teaching",
+        "meeting", "pattern", "possibility", "decision",
+    })
+
+    def _migrate_type_to_kind(self, doc_coll: str) -> dict[str, int]:
+        """Move content-kind values from ``type`` to ``kind`` tag in-place.
+
+        After this migration ``type`` holds only entity-type values
+        (conversation, paper, …) and ``kind`` holds content-kind values
+        (learning, breakdown, …).  If a note's ``type`` contains both
+        entity-type and content-kind values, only the content-kind ones
+        are moved; the entity-type values remain.
+        """
+        changed_docs = 0
+        changed_versions = 0
+        changed_parts = 0
+        chroma_coll = self._resolve_chroma_collection()
+
+        for doc_id in self._document_store.list_ids(doc_coll):
+            record = self._document_store.get(doc_coll, doc_id)
+            if record is None:
+                continue
+
+            # --- head document ---
+            migrated_tags = self._retag_type_to_kind(dict(record.tags))
+            if migrated_tags is not None:
+                self._document_store.patch_head_tags(doc_coll, doc_id, migrated_tags)
+                self._rewrite_index_tags_without_timestamp(
+                    chroma_coll, doc_id, casefold_tags_for_index(migrated_tags),
+                )
+                changed_docs += 1
+
+            # --- versions ---
+            for version in self._document_store.list_versions(
+                doc_coll, doc_id, limit=10000,
+            ):
+                migrated_vtags = self._retag_type_to_kind(dict(version.tags))
+                if migrated_vtags is not None:
+                    self._document_store.replace_version_content(
+                        doc_coll, doc_id, version.version,
+                        version.summary, migrated_vtags, version.content_hash,
+                    )
+                    indexed = dict(migrated_vtags)
+                    indexed["_version"] = str(version.version)
+                    indexed["_base_id"] = doc_id
+                    self._rewrite_index_tags_without_timestamp(
+                        chroma_coll,
+                        f"{doc_id}@v{version.version}",
+                        casefold_tags_for_index(indexed),
+                    )
+                    changed_versions += 1
+
+            # --- parts ---
+            for part in self._document_store.list_parts(doc_coll, doc_id):
+                migrated_ptags = self._retag_type_to_kind(dict(part.tags))
+                if migrated_ptags is not None:
+                    self._document_store.update_part_tags(
+                        doc_coll, doc_id, part.part_num, migrated_ptags,
+                    )
+                    indexed = dict(migrated_ptags)
+                    indexed["_part_num"] = str(part.part_num)
+                    indexed["_base_id"] = doc_id
+                    self._rewrite_index_tags_without_timestamp(
+                        chroma_coll,
+                        f"{doc_id}@p{part.part_num}",
+                        casefold_tags_for_index(indexed),
+                    )
+                    changed_parts += 1
+
+        return {
+            "documents": changed_docs,
+            "versions": changed_versions,
+            "parts": changed_parts,
+        }
+
+    def _retag_type_to_kind(self, tags: dict[str, Any]) -> dict[str, Any] | None:
+        """Move content-kind values from ``type`` to ``kind``.
+
+        Returns the mutated *tags* dict if any values were moved, else ``None``
+        (no change needed).
+        """
+        type_vals = tag_values(tags, "type")
+        if not type_vals:
+            return None
+
+        to_move = [v for v in type_vals if v in self._TYPE_TO_KIND_VALUES]
+        if not to_move:
+            return None
+
+        # Values that stay in type (entity-type values)
+        keep_in_type = [v for v in type_vals if v not in self._TYPE_TO_KIND_VALUES]
+        set_tag_values(tags, "type", keep_in_type)
+
+        # Merge into existing kind values (hermes may already have set kind)
+        existing_kind = tag_values(tags, "kind")
+        merged_kind = list(dict.fromkeys(existing_kind + to_move))
+        set_tag_values(tags, "kind", merged_kind)
+
+        return tags
+
+    def _run_type_to_kind_migration(self, doc_coll: str) -> dict[str, int]:
+        """Rename content-kind values once per store."""
+        if self._config.type_to_kind_migrated:
+            return {"documents": 0, "versions": 0, "parts": 0}
+        if not self._document_store.list_ids(doc_coll, limit=1):
+            self._config.type_to_kind_migrated = True
+            try:
+                save_config(self._config)
+            except Exception as e:
+                logger.debug("Failed to persist type_to_kind_migrated: %s", e)
+            return {"documents": 0, "versions": 0, "parts": 0}
+
+        try:
+            logger.info("Migrating content-kind values from 'type' to 'kind' tag")
+            stats = self._migrate_type_to_kind(doc_coll)
+            self._config.type_to_kind_migrated = True
+            try:
+                save_config(self._config)
+            except Exception as e:
+                logger.debug("Failed to persist type_to_kind_migrated: %s", e)
+            logger.info(
+                "type→kind migration complete (%d docs, %d versions, %d parts)",
+                stats["documents"], stats["versions"], stats["parts"],
+            )
+            return stats
+        except Exception as e:
+            logger.warning(
+                "type→kind migration failed; content-kind values remain in 'type' "
+                "until it succeeds: %s", e,
+            )
+            return {"documents": 0, "versions": 0, "parts": 0}
+
     # Provider+model combinations known to be symmetric (task param is a no-op).
     # Key: provider name, Value: set of model prefixes that are symmetric,
     # or None meaning the entire provider family is symmetric.
@@ -961,6 +1096,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             self._run_tag_marker_startup_check(
                 chroma_coll, doc_coll, _doc_store=startup_doc_store,
             )
+
+            if self._closing.is_set():
+                return
+
+            # Move content-kind values from ``type`` to ``kind`` tag
+            self._run_type_to_kind_migration(doc_coll)
 
             if self._closing.is_set():
                 return

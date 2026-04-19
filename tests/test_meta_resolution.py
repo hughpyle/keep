@@ -21,7 +21,7 @@ def kp(mock_providers, tmp_path):
     the bundled .meta/* docs. We seed items that match their queries:
 
     - .meta/todo queries: act=commitment status=open, act=request status=open, etc.
-    - .meta/learnings queries: type=learning, type=breakdown, type=gotcha
+    - .meta/learnings queries: kind=learning, kind=breakdown, kind=gotcha
     - .meta/genre queries: genre=* (prereq), genre= (context expansion)
     """
     kp = Keeper(store_path=tmp_path)
@@ -50,10 +50,10 @@ def kp(mock_providers, tmp_path):
 
     # Learnings (one shares project=myapp with anchor for context expansion)
     kp.put("SQLite WAL mode prevents corruption", tags={
-        "type": "learning", "topic": "sqlite", "project": "myapp",
+        "kind": "learning", "topic": "sqlite", "project": "myapp",
     })
     kp.put("Always pin dependencies", tags={
-        "type": "learning", "topic": "packaging",
+        "kind": "learning", "topic": "packaging",
     })
 
     # An item with project tag (anchor for context expansion)
@@ -176,10 +176,10 @@ class TestResolveInlineMeta:
     def test_basic_tag_query(self, kp):
         """Simple tag query should find matching items."""
         items = kp.resolve_inline_meta(
-            "anchor", [{"type": "learning"}],
+            "anchor", [{"kind": "learning"}],
         )
         assert len(items) > 0
-        assert all(item.tags.get("type") == "learning" for item in items)
+        assert all(item.tags.get("kind") == "learning" for item in items)
 
     def test_multi_tag_and_query(self, kp):
         """AND query with multiple tags should narrow results."""
@@ -195,12 +195,12 @@ class TestResolveInlineMeta:
         """Multiple query dicts should produce union of results."""
         items = kp.resolve_inline_meta(
             "anchor",
-            [{"type": "learning"}, {"act": "commitment", "status": "open"}],
+            [{"kind": "learning"}, {"act": "commitment", "status": "open"}],
         )
         # Should find both learnings AND open commitments
-        types = {item.tags.get("type") for item in items}
+        kinds = {item.tags.get("kind") for item in items}
         acts = {item.tags.get("act") for item in items}
-        assert "learning" in types or "commitment" in acts
+        assert "learning" in kinds or "commitment" in acts
 
     def test_context_expansion(self, kp):
         """context_keys should expand using anchor's tag values."""
@@ -217,7 +217,7 @@ class TestResolveInlineMeta:
         """prereq_keys should gate resolution — missing tag returns empty."""
         items = kp.resolve_inline_meta(
             "no-project",
-            [{"type": "learning"}],
+            [{"kind": "learning"}],
             prereq_keys=["project"],
         )
         assert items == []
@@ -226,7 +226,7 @@ class TestResolveInlineMeta:
         """prereq_keys should pass when anchor has the required tag."""
         items = kp.resolve_inline_meta(
             "anchor",
-            [{"type": "learning"}],
+            [{"kind": "learning"}],
             prereq_keys=["project"],
         )
         assert len(items) > 0
@@ -251,7 +251,7 @@ class TestResolveInlineMeta:
     def test_nonexistent_anchor_returns_empty(self, kp):
         """Inline resolve for nonexistent item returns empty list."""
         items = kp.resolve_inline_meta(
-            "does-not-exist", [{"type": "learning"}],
+            "does-not-exist", [{"kind": "learning"}],
         )
         assert items == []
 

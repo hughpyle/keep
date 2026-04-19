@@ -1,7 +1,7 @@
 ---
 tags:
   category: system
-  type: teaching
+  kind: teaching
   topic: action
   source_url: https://github.com/suttacentral/sc-data/blob/main/sc_bilara_data/translation/en/sujato/sutta/an/an5/an5.57_translation-en-sujato.json
 ---

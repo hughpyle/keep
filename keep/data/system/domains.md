@@ -139,7 +139,7 @@ keep now "Working on feature X" --tag topic=feature_x
 # When something goes wrong, capture the learning
 keep put "Assumed user wanted full rewrite, actually wanted minimal fix. \
 Ask about scope before large changes." \
-  --tag type=breakdown --tag conversation_type=code_change_request
+  --tag kind=breakdown --tag conversation_type=code_change_request
 ```
 
 **Speech-act tracking:**

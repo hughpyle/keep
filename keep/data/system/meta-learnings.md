@@ -9,7 +9,7 @@ tags:
 # check what went wrong or was hard-won last time. The goal isn't
 # caution — it's not re-learning things the hard way.
 #
-# Each rule finds items of a specific type, ranked by semantic
+# Each rule finds items of a specific kind, ranked by semantic
 # similarity to the item being viewed. If you're looking at an
 # auth-related item, auth-related learnings surface first.
 #
@@ -20,17 +20,17 @@ rules:
     do: find
     with:
       similar_to: "{params.item_id}"
-      tags: {type: learning}
+      tags: {kind: learning}
       limit: "{params.limit}"
   - id: breakdowns
     do: find
     with:
       similar_to: "{params.item_id}"
-      tags: {type: breakdown}
+      tags: {kind: breakdown}
       limit: "{params.limit}"
   - id: gotchas
     do: find
     with:
       similar_to: "{params.item_id}"
-      tags: {type: gotcha}
+      tags: {kind: gotcha}
       limit: "{params.limit}"

@@ -153,7 +153,7 @@ Exactly one of `content` or `uri` is required. After storing, the `after-write` 
 
 ```json
 keep_flow(state="put", params={"content": "OAuth2 uses PKCE for public clients", "tags": {"topic": "auth"}})
-keep_flow(state="put", params={"uri": "https://docs.example.com/api", "tags": {"type": "reference"}})
+keep_flow(state="put", params={"uri": "https://docs.example.com/api", "tags": {"kind": "reference"}})
 keep_flow(state="put", params={"content": "My design notes", "id": "design-notes", "summary": "Architecture decisions"})
 ```
 
@@ -404,7 +404,7 @@ keep_prompt(name="reflect")
 ### Store and retrieve
 
 ```json
-keep_flow(state="put", params={"content": "insight text", "tags": {"type": "learning", "topic": "auth"}})
+keep_flow(state="put", params={"content": "insight text", "tags": {"kind": "learning", "topic": "auth"}})
 keep_flow(state="query-resolve", params={"query": "authentication insights"})
 keep_flow(state="get", params={"item_id": "%returned_id"})
 ```
@@ -420,7 +420,7 @@ keep_flow(state="tag", params={"id": "ID", "tags": {"status": "fulfilled"}})
 ### Index a document
 
 ```json
-keep_flow(state="put", params={"uri": "https://docs.example.com/api", "tags": {"type": "reference", "topic": "api"}})
+keep_flow(state="put", params={"uri": "https://docs.example.com/api", "tags": {"kind": "reference", "topic": "api"}})
 keep_flow(state="query-resolve", params={"query": "API documentation"})
 ```
 

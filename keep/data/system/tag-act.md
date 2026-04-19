@@ -30,7 +30,7 @@ The other three — `assertion`, `assessment`, `declaration` — are typically c
 
 ## Relationship to `type`
 
-The `act` tag is orthogonal to `type`. An item can be both `type=learning` and `act=assessment` — the learning is *about* an assessment. Or `type=breakdown` and `act=commitment` — the breakdown occurred in a commitment.
+The `act` tag is orthogonal to `kind`. An item can be both `kind=learning` and `act=assessment` — the learning is *about* an assessment. Or `kind=breakdown` and `act=commitment` — the breakdown occurred in a commitment.
 
 ## Prompt
 

@@ -58,19 +58,19 @@ rules:
     do: find
     with:
       similar_to: "{params.item_id}"
-      tags: {type: learning}
+      tags: {kind: learning}
       limit: "{params.limit}"
   - id: breakdowns
     do: find
     with:
       similar_to: "{params.item_id}"
-      tags: {type: breakdown}
+      tags: {kind: breakdown}
       limit: "{params.limit}"
   - id: gotchas
     do: find
     with:
       similar_to: "{params.item_id}"
-      tags: {type: gotcha}
+      tags: {kind: gotcha}
       limit: "{params.limit}"
 ```
 

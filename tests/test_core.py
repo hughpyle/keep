@@ -411,10 +411,10 @@ class TestMetaDocParser:
     def test_query_lines(self):
         """Query lines with key=value pairs are parsed."""
         from keep.utils import _parse_meta_doc
-        queries, ctx, prereqs = _parse_meta_doc("act=commitment status=open\ntype=learning")
+        queries, ctx, prereqs = _parse_meta_doc("act=commitment status=open\nkind=learning")
         assert queries == [
             {"act": "commitment", "status": "open"},
-            {"type": "learning"},
+            {"kind": "learning"},
         ]
         assert ctx == []
         assert prereqs == []
@@ -450,18 +450,18 @@ project=
 
 Past learnings and breakdowns.
 
-type=learning
-type=breakdown
-type=gotcha
+kind=learning
+kind=breakdown
+kind=gotcha
 
 project=
 topic=
 """
         queries, ctx, prereqs = _parse_meta_doc(content)
         assert len(queries) == 3
-        assert queries[0] == {"type": "learning"}
-        assert queries[1] == {"type": "breakdown"}
-        assert queries[2] == {"type": "gotcha"}
+        assert queries[0] == {"kind": "learning"}
+        assert queries[1] == {"kind": "breakdown"}
+        assert queries[2] == {"kind": "gotcha"}
         assert ctx == ["project", "topic"]
         assert prereqs == []
 
@@ -505,13 +505,13 @@ topic=
 Items in the same genre, for media with genre tags.
 
 genre=*
-type=learning
+kind=learning
 genre=
 project=
 """
         queries, ctx, prereqs = _parse_meta_doc(content)
         assert prereqs == ["genre"]
-        assert queries == [{"type": "learning"}]
+        assert queries == [{"kind": "learning"}]
         assert ctx == ["genre", "project"]
 
 

@@ -1,7 +1,7 @@
 ---
 tags:
   category: system
-  type: teaching
+  kind: teaching
   topic: conduct
   source_url: https://www.gutenberg.org/cache/epub/23585/pg23585.txt
 ---

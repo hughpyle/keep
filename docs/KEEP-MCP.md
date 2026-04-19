@@ -202,7 +202,7 @@ context. Each step is one tool call:
 
 1. `keep_prompt(name="session-start")`
 2. `keep_flow(state="query-resolve", params={"query": "topic"}, token_budget=2000)`
-3. `keep_flow(state="put", params={"content": "insight", "tags": {"type": "learning"}})`
+3. `keep_flow(state="put", params={"content": "insight", "tags": {"kind": "learning"}})`
 4. `keep_prompt(name="reflect")`
 5. `keep_flow(state="put", params={"id": "now", "content": "next steps"})`
 

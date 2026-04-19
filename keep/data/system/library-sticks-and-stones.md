@@ -1,7 +1,7 @@
 ---
 tags:
   category: system
-  type: teaching
+  kind: teaching
   topic: architecture
   source_url: https://archive.org/download/sticksstones0000lewi/sticksstones0000lewi.pdf
 ---

@@ -1,7 +1,7 @@
 ---
 tags:
   category: system
-  type: teaching
+  kind: teaching
   topic: reflection
   source_url: https://www.dhammatalks.org/suttas/MN/MN61.html
 ---

@@ -47,7 +47,7 @@ The hot meta docs are structurally simple:
   - exact `tags` filters like `{act: commitment, status: open}`
 - `.meta/learnings` runs several `find` rules with:
   - `similar_to: "{params.item_id}"`
-  - exact `tags` filters like `{type: learning}`
+  - exact `tags` filters like `{kind: learning}`
 
 These are already the dependency surface. The `with:` params on `find`
 fully describe selection and ranking for this purpose.
@@ -261,7 +261,7 @@ Required regression coverage:
 2. Repeated `get_context("now")` reuses cached `.meta/todo` and
    `.meta/learnings` inner searches.
 3. Writing an unrelated item does not evict those cached entries.
-4. Writing an item with `type=learning` evicts only the learning-style
+4. Writing an item with `kind=learning` evicts only the learning-style
    selectors that match.
 5. Writing an item with `act=request,status=open` evicts the matching
    todo selector entries.

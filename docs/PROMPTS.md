@@ -54,7 +54,7 @@ Match rules can combine multiple tags for higher specificity:
 ```bash
 # Prompt for meeting notes in a specific project
 keep put "$(cat <<'EOF'
-type=meeting project=myapp
+kind=meeting project=myapp
 
 ## Prompt
 
@@ -65,7 +65,7 @@ EOF
 )" --id .prompt/summarize/myapp-meetings
 ```
 
-The most specific match wins — a prompt matching `type=meeting project=myapp` (2 rules) beats one matching just `type=meeting` (1 rule), which beats the default (0 rules).
+The most specific match wins — a prompt matching `kind=meeting project=myapp` (2 rules) beats one matching just `kind=meeting` (1 rule), which beats the default (0 rules).
 
 ## Agent prompts
 

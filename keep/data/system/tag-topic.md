@@ -34,7 +34,7 @@ Identify the subject area or theme. Use short, lowercase, hyphenated names. A to
 
 ```bash
 # Cross-project knowledge (topic only)
-keep put "Token refresh needs clock sync within 30s" -t topic=auth -t type=learning
+keep put "Token refresh needs clock sync within 30s" -t topic=auth -t kind=learning
 
 # Project-specific, but topically relevant
 keep put "myapp uses PKCE for OAuth2" -t project=myapp -t topic=auth

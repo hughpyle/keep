@@ -199,6 +199,10 @@ class StoreConfig:
     # ``[[target|label]]`` syntax.
     labeled_ref_format_verified: bool = False
 
+    # True once content-kind values (learning, breakdown, …) have been moved
+    # from the ``type`` tag to a new ``kind`` tag.
+    type_to_kind_migrated: bool = False
+
     # Tool integrations tracking (presence of key = handled, value = installed or skipped)
     integrations: dict[str, Any] = field(default_factory=dict)
 

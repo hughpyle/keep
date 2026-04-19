@@ -23,7 +23,7 @@ keep_flow(state="get", params={item_id: "now"}, token_budget=2000)             #
 keep_flow(state="query-resolve", params={query: "topic"}, token_budget=2000)   # What do I know?
 keep_flow(state="get", params={item_id: "%abcdef"})                            # Read and research
 keep_flow(state="put", params={content: "what's true now", id: "now"})         # Update working memory
-keep_flow(state="put", params={content: "learning", tags: {type: "learning"}}) # Capture insight
+keep_flow(state="put", params={content: "learning", tags: {kind: "learning"}}) # Capture insight
 keep_flow(state="put", params={uri: "https://example.com/doc", tags: {topic: "X"}})  # Index a URL
 keep_flow(state="tag", params={id: "item", tags: {reviewed: "true"}})          # Tag an item
 keep_help(topic="flow-actions")                                                # Action reference

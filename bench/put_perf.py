@@ -45,7 +45,7 @@ ITEMS = {
             "- [ ] Bob: benchmark get_context components\n"
             "- [ ] Carol: review meta-doc dependency extraction\n"
         ),
-        "tags": {"project": "cache", "type": "meeting"},
+        "tags": {"project": "cache", "kind": "meeting"},
         "desc": "Long text (triggers summarize + embed + tag)",
     },
     "markdown_file": {

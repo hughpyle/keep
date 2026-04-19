@@ -1,7 +1,7 @@
 ---
 tags:
   category: system
-  type: teaching
+  kind: teaching
   topic: conduct
   source_url: https://www.bsswebsite.me.uk/History/AncreneRiwle/AnchoressesRule.pdf
 ---

@@ -1,7 +1,7 @@
 ---
 tags:
   category: system
-  type: teaching
+  kind: teaching
   topic: urgency
   source_url: https://raw.githubusercontent.com/keepnotes-ai/keep/refs/heads/main/docs/library/han_verse.txt
 ---

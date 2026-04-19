@@ -189,7 +189,7 @@ A possibility conversation should **fail** if no actionable commitments eventual
 # Index possibility exploration
 keep put "Explored three auth options: OAuth2, API keys, magic links. \
 User showed interest in magic links for UX simplicity. No decision yet." \
-  --tag type=possibility --tag topic=authentication --tag status=open
+  --tag kind=possibility --tag topic=authentication --tag status=open
 ```
 
 ---
@@ -237,7 +237,7 @@ A **breakdown** occurs when the normal flow is interrupted:
 When indexing a breakdown:
 ```bash
 keep put "Assumption: user wanted full rewrite. Actually: wanted minimal patch." \
-  --tag type=breakdown --tag conversation_type=code_change_request
+  --tag kind=breakdown --tag conversation_type=code_change_request
 ```
 
 ---

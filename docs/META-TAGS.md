@@ -195,11 +195,11 @@ keep put "Can you review the PR?" -t act=request -t status=open -t project=myapp
 keep put "Login bug fixed" -t act=commitment -t status=fulfilled -t project=myapp
 
 # Learnings and breakdowns (surface in meta/learnings)
-keep put "Always check token expiry before refresh" -t type=learning -t topic=auth
-keep put "Assumed UTC, server was local time" -t type=breakdown -t project=myapp
+keep put "Always check token expiry before refresh" -t kind=learning -t topic=auth
+keep put "Assumed UTC, server was local time" -t kind=breakdown -t project=myapp
 
 # Gotchas (surface in meta/learnings)
-keep put "CI cache invalidation needs manual clear after dep change" -t type=gotcha -t topic=ci
+keep put "CI cache invalidation needs manual clear after dep change" -t kind=gotcha -t topic=ci
 ```
 
 ### Media library

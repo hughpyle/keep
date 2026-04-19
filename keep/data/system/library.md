@@ -28,7 +28,7 @@ keep_flow(state="get", params={id: ".library/mn61"}, token_budget=2000)
 
 Each teaching has a `source_url` tag pointing to the full original text online. To ingest the full original into your store, link it back to the library summary with a `duplicates` edge:
 ```
-keep_flow(state="put", params={uri: "<source_url>", tags: {type: "teaching", duplicates: ".library/<id>"}})
+keep_flow(state="put", params={uri: "<source_url>", tags: {kind: "teaching", duplicates: ".library/<id>"}})
 ```
 
 ## Format Diversity

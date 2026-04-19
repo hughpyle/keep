@@ -1,7 +1,7 @@
 ---
 tags:
   category: system
-  type: teaching
+  kind: teaching
   topic: awareness
   source_url: https://raw.githubusercontent.com/keepnotes-ai/keep/refs/heads/main/docs/library/true_person_no_rank.md
 ---

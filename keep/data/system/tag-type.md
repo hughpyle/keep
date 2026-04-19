@@ -3,58 +3,50 @@ tags:
   category: system
   context: tag-description
 ---
-# Tag: `type` — Content Classification
+# Tag: `type` — Entity Type
 
-The `type` tag classifies an item by what kind of content it is. It is orthogonal to `act` (which classifies the speech act) and `topic`/`project` (which classify subject matter).
-
-An item can have both `type` and `act`. For example, `type=breakdown act=assessment` — the content is a breakdown, and the speech act is an evaluation.
+The `type` tag classifies an item by what kind of entity it represents in the knowledge graph. It answers the question "what *is* this thing?" — not what you got out of it (see `kind`) or what speech act it performs (see `act`).
 
 ## Values
 
 | Value | What it marks | Example |
 |-------|---------------|---------|
-| `learning` | Hard-won insight worth remembering | "Token refresh fails when clock skew exceeds 30s" |
-| `breakdown` | A failure where assumptions were revealed | "Assumed user wanted full rewrite, actually wanted minimal patch" |
-| `gotcha` | A known trap or non-obvious pitfall | "ChromaDB silently drops metadata keys with None values" |
-| `reference` | An indexed document, file, or URL | A PDF, webpage, or source file captured for later retrieval |
-| `teaching` | Source material for study or practice | Texts, sutras, foundational documents |
-| `meeting` | Notes from a meeting or conversation | "Meeting notes: discussed auth approach with team" |
-| `pattern` | A recognized recurring structure | "Incremental Specification: propose interpretation, get correction, repeat" |
-| `possibility` | An exploration of options, no commitment yet | "Three auth options explored: OAuth2, API keys, magic links" |
-| `decision` | A significant choice with recorded reasoning | "Chose PKCE over implicit flow for security" |
+| `conversation` | A multi-turn dialogue or chat session | Agent conversation, meeting transcript |
+| `paper` | A research paper or academic document | arXiv preprint, conference paper |
+| `vulnerability` | A security vulnerability or weakness | CWE entry, CVE report |
+| `file` | A source file or document | Source code, config file |
+| `person` | A person entity | Collaborator, author |
+| `project` | A project entity | Repository, initiative |
 
-## Relationship to `act`
+This tag is unconstrained — the table above lists common values but new entity types can be created as needed.
 
-The `type` tag describes the *content*. The `act` tag describes the *speech act*. They answer different questions:
+## Relationship to `kind` and `act`
 
-- `type=learning` — "What kind of thing is this?" → A learning.
-- `act=assertion` — "What is the speaker doing?" → Stating a fact.
+| Tag | Question | Examples |
+|-----|----------|----------|
+| `type` | "What is this entity?" | conversation, paper, vulnerability |
+| `kind` | "What kind of content is this?" | learning, breakdown, decision |
+| `act` | "What speech act is this?" | assertion, commitment, request |
 
-A single item might be `type=learning act=assessment` — a learning that takes the form of an evaluation.
+A single item might be `type=conversation kind=decision act=declaration` — a conversation that records a decision, expressed as a declaration.
 
 ## Injection
 
-When `analyze --tags type` is used, the full text of this doc is prepended to the analysis prompt as guide context. This tag is unconstrained — values are free-form, but the table above lists the standard vocabulary.
+When `analyze --tags type` is used, the full text of this doc is prepended to the analysis prompt as guide context.
 
 ## Prompt
 
-Classify what kind of content this is. Use one of the standard values when applicable: `learning` (hard-won insight), `breakdown` (failure/revealed assumption), `gotcha` (known trap), `reference` (indexed document), `teaching` (source material), `meeting` (conversation notes), `pattern` (recurring structure), `possibility` (exploration of options), `decision` (choice with reasoning).
+Classify the entity type of this item. Use one of the standard values when applicable: `conversation` (dialogue/chat), `paper` (research/academic), `vulnerability` (security weakness), `file` (source document), `person` (individual), `project` (initiative/repo). If none fit, use a descriptive entity-type noun.
 
 ## Examples
 
 ```bash
-# Capture a learning
-keep put "Mock time in tests instead of real sleep assertions" -t type=learning -t topic=testing
+# Tag a conversation
+keep put "file:///path/to/transcript.md" -t type=conversation
 
-# Record a breakdown
-keep put "Assumed X, actually Y. Next time: Z" -t type=breakdown -t project=myapp
+# Tag a research paper
+keep put "file:///path/to/paper.pdf" -t type=paper -t topic=ml
 
-# Index a reference document
-keep put "file:///path/to/design.pdf" -t type=reference -t topic=architecture
-
-# Note a gotcha for future agents
-keep put "sqlite WAL mode required for concurrent reads" -t type=gotcha -t topic=database
-
-# Record a decision
-keep put "Chose LanceDB over Pinecone: local-first, no API dependency" -t type=decision -t project=keep
+# Tag a vulnerability
+keep put "CWE-79: Cross-site Scripting" -t type=vulnerability -t topic=security
 ```

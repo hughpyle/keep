@@ -254,7 +254,8 @@ keep ships with these tag descriptions:
 |-----|:-----------:|:--------:|--------|---------|
 | `act` | Yes | Yes | `commitment`, `request`, `offer`, `assertion`, `assessment`, `declaration` | Speech-act category (what the speaker is doing) |
 | `status` | Yes | Yes | `open`, `blocked`, `fulfilled`, `declined`, `withdrawn`, `renegotiated` | Lifecycle state of commitments/requests/offers |
-| `type` | No | No | `learning`, `breakdown`, `gotcha`, `reference`, `teaching`, `meeting`, `pattern`, `possibility`, `decision` | Content classification |
+| `type` | No | No | `conversation`, `paper`, `vulnerability`, `file`, `person`, `project` | Entity type (graph node label) |
+| `kind` | No | No | `learning`, `breakdown`, `gotcha`, `reference`, `teaching`, `meeting`, `pattern`, `possibility`, `decision` | Content classification |
 | `project` | No | No | (user-defined) | Bounded work context |
 | `topic` | No | No | (user-defined) | Cross-cutting subject area |
 

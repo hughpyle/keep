@@ -168,7 +168,7 @@ Index important documents encountered during work:
 
 ```bash
 keep put "https://docs.example.com/auth" -t topic=auth -t project=myapp
-keep put "file:///path/to/design.pdf" -t type=reference -t topic=architecture
+keep put "file:///path/to/design.pdf" -t kind=reference -t topic=architecture
 ```
 
 ## See Also
