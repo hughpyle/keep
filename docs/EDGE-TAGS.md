@@ -147,7 +147,7 @@ Use **meta docs** for contextual reflection policy:
 Edge tags optimize navigability and relationship fidelity.
 Meta docs optimize relevance and situational awareness.
 
-## Finding edge sources
+## Finding edges
 
 Outbound edges are normal tags, so `keep find` works:
 
@@ -155,7 +155,25 @@ Outbound edges are normal tags, so `keep find` works:
 keep find -t speaker=Deborah    # All docs where Deborah is the speaker
 ```
 
-Inverse edges (the resolved `said:` entries in `tags:`) are only visible through `keep get` on the target.
+Inverse edges work too — `keep find` detects inverse-edge tag keys and queries the edges table:
+
+```bash
+keep find -q "topic" -t said=Deborah    # All docs where Deborah is mentioned via said (inverse of speaker)
+keep find -q "survey" -t cited_by=paper-a  # All docs cited by paper-a
+```
+
+## Conditional edges
+
+Edge tags can declare a `_when` condition in their tagdoc frontmatter. The condition is a CEL expression evaluated against the source note's item context. If the condition is false, no edge is created.
+
+```yaml
+# .tag/sender — only create edges when source is an email
+tags:
+  _inverse: sent_by
+  _when: "'email' in item.tags.type"
+```
+
+This prevents spurious edges when a tag key means different things in different content types (e.g. `sender` in an email vs. a generic attribution).
 
 ## See Also
 

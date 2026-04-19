@@ -1,6 +1,6 @@
 # Design: Tags, Conditions, and Item Context
 
-Status: **phase 1 implemented** (type/kind split); phase 2 in design (unified CEL conditions)
+Status: **phases 1–4 implemented** (type/kind split, unified item context, conditional edges + inverse find, conversation tagging)
 
 ## Motivation
 
@@ -693,21 +693,209 @@ test_find_inverse_edge_nonexistent_predicate
       returns nothing (no false positives)
 ```
 
-## Sequence
+## Phase 3 Status
 
-- [ ] Add `_tagdoc_when_cache` dict to Keeper.__init__
-- [ ] Parse `_when` from tagdoc tags during edge materialization
-- [ ] Evaluate `_when` in `_restore_current_edges_without_backfill`
-- [ ] Pass `when_source` through to backfill
-- [ ] Cache invalidation on tagdoc write
-- [ ] Add `find_by_inverse_edge` to DocumentStore + index migration
-- [ ] Detect inverse-edge keys in `_find_direct` tag filter
-- [ ] Tests: conditional edge created/skipped
-- [ ] Tests: inverse edge absent when condition not met
-- [ ] Tests: backfill respects condition
-- [ ] Tests: unconditional edges unchanged
-- [ ] Tests: find by inverse edge tag
-- [ ] Update EDGE-TAGS.md to remove asymmetry caveat
+- [x] Add `_tagdoc_when_cache` dict to Keeper.__init__
+- [x] Parse `_when` from tagdoc tags during edge materialization
+- [x] Evaluate `_when` in `_process_edge_tags` (write-time) and
+      `_restore_current_edges_without_backfill` (migration)
+- [x] Pass `when_source` through to backfill
+- [x] Cache invalidation on tagdoc write
+- [x] Add `find_by_inverse_edge` to DocumentStore + index migration (v16)
+- [x] Detect inverse-edge keys in `_find_direct` tag filter
+- [x] Tests: conditional edge created/skipped (7 tests)
+- [x] Tests: find by inverse edge tag (2 tests)
+- [x] Tests: DocumentStore.find_by_inverse_edge (2 tests)
+- [x] Update EDGE-TAGS.md: conditional edges + inverse find docs
+
+---
+
+# Phase 4: Automatic `type=conversation` on captured messages
+
+## Motivation
+
+Conversation-specific prompts (`prompt-analyze-conversation.md`,
+`prompt-summarize-conversation.md`) match on `type=conversation`.
+Today, no conversation capture source sets this tag automatically.
+User/assistant messages from Hermes, OpenClaw, and IDE hooks arrive
+without `type`, so they get the default analysis/summarization
+prompts — missing conversation-specific extraction like speaker
+attribution and speech-act classification.
+
+## Distinguishing principle
+
+The rule is: **if the system is automatically capturing what a user
+or assistant said as part of a dialogue, that's a conversation.** If
+a user or agent is deliberately writing a note via tool use, it's
+not — the caller chooses its own type/kind.
+
+The distinction is about **who initiated the write**, not the item
+ID. `keep now "working on auth"` is deliberate intention-setting.
+`UserPromptSubmit` automatically capturing the user's prompt is
+conversation capture. Same `now` doc, different semantics.
+
+## Scope
+
+**Should get `type=conversation`:**
+- **Hermes `sync_turn()`** — the gateway automatically captures
+  user/assistant message pairs as versioned items on every turn.
+  This is the primary conversation capture path for Hermes-managed
+  agent sessions.
+- **OpenClaw `ingest()` / `ingestBatch()`** — the context engine
+  automatically captures individual messages as they arrive from the
+  gateway. Each message is a conversation turn.
+- **Claude Code `UserPromptSubmit` hook** — the harness
+  automatically fires on every user prompt submission. The hook
+  command captures the prompt text. This is automatic conversation
+  capture, not deliberate tool use.
+- **Kiro `promptSubmit` hook** — same pattern as Claude Code.
+
+**Should NOT get `type=conversation`:**
+- `keep now "working on auth"` — deliberate intention-setting by
+  user or agent.
+- `keep put "some insight" -t kind=learning` — deliberate note.
+- `keep_flow(state="put", ...)` — deliberate agent tool use.
+- Hermes `on_pre_compress()` — operational (`kind=compression-snapshot`).
+- Hermes `on_delegation()` — operational (`kind=delegation`).
+- Hermes `on_memory_write()` — memory mirror (`source=hermes-builtin`).
+- OpenClaw `afterTurn()` compaction summaries — operational.
+- Codex — only protocol block, no conversation hooks.
+
+## Changes
+
+### 1. Hermes provider (`keep/hermes/provider.py`)
+
+**`sync_turn()`** — add `type: "conversation"` to session tags:
+
+```python
+# In _build_session_tags() or sync_turn() tag construction
+tags["type"] = "conversation"
+```
+
+This is the only Hermes method that writes actual conversation turns.
+The other methods (`on_pre_compress`, `on_delegation`,
+`on_memory_write`) should NOT set `type=conversation`.
+
+### 2. OpenClaw context engine (`keep/data/openclaw-plugin/src/index.ts`)
+
+**`ingest()` and `ingestBatch()`** — add `type: "conversation"` and
+`source: "openclaw"` to tags:
+
+```typescript
+// In sessionTags() or at the ingest call sites
+tags.type = "conversation";
+tags.source = "openclaw";
+```
+
+**`afterTurn()` compaction summaries** — no change (already has
+`type: compaction-summary`).
+
+### 3. IDE hooks (`keep/integrations.py`, `keep/data/kiro-hooks/`)
+
+The hook commands themselves set `type=conversation` in their
+invocation, since these are automatic conversation captures:
+
+**Claude Code** (`integrations.py` CLAUDE_CODE_HOOKS):
+```python
+# UserPromptSubmit hook command — add -t type=conversation
+"command": "keep now 'User prompt: ${.prompt|text}' --truncate -t type=conversation 2>/dev/null || true",
+```
+
+**Kiro** (`keep-prompt.kiro.hook`):
+```json
+"command": "printf 'User prompt: %s' \"$USER_PROMPT\" | keep now -t type=conversation 2>/dev/null || true"
+```
+
+This keeps the tagging at the source (the hook definition) rather
+than injecting it in the write path. The `now` doc itself is not
+inherently conversational — it's the hook's automatic capture that
+makes it conversation content.
+
+### Source tag consistency
+
+Currently Hermes uses `source: "hermes"` (no underscore) while
+the system convention is `_source` (with underscore). This is
+intentional — `_source` is a system-managed provenance tag set
+during write (`inline`, `uri`, `link`, `auto-vivify`). The
+user-facing `source` tag is a different concept: "what integration
+produced this content."
+
+No change to `_source` — the `source` tag stays as a user-facing
+attribution. OpenClaw should add `source: "openclaw"` for parity
+with Hermes.
+
+### Prompt matching (already works)
+
+`prompt-analyze-conversation.md` has match rule `type=conversation`.
+`prompt-summarize-conversation.md` has match rule `type=conversation`.
+Once the sources set this tag, conversation-specific prompts will
+activate automatically. No prompt changes needed.
+
+### Act classifier conditioning (future, enabled by this)
+
+Once conversation items are reliably tagged `type=conversation`,
+the `act` (speech-act) tag classifier can be conditioned to only
+run on conversations:
+
+```yaml
+# .tag/act
+tags:
+  _constrained: "true"
+  _when: "'conversation' in item.tags.type"
+```
+
+This prevents speech-act classification on non-conversation content
+(papers, references, etc.) where it produces noise. This is a
+separate change using the `_when` mechanism from Phase 3.
+
+## What does NOT change
+
+- **`keep now`** (deliberate) — user/agent writes intentions
+  or status updates. No automatic `type` injection.
+- **`keep put`** — user chooses their own tags.
+- **`keep_flow(state="put")`** — agent chooses its own tags.
+- **File/URL indexing** — `_source: uri` items get their type
+  from content analysis, not from the capture path.
+
+## Tests
+
+```
+test_hermes_sync_turn_sets_type_conversation
+    - Call sync_turn with user/assistant content
+    - Verify stored item has type=conversation
+
+test_hermes_on_delegation_does_not_set_type_conversation
+    - Call on_delegation
+    - Verify stored item does NOT have type=conversation
+
+test_hermes_on_memory_write_does_not_set_type_conversation
+    - Call on_memory_write
+    - Verify stored item does NOT have type=conversation
+
+test_claude_code_hook_command_includes_type_conversation
+    - Verify CLAUDE_CODE_HOOKS["UserPromptSubmit"] command
+      contains "-t type=conversation"
+
+test_kiro_hook_command_includes_type_conversation
+    - Verify keep-prompt.kiro.hook command contains
+      "-t type=conversation"
+
+test_openclaw_ingest_sets_type_conversation
+    - (TypeScript test in openclaw plugin)
+```
+
+## Phase 4 Status
+
+- [x] Add `type=conversation` in Hermes `sync_turn()` tags
+- [x] Add `-t type=conversation` to Claude Code `UserPromptSubmit`
+      hook command (also changed prefix from "User prompt:" to "User:")
+- [x] Add `-t type=conversation` to Kiro `promptSubmit` hook command
+      (also changed prefix from "User prompt:" to "User:")
+- [x] Add `type=conversation` + `source=openclaw` in OpenClaw
+      `ingest()` / `ingestBatch()` / `afterTurn()` message re-ingest
+- [x] Tests: Hermes sync_turn sets type=conversation (1 test)
+- [x] Tests: delegation/compress do NOT set type=conversation (2 tests)
+- [x] Tests: hook commands include type=conversation (2 tests)
 
 ## Future phases
 

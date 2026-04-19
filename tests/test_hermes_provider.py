@@ -847,3 +847,71 @@ class TestSetupStorePathPreservation:
             p.initialize("s1", hermes_home=str(hermes_home), platform="cron")
 
         assert p._store_path == str(profile_path)
+
+
+class TestConversationTagging:
+    """Verify type=conversation is set on automatic message captures only."""
+
+    def test_sync_turn_sets_type_conversation(self, mock_providers, tmp_path):
+        """Automatic message capture via sync_turn → type=conversation."""
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="cli",
+                     agent_identity="test")
+        p.sync_turn("Hello", "Hi there!")
+        if p._sync_thread:
+            p._sync_thread.join(timeout=5.0)
+        item = p._keeper.get(p._session_item_id)
+        assert item is not None
+        assert item.tags.get("type") == "conversation"
+        p.shutdown()
+
+    def test_on_delegation_does_not_set_type_conversation(self, mock_providers, tmp_path):
+        """Delegation is operational, not conversation capture."""
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="cli",
+                     agent_identity="test")
+        p.on_delegation("do X", "done X", child_session_id="child-1")
+        # Wait for background thread
+        import time
+        time.sleep(1.0)
+        # Find the delegation item (it has kind=delegation)
+        results = p._keeper._find_direct(
+            query="do X", tags={"kind": "delegation"},
+        )
+        if results:
+            assert results[0].tags.get("type") != "conversation"
+        p.shutdown()
+
+    def test_on_pre_compress_does_not_set_type_conversation(self, mock_providers, tmp_path):
+        """Compression snapshots are operational, not conversation."""
+        p = KeepMemoryProvider()
+        p.initialize("s1", hermes_home=str(tmp_path), platform="cli",
+                     agent_identity="test")
+        p.on_pre_compress([{"role": "user", "content": "msg1"}, {"role": "assistant", "content": "msg2"}])
+        results = p._keeper._find_direct(
+            query="msg1", tags={"kind": "compression-snapshot"},
+        )
+        if results:
+            assert results[0].tags.get("type") != "conversation"
+        p.shutdown()
+
+
+class TestHookConversationTags:
+    """Verify IDE hook commands include type=conversation."""
+
+    def test_claude_code_hook_includes_type_conversation(self):
+        """Claude Code UserPromptSubmit hook command tags with type=conversation."""
+        from keep.integrations import CLAUDE_CODE_HOOKS
+        commands = [
+            h["command"]
+            for entry in CLAUDE_CODE_HOOKS.get("UserPromptSubmit", [])
+            for h in entry.get("hooks", [])
+        ]
+        assert any("type=conversation" in cmd for cmd in commands)
+
+    def test_kiro_hook_includes_type_conversation(self):
+        """Kiro promptSubmit hook command tags with type=conversation."""
+        from pathlib import Path
+        hook_file = Path(__file__).parent.parent / "keep" / "data" / "kiro-hooks" / "keep-prompt.kiro.hook"
+        content = hook_file.read_text()
+        assert "type=conversation" in content

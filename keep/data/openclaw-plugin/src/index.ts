@@ -697,7 +697,7 @@ export default function register(api: any) {
             params: {
               content,
               id: itemId,
-              tags: sessionTags({ ...params, extra: { role } }),
+              tags: sessionTags({ ...params, extra: { role, type: "conversation", source: "openclaw" } }),
             },
           });
 
@@ -741,7 +741,7 @@ export default function register(api: any) {
             params: {
               content: turnContent,
               id: itemId,
-              tags: sessionTags(params),
+              tags: sessionTags({ ...params, extra: { type: "conversation", source: "openclaw" } }),
             },
           });
 
@@ -886,7 +886,7 @@ export default function register(api: any) {
               params: {
                 content,
                 id: itemId,
-                tags: sessionTags({ ...params, extra: { role } }),
+                tags: sessionTags({ ...params, extra: { role, type: "conversation", source: "openclaw" } }),
               },
             });
           } catch (err: any) {

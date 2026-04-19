@@ -117,6 +117,25 @@ class TestDocumentStoreEdges:
         assert store.get_inverse_edges("coll_b", "nate") == []
         assert len(store.get_inverse_edges("coll_a", "nate")) == 1
 
+    def test_find_by_inverse_edge(self, store):
+        """find_by_inverse_edge returns target IDs for a given inverse + source."""
+        store.upsert_edge("default", "survey", "cites", "paper-a", "cited_by", "2025-01-01")
+        store.upsert_edge("default", "survey", "cites", "paper-b", "cited_by", "2025-01-01")
+        store.upsert_edge("default", "other", "cites", "paper-a", "cited_by", "2025-01-02")
+
+        # cited_by survey → papers that survey cites
+        targets = store.find_by_inverse_edge("default", "cited_by", "survey")
+        assert set(targets) == {"paper-a", "paper-b"}
+
+        # cited_by other → only paper-a
+        targets = store.find_by_inverse_edge("default", "cited_by", "other")
+        assert targets == ["paper-a"]
+
+    def test_find_by_inverse_edge_empty(self, store):
+        """No matching edges returns empty list."""
+        targets = store.find_by_inverse_edge("default", "cited_by", "nonexistent")
+        assert targets == []
+
 
 # ---------------------------------------------------------------------------
 # Integration: Keeper edge processing with mocks
@@ -909,3 +928,202 @@ class TestInverseTagdocMaterialization:
         assert "said" in ctx_nate.edges
         assert "speaker" in ctx_nate.edges
         assert ctx_nate.edges["speaker"][0].source_id == "quote1"
+
+
+# ---------------------------------------------------------------------------
+# Conditional edges (_when on tagdocs)
+# ---------------------------------------------------------------------------
+
+
+class TestConditionalEdges:
+    """Tests for _when conditions on edge tagdocs."""
+
+    @pytest.fixture
+    def kp(self, mock_providers, tmp_path):
+        return Keeper(store_path=tmp_path)
+
+    def _create_tagdoc(self, kp, key, inverse, when=None):
+        """Create a .tag/KEY tagdoc with _inverse and optional _when."""
+        from keep.types import utc_now
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+        tags = {
+            "_inverse": inverse,
+            "_created": now,
+            "_updated": now,
+            "_source": "inline",
+            "category": "system",
+        }
+        if when:
+            tags["_when"] = when
+        kp._document_store.upsert(
+            collection=doc_coll,
+            id=f".tag/{key}",
+            summary=f"Tag: {key}",
+            tags=tags,
+        )
+
+    def test_conditional_edge_created_when_condition_met(self, kp):
+        """Edge created when source note meets _when condition."""
+        self._create_tagdoc(kp, "sender", "sent_by",
+                            when="'email' in item.tags.type")
+
+        kp.put(content="Email from Alice", id="email1", summary="Email",
+               tags={"sender": "alice", "type": "email"})
+
+        ctx = kp.get_context("alice")
+        assert ctx is not None
+        assert "sent_by" in ctx.edges
+        assert ctx.edges["sent_by"][0].source_id == "email1"
+
+    def test_conditional_edge_skipped_when_condition_not_met(self, kp):
+        """No edge when source note does not meet _when condition."""
+        self._create_tagdoc(kp, "sender", "sent_by",
+                            when="'email' in item.tags.type")
+
+        kp.put(content="Date range from January", id="doc1", summary="Report",
+               tags={"sender": "2026-01-01", "type": "report"})
+
+        # Target should not be auto-vivified
+        target = kp.get("2026-01-01")
+        assert target is None
+
+        # No edge rows for this predicate
+        doc_coll = kp._resolve_doc_collection()
+        edges = kp._document_store.get_inverse_edges(doc_coll, "2026-01-01")
+        assert len(edges) == 0
+
+    def test_unconditional_edge_still_works(self, kp):
+        """Edge without _when condition works as before."""
+        self._create_tagdoc(kp, "speaker", "said")
+
+        kp.put(content="Nate said hello", id="conv1", summary="Greeting",
+               tags={"speaker": "nate"})
+
+        ctx = kp.get_context("nate")
+        assert "said" in ctx.edges
+        assert ctx.edges["said"][0].source_id == "conv1"
+
+    def test_conditional_edge_inverse_not_visible(self, kp):
+        """Inverse edges absent on target when source doesn't meet condition."""
+        self._create_tagdoc(kp, "sender", "sent_by",
+                            when="'email' in item.tags.type")
+
+        # Put a non-email note with sender=alice
+        kp.put(content="Letter from Alice", id="letter1", summary="Letter",
+               tags={"sender": "alice", "type": "letter"})
+
+        # alice should have no sent_by edges
+        ctx = kp.get_context("alice")
+        assert ctx is None or "sent_by" not in ctx.edges
+
+    def test_condition_on_tags(self, kp):
+        """_when can test arbitrary tags via has()."""
+        self._create_tagdoc(kp, "sender", "sent_by",
+                            when="has(item.tags.priority) && item.tags.priority == 'high'")
+
+        # Matching tag → edge created
+        kp.put(content="Urgent from Bob", id="msg1", summary="Urgent",
+               tags={"sender": "bob", "priority": "high"})
+
+        ctx = kp.get_context("bob")
+        assert ctx is not None
+        assert "sent_by" in ctx.edges
+
+        # Non-matching tag → no edge
+        kp.put(content="Low priority from Carol", id="msg2", summary="Low",
+               tags={"sender": "carol", "priority": "low"})
+
+        ctx_carol = kp.get_context("carol")
+        assert ctx_carol is None or "sent_by" not in ctx_carol.edges
+
+    def test_mixed_conditional_and_unconditional(self, kp):
+        """Multiple edge tags: one conditional, one not."""
+        self._create_tagdoc(kp, "sender", "sent_by",
+                            when="'email' in item.tags.type")
+        self._create_tagdoc(kp, "talker", "talked")
+
+        # Note has both tags but only meets talker condition (no type=email)
+        kp.put(content="Nate from engineering", id="conv1", summary="Chat",
+               tags={"sender": "nate", "talker": "nate", "type": "conversation"})
+
+        ctx = kp.get_context("nate")
+        assert "talked" in ctx.edges  # unconditional — created
+        assert "sent_by" not in ctx.edges  # conditional — not met
+
+    def test_tagdoc_when_change_clears_cache(self, kp):
+        """Updating _when on a tagdoc invalidates the cache."""
+        self._create_tagdoc(kp, "sender", "sent_by")  # no _when initially
+
+        kp.put(content="From Alice", id="doc1", summary="Doc",
+               tags={"sender": "alice"})
+
+        # Edge should exist (unconditional)
+        ctx = kp.get_context("alice")
+        assert ctx is not None
+        assert "sent_by" in ctx.edges
+
+        # Update tagdoc to add restrictive _when, then clear caches
+        # (direct store writes bypass the Keeper cache invalidation path)
+        self._create_tagdoc(kp, "sender", "sent_by",
+                            when="'email' in item.tags.type")
+        kp._tagdoc_cache.pop("sender", None)
+        kp._tagdoc_when_cache.pop("sender", None)
+
+        # New note without type=email should NOT create edge
+        kp.put(content="From Bob", id="doc2", summary="Doc2",
+               tags={"sender": "bob"})
+
+        ctx_bob = kp.get_context("bob")
+        assert ctx_bob is None or "sent_by" not in ctx_bob.edges
+
+
+# ---------------------------------------------------------------------------
+# Inverse edge find
+# ---------------------------------------------------------------------------
+
+
+class TestInverseEdgeFind:
+    """Tests for finding items via inverse edge tags."""
+
+    @pytest.fixture
+    def kp(self, mock_providers, tmp_path):
+        return Keeper(store_path=tmp_path)
+
+    def _create_tagdoc(self, kp, key, inverse):
+        """Create a .tag/KEY tagdoc with _inverse."""
+        from keep.types import utc_now
+        doc_coll = kp._resolve_doc_collection()
+        now = utc_now()
+        tags = {
+            "_inverse": inverse,
+            "_created": now,
+            "_updated": now,
+            "_source": "inline",
+            "category": "system",
+        }
+        kp._document_store.upsert(
+            collection=doc_coll,
+            id=f".tag/{key}",
+            summary=f"Tag: {key}",
+            tags=tags,
+        )
+
+    def test_find_by_inverse_edge_tag(self, kp):
+        """Find with inverse edge tag returns edge targets."""
+        self._create_tagdoc(kp, "cites", "cited_by")
+
+        kp.put(content="Survey paper", id="survey", summary="Survey",
+               tags={"cites": "paper-a"})
+        kp.put(content="Paper A about ML", id="paper-a", summary="ML Paper")
+
+        # Use _find_direct to avoid flow-layer compat shim
+        results = kp._find_direct(query="paper", tags={"cited_by": "survey"})
+        assert len(results) >= 1
+        assert any(r.id == "paper-a" for r in results)
+
+    def test_find_inverse_nonexistent_predicate(self, kp):
+        """Find with a non-inverse tag key works as regular tag filter."""
+        # "flavor" has no tagdoc with _inverse — treated as a regular tag
+        results = kp._find_direct(query="anything", tags={"flavor": "vanilla"})
+        assert results == []

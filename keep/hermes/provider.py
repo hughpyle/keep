@@ -450,6 +450,7 @@ class KeepMemoryProvider:
         turn = self._turn_count
         item_id = self._session_item_id or f"hermes:{self._session_id}"
         tags = dict(self._session_tags)
+        tags["type"] = "conversation"  # automatic message capture → conversation
         platform = str(tags.get("platform") or "").strip()
         raw_user_id = str(user_id or self._turn_user_id or "").strip()
         turn_user_name = str(user_name or self._turn_user_name or "").strip()

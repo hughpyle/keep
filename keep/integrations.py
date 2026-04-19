@@ -78,7 +78,7 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "keep now 'User prompt: ${.prompt|text}' --truncate 2>/dev/null || true",
+                    "command": "keep now 'User: ${.prompt|text}' --truncate -t type=conversation 2>/dev/null || true",
                     "statusMessage": "Reflecting...",
                 }
             ],

@@ -1041,9 +1041,20 @@ class MockDocumentStore:
         return 0
 
     def backfill_version_edges_for_predicate(
-        self, collection: str, predicate: str, inverse: str
+        self, collection: str, predicate: str, inverse: str,
+        *, when_source: str = "",
     ) -> int:
         return 0
+
+    def find_by_inverse_edge(
+        self, collection: str, inverse: str, source_id: str,
+        *, limit: int = 200,
+    ) -> list[str]:
+        self.__init_edges()
+        return [
+            e["target_id"] for e in self._edges
+            if e["source_id"] == source_id and e["inverse"] == inverse
+        ]
 
     def get_inverse_edges(self, collection: str, target_id: str) -> list[tuple[str, str, str]]:
         self.__init_edges()

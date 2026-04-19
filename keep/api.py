@@ -79,6 +79,7 @@ from .recovery import is_malformed_db_error
 from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, EdgeRef, TagMap,
+    build_item_context,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
     iter_tag_pairs, note_display_name, normalize_edge_value, set_tag_values, tag_values, parse_ref, format_ref,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
@@ -87,6 +88,7 @@ from .types import (
     MAX_TAG_VALUE_LENGTH,
     repair_surrogate_text,
 )
+from .state_doc import _compile_predicate, _eval_predicate
 from .context_cache import ContextCache
 from .const import STATE_PROMPT
 from .flow_client import (
@@ -272,6 +274,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._startup_maintenance_thread: Optional[threading.Thread] = None
         self._last_spawn_time: float = 0.0
         self._tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
+        self._tagdoc_when_cache: dict[str, Any] = {}  # compiled CEL _when programs (None = unconditional)
         self._ignore_patterns: Optional[list[str]] = None
         self._ignore_patterns_ts: float = 0.0
         self._context_cache = ContextCache()
@@ -552,6 +555,36 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 inverse = inverse[0]
             if not inverse:
                 continue
+
+            # Compile and cache _when predicate for this edge tag
+            if key not in self._tagdoc_when_cache:
+                when_source = td_tags.get("_when", "")
+                if when_source:
+                    try:
+                        self._tagdoc_when_cache[key] = (
+                            _compile_predicate(when_source), when_source,
+                        )
+                    except (ValueError, RuntimeError) as exc:
+                        logger.warning(
+                            ".tag/%s: failed to compile _when %r: %s",
+                            key, when_source, exc,
+                        )
+                        self._tagdoc_when_cache[key] = None
+                else:
+                    self._tagdoc_when_cache[key] = None
+
+            # Evaluate _when condition against source note
+            when_entry = self._tagdoc_when_cache[key]
+            if when_entry is not None:
+                when_prog, when_src = when_entry
+                item_ctx = build_item_context(
+                    id=id,
+                    tags=merged_tags,
+                    content_type=merged_tags.get("_content_type", ""),
+                    uri=merged_tags.get("_source_uri", ""),
+                )
+                if not _eval_predicate(when_prog, {"item": item_ctx}, when_src):
+                    continue  # condition not met — skip this edge tag
 
             for current_value in tag_values(merged_tags, key):
                 if not current_value:
@@ -1215,6 +1248,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         from .system_docs import migrate_system_documents
         result = migrate_system_documents(self, progress=progress)
         self._tagdoc_cache.clear()  # tagdocs may have changed
+        self._tagdoc_when_cache.clear()
         self._context_cache.clear()
         self._scan_tagdoc_backfills()
         return result
@@ -2493,6 +2527,32 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if isinstance(inverse, list):
                 inverse = inverse[0]
 
+            # Evaluate _when condition from tagdoc against source note
+            when_source = td_tags.get("_when", "")
+            if when_source:
+                if key not in self._tagdoc_when_cache:
+                    try:
+                        self._tagdoc_when_cache[key] = (
+                            _compile_predicate(when_source), when_source,
+                        )
+                    except (ValueError, RuntimeError) as exc:
+                        logger.warning(
+                            ".tag/%s: failed to compile _when %r: %s",
+                            key, when_source, exc,
+                        )
+                        self._tagdoc_when_cache[key] = None
+                when_entry = self._tagdoc_when_cache.get(key)
+                if when_entry is not None:
+                    when_prog, when_src = when_entry
+                    item_ctx = build_item_context(
+                        id=id,
+                        tags=merged_tags,
+                        content_type=merged_tags.get("_content_type", ""),
+                        uri=merged_tags.get("_source_uri", ""),
+                    )
+                    if not _eval_predicate(when_prog, {"item": item_ctx}, when_src):
+                        continue  # condition not met — skip this edge tag
+
             current_values = tag_values(merged_tags, key)
             previous_values = tag_values(existing_tags, key)
             previous_value_set = set(previous_values)
@@ -3108,6 +3168,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             self._process_tagdoc_inverse_change(id, merged_tags, old_tagdoc_tags, doc_coll)
             tag_key = id.removeprefix(".tag/").split("/")[0]
             self._tagdoc_cache.pop(tag_key, None)
+            self._tagdoc_when_cache.pop(tag_key, None)
 
         # Save old embedding before ChromaDB upsert overwrites it (for version archival)
         old_embedding = None
@@ -3813,12 +3874,38 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # don't inherit parent tags (see analyze.py), so without this
         # expansion a tag filter would never reach them.
         tag_join_base_ids: list[str] = []
+        # IDs from inverse-edge tag filters (e.g. cited_by=source_id)
+        inverse_edge_ids: Optional[set[str]] = None
         if tags:
             casefolded_tags = casefold_tags(tags)
             for k in casefolded_tags:
                 if not k.startswith(SYSTEM_TAG_PREFIX):
                     validate_tag_key(k)
-            where = self._build_tag_where(casefolded_tags)
+
+            # Separate inverse-edge filters from regular tag filters.
+            # An inverse-edge filter is a tag key that matches an inverse
+            # predicate (i.e., .tag/KEY exists with _inverse pointing back).
+            regular_tags: dict[str, Any] = {}
+            for k, v in casefolded_tags.items():
+                td = self._get_tagdoc_tags(k, doc_coll)
+                if td is not None and td.get("_inverse"):
+                    # This key is itself an inverse predicate — resolve
+                    # via the edges table instead of tag matching.
+                    for source_id in tag_values(casefolded_tags, k):
+                        if not source_id:
+                            continue
+                        found = self._document_store.find_by_inverse_edge(
+                            doc_coll, k, source_id,
+                        )
+                        if inverse_edge_ids is None:
+                            inverse_edge_ids = set(found)
+                        else:
+                            inverse_edge_ids &= set(found)
+                else:
+                    regular_tags[k] = v
+
+            casefolded_tags = regular_tags
+            where = self._build_tag_where(casefolded_tags) if casefolded_tags else None
 
             if where is not None:
                 parent_ids_set = self._ids_matching_tags(
@@ -3967,6 +4054,21 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                      if (i.tags.get("_base_id") or
                          (i.id.split("@")[0] if "@" in i.id else i.id))
                      in scope_ids]
+
+        # Filter by inverse-edge results (e.g. find -t cited_by=source)
+        if inverse_edge_ids is not None:
+            if not items:
+                # No semantic/FTS results — return inverse-edge targets directly
+                for tid in sorted(inverse_edge_ids)[:limit]:
+                    doc = self._document_store.get(doc_coll, tid)
+                    if doc is not None:
+                        items.append(Item(id=doc.id, summary=doc.summary, tags=dict(doc.tags)))
+            else:
+                base_ids = inverse_edge_ids
+                items = [i for i in items
+                         if (i.tags.get("_base_id") or
+                             (i.id.split("@")[0] if "@" in i.id else i.id))
+                         in base_ids]
 
         # Deep follow: prefer edge-following when edges exist in the store,
         # fall back to tag-following for stores without edges.
