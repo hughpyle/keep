@@ -10,7 +10,7 @@ from ..tracing import get_tracer
 from ..types import SYSTEM_TAG_PREFIX
 from . import action
 from ._item_scope import check_content_hash, resolve_item_text
-from ._tagging import classify_parts_with_specs
+from ._tagging import classify_parts_with_specs, _filter_specs_by_when
 from ._item_scope import resolve_item
 from ._tagging import load_tag_specs
 
@@ -180,27 +180,36 @@ class Analyze:
             part["part_num"] = idx
         tag_specs = prepared.get("tag_specs")
         if isinstance(tag_specs, list) and tag_specs:
-            try:
-                with tracer.start_as_current_span(
-                    "analyze.classify",
-                    attributes={"item_id": item_id, "part_count": len(parts), "spec_count": len(tag_specs)},
-                ):
-                    from ..analyzers import TagClassifier
-                    provider = context.resolve_provider("summarization")
-                    classifier = TagClassifier(provider=provider)
-                    parts = classifier.classify(parts, specs=tag_specs)
-            except Exception:
-                with tracer.start_as_current_span(
-                    "analyze.classify_fallback",
-                    attributes={"item_id": item_id, "part_count": len(parts)},
-                ):
-                    parts = classify_parts_with_specs(parts, context)
+            # Filter specs by _when conditions against the item
+            tag_specs = _filter_specs_by_when(tag_specs, item_tags, item_id)
+            if not tag_specs:
+                pass  # all specs filtered out — skip classification
+            else:
+                try:
+                    with tracer.start_as_current_span(
+                        "analyze.classify",
+                        attributes={"item_id": item_id, "part_count": len(parts), "spec_count": len(tag_specs)},
+                    ):
+                        from ..analyzers import TagClassifier
+                        provider = context.resolve_provider("summarization")
+                        classifier = TagClassifier(provider=provider)
+                        parts = classifier.classify(parts, specs=tag_specs)
+                except Exception:
+                    with tracer.start_as_current_span(
+                        "analyze.classify_fallback",
+                        attributes={"item_id": item_id, "part_count": len(parts)},
+                    ):
+                        parts = classify_parts_with_specs(
+                            parts, context, item_tags=item_tags, item_id=item_id,
+                        )
         else:
             with tracer.start_as_current_span(
                 "analyze.classify_fallback",
                 attributes={"item_id": item_id, "part_count": len(parts)},
             ):
-                parts = classify_parts_with_specs(parts, context)
+                parts = classify_parts_with_specs(
+                    parts, context, item_tags=item_tags, item_id=item_id,
+                )
         out: dict[str, Any] = {"parts": parts}
 
         if not parts:

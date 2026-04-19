@@ -39,8 +39,19 @@ class AutoTag:
         if check_summary_hash(params, context, item_id, "_tagged_summary_hash"):
             return {"skipped": True, "reason": "summary unchanged"}
 
+        # Get item tags for _when filtering on tag specs
+        item_tags = {}
+        if _item is not None:
+            item_tags = _item.tags if hasattr(_item, "tags") else {}
+            if isinstance(item_tags, dict):
+                item_tags = dict(item_tags)
+            else:
+                item_tags = {}
+
         parts = [{"summary": str(content), "tags": {}}]
-        classified = classify_parts_with_specs(parts, context)
+        classified = classify_parts_with_specs(
+            parts, context, item_tags=item_tags, item_id=item_id,
+        )
         row = classified[0] if classified else {}
         raw_tags = row.get("tags") if isinstance(row, dict) else {}
         if not isinstance(raw_tags, dict):

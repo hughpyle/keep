@@ -4,6 +4,7 @@ tags:
   context: tag-description
   _constrained: "true"
   _singular: "true"
+  _when: "'conversation' in item.tags.type"
 ---
 # Tag: `act` — Speech-Act Category
 

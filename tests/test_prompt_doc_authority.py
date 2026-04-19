@@ -332,3 +332,117 @@ def test_analyze_action_errors_when_default_prompt_is_broken(mock_providers, tmp
         assert False, "analyze should fail when the default prompt doc is broken"
     except ValueError as exc:
         assert "missing prompt doc for analyze" in str(exc).lower()
+
+
+# ---------------------------------------------------------------------------
+# _when on prompt docs
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_doc_when_matches(mock_providers, tmp_path):
+    """Prompt doc with _when that matches the item's tags is selected."""
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    # Create a prompt doc with _when condition
+    kp._document_store.upsert(
+        kp._resolve_doc_collection(),
+        ".prompt/summarize/email-only",
+        summary=(
+            "## Prompt\n\n"
+            "Summarize this email conversation."
+        ),
+        tags={
+            "category": "system",
+            "context": "prompt",
+            "_when": "'email' in item.tags.type",
+        },
+    )
+    kp._tagdoc_cache.clear()
+
+    # Item with type=email → prompt should match
+    result = kp._resolve_prompt_doc(
+        "summarize",
+        {"type": "email"},
+    )
+    assert result is not None
+    assert "email conversation" in result
+
+
+def test_prompt_doc_when_does_not_match(mock_providers, tmp_path):
+    """Prompt doc with _when that doesn't match is skipped."""
+    kp = Keeper(store_path=tmp_path)
+    _ensure_system_docs(kp)
+
+    # Create a prompt doc with _when that requires type=email
+    kp._document_store.upsert(
+        kp._resolve_doc_collection(),
+        ".prompt/summarize/email-only",
+        summary=(
+            "## Prompt\n\n"
+            "Summarize this email conversation."
+        ),
+        tags={
+            "category": "system",
+            "context": "prompt",
+            "_when": "'email' in item.tags.type",
+        },
+    )
+    kp._tagdoc_cache.clear()
+
+    # Item with type=paper → email prompt should NOT match
+    # Should fall back to default summarize prompt
+    result = kp._resolve_prompt_doc(
+        "summarize",
+        {"type": "paper"},
+    )
+    # Default prompt exists but is not the email one
+    if result is not None:
+        assert "email conversation" not in result
+
+
+# ---------------------------------------------------------------------------
+# _when on tag classifier specs
+# ---------------------------------------------------------------------------
+
+
+def test_tag_spec_when_filters_non_matching(mock_providers, tmp_path):
+    """Tag specs with _when are excluded when item doesn't match."""
+    from keep.actions._tagging import _filter_specs_by_when
+
+    specs = [
+        {"key": "act", "description": "Speech act", "values": [], "_when": "'conversation' in item.tags.type"},
+        {"key": "status", "description": "Status", "values": []},
+    ]
+
+    # Item WITHOUT type=conversation → act spec filtered out
+    filtered = _filter_specs_by_when(specs, {"type": "paper"}, "paper-1")
+    assert len(filtered) == 1
+    assert filtered[0]["key"] == "status"
+
+
+def test_tag_spec_when_includes_matching(mock_providers, tmp_path):
+    """Tag specs with _when are included when item matches."""
+    from keep.actions._tagging import _filter_specs_by_when
+
+    specs = [
+        {"key": "act", "description": "Speech act", "values": [], "_when": "'conversation' in item.tags.type"},
+        {"key": "status", "description": "Status", "values": []},
+    ]
+
+    # Item WITH type=conversation → both specs included
+    filtered = _filter_specs_by_when(specs, {"type": "conversation"}, "conv-1")
+    assert len(filtered) == 2
+    keys = {s["key"] for s in filtered}
+    assert keys == {"act", "status"}
+
+
+def test_tag_spec_without_when_always_included():
+    """Tag specs without _when are always included."""
+    from keep.actions._tagging import _filter_specs_by_when
+
+    specs = [
+        {"key": "status", "description": "Status", "values": []},
+    ]
+    filtered = _filter_specs_by_when(specs, {}, "anything")
+    assert len(filtered) == 1

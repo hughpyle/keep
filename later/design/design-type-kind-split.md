@@ -1,6 +1,6 @@
 # Design: Tags, Conditions, and Item Context
 
-Status: **phases 1–4 implemented** (type/kind split, unified item context, conditional edges + inverse find, conversation tagging)
+Status: **phases 1–5 implemented** (type/kind split, unified item context, conditional edges + inverse find, conversation tagging, _when on prompts + classifier)
 
 ## Motivation
 
@@ -897,8 +897,16 @@ test_openclaw_ingest_sets_type_conversation
 - [x] Tests: delegation/compress do NOT set type=conversation (2 tests)
 - [x] Tests: hook commands include type=conversation (2 tests)
 
-## Future phases
+## Phase 5 Status — `_when` on prompts and tag classifier
 
-- [ ] Add `_when` evaluation to `_resolve_prompt_doc()`
-- [ ] Add `_when` evaluation to TagClassifier
-- [ ] Condition `act` classifier on `type=conversation`
+- [x] Add `_when` evaluation to `_resolve_prompt_doc()` — CEL
+      condition checked per prompt doc; passing `_when` boosts
+      specificity by 1 over bare defaults
+- [x] Add `_when` filtering to tag classifier — specs carry `_when`
+      from `load_tag_specs`; `_filter_specs_by_when` evaluates against
+      item context in `classify_parts_with_specs`, `auto_tag`, and
+      both `analyze` paths (action + legacy api.py)
+- [x] Add `_when: "'conversation' in item.tags.type"` to `.tag/act`
+      tagdoc — speech-act classification now only runs on conversations
+- [x] Tests: prompt doc `_when` matching (2 tests)
+- [x] Tests: tag spec `_when` filtering (3 tests)

@@ -66,7 +66,8 @@ def load_tag_specs(context: Any, *, limit: int = 5000) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     for key in sorted(parents.keys()):
         parent = parents[key]
-        if not _truthy(_item_tags(parent).get("_constrained")):
+        parent_tags = _item_tags(parent)
+        if not _truthy(parent_tags.get("_constrained")):
             continue
         parent_summary = _item_summary(parent)
         values: list[dict[str, Any]] = []
@@ -83,25 +84,79 @@ def load_tag_specs(context: Any, *, limit: int = 5000) -> list[dict[str, Any]]:
                     "prompt": extract_prompt_section(child_summary),
                 }
             )
-        specs.append(
-            {
-                "key": key,
-                "description": parent_summary,
-                "prompt": extract_prompt_section(parent_summary),
-                "values": values,
-            }
-        )
+        spec: dict[str, Any] = {
+            "key": key,
+            "description": parent_summary,
+            "prompt": extract_prompt_section(parent_summary),
+            "values": values,
+        }
+        # Carry _when for downstream filtering by item context
+        when_source = parent_tags.get("_when", "")
+        if when_source:
+            spec["_when"] = when_source
+        specs.append(spec)
 
     return specs
 
 
-def classify_parts_with_specs(parts: list[dict[str, Any]], context: Any) -> list[dict[str, Any]]:
-    """Classify part summaries with constrained tag specs when available."""
+def _filter_specs_by_when(
+    specs: list[dict[str, Any]],
+    item_tags: dict[str, Any],
+    item_id: str = "",
+) -> list[dict[str, Any]]:
+    """Remove specs whose ``_when`` condition is not met by the item."""
+    from ..state_doc import _compile_predicate, _eval_predicate
+    from ..types import build_item_context
+    import logging
+
+    logger = logging.getLogger(__name__)
+    result = []
+    for spec in specs:
+        when_source = spec.get("_when", "")
+        if not when_source:
+            result.append(spec)
+            continue
+        try:
+            prog = _compile_predicate(when_source)
+            ctx = build_item_context(
+                id=item_id,
+                tags=item_tags,
+                content_type=item_tags.get("_content_type", ""),
+                uri=item_tags.get("_source_uri", ""),
+            )
+            if _eval_predicate(prog, {"item": ctx}, when_source):
+                result.append(spec)
+        except (ValueError, RuntimeError) as exc:
+            logger.warning(
+                ".tag/%s: failed to evaluate _when %r: %s",
+                spec.get("key", "?"), when_source, exc,
+            )
+    return result
+
+
+def classify_parts_with_specs(
+    parts: list[dict[str, Any]],
+    context: Any,
+    *,
+    item_tags: dict[str, Any] | None = None,
+    item_id: str = "",
+) -> list[dict[str, Any]]:
+    """Classify part summaries with constrained tag specs when available.
+
+    When *item_tags* is provided, specs with ``_when`` conditions are
+    filtered: only specs whose condition matches the item's tags are
+    included in the classification prompt.
+    """
     if not parts:
         return parts
     specs = load_tag_specs(context)
     if not specs:
         return parts
+    # Filter specs by _when conditions if item context is available
+    if item_tags is not None:
+        specs = _filter_specs_by_when(specs, item_tags, item_id)
+        if not specs:
+            return parts
     provider = context.resolve_provider("summarization")
     # Resolve prompt template from .prompt/tag/* docs
     prompt_template = None

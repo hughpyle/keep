@@ -724,6 +724,36 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             "parts": changed_parts,
         }
 
+    @staticmethod
+    def _filter_tag_specs_by_when(
+        specs: list[dict],
+        item_tags: dict[str, Any],
+        item_id: str = "",
+    ) -> list[dict]:
+        """Remove tag specs whose ``_when`` condition is not met by the item."""
+        result = []
+        for spec in specs:
+            when_source = spec.get("_when", "")
+            if not when_source:
+                result.append(spec)
+                continue
+            try:
+                prog = _compile_predicate(when_source)
+                ctx = build_item_context(
+                    id=item_id,
+                    tags=item_tags,
+                    content_type=item_tags.get("_content_type", ""),
+                    uri=item_tags.get("_source_uri", ""),
+                )
+                if _eval_predicate(prog, {"item": ctx}, when_source):
+                    result.append(spec)
+            except (ValueError, RuntimeError) as exc:
+                logger.warning(
+                    ".tag/%s: failed to evaluate _when %r: %s",
+                    spec.get("key", "?"), when_source, exc,
+                )
+        return result
+
     # Content-kind values that should live under ``kind`` instead of ``type``.
     # Entity-type values (conversation, paper, vulnerability, …) stay in ``type``.
     _TYPE_TO_KIND_VALUES: frozenset[str] = frozenset({
@@ -1329,8 +1359,30 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if not prompt_text:
                 continue
 
-            # Check scope tag (glob against item ID)
+            # Check _when condition (CEL expression against item context)
             rec_tags = rec.tags if hasattr(rec, 'tags') else {}
+            when_source = rec_tags.get("_when", "")
+            when_matched = False
+            if when_source:
+                try:
+                    when_prog = _compile_predicate(when_source)
+                    item_ctx = build_item_context(
+                        id=item_id or "",
+                        tags=doc_tags,
+                        content_type=doc_tags.get("_content_type", ""),
+                        uri=doc_tags.get("_source_uri", ""),
+                    )
+                    if not _eval_predicate(when_prog, {"item": item_ctx}, when_source):
+                        continue  # item doesn't match this prompt's condition
+                    when_matched = True
+                except (ValueError, RuntimeError) as exc:
+                    logger.warning(
+                        "prompt %s: failed to compile _when %r: %s",
+                        rec.id if hasattr(rec, 'id') else "?", when_source, exc,
+                    )
+                    continue
+
+            # Check scope tag (glob against item ID)
             scope = rec_tags.get("scope")
             if isinstance(scope, list):
                 scope = scope[0] if scope else None
@@ -1350,8 +1402,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             query_lines, _, _ = _parse_meta_doc(content)
 
             if not query_lines:
-                # No match rules = default/fallback (specificity 0)
-                if best_specificity < 0:
+                # No match rules: specificity depends on whether _when matched.
+                # _when match → specificity 1 (beats bare default).
+                # No _when → specificity 0 (fallback).
+                fallback_specificity = 1 if when_matched else 0
+                if fallback_specificity > best_specificity:
+                    best_prompt = prompt_text
+                    best_specificity = fallback_specificity
+                elif best_specificity < 0:
                     best_prompt = prompt_text
                     best_specificity = 0
                 continue
@@ -1359,7 +1417,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             # Check if any query line fully matches doc_tags
             for query in query_lines:
                 if all(v in tag_values(doc_tags, k) for k, v in query.items()):
-                    specificity = len(query)
+                    # _when match adds 1 to specificity over bare match rules
+                    specificity = len(query) + (1 if when_matched else 0)
                     if specificity > best_specificity:
                         best_specificity = specificity
                         best_prompt = prompt_text
@@ -5721,12 +5780,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     logger.warning("Incremental analysis LLM call failed: %s", e)
                     new_parts = []
 
-                # Classify new parts with tag specs
+                # Classify new parts with tag specs (filtered by _when)
                 if tag_specs and new_parts:
-                    try:
-                        classifier.classify(new_parts, tag_specs)
-                    except Exception as e:
-                        logger.warning("Tag classification skipped: %s", e)
+                    filtered_specs = self._filter_tag_specs_by_when(
+                        tag_specs, dict(doc_record.tags), id,
+                    )
+                    if filtered_specs:
+                        try:
+                            classifier.classify(new_parts, filtered_specs)
+                        except Exception as e:
+                            logger.warning("Tag classification skipped: %s", e)
 
                 # Append new parts (don't delete old ones)
                 if new_parts:
@@ -5753,10 +5816,14 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 prompt_override=analysis_prompt,
             )
             if tag_specs and raw_parts:
-                try:
-                    classifier.classify(raw_parts, tag_specs)
-                except Exception as e:
-                    logger.warning("Tag classification skipped: %s", e)
+                filtered_specs = self._filter_tag_specs_by_when(
+                    tag_specs, dict(doc_record.tags), id,
+                )
+                if filtered_specs:
+                    try:
+                        classifier.classify(raw_parts, filtered_specs)
+                    except Exception as e:
+                        logger.warning("Tag classification skipped: %s", e)
             analyze_result = {"parts": raw_parts}
         else:
             analyze_result = process_analyze(
