@@ -2227,13 +2227,15 @@ class DocumentStore:
         Returns:
             List of VersionInfo, newest archived first
         """
+        # limit <= 0 means no limit (SQLite LIMIT -1 = unlimited)
+        effective_limit = limit if limit > 0 else -1
         cursor = self._execute("""
             SELECT version, summary, tags_json, content_hash, created_at
             FROM document_versions
             WHERE id = ? AND collection = ?
             ORDER BY version DESC
             LIMIT ?
-        """, (id, collection, limit))
+        """, (id, collection, effective_limit))
 
         versions = []
         for row in cursor:

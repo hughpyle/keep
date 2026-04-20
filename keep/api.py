@@ -275,6 +275,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._last_spawn_time: float = 0.0
         self._tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
         self._tagdoc_when_cache: dict[str, Any] = {}  # compiled CEL _when programs (None = unconditional)
+        self._cel_cache: dict[str, Any] = {}  # compiled CEL programs keyed by source string
         self._ignore_patterns: Optional[list[str]] = None
         self._ignore_patterns_ts: float = 0.0
         self._context_cache = ContextCache()
@@ -677,7 +678,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 )
                 changed_docs += 1
 
-            for version in self._document_store.list_versions(doc_coll, doc_id, limit=10000):
+            for version in self._document_store.list_versions(doc_coll, doc_id, limit=0):
                 version_tags = dict(version.tags)
                 migrated_version_tags = dict(version.tags)
                 self._normalize_edge_tag_values(migrated_version_tags, doc_coll)
@@ -728,8 +729,8 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             "parts": changed_parts,
         }
 
-    @staticmethod
     def _filter_tag_specs_by_when(
+        self,
         specs: list[dict],
         item_tags: dict[str, Any],
         item_id: str = "",
@@ -743,7 +744,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 result.append(spec)
                 continue
             try:
-                prog = _compile_predicate(when_source)
+                prog = self._cel_cache.get(when_source)
+                if prog is None:
+                    prog = _compile_predicate(when_source)
+                    self._cel_cache[when_source] = prog
                 ctx = build_item_context(
                     id=item_id,
                     tags=item_tags,
@@ -789,7 +793,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             # --- head document ---
             migrated_tags = self._retag_type_to_kind(dict(record.tags))
             if migrated_tags is not None:
-                self._document_store.patch_head_tags(doc_coll, doc_id, migrated_tags)
+                self._document_store.update_tags(doc_coll, doc_id, migrated_tags)
                 self._rewrite_index_tags_without_timestamp(
                     chroma_coll, doc_id, casefold_tags_for_index(migrated_tags),
                 )
@@ -797,7 +801,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
             # --- versions ---
             for version in self._document_store.list_versions(
-                doc_coll, doc_id, limit=10000,
+                doc_coll, doc_id, limit=0,
             ):
                 migrated_vtags = self._retag_type_to_kind(dict(version.tags))
                 if migrated_vtags is not None:
@@ -1285,6 +1289,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         result = migrate_system_documents(self, progress=progress)
         self._tagdoc_cache.clear()  # tagdocs may have changed
         self._tagdoc_when_cache.clear()
+        self._cel_cache.clear()
         self._context_cache.clear()
         self._scan_tagdoc_backfills()
         return result
@@ -1373,7 +1378,10 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             when_matched = False
             if when_source:
                 try:
-                    when_prog = _compile_predicate(when_source)
+                    when_prog = self._cel_cache.get(when_source)
+                    if when_prog is None:
+                        when_prog = _compile_predicate(when_source)
+                        self._cel_cache[when_source] = when_prog
                     item_ctx = build_item_context(
                         id=item_id or "",
                         tags=doc_tags,

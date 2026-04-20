@@ -37,6 +37,7 @@ class Analyze:
         prepared = dict(params)
         item_id, item = resolve_item(prepared, context)
         item_tags = dict(getattr(item, "tags", None) or {})
+        item_summary = str(getattr(item, "summary", "") or "")
 
         if prepared.get("chunks") is None:
             gather_chunks = getattr(context, "gather_analyze_chunks", None)
@@ -76,7 +77,10 @@ class Analyze:
                 "analyze.prepare.prompt",
                 attributes={"item_id": item_id, "tag_count": len(item_tags)},
             ):
-                prompt_text = context.resolve_prompt("analyze", item_tags)
+                prompt_text = context.resolve_prompt(
+                    "analyze", item_tags,
+                    item_id=item_id, item_summary=item_summary,
+                )
             if prompt_text is not None:
                 prepared["prompt_override"] = prompt_text
 

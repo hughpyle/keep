@@ -269,9 +269,12 @@ class _KeeperActionContext:
         return method()
 
     def resolve_prompt(
-        self, prefix: str, doc_tags: dict[str, Any] | None = None, *, item_id: str | None = None,
+        self, prefix: str, doc_tags: dict[str, Any] | None = None,
+        *, item_id: str | None = None, item_summary: str = "",
     ) -> str | None:
-        return self._keeper._resolve_prompt_doc(prefix, doc_tags or {}, item_id=item_id)
+        return self._keeper._resolve_prompt_doc(
+            prefix, doc_tags or {}, item_id=item_id, item_summary=item_summary,
+        )
 
     def move(
         self, name: str, *, source_id: str = "now",

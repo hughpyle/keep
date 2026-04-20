@@ -807,13 +807,14 @@ class _EnvActionContext:
         self._env.delete(id, delete_versions=delete_versions)
 
     def resolve_prompt(
-        self, prefix: str, doc_tags: dict[str, Any] | None = None, *, item_id: str | None = None,
+        self, prefix: str, doc_tags: dict[str, Any] | None = None,
+        *, item_id: str | None = None, item_summary: str = "",
     ) -> str | None:
         """Resolve a prompt doc matching tags (e.g. .prompt/summarize/*)."""
         resolve = getattr(self._env, "resolve_prompt", None)
         if resolve is None:
             return None
-        return resolve(prefix, doc_tags or {}, item_id=item_id)
+        return resolve(prefix, doc_tags or {}, item_id=item_id, item_summary=item_summary)
 
     def resolve_provider(self, kind: str, name: str | None = None) -> Any:
         if not self._writable:

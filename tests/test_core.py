@@ -569,3 +569,78 @@ class TestSystemDocs:
         h2 = _content_hash("test content")
         assert h1 == h2
         assert h1 != _content_hash("different content")
+
+
+# ---------------------------------------------------------------------------
+# Type→kind migration
+# ---------------------------------------------------------------------------
+
+
+class TestTypeToKindMigration:
+    """Tests for the type→kind tag migration."""
+
+    def test_retag_moves_content_kind_to_kind(self, mock_providers, tmp_path):
+        """Content-kind values are moved from type to kind."""
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        tags = {"type": "learning", "topic": "auth"}
+        result = kp._retag_type_to_kind(dict(tags))
+        assert result is not None
+        assert "type" not in result  # removed (no entity-type left)
+        assert result["kind"] == "learning"
+        assert result["topic"] == "auth"
+        kp.close()
+
+    def test_retag_preserves_entity_type(self, mock_providers, tmp_path):
+        """Entity-type values stay in type when mixed with content-kind."""
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        tags = {"type": ["conversation", "learning"]}
+        result = kp._retag_type_to_kind(dict(tags))
+        assert result is not None
+        assert result["type"] == "conversation"
+        assert result["kind"] == "learning"
+        kp.close()
+
+    def test_retag_no_change_for_entity_only(self, mock_providers, tmp_path):
+        """Pure entity-type values → no migration needed."""
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        tags = {"type": "conversation"}
+        result = kp._retag_type_to_kind(dict(tags))
+        assert result is None  # no change
+        kp.close()
+
+    def test_retag_merges_with_existing_kind(self, mock_providers, tmp_path):
+        """Content-kind values merge with existing kind tag."""
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        tags = {"type": "learning", "kind": "delegation"}
+        result = kp._retag_type_to_kind(dict(tags))
+        assert result is not None
+        assert "type" not in result
+        assert set(result["kind"]) == {"delegation", "learning"}
+        kp.close()
+
+    def test_migration_runs_on_keeper(self, mock_providers, tmp_path):
+        """End-to-end: put with type=learning, run migration, verify kind."""
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        kp._config.type_to_kind_migrated = True  # skip auto-migration
+
+        # Write a doc with old-style type=learning
+        kp.put("Test insight", id="test-1", tags={"type": "learning"})
+
+        # Reset flag and run migration
+        kp._config.type_to_kind_migrated = False
+        doc_coll = kp._resolve_doc_collection()
+        stats = kp._run_type_to_kind_migration(doc_coll)
+        assert stats["documents"] >= 1
+
+        # Verify the doc was migrated (check SQLite directly —
+        # the authoritative store for tags after migration)
+        record = kp._document_store.get(doc_coll, "test-1")
+        assert record is not None
+        assert record.tags.get("kind") == "learning"
+        assert record.tags.get("type") != "learning"
+        kp.close()

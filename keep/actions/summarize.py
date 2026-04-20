@@ -70,7 +70,11 @@ class Summarize:
                     "summarize.prepare.prompt",
                     attributes={"item_id": item_id, "tag_count": len(prompt_tags)},
                 ):
-                    prompt_text = resolve_prompt("summarize", prompt_tags)
+                    item_summary = str(getattr(item, "summary", "") or "")
+                    prompt_text = resolve_prompt(
+                        "summarize", prompt_tags,
+                        item_id=item_id, item_summary=item_summary,
+                    )
                 if prompt_text is not None:
                     prepared["system_prompt"] = prompt_text
 

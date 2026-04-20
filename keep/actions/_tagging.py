@@ -99,6 +99,9 @@ def load_tag_specs(context: Any, *, limit: int = 5000) -> list[dict[str, Any]]:
     return specs
 
 
+_cel_compile_cache: dict[str, Any] = {}  # compiled CEL programs keyed by source
+
+
 def _filter_specs_by_when(
     specs: list[dict[str, Any]],
     item_tags: dict[str, Any],
@@ -118,7 +121,10 @@ def _filter_specs_by_when(
             result.append(spec)
             continue
         try:
-            prog = _compile_predicate(when_source)
+            prog = _cel_compile_cache.get(when_source)
+            if prog is None:
+                prog = _compile_predicate(when_source)
+                _cel_compile_cache[when_source] = prog
             ctx = build_item_context(
                 id=item_id,
                 tags=item_tags,

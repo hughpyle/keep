@@ -623,10 +623,13 @@ class LocalFlowEnvironment:
         return self._keeper._gather_guide_context(tags)
 
     def resolve_prompt(
-        self, prefix: str, doc_tags: dict[str, Any], *, item_id: str | None = None,
+        self, prefix: str, doc_tags: dict[str, Any],
+        *, item_id: str | None = None, item_summary: str = "",
     ) -> str | None:
         """Resolve a prompt doc (e.g. .prompt/summarize/default) matching tags."""
-        return self._keeper._resolve_prompt_doc(prefix, doc_tags, item_id=item_id)
+        return self._keeper._resolve_prompt_doc(
+            prefix, doc_tags, item_id=item_id, item_summary=item_summary,
+        )
 
     def get_default_summarization_provider(self) -> Any:
         return self._keeper._get_summarization_provider()
