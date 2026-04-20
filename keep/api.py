@@ -79,7 +79,7 @@ from .recovery import is_malformed_db_error
 from .document_store import PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, EdgeRef, TagMap,
-    build_item_context,
+    build_item_context, eval_when_predicate,
     casefold_tags, casefold_tags_for_index, filter_non_system_tags,
     iter_tag_pairs, note_display_name, normalize_edge_value, set_tag_values, tag_values, parse_ref, format_ref,
     SYSTEM_TAG_PREFIX, local_date, utc_now,
@@ -88,7 +88,6 @@ from .types import (
     MAX_TAG_VALUE_LENGTH,
     repair_surrogate_text,
 )
-from .state_doc import _compile_predicate, _eval_predicate
 from .context_cache import ContextCache
 from .const import STATE_PROMPT
 from .flow_client import (
@@ -274,7 +273,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._startup_maintenance_thread: Optional[threading.Thread] = None
         self._last_spawn_time: float = 0.0
         self._tagdoc_cache: dict[str, Optional[dict[str, str]]] = {}
-        self._tagdoc_when_cache: dict[str, Any] = {}  # compiled CEL _when programs (None = unconditional)
         self._cel_cache: dict[str, Any] = {}  # compiled CEL programs keyed by source string
         self._ignore_patterns: Optional[list[str]] = None
         self._ignore_patterns_ts: float = 0.0
@@ -559,27 +557,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             if not inverse:
                 continue
 
-            # Compile and cache _when predicate for this edge tag
-            if key not in self._tagdoc_when_cache:
-                when_source = td_tags.get("_when", "")
-                if when_source:
-                    try:
-                        self._tagdoc_when_cache[key] = (
-                            _compile_predicate(when_source), when_source,
-                        )
-                    except (ValueError, RuntimeError) as exc:
-                        logger.warning(
-                            ".tag/%s: failed to compile _when %r: %s",
-                            key, when_source, exc,
-                        )
-                        self._tagdoc_when_cache[key] = None
-                else:
-                    self._tagdoc_when_cache[key] = None
-
             # Evaluate _when condition against source note
-            when_entry = self._tagdoc_when_cache[key]
-            if when_entry is not None:
-                when_prog, when_src = when_entry
+            when_source = td_tags.get("_when", "")
+            if when_source:
                 item_ctx = build_item_context(
                     id=id,
                     tags=merged_tags,
@@ -587,7 +567,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     content_type=merged_tags.get("_content_type", ""),
                     uri=merged_tags.get("_source_uri", ""),
                 )
-                if not _eval_predicate(when_prog, {"item": item_ctx}, when_src):
+                if not eval_when_predicate(when_source, item_ctx, cache=self._cel_cache):
                     continue  # condition not met — skip this edge tag
 
             for current_value in tag_values(merged_tags, key):
@@ -738,30 +718,19 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
     ) -> list[dict]:
         """Remove tag specs whose ``_when`` condition is not met by the item."""
         result = []
+        item_ctx = build_item_context(
+            id=item_id,
+            tags=item_tags,
+            summary=item_summary,
+            content_type=item_tags.get("_content_type", ""),
+            uri=item_tags.get("_source_uri", ""),
+        )
         for spec in specs:
             when_source = spec.get("_when", "")
-            if not when_source:
+            if not when_source or eval_when_predicate(
+                when_source, item_ctx, cache=self._cel_cache,
+            ):
                 result.append(spec)
-                continue
-            try:
-                prog = self._cel_cache.get(when_source)
-                if prog is None:
-                    prog = _compile_predicate(when_source)
-                    self._cel_cache[when_source] = prog
-                ctx = build_item_context(
-                    id=item_id,
-                    tags=item_tags,
-                    summary=item_summary,
-                    content_type=item_tags.get("_content_type", ""),
-                    uri=item_tags.get("_source_uri", ""),
-                )
-                if _eval_predicate(prog, {"item": ctx}, when_source):
-                    result.append(spec)
-            except (ValueError, RuntimeError) as exc:
-                logger.warning(
-                    ".tag/%s: failed to evaluate _when %r: %s",
-                    spec.get("key", "?"), when_source, exc,
-                )
         return result
 
     # Content-kind values that should live under ``kind`` instead of ``type``.
@@ -1288,7 +1257,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         from .system_docs import migrate_system_documents
         result = migrate_system_documents(self, progress=progress)
         self._tagdoc_cache.clear()  # tagdocs may have changed
-        self._tagdoc_when_cache.clear()
+        self._cel_cache.clear()
         self._cel_cache.clear()
         self._context_cache.clear()
         self._scan_tagdoc_backfills()
@@ -1377,27 +1346,16 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             when_source = rec_tags.get("_when", "")
             when_matched = False
             if when_source:
-                try:
-                    when_prog = self._cel_cache.get(when_source)
-                    if when_prog is None:
-                        when_prog = _compile_predicate(when_source)
-                        self._cel_cache[when_source] = when_prog
-                    item_ctx = build_item_context(
-                        id=item_id or "",
-                        tags=doc_tags,
-                        summary=item_summary,
-                        content_type=doc_tags.get("_content_type", ""),
-                        uri=doc_tags.get("_source_uri", ""),
-                    )
-                    if not _eval_predicate(when_prog, {"item": item_ctx}, when_source):
-                        continue  # item doesn't match this prompt's condition
-                    when_matched = True
-                except (ValueError, RuntimeError) as exc:
-                    logger.warning(
-                        "prompt %s: failed to compile _when %r: %s",
-                        rec.id if hasattr(rec, 'id') else "?", when_source, exc,
-                    )
-                    continue
+                item_ctx = build_item_context(
+                    id=item_id or "",
+                    tags=doc_tags,
+                    summary=item_summary,
+                    content_type=doc_tags.get("_content_type", ""),
+                    uri=doc_tags.get("_source_uri", ""),
+                )
+                if not eval_when_predicate(when_source, item_ctx, cache=self._cel_cache):
+                    continue  # item doesn't match this prompt's condition
+                when_matched = True
 
             # Check scope tag (glob against item ID)
             scope = rec_tags.get("scope")
@@ -2613,29 +2571,15 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             when_allows_creation = True
             when_source = td_tags.get("_when", "")
             if when_source:
-                if key not in self._tagdoc_when_cache:
-                    try:
-                        self._tagdoc_when_cache[key] = (
-                            _compile_predicate(when_source), when_source,
-                        )
-                    except (ValueError, RuntimeError) as exc:
-                        logger.warning(
-                            ".tag/%s: failed to compile _when %r: %s",
-                            key, when_source, exc,
-                        )
-                        self._tagdoc_when_cache[key] = None
-                when_entry = self._tagdoc_when_cache.get(key)
-                if when_entry is not None:
-                    when_prog, when_src = when_entry
-                    item_ctx = build_item_context(
-                        id=id,
-                        tags=merged_tags,
-                        summary=summary,
-                        content_type=merged_tags.get("_content_type", ""),
-                        uri=merged_tags.get("_source_uri", ""),
-                    )
-                    if not _eval_predicate(when_prog, {"item": item_ctx}, when_src):
-                        when_allows_creation = False
+                item_ctx = build_item_context(
+                    id=id,
+                    tags=merged_tags,
+                    summary=summary,
+                    content_type=merged_tags.get("_content_type", ""),
+                    uri=merged_tags.get("_source_uri", ""),
+                )
+                if not eval_when_predicate(when_source, item_ctx, cache=self._cel_cache):
+                    when_allows_creation = False
 
             current_values = tag_values(merged_tags, key)
             previous_values = tag_values(existing_tags, key)
@@ -3258,7 +3202,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             self._process_tagdoc_inverse_change(id, merged_tags, old_tagdoc_tags, doc_coll)
             tag_key = id.removeprefix(".tag/").split("/")[0]
             self._tagdoc_cache.pop(tag_key, None)
-            self._tagdoc_when_cache.pop(tag_key, None)
+            self._cel_cache.clear()  # tagdoc _when may have changed
 
         # Save old embedding before ChromaDB upsert overwrites it (for version archival)
         old_embedding = None

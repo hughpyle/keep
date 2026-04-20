@@ -109,36 +109,22 @@ def _filter_specs_by_when(
     item_summary: str = "",
 ) -> list[dict[str, Any]]:
     """Remove specs whose ``_when`` condition is not met by the item."""
-    from ..state_doc import _compile_predicate, _eval_predicate
-    from ..types import build_item_context
-    import logging
+    from ..types import build_item_context, eval_when_predicate
 
-    logger = logging.getLogger(__name__)
     result = []
+    item_ctx = build_item_context(
+        id=item_id,
+        tags=item_tags,
+        summary=item_summary,
+        content_type=item_tags.get("_content_type", ""),
+        uri=item_tags.get("_source_uri", ""),
+    )
     for spec in specs:
         when_source = spec.get("_when", "")
-        if not when_source:
+        if not when_source or eval_when_predicate(
+            when_source, item_ctx, cache=_cel_compile_cache,
+        ):
             result.append(spec)
-            continue
-        try:
-            prog = _cel_compile_cache.get(when_source)
-            if prog is None:
-                prog = _compile_predicate(when_source)
-                _cel_compile_cache[when_source] = prog
-            ctx = build_item_context(
-                id=item_id,
-                tags=item_tags,
-                summary=item_summary,
-                content_type=item_tags.get("_content_type", ""),
-                uri=item_tags.get("_source_uri", ""),
-            )
-            if _eval_predicate(prog, {"item": ctx}, when_source):
-                result.append(spec)
-        except (ValueError, RuntimeError) as exc:
-            logger.warning(
-                ".tag/%s: failed to evaluate _when %r: %s",
-                spec.get("key", "?"), when_source, exc,
-            )
     return result
 
 

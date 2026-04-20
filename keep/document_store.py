@@ -24,7 +24,7 @@ from .const import SQLITE_BUSY_TIMEOUT_MS
 from .recovery import is_malformed_db_error
 from .tracing import get_tracer
 from .types import (
-    build_item_context,
+    build_item_context, eval_when_predicate,
     normalize_id,
     normalize_tag_map,
     parse_ref,
@@ -32,7 +32,6 @@ from .types import (
     tag_values,
     utc_now,
 )
-from .state_doc import _compile_predicate, _eval_predicate
 
 logger = logging.getLogger(__name__)
 
@@ -4034,16 +4033,6 @@ class DocumentStore:
         if not predicate or not inverse:
             return 0
 
-        # Compile _when condition once
-        when_prog = None
-        if when_source:
-            try:
-                when_prog = _compile_predicate(when_source)
-            except (ValueError, RuntimeError):
-                logger.warning(
-                    "backfill_version_edges: failed to compile _when %r", when_source,
-                )
-
         with self._lock:
             self._execute("BEGIN IMMEDIATE")
             try:
@@ -4067,7 +4056,7 @@ class DocumentStore:
                     tags = json.loads(row["tags_json"]) if row["tags_json"] else {}
 
                     # Evaluate _when condition against this version's tags
-                    if when_prog is not None:
+                    if when_source:
                         item_ctx = build_item_context(
                             id=row["id"],
                             tags=tags,
@@ -4075,9 +4064,7 @@ class DocumentStore:
                             content_type=tags.get("_content_type", ""),
                             uri=tags.get("_source_uri", ""),
                         )
-                        if not _eval_predicate(
-                            when_prog, {"item": item_ctx}, when_source,
-                        ):
+                        if not eval_when_predicate(when_source, item_ctx):
                             continue
 
                     for value in tag_values(tags, predicate):

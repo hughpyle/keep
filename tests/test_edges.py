@@ -1068,7 +1068,7 @@ class TestConditionalEdges:
         self._create_tagdoc(kp, "sender", "sent_by",
                             when="'email' in item.tags.type")
         kp._tagdoc_cache.pop("sender", None)
-        kp._tagdoc_when_cache.pop("sender", None)
+        kp._cel_cache.clear()
 
         # New note without type=email should NOT create edge
         kp.put(content="From Bob", id="doc2", summary="Doc2",

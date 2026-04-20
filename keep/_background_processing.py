@@ -23,7 +23,7 @@ from .processors import _content_hash
 from .providers.base import EmbedTask
 from .types import (
     SYSTEM_TAG_PREFIX,
-    build_item_context,
+    build_item_context, eval_when_predicate,
     casefold_tags,
     casefold_tags_for_index,
     filter_non_system_tags,
@@ -32,7 +32,6 @@ from .types import (
     tag_values,
     utc_now,
 )
-from .state_doc import _compile_predicate, _eval_predicate
 from .tracing import get_tracer
 
 logger = logging.getLogger(__name__)
@@ -1374,17 +1373,8 @@ class BackgroundProcessingMixin:
             self._document_store.delete_backfill(doc_coll, predicate)
             return
 
-        # Compile _when condition if present on the tagdoc
+        # _when condition from tagdoc (if any)
         when_source = tagdoc.tags.get("_when", "") if tagdoc else ""
-        when_prog = None
-        if when_source:
-            try:
-                when_prog = _compile_predicate(when_source)
-            except (ValueError, RuntimeError) as exc:
-                logger.warning(
-                    "Backfill .tag/%s: failed to compile _when %r: %s",
-                    predicate, when_source, exc,
-                )
 
         # Paginate -- query_by_tag_key defaults to limit=100
         edge_count = 0
@@ -1399,7 +1389,7 @@ class BackgroundProcessingMixin:
             offset += len(docs)
             for doc in docs:
                 # Evaluate _when condition against source note
-                if when_prog is not None:
+                if when_source:
                     item_ctx = build_item_context(
                         id=doc.id,
                         tags=doc.tags,
@@ -1407,7 +1397,7 @@ class BackgroundProcessingMixin:
                         content_type=doc.tags.get("_content_type", ""),
                         uri=doc.tags.get("_source_uri", ""),
                     )
-                    if not _eval_predicate(when_prog, {"item": item_ctx}, when_source):
+                    if not eval_when_predicate(when_source, item_ctx):
                         continue  # source doesn't meet condition
 
                 for raw_target in tag_values(doc.tags, predicate):

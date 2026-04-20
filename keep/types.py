@@ -647,6 +647,54 @@ def build_item_context(
     }
 
 
+def eval_when_predicate(
+    when_source: str,
+    item_ctx: dict[str, Any],
+    *,
+    cache: dict[str, Any] | None = None,
+) -> bool:
+    """Evaluate a ``_when`` CEL predicate against an item context.
+
+    This is the single policy owner for all ``_when`` condition checks —
+    edge applicability, prompt selection, and tag-classifier filtering
+    all call this function.
+
+    Args:
+        when_source: CEL expression string (e.g. ``"'email' in item.tags.type"``).
+        item_ctx: Dict from ``build_item_context()``.
+        cache: Optional dict for caching compiled programs keyed by source.
+            Callers should pass a long-lived dict (e.g. ``self._cel_cache``)
+            to avoid recompiling on every call.
+
+    Returns:
+        True if the predicate passes, False if it fails or errors.
+        Compilation/evaluation errors are logged as warnings with the
+        full expression source for diagnostics.
+    """
+    import logging
+    # Deferred import: state_doc loads the CEL library, which is heavy.
+    # types.py is imported by every module; eagerly importing CEL here
+    # would add ~100ms to startup for callers that never evaluate _when.
+    from .state_doc import _compile_predicate, _eval_predicate
+
+    logger = logging.getLogger(__name__)
+    if not when_source:
+        return True  # no condition → unconditionally true
+
+    try:
+        if cache is not None:
+            prog = cache.get(when_source)
+            if prog is None:
+                prog = _compile_predicate(when_source)
+                cache[when_source] = prog
+        else:
+            prog = _compile_predicate(when_source)
+        return _eval_predicate(prog, {"item": item_ctx}, when_source)
+    except (ValueError, RuntimeError) as exc:
+        logger.warning("_when predicate failed for %r: %s", when_source, exc)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # ItemContext — assembled display context for a single item
 # ---------------------------------------------------------------------------
