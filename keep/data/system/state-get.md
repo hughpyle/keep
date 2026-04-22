@@ -38,6 +38,7 @@ rules:
     do: find
     with:
       similar_to: "{params.item_id}"
+      stored_only: true
       limit: "{params.similar_limit}"
   - id: parts
     # Decomposed parts (from analyze)

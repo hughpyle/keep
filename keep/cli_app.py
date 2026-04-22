@@ -1078,11 +1078,19 @@ def put(
         content = source
         uri = None
         watch_kind = "file"
+        is_directory = False
         if source.startswith(("file://", "http://", "https://")):
             uri = source
             content = None
             watch_kind = "url" if source.startswith(("http://", "https://")) else "file"
-        elif Path(source).is_dir():
+        else:
+            # Inline note content can be arbitrarily long; probing it as a
+            # filesystem path must never turn validation into an OS error.
+            try:
+                is_directory = Path(source).is_dir()
+            except OSError:
+                is_directory = False
+        if is_directory:
             if summary is not None:
                 typer.echo("Error: --summary cannot be used with directory mode", err=True)
                 raise typer.Exit(1)
@@ -1123,9 +1131,34 @@ def put(
                 force=force, json_output=json_output,
             )
             return
-        elif Path(source).exists() and not source.startswith("%"):
-            uri = f"file://{Path(source).resolve()}"
-            content = None
+        elif not source.startswith("%"):
+            try:
+                if Path(source).exists():
+                    uri = f"file://{Path(source).resolve()}"
+                    content = None
+            except OSError:
+                # Overlong inline text is not a filesystem path.
+                pass
+
+        if content is not None and uri is None:
+            from .config import load_or_create_config
+            from .paths import get_config_dir
+
+            config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
+            cfg = load_or_create_config(config_dir)
+            if len(content) > cfg.max_inline_length:
+                typer.echo(
+                    (
+                        f"Error: inline text too long ({len(content)} chars, "
+                        f"max {cfg.max_inline_length})"
+                    ),
+                    err=True,
+                )
+                typer.echo(
+                    "Hint: write it to a file and run: keep put file:///path/to/file",
+                    err=True,
+                )
+                raise typer.Exit(1)
 
         # Inline text + --summary rejected (original content would be lost)
         if content is not None and uri is None and summary is not None:

@@ -848,8 +848,13 @@ class DaemonServer:
                 (self._bind_host, 0), DaemonRequestHandler)
 
         port = self._server.server_address[1]
+        # Use a shorter poll interval so shutdown does not routinely spend
+        # half a second waiting for serve_forever() to notice the stop signal.
+        def _serve() -> None:
+            self._server.serve_forever(poll_interval=0.1)
+
         self._thread = threading.Thread(
-            target=self._server.serve_forever, daemon=True, name="daemon-http")
+            target=_serve, daemon=True, name="daemon-http")
         self._thread.start()
         logger.info("Query server listening on %s:%d", self._bind_host, port)
         return port

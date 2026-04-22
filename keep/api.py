@@ -3840,6 +3840,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         *,
         tags: Optional[TagMap] = None,
         similar_to: Optional[str] = None,
+        stored_only: bool = False,
         limit: int = 10,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -3860,6 +3861,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             query: Search query text
             tags: Optional tag filter — only return items matching all specified tags
             similar_to: Find items similar to this note ID
+            stored_only: In ``similar_to`` mode, use only the stored anchor
+                embedding. If the anchor is not indexed yet, skip the semantic
+                fallback instead of loading an embedding provider on the read path.
             limit: Maximum results to return
             since: Only include items updated since (ISO duration like P3D, or date)
             until: Only include items updated before (ISO duration like P3D, or date)
@@ -3977,29 +3981,47 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
             embedding = self._store.get_embedding(chroma_coll, similar_to)
             if embedding is None:
-                anchor_summary = (
-                    anchor.summary
-                    if anchor is not None
-                    else (item.summary if item is not None else "")
-                )
-                with _get_tracer("keeper").start_as_current_span("embed"):
-                    embedding = self._get_embedding_provider().embed(
-                        anchor_summary,
-                        task=EmbedTask.QUERY,
+                if stored_only:
+                    if casefolded_tags or since or until:
+                        items = self.list_items(
+                            tags=casefolded_tags if casefolded_tags else None,
+                            since=since,
+                            until=until,
+                            include_hidden=include_hidden,
+                            limit=limit,
+                        )
+                        if not include_self:
+                            items = [candidate for candidate in items if candidate.id != similar_to]
+                        items = self._apply_recency_decay(items)
+                    else:
+                        items = []
+                else:
+                    anchor_summary = (
+                        anchor.summary
+                        if anchor is not None
+                        else (item.summary if item is not None else "")
                     )
-            actual_limit = (limit + 1 if not include_self else limit) * 3
-            if deep:
-                actual_limit = max(actual_limit, 30)
-            if scope_ids is not None:
-                actual_limit = max(actual_limit, len(scope_ids))
-            with _get_tracer("keeper").start_as_current_span("chroma.query"):
-                results = self._store.query_embedding(chroma_coll, embedding, limit=actual_limit, where=where)
+                    with _get_tracer("keeper").start_as_current_span("embed"):
+                        embedding = self._get_embedding_provider().embed(
+                            anchor_summary,
+                            task=EmbedTask.QUERY,
+                        )
+            if embedding is not None:
+                actual_limit = (limit + 1 if not include_self else limit) * 3
+                if deep:
+                    actual_limit = max(actual_limit, 30)
+                if scope_ids is not None:
+                    actual_limit = max(actual_limit, len(scope_ids))
+                with _get_tracer("keeper").start_as_current_span("chroma.query"):
+                    results = self._store.query_embedding(
+                        chroma_coll, embedding, limit=actual_limit, where=where,
+                    )
 
-            if not include_self:
-                results = [r for r in results if r.id != similar_to]
+                if not include_self:
+                    results = [r for r in results if r.id != similar_to]
 
-            items = [r.to_item() for r in results]
-            items = self._apply_recency_decay(items)
+                items = [r.to_item() for r in results]
+                items = self._apply_recency_decay(items)
 
         elif self._config.embedding is not None:
             # Hybrid search: semantic + FTS5, fused with RRF.

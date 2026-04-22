@@ -25,6 +25,7 @@ class Find:
     def run(self, params: dict[str, Any], context) -> dict[str, Any]:
         query = params.get("query")
         similar_to = params.get("similar_to")
+        stored_only = bool(params.get("stored_only", False))
         tags = params.get("tags") if isinstance(params.get("tags"), dict) else None
         tag_keys = params.get("tag_keys") if isinstance(params.get("tag_keys"), list) else None
         prefix = params.get("prefix")
@@ -90,6 +91,7 @@ class Find:
                 str(query) if query is not None else None,
                 tags=tags,
                 similar_to=str(similar_to) if similar_to is not None else None,
+                stored_only=stored_only,
                 limit=fetch_limit,
                 since=str(since) if since is not None else None,
                 until=str(until) if until is not None else None,

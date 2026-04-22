@@ -17,6 +17,43 @@ from unittest.mock import MagicMock, patch
 import pytest
 from keep.types import SYSTEM_TAG_PREFIX, tag_values, utc_now
 
+_PERF_PHASES_KEY = pytest.StashKey[dict[str, float]]()
+_PERF_OUTCOME_KEY = pytest.StashKey[str]()
+
+
+def _write_test_store_config(store: Path) -> None:
+    """Write a deterministic local test config.
+
+    Tests should not pay provider auto-detection or network-probe costs just to
+    exercise CLI wiring. These explicit sections suppress config re-detection
+    during startup while keeping providers lazy unless a test actually uses
+    them. The explicit local embedding also keeps daemon-backed CLI reads from
+    failing on hosts without Ollama.
+    """
+    (store / "keep.toml").write_text(
+        """[store]
+version = 3
+
+[embedding]
+name = "sentence-transformers"
+model = "all-MiniLM-L6-v2"
+
+[summarization]
+name = "first_paragraph"
+
+[document]
+name = "composite"
+
+[media]
+name = "ollama"
+model = "gemma3:4b"
+
+[content_extractor]
+name = "ollama"
+model = "glm-ocr"
+""",
+    )
+
 
 class MockEmbeddingProvider:
     """Deterministic mock embedding provider for testing.
@@ -1271,6 +1308,127 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "e2e: marks tests as end-to-end (require real providers)"
     )
+    # Session-scoped store for lightweight timing artifacts.
+    config._keep_perf_reports = []
+
+
+def pytest_addoption(parser):
+    """Add lightweight suite-performance reporting options."""
+    group = parser.getgroup("keep-perf")
+    group.addoption(
+        "--keep-test-perf-json",
+        action="store",
+        default="",
+        help="Write per-test setup/call/teardown timings to this JSON file.",
+    )
+    group.addoption(
+        "--keep-test-perf-top",
+        action="store",
+        type=int,
+        default=0,
+        help="Show the top N slowest tests and files at the end of the run.",
+    )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Capture per-phase timings so slow setup/teardown is visible."""
+    outcome = yield
+    report = outcome.get_result()
+
+    phase_timings = item.stash.setdefault(_PERF_PHASES_KEY, {})
+    phase_timings[report.when] = report.duration
+
+    if report.when != "teardown" and report.outcome != "passed":
+        item.stash[_PERF_OUTCOME_KEY] = report.outcome
+
+    if report.when != "teardown":
+        return
+
+    total = sum(phase_timings.values())
+    record = {
+        "nodeid": item.nodeid,
+        "file": str(item.path),
+        "total": total,
+        "setup": phase_timings.get("setup", 0.0),
+        "call": phase_timings.get("call", 0.0),
+        "teardown": phase_timings.get("teardown", 0.0),
+        "outcome": item.stash.get(_PERF_OUTCOME_KEY, report.outcome),
+        "markers": sorted({mark.name for mark in item.iter_markers()}),
+    }
+    item.config._keep_perf_reports.append(record)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Optionally print or persist test-timing summaries for perf reviews."""
+    records = getattr(config, "_keep_perf_reports", [])
+    top_n = int(config.getoption("--keep-test-perf-top") or 0)
+    json_path = config.getoption("--keep-test-perf-json") or os.environ.get("KEEP_TEST_PERF_JSON", "")
+
+    if json_path:
+        path = Path(json_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        by_file: dict[str, dict[str, float | int]] = {}
+        for record in records:
+            file_entry = by_file.setdefault(
+                record["file"],
+                {"tests": 0, "total": 0.0, "setup": 0.0, "call": 0.0, "teardown": 0.0},
+            )
+            file_entry["tests"] += 1
+            file_entry["total"] += record["total"]
+            file_entry["setup"] += record["setup"]
+            file_entry["call"] += record["call"]
+            file_entry["teardown"] += record["teardown"]
+        payload = {
+            "generated_at": time.time(),
+            "exitstatus": exitstatus,
+            "tests": sorted(records, key=lambda record: record["total"], reverse=True),
+            "files": [
+                {"file": file_name, **totals}
+                for file_name, totals in sorted(
+                    by_file.items(),
+                    key=lambda entry: entry[1]["total"],
+                    reverse=True,
+                )
+            ],
+        }
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+    if top_n <= 0 or not records:
+        return
+
+    terminalreporter.section(f"keep perf: slowest {top_n} tests")
+    for record in sorted(records, key=lambda record: record["total"], reverse=True)[:top_n]:
+        terminalreporter.write_line(
+            (
+                f"{record['total']:.2f}s total"
+                f" ({record['setup']:.2f}s setup, {record['call']:.2f}s call, "
+                f"{record['teardown']:.2f}s teardown) {record['nodeid']}"
+            ),
+        )
+
+    by_file: dict[str, dict[str, float | int]] = {}
+    for record in records:
+        file_entry = by_file.setdefault(
+            record["file"],
+            {"tests": 0, "total": 0.0, "teardown": 0.0},
+        )
+        file_entry["tests"] += 1
+        file_entry["total"] += record["total"]
+        file_entry["teardown"] += record["teardown"]
+
+    terminalreporter.section(f"keep perf: slowest {min(top_n, len(by_file))} files")
+    for file_name, totals in sorted(
+        by_file.items(),
+        key=lambda entry: entry[1]["total"],
+        reverse=True,
+    )[:top_n]:
+        terminalreporter.write_line(
+            (
+                f"{totals['total']:.2f}s total across {totals['tests']} tests"
+                f" ({totals['teardown']:.2f}s teardown) {file_name}"
+            ),
+        )
 
 
 def _terminate_pid(pid: int) -> None:
@@ -1377,23 +1535,8 @@ def _isolate_test_store_and_cleanup_daemons(monkeypatch, tmp_path):
     store.mkdir()
     monkeypatch.setenv("KEEP_STORE_PATH", str(store))
     monkeypatch.setenv("KEEP_CONFIG", str(store))
-    # Avoid slow and environment-dependent provider auto-detection for
-    # subprocess CLI tests by giving each test store a minimal fixed config.
-    (store / "keep.toml").write_text(
-        """[store]
-version = 3
-
-[embedding]
-name = "ollama"
-model = "nomic-embed-text:latest"
-
-[summarization]
-name = "truncate"
-
-[document]
-name = "composite"
-""",
-    )
+    monkeypatch.setenv("KEEP_LOCAL_ONLY", "1")
+    _write_test_store_config(store)
 
     yield
 

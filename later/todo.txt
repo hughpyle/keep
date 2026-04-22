@@ -369,3 +369,7 @@ x acp
 . hermes plugin
 . improve one-line rendering
 . obsidian skills
+. stronger definition of the "type" tag
+. more general "conditions for prompts",
+. more expressive conditions for edge tags
+. hooks tag with type=conversation

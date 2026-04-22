@@ -131,6 +131,7 @@ class _KeeperActionContext:
         *,
         tags: dict[str, Any] | None = None,
         similar_to: str | None = None,
+        stored_only: bool = False,
         limit: int = 10,
         since: str | None = None,
         until: str | None = None,
@@ -141,7 +142,7 @@ class _KeeperActionContext:
     ) -> list[Any]:
         return self._keeper.find(
             query, tags=tags, similar_to=similar_to, limit=limit,
-            since=since, until=until, include_self=include_self,
+            stored_only=stored_only, since=since, until=until, include_self=include_self,
             include_hidden=include_hidden, deep=deep, scope=scope,
         )
 

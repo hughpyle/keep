@@ -326,6 +326,31 @@ class TestGetContextFlow:
             similar_ids = {s.id for s in similar}
             assert "py2" in similar_ids or len(similar) > 0
 
+    def test_get_context_skips_similar_reembed_when_anchor_not_indexed(self, kp):
+        """Display context should not load an embedding model for fresh anchors."""
+        kp.put("Anchor note about auth flows", id="anchor-display")
+        kp.put("Related note about auth flows", id="related-display")
+
+        chroma_coll = kp._resolve_chroma_collection()
+        kp._store.delete(chroma_coll, "anchor-display")
+
+        def _unexpected_embed(*args, **kwargs):
+            raise AssertionError("get_context() should not re-embed for display similarity")
+
+        kp._embedding_provider.embed = _unexpected_embed
+
+        ctx = kp.get_context(
+            "anchor-display",
+            meta_limit=0,
+            parts_limit=0,
+            edges_limit=0,
+            versions_limit=0,
+        )
+
+        assert ctx is not None
+        assert ctx.item.id == "anchor-display"
+        assert ctx.similar == []
+
     def test_similar_limit_exact_conformance(self, kp):
         """similar_limit=2 returns exactly 2 when 8 similar items exist."""
         for i in range(8):

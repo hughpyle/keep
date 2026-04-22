@@ -10,12 +10,14 @@ These tests do NOT invoke any ML providers or models.
 """
 
 import json
-import subprocess
-import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from typer.testing import CliRunner
+
+from keep.cli_app import app
 
 
 # -----------------------------------------------------------------------------
@@ -24,15 +26,23 @@ import pytest
 
 @pytest.fixture
 def cli():
-    """Run CLI command and return result."""
-    def run(*args: str, input: str | None = None) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, "-m", "keep", *args],
-            capture_output=True,
-            text=True,
+    """Run local CLI commands in-process for fast config coverage."""
+    runner = CliRunner()
+
+    def run(*args: str, input: str | None = None) -> SimpleNamespace:
+        result = runner.invoke(
+            app,
+            list(args),
             input=input,
-            cwd=Path(__file__).parent.parent,
+            catch_exceptions=False,
+            terminal_width=120,
         )
+        return SimpleNamespace(
+            returncode=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+
     return run
 
 

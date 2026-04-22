@@ -97,6 +97,7 @@ class ActionContext(Protocol):
         *,
         tags: dict[str, Any] | None = None,
         similar_to: str | None = None,
+        stored_only: bool = False,
         limit: int = 10,
         since: str | None = None,
         until: str | None = None,

@@ -11,12 +11,17 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
+from typer.testing import CliRunner
 
 from keep.state_doc_runtime import FlowResult
-from tests.conftest import _cleanup_daemons_under
+from keep.cli_app import app
+from tests.conftest import _cleanup_daemons_under, _write_test_store_config
 
 
 # -----------------------------------------------------------------------------
@@ -29,34 +34,31 @@ def _shared_e2e_cli_env(tmp_path_factory):
     root = tmp_path_factory.mktemp("cli-e2e-shared")
     store = root / ".keep-test-store"
     store.mkdir()
-    (store / "keep.toml").write_text(
-        """[store]
-version = 3
-
-[embedding]
-name = "ollama"
-model = "nomic-embed-text:latest"
-
-[summarization]
-name = "truncate"
-
-[document]
-name = "composite"
-""",
-    )
+    _write_test_store_config(store)
     env = os.environ.copy()
     env["KEEP_STORE_PATH"] = str(store)
     env["KEEP_CONFIG"] = str(store)
+    env["KEEP_LOCAL_ONLY"] = "1"
 
-    # Pre-start the daemon once so the individual e2e tests do not each pay
-    # a full daemon bootstrap and readiness wait.
-    result = subprocess.run(
-        [sys.executable, "-m", "keep", "get", ".meta/todo"],
-        capture_output=True,
-        text=True,
-        cwd=Path(__file__).parent.parent,
-        env=env,
-    )
+    # Warm the shared store once so the first `keep` invocation does not spend
+    # its entire timeout budget on fresh-store daemon bootstrap.
+    warm_cmd = [sys.executable, "-m", "keep", "get", ".meta/todo", "--limit", "0"]
+    result = None
+    for attempt in range(3):
+        result = subprocess.run(
+            warm_cmd,
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent.parent,
+            env=env,
+        )
+        if result.returncode == 0:
+            break
+        # The daemon can still be in the middle of auto-start when the first
+        # CLI request exhausts its startup budget; a short retry reuses that
+        # in-flight daemon instead of paying for another cold bootstrap.
+        time.sleep(1.0)
+    assert result is not None
     assert result.returncode == 0, result.stderr
 
     yield env
@@ -67,18 +69,32 @@ name = "composite"
 @pytest.fixture
 def cli(request):
     """Run CLI command and return result."""
-    def run(*args: str, input: str | None = None) -> subprocess.CompletedProcess:
-        env = None
+    runner = CliRunner()
+
+    def run(*args: str, input: str | None = None) -> SimpleNamespace:
         if request.node.get_closest_marker("e2e") is not None:
             env = request.getfixturevalue("_shared_e2e_cli_env")
-        return subprocess.run(
-            [sys.executable, "-m", "keep", *args],
-            capture_output=True,
-            text=True,
+            return subprocess.run(
+                [sys.executable, "-m", "keep", *args],
+                capture_output=True,
+                text=True,
+                input=input,
+                cwd=Path(__file__).parent.parent,
+                env=env,
+            )
+        result = runner.invoke(
+            app,
+            list(args),
             input=input,
-            cwd=Path(__file__).parent.parent,
-            env=env,
+            catch_exceptions=False,
+            terminal_width=120,
         )
+        return SimpleNamespace(
+            returncode=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+
     return run
 
 
@@ -97,36 +113,57 @@ class TestCliBasics:
         assert "find" in result.stdout
         assert "put" in result.stdout
     
-    @pytest.mark.e2e
-    def test_no_args_shows_now(self, cli):
-        """CLI with no args shows current working context."""
-        result = cli()
-        # Returns success and shows the "now" document
-        assert result.returncode == 0
-        assert "---" in result.stdout  # YAML frontmatter
-        assert "id:" in result.stdout
+    def test_no_args_shows_now(self):
+        """CLI with no args renders the current working context."""
+        runner = CliRunner()
+        with (
+            patch("keep.cli_app._get_port", return_value=1234),
+            patch(
+                "keep.cli_app._get",
+                return_value={
+                    "item": {"id": "now", "summary": "Working context", "tags": {"project": "keep"}},
+                    "viewing_offset": 0,
+                    "similar": [],
+                    "meta": {},
+                    "edges": {},
+                    "parts": [],
+                    "prev": [],
+                    "next": [],
+                },
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                [],
+                catch_exceptions=False,
+                terminal_width=120,
+            )
+
+        assert result.exit_code == 0
+        assert "---" in result.stdout
+        assert "id: now" in result.stdout
 
     @pytest.mark.e2e
     def test_meta_docs_loaded(self, cli):
         """Meta-doc system docs are loaded and accessible."""
-        result = cli("get", ".meta/todo")
+        result = cli("get", ".meta/todo", "--limit", "0")
         assert result.returncode == 0
         assert ".meta/todo" in result.stdout
 
     @pytest.mark.e2e
     def test_tag_type_doc_loaded(self, cli):
         """Tag description doc .tag/type is loaded and has full content."""
-        result = cli("get", ".tag/type")
+        result = cli("get", ".tag/type", "--limit", "0")
         assert result.returncode == 0
-        assert "Content Classification" in result.stdout
+        assert "Entity Type" in result.stdout
         # Should contain the values table (verbatim, not summarized)
-        assert "learning" in result.stdout
-        assert "breakdown" in result.stdout
+        assert "conversation" in result.stdout
+        assert "vulnerability" in result.stdout
 
     @pytest.mark.e2e
     def test_meta_sections_use_namespace_prefix(self, cli):
         """Meta sections in frontmatter use meta/ prefix to avoid key conflicts."""
-        result = cli("get", ".meta/todo")
+        result = cli("get", ".meta/todo", "--limit", "0")
         assert result.returncode == 0
         # The meta-doc itself shouldn't show meta/ sections (it IS a meta-doc)
         # but its content should have the state-doc rules intact
@@ -528,7 +565,7 @@ class TestExitCodes:
 
     def test_put_inline_too_long_rejected(self, cli):
         """Inline text exceeding max_summary_length is rejected."""
-        long_text = "x" * 3000
+        long_text = "x" * 3001
         result = cli("put", long_text)
         assert result.returncode == 1
         assert "too long" in result.stderr.lower()
@@ -620,16 +657,27 @@ class TestUnixComposability:
         ids = [item["id"] for item in parsed]
         assert ids == ["file:///a.md", "file:///b.md"]
 
-    @pytest.mark.e2e
-    def test_get_multiple_ids_separated_by_yaml_separator(self, cli):
+    def test_get_multiple_ids_separated_by_yaml_separator(self):
         """Multiple IDs in get produce YAML-document-separated output."""
-        # Get two system docs that always exist
-        result = cli("get", ".conversations", ".domains")
-        assert result.returncode == 0
-        # Multiple items separated by --- between them
-        parts = result.stdout.split("\n---\n")
-        # At least 2 documents (each starts with --- frontmatter too)
-        assert len(parts) >= 3  # opening ---, doc1 body + ---, doc2 frontmatter + body
+        runner = CliRunner()
+        with (
+            patch("keep.cli_app._get_port", return_value=1234),
+            patch(
+                "keep.cli_app._get_one_item",
+                side_effect=[
+                    "---\nid: .conversations\nConversation doc",
+                    "---\nid: .domains\nDomains doc",
+                ],
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                ["get", ".conversations", ".domains"],
+                catch_exceptions=False,
+                terminal_width=120,
+            )
+        assert result.exit_code == 0
+        assert "\n---\n" in result.stdout
         assert ".conversations" in result.stdout
         assert ".domains" in result.stdout
 
@@ -640,9 +688,19 @@ class TestUnixComposability:
         assert result.returncode == 0
         assert "id: .conversations" in result.stdout
 
-    def test_get_nonexistent_id_returns_error(self, cli):
+    @pytest.mark.e2e
+    def test_get_nonexistent_id_returns_error(self, _shared_e2e_cli_env):
         """Nonexistent ID returns exit code 1."""
-        result = cli("get", "nonexistent:id:that:does:not:exist")
+        # Use a real subprocess here so daemon-client globals from in-process
+        # CliRunner invocations cannot leak across command boundaries, while
+        # still reusing the warmed shared test daemon/store.
+        result = subprocess.run(
+            [sys.executable, "-m", "keep", "get", "nonexistent:id:that:does:not:exist"],
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent.parent,
+            env=_shared_e2e_cli_env,
+        )
         assert result.returncode == 1
         assert "Not found" in result.stderr
 

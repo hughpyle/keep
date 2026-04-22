@@ -137,6 +137,7 @@ def _assert_public_flow_roundtrip(client, calls: list[tuple[str, dict[str, Any]]
             "query": "Round-trip",
             "tags": None,
             "similar_to": None,
+            "stored_only": False,
             "limit": 5,
             "since": None,
             "until": None,
