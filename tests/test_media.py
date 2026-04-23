@@ -355,7 +355,7 @@ class TestAfterWriteDispatch:
         assert ctx["uri"].startswith("file://")
         kp.close()
 
-    def test_image_put_without_media_config(self, mock_providers, tmp_path):
+    def test_image_put_without_media_config(self, mock_providers, tmp_path, monkeypatch):
         """Image URI without media config → flow item without media provider."""
         from keep.api import Keeper
 
@@ -364,6 +364,7 @@ class TestAfterWriteDispatch:
         )
         mock_providers["document"].fetch = lambda uri: mock_doc
 
+        monkeypatch.delenv("KEEP_CONFIG", raising=False)
         with patch("keep.config._detect_ollama", return_value=None):
             kp = Keeper(store_path=tmp_path)
         _keeper_bootstrap_sysdocs(kp)

@@ -16,6 +16,12 @@ from keep.setup_wizard import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clear_local_only(monkeypatch):
+    """Wizard choice tests should not inherit suite-wide local-only mode."""
+    monkeypatch.delenv("KEEP_LOCAL_ONLY", raising=False)
+
+
 class TestNeedsWizard:
     """Tests for wizard-needed detection."""
     def test_needs_wizard_no_config(self, tmp_path):

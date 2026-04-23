@@ -274,7 +274,11 @@ def get_port(store_override: str | None = None) -> int:
         if port_file.exists():
             try:
                 port = int(port_file.read_text().strip())
-                if port != existing_port and check_health(port):
+                if port != existing_port:
+                    # Fresh discovery files mean a replacement daemon has
+                    # claimed the store. Return its port immediately so the
+                    # caller's real request can perform the next retry even if
+                    # /v1/ready is not answering yet.
                     return port
             except (ValueError, OSError):
                 pass

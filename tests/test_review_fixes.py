@@ -266,9 +266,11 @@ class TestEmbeddingProviderAbsent:
         config_file = tmp_path / "keep.toml"
         assert config_file.exists()
 
-    def test_load_config_treats_legacy_remote_as_remote_store(self, tmp_path) -> None:
+    def test_load_config_treats_legacy_remote_as_remote_store(self, tmp_path, monkeypatch) -> None:
         """Legacy [remote] config still routes the authoritative store."""
         from keep.config import load_config
+
+        monkeypatch.delenv("KEEP_LOCAL_ONLY", raising=False)
 
         (tmp_path / "keep.toml").write_text(
             """

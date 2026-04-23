@@ -571,6 +571,56 @@ class TestExitCodes:
         assert "too long" in result.stderr.lower()
         assert "file" in result.stderr.lower()  # Hint mentions file
 
+    def test_put_inline_survives_path_probe_oserror(self, monkeypatch):
+        """Long inline text stays inline when filesystem probes raise OSError."""
+        from keep import cli_app
+
+        runner = CliRunner()
+        long_text = "This is inline text, not a path. " * 12
+        captured: dict[str, object] = {}
+        original_is_dir = cli_app.Path.is_dir
+        original_exists = cli_app.Path.exists
+
+        def raising_is_dir(path_obj):
+            if str(path_obj) == long_text:
+                raise OSError(63, "File name too long")
+            return original_is_dir(path_obj)
+
+        def raising_exists(path_obj):
+            if str(path_obj) == long_text:
+                raise OSError(63, "File name too long")
+            return original_exists(path_obj)
+
+        def fake_post(port, path, body):
+            captured["port"] = port
+            captured["path"] = path
+            captured["body"] = body
+            return {"id": "%inline"}
+
+        monkeypatch.setattr(cli_app.Path, "is_dir", raising_is_dir)
+        monkeypatch.setattr(cli_app.Path, "exists", raising_exists)
+        monkeypatch.setattr(cli_app, "_get_port", lambda: 1234)
+        monkeypatch.setattr(cli_app, "_post", fake_post)
+
+        result = runner.invoke(
+            app,
+            ["put", long_text],
+            catch_exceptions=False,
+            terminal_width=120,
+        )
+
+        assert result.exit_code == 0
+        assert captured["path"] == "/v1/notes"
+        assert captured["body"] == {
+            "content": long_text,
+            "uri": None,
+            "id": None,
+            "tags": None,
+            "summary": None,
+            "force": None,
+        }
+        assert "%inline stored." in result.stdout
+
 
 # -----------------------------------------------------------------------------
 # Tag Parsing Tests
