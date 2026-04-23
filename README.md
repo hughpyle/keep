@@ -203,3 +203,7 @@ Issues and PRs welcome:
 - Documentation clarity
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Download History
+
+[![Download History](https://skill-history.com/chart/hughpyle/keep.svg)](https://skill-history.com/hughpyle/keep)
