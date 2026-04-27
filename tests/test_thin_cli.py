@@ -387,24 +387,20 @@ def test_thin_cli_context_round_trip(daemon):
 
 
 def test_get_one_item_retries_after_connection_refused():
-    """The command app re-resolves daemon discovery if the first request loses the daemon."""
+    """The command app delegates daemon retry behavior to daemon_client."""
     with (
-        patch("keep.cli_app._http") as mock_http,
-        patch("keep.cli_app._get_port", return_value=5338),
+        patch("keep.cli_app._daemon_client.http_request_with_discovery_retry") as request,
     ):
-        mock_http.side_effect = [
-            ConnectionRefusedError(61, "refused"),
-            (200, {
-                "item": {"id": "now", "summary": "ok", "tags": {}},
-                "viewing_offset": 0,
-                "similar": [],
-                "meta": {},
-                "edges": {},
-                "parts": [],
-                "prev": [],
-                "next": [],
-            }),
-        ]
+        request.return_value = (200, {
+            "item": {"id": "now", "summary": "ok", "tags": {}},
+            "viewing_offset": 0,
+            "similar": [],
+            "meta": {},
+            "edges": {},
+            "parts": [],
+            "prev": [],
+            "next": [],
+        })
 
         result = _get_one_item(
             5337,
@@ -420,8 +416,13 @@ def test_get_one_item_retries_after_connection_refused():
         )
 
     assert "id: now" in result
-    assert mock_http.call_args_list[0].args[1] == 5337
-    assert mock_http.call_args_list[1].args[1] == 5338
+    request.assert_called_once_with(
+        "GET",
+        5337,
+        "/v1/notes/now/context",
+        None,
+        store_override=None,
+    )
 
 
 def test_get_now_uses_now_context_defaults():

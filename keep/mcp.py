@@ -10,7 +10,6 @@ Usage:
     claude --mcp-server keep="keep mcp"   # Claude Code integration
 """
 
-import http.client
 import json
 import logging
 import os
@@ -36,7 +35,7 @@ from mcp.types import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from ._context_resolution import _SUPPORTED_MCP_PROMPT_ARGS
-from .daemon_client import get_port, http_request
+from .daemon_client import get_port, http_request_with_discovery_retry
 from .help import get_help_topic
 
 _port: Optional[int] = None
@@ -65,29 +64,43 @@ def _ensure_daemon() -> int:
 def _post(path: str, body: dict) -> tuple[int, dict]:
     """POST to the daemon. Returns (status, json_body)."""
     global _port
-    try:
-        status, result = http_request("POST", _ensure_daemon(), path, body)
-    except (ConnectionError, TimeoutError, http.client.RemoteDisconnected, OSError):
-        _port = None
-        status, result = http_request("POST", _ensure_daemon(), path, body)
+    status, result = http_request_with_discovery_retry(
+        "POST",
+        _ensure_daemon(),
+        path,
+        body,
+        store_override=os.environ.get("KEEP_STORE_PATH"),
+    )
     if status == 401:
         # Daemon may have restarted on a new port. Re-resolve.
         _port = None
-        status, result = http_request("POST", _ensure_daemon(), path, body)
+        status, result = http_request_with_discovery_retry(
+            "POST",
+            _ensure_daemon(),
+            path,
+            body,
+            store_override=os.environ.get("KEEP_STORE_PATH"),
+        )
     return status, result
 
 
 def _get(path: str) -> tuple[int, dict]:
     """GET from the daemon. Returns (status, json_body)."""
     global _port
-    try:
-        status, result = http_request("GET", _ensure_daemon(), path)
-    except (ConnectionError, TimeoutError, http.client.RemoteDisconnected, OSError):
-        _port = None
-        status, result = http_request("GET", _ensure_daemon(), path)
+    status, result = http_request_with_discovery_retry(
+        "GET",
+        _ensure_daemon(),
+        path,
+        store_override=os.environ.get("KEEP_STORE_PATH"),
+    )
     if status == 401:
         _port = None
-        status, result = http_request("GET", _ensure_daemon(), path)
+        status, result = http_request_with_discovery_retry(
+            "GET",
+            _ensure_daemon(),
+            path,
+            store_override=os.environ.get("KEEP_STORE_PATH"),
+        )
     return status, result
 
 

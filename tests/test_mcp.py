@@ -20,9 +20,9 @@ from keep.const import STATE_DELETE, STATE_PUT, STATE_QUERY_RESOLVE
 
 @pytest.fixture
 def mock_daemon():
-    """Patch _ensure_daemon and http_request to avoid real daemon."""
+    """Patch _ensure_daemon and daemon request helper to avoid real daemon."""
     with patch("keep.mcp._ensure_daemon", return_value=9999), \
-         patch("keep.mcp.http_request") as mock_http:
+         patch("keep.mcp.http_request_with_discovery_retry") as mock_http:
         yield mock_http
 
 
@@ -123,28 +123,25 @@ class TestKeepFlow:
         assert call_body.get("token_budget") == 4000
 
     @pytest.mark.asyncio
-    async def test_flow_retries_after_connection_refused(self):
+    async def test_flow_uses_shared_discovery_retry_helper(self):
         from keep.mcp import keep_flow
 
         with (
-            patch("keep.mcp._ensure_daemon", side_effect=[9999, 10000]),
-            patch("keep.mcp.http_request") as mock_http,
+            patch("keep.mcp._ensure_daemon", return_value=9999),
+            patch("keep.mcp.http_request_with_discovery_retry") as mock_http,
         ):
-            mock_http.side_effect = [
-                ConnectionRefusedError(61, "refused"),
-                (200, {
-                    "status": "done", "ticks": 1,
-                    "data": {"ok": True},
-                    "bindings": {}, "history": [], "cursor": None, "tried_queries": [],
-                }),
-            ]
+            mock_http.return_value = (200, {
+                "status": "done", "ticks": 1,
+                "data": {"ok": True},
+                "bindings": {}, "history": [], "cursor": None, "tried_queries": [],
+            })
 
             result = await keep_flow(state=STATE_PUT, params={"content": "hello"})
 
         parsed = json.loads(result)
         assert parsed["status"] == "done"
-        assert mock_http.call_args_list[0].args[1] == 9999
-        assert mock_http.call_args_list[1].args[1] == 10000
+        mock_http.assert_called_once()
+        assert mock_http.call_args.args[:3] == ("POST", 9999, "/v1/flow")
 
 
 # ---------------------------------------------------------------------------

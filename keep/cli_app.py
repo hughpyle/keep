@@ -9,7 +9,6 @@ import json
 import os
 import shutil
 import sys
-import http.client
 import importlib.metadata
 import importlib.resources
 import select
@@ -35,8 +34,7 @@ from . import daemon_client as _daemon_client
 from . import markdown_import as _markdown_import
 from . import markdown_mirrors as _markdown_mirrors
 from .config import load_or_create_config
-from .daemon_client import http_request as _http
-from .daemon_client import get_port, get_port as _daemon_get_port, resolve_store_path
+from .daemon_client import get_port as _daemon_get_port
 from .const import DAEMON_PORT_FILE, DAEMON_TOKEN_FILE, STATE_PROMPT
 from .console_support import (
     _format_config_with_defaults,
@@ -299,18 +297,14 @@ def _should_use_now_put_path(
 
 
 def _daemon_request(method: str, port: int, path: str, body: dict | None = None) -> tuple[int, dict]:
-    """Make one daemon request, retrying via fresh discovery on connection loss.
-
-    The daemon can exit between `_get_port()` and the first real request, leaving
-    a previously healthy port momentarily unreachable. Re-resolve once so thin
-    CLI commands recover from daemon restarts instead of surfacing a raw socket
-    error to the user.
-    """
-    try:
-        return _http(method, port, path, body)
-    except (ConnectionError, TimeoutError, http.client.RemoteDisconnected, OSError):
-        retry_port = _get_port()
-        return _http(method, retry_port, path, body)
+    """Make one daemon request using the shared daemon-client retry policy."""
+    return _daemon_client.http_request_with_discovery_retry(
+        method,
+        port,
+        path,
+        body,
+        store_override=_global_store,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +314,16 @@ def _daemon_request(method: str, port: int, path: str, body: dict | None = None)
 def _get_port() -> int:
     """Get daemon port, auto-starting if needed."""
     return _daemon_get_port(_global_store)
+
+
+def _resolved_store_path() -> Path:
+    """Resolve the active CLI store through the shared daemon-client helper."""
+    return _daemon_client.resolve_store_path(_global_store)
+
+
+def _config_dir_for_store() -> Path:
+    """Return the config directory for commands that read local settings."""
+    return _resolved_store_path() if _global_store else get_config_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -1174,7 +1178,7 @@ def put(
                 pass
 
         if content is not None and uri is None:
-            config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
+            config_dir = _config_dir_for_store()
             cfg = load_or_create_config(config_dir)
             if len(content) > cfg.max_inline_length:
                 typer.echo(
@@ -1358,7 +1362,7 @@ def now(
     port = _get_port()
     if content:
         if truncate_flag:
-            config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
+            config_dir = _config_dir_for_store()
             cfg = load_or_create_config(config_dir)
             if len(content) > cfg.max_inline_length:
                 content = content[:cfg.max_inline_length]
@@ -1704,7 +1708,7 @@ def _daemon_command_impl(
     interactive: bool = True,
 ) -> None:
     if stop:
-        store_path = _daemon_client.resolve_store_path(_global_store)
+        store_path = _resolved_store_path()
         pid_file = store_path / "processor.pid"
         if not pid_file.exists():
             typer.echo("No daemon running.")
@@ -1741,13 +1745,13 @@ def _daemon_command_impl(
         return
 
     if list_items:
-        store_path = _daemon_client.resolve_store_path(_global_store)
+        store_path = _resolved_store_path()
         _console_support.print_pending_list_lightweight(store_path)
         # Ensure daemon is running so pending items get processed
         _daemon_client.get_port(_global_store)
         return
 
-    kp = _api.Keeper(store_path=_daemon_client.resolve_store_path(_global_store))
+    kp = _api.Keeper(store_path=_resolved_store_path())
 
     if daemon:
         _console_support.run_pending_daemon(
@@ -1897,14 +1901,14 @@ def config(
         return
 
     if setup:
-        store_path = _daemon_client.resolve_store_path(_global_store)
-        config_dir = store_path if _global_store else get_config_dir()
+        store_path = _resolved_store_path()
+        config_dir = _config_dir_for_store()
         run_wizard(config_dir, store_path, restart_command="keep config --setup")
         return
 
-    config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
+    config_dir = _config_dir_for_store()
     cfg = load_or_create_config(config_dir)
-    store_path = get_default_store_path(cfg) if not _global_store else _global_store
+    store_path = get_default_store_path(cfg) if not _global_store else _resolved_store_path()
 
     if path:
         try:
@@ -2371,7 +2375,7 @@ def data_import(
             ):
                 raise SystemExit(0)
 
-    kp = _api.Keeper(store_path=_daemon_client.resolve_store_path(_global_store))
+    kp = _api.Keeper(store_path=_resolved_store_path())
     try:
         if import_format == "json":
             if mode != "replace":

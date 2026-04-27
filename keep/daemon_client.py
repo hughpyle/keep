@@ -103,6 +103,28 @@ def http_request(
     raise last_exc  # type: ignore[misc]
 
 
+def http_request_with_discovery_retry(
+    method: str,
+    port: int,
+    path: str,
+    body: dict | None = None,
+    *,
+    store_override: str | None = None,
+    timeout: int = 30,
+) -> tuple[int, dict]:
+    """Make a daemon request, re-resolving the port once on connection loss.
+
+    A daemon can exit between discovery and the first real request. Re-reading
+    discovery files lets CLI/MCP callers survive that restart without
+    duplicating socket-retry policy.
+    """
+    try:
+        return http_request(method, port, path, body, timeout=timeout)
+    except (ConnectionError, TimeoutError, http.client.RemoteDisconnected, OSError):
+        retry_port = get_port(store_override)
+        return http_request(method, retry_port, path, body, timeout=timeout)
+
+
 def resolve_store_path(override: str | None = None) -> Path:
     """Resolve store path from override, env, or config. Stdlib only."""
     effective = override or os.environ.get("KEEP_STORE_PATH")

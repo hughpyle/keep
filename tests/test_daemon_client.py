@@ -214,6 +214,41 @@ class TestCheckHealth:
         }
 
 
+class TestHttpRequestWithDiscoveryRetry:
+    """Request retry policy belongs to daemon_client, not surface clients."""
+
+    def test_re_resolves_port_once_after_connection_loss(self):
+        from keep import daemon_client as client
+
+        calls = []
+
+        def fake_http_request(method, port, path, body=None, timeout=30):
+            calls.append((method, port, path, body, timeout))
+            if len(calls) == 1:
+                raise ConnectionError("stale port")
+            return 200, {"ok": True}
+
+        with (
+            patch("keep.daemon_client.http_request", side_effect=fake_http_request),
+            patch("keep.daemon_client.get_port", return_value=7788) as get_port,
+        ):
+            result = client.http_request_with_discovery_retry(
+                "POST",
+                6677,
+                "/v1/notes",
+                {"id": "x"},
+                store_override="/tmp/store",
+                timeout=12,
+            )
+
+        assert result == (200, {"ok": True})
+        get_port.assert_called_once_with("/tmp/store")
+        assert calls == [
+            ("POST", 6677, "/v1/notes", {"id": "x"}, 12),
+            ("POST", 7788, "/v1/notes", {"id": "x"}, 12),
+        ]
+
+
 class TestStopDaemon:
     """Daemon stop helper should preserve accurate liveness state."""
 
