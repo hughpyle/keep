@@ -72,3 +72,4 @@ keep.toml
 pending_summaries.db
 planner_stats.db
 stores/
+TECH_DEBT_AUDIT.md
