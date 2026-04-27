@@ -401,7 +401,35 @@ def test_put_keeps_internal_server_error_for_unexpected_exceptions(daemon, http)
         r = http.post("/v1/notes", json={"content": "test note", "id": "test-1"})
 
     assert r.status_code == 500
-    assert r.json()["error"] == "internal server error"
+    body = r.json()
+    assert body["error"] == "internal server error"
+    assert isinstance(body["request_id"], str)
+    assert body["request_id"]
+
+
+def test_put_rejects_non_object_json_body(http):
+    r = http.post("/v1/notes", content=b'["not", "an", "object"]')
+
+    assert r.status_code == 400
+    assert r.json()["error"] == "request body must be a JSON object"
+
+
+def test_put_rejects_invalid_field_types(http):
+    r = http.post("/v1/notes", json={
+        "content": "test note",
+        "id": "bad-types",
+        "tags": ["not", "a", "map"],
+    })
+
+    assert r.status_code == 400
+    assert "invalid request body" in r.json()["error"]
+
+
+def test_find_rejects_invalid_limit_type(http):
+    r = http.post("/v1/search", json={"query": "alpha", "limit": "five"})
+
+    assert r.status_code == 400
+    assert "invalid request body" in r.json()["error"]
 
 
 def test_delete(http):

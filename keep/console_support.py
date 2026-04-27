@@ -979,8 +979,13 @@ def _render_context_from_flow_bindings(bindings: dict[str, dict], kp=None) -> st
             ctx = kp.get_context(item_id)
             if ctx is not None and getattr(ctx, "item", None) is not None:
                 return render_context(ctx)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.info(
+                "Failed to render full context for %s; falling back to item binding: %s",
+                item_id,
+                exc,
+                exc_info=True,
+            )
 
     from ._context_resolution import ItemContext
     from .types import Item

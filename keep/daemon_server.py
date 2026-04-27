@@ -24,17 +24,25 @@ import os
 import re
 import secrets
 import threading
+import uuid
+from importlib.metadata import version
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
+
+from opentelemetry.propagate import extract
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError, field_validator
 
 if TYPE_CHECKING:
     from .api import Keeper
 
 logger = logging.getLogger(__name__)
 
+from .api import _MAX_EXPORT_CHANGES_LIMIT
+from . import markdown_export as _markdown_export
 from .const import DAEMON_PORT
+from .console_support import render_flow_response
 from .flow_client import (
     delete_item as flow_delete_item,
     find_items as flow_find_items,
@@ -42,16 +50,19 @@ from .flow_client import (
     put_item as flow_put_item,
     tag_item as flow_tag_item,
 )
+from .markdown_export import _get_export_bundle
 from .markdown_mirrors import (
     add_markdown_mirror,
     clear_sync_outbox,
+    list_markdown_mirrors,
     record_markdown_mirror_export_success,
     remove_markdown_mirror,
     run_markdown_export_once,
     validate_markdown_mirror,
 )
-from .markdown_export import _get_export_bundle
-from . import markdown_export as _markdown_export
+from .shutdown import is_shutting_down
+from .tracing import get_tracer
+from .types import TagMap, file_uri_to_path
 from .watches import add_watch, enqueue_git_ingest_for_directory, remove_watch
 
 
@@ -104,7 +115,105 @@ _COMPILED_ROUTES = [
     (method, re.compile(pattern), handler)
     for method, pattern, handler in _ROUTES
 ]
-from .api import _MAX_EXPORT_CHANGES_LIMIT
+
+
+class _RequestBody(BaseModel):
+    """Base model for daemon JSON payloads.
+
+    Extra fields are allowed to preserve the previous "ignore unknown keys"
+    behavior while still rejecting wrong shapes at the request boundary.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+class PutRequest(_RequestBody):
+    """Request body for creating, updating, or watching a note."""
+
+    content: str | None = None
+    uri: str | None = None
+    id: str | None = None
+    summary: str | None = None
+    tags: TagMap | None = None
+    created_at: str | None = None
+    force: StrictBool = False
+    watch: StrictBool = False
+    unwatch: StrictBool = False
+    enqueue_git: StrictBool = False
+    watch_kind: str = "file"
+    recurse: StrictBool = False
+    exclude: list[str] = Field(default_factory=list)
+    interval: str = "PT30S"
+
+
+class MarkdownExportRequest(_RequestBody):
+    """Request body for markdown export and sync administration."""
+
+    list: StrictBool = False
+    root: str | None = None
+    output: str | None = None
+    include_system: StrictBool = False
+    include_parts: StrictBool = False
+    include_versions: StrictBool = False
+    sync: StrictBool = False
+    stop: StrictBool = False
+    register_only: StrictBool = False
+    validate_only: StrictBool = False
+    baseline_complete: StrictBool = False
+    interval: str = "PT30S"
+    source_cursor: str = ""
+
+
+class FindRequest(_RequestBody):
+    """Request body for semantic and tag search."""
+
+    query: str | None = None
+    tags: TagMap | None = None
+    similar_to: str | None = None
+    limit: StrictInt = 10
+    since: str | None = None
+    until: str | None = None
+    include_self: StrictBool = False
+    include_hidden: StrictBool = False
+    deep: StrictBool = False
+    scope: str | None = None
+
+
+class TagRequest(_RequestBody):
+    """Request body for setting and removing note tags."""
+
+    set: TagMap = Field(default_factory=dict)
+    remove: list[str] = Field(default_factory=list)
+    remove_values: TagMap = Field(default_factory=dict)
+
+
+class FlowRequest(_RequestBody):
+    """Request body for daemon-backed state-doc flow execution."""
+
+    state: str = ""
+    params: dict[str, Any] = Field(default_factory=dict)
+    budget: StrictInt | None = 5
+    cursor_token: str | None = None
+    cursor: str | None = None
+    state_doc_yaml: str | None = None
+    writable: StrictBool = True
+    token_budget: StrictInt | None = 0
+
+    @field_validator("budget", "token_budget", mode="before")
+    @classmethod
+    def _blank_int_uses_default(cls, value: Any) -> Any:
+        if value == "":
+            return None
+        return value
+
+
+class AnalyzeRequest(_RequestBody):
+    """Request body for foreground or background note analysis."""
+
+    id: str = ""
+    tags: TagMap | None = None
+    force: StrictBool = False
+    foreground: StrictBool = False
 
 
 def _normalize_host(value: str) -> str:
@@ -193,10 +302,6 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "unauthorized"})
                 return
 
-        from .tracing import get_tracer
-        from opentelemetry.propagate import extract
-        from .shutdown import is_shutting_down
-
         if is_shutting_down():
             self._json(503, {"error": "shutting down"})
             return
@@ -222,8 +327,18 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                         logger.warning("Handler %s rejected request: %s", handler_name, e)
                         self._json(400, {"error": str(e)})
                     except Exception as e:
-                        logger.warning("Handler %s error: %s", handler_name, e, exc_info=True)
-                        self._json(500, {"error": "internal server error"})
+                        request_id = uuid.uuid4().hex
+                        logger.warning(
+                            "Handler %s error request_id=%s: %s",
+                            handler_name,
+                            request_id,
+                            e,
+                            exc_info=True,
+                        )
+                        self._json(500, {
+                            "error": "internal server error",
+                            "request_id": request_id,
+                        })
                 return
         self._json(404, {"error": "not found"})
 
@@ -263,11 +378,23 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             logger.debug("NDJSON stream closed by client")
 
-    def _read_body(self) -> dict:
+    def _read_body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", 0))
         if length == 0:
             return {}
-        return json.loads(self.rfile.read(length))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON body: {exc.msg}") from exc
+        if not isinstance(body, dict):
+            raise ValueError("request body must be a JSON object")
+        return body
+
+    def _read_request(self, model: type[_RequestBody]) -> _RequestBody:
+        try:
+            return model.model_validate(self._read_body())
+        except ValidationError as exc:
+            raise ValueError(f"invalid request body: {exc.errors()}") from exc
 
     # --- Handlers ---
 
@@ -275,7 +402,6 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
     def _daemon_status(self, *, include_item_count: bool) -> dict[str, Any]:
         if not DaemonRequestHandler._cached_version:
-            from importlib.metadata import version
             try:
                 DaemonRequestHandler._cached_version = version("keep-skill")
             except Exception:
@@ -459,11 +585,11 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             self._json(200, ctx.to_dict())
 
     def _handle_put(self, groups: dict):
-        body = self._read_body()
-        watch = body.get("watch", False)
-        unwatch = body.get("unwatch", False)
-        enqueue_git = body.get("enqueue_git", False)
-        watch_kind = body.get("watch_kind", "file")
+        req = self._read_request(PutRequest)
+        watch = req.watch
+        unwatch = req.unwatch
+        enqueue_git = req.enqueue_git
+        watch_kind = req.watch_kind
 
         # Directory watches do not correspond to a single document: the CLI
         # walked the directory and posted each child file individually before
@@ -471,8 +597,7 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         # registration, otherwise the put would blow up on "Not a file".
         if (watch or unwatch or enqueue_git) and watch_kind == "directory":
             # Directory watch entries store a bare filesystem path, not a URI.
-            from .types import file_uri_to_path
-            raw_uri = body.get("uri") or ""
+            raw_uri = req.uri or ""
             source = file_uri_to_path(raw_uri) if raw_uri.startswith("file://") else raw_uri
             if not source:
                 self._json(400, {"error": "directory watch requires a uri"})
@@ -483,10 +608,10 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             else:
                 entry = add_watch(
                     self.keeper, source, watch_kind,
-                    tags=body.get("tags") or {},
-                    recurse=body.get("recurse", False),
-                    exclude=body.get("exclude") or [],
-                    interval=body.get("interval", "PT30S"),
+                    tags=req.tags or {},
+                    recurse=req.recurse,
+                    exclude=req.exclude,
+                    interval=req.interval,
                     max_watches=self.keeper.config.max_watches,
                 )
                 resp["watch"] = {"source": entry.source, "interval": entry.interval}
@@ -494,8 +619,8 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
                 roots = enqueue_git_ingest_for_directory(
                     self.keeper,
                     Path(source),
-                    recurse=bool(body.get("recurse", False)),
-                    exclude=body.get("exclude") or [],
+                    recurse=req.recurse,
+                    exclude=req.exclude,
                     extra_exclude=self.keeper._load_ignore_patterns(),
                 )
                 resp["git"] = {"queued": len(roots)}
@@ -504,29 +629,29 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
 
         item = flow_put_item(
             self.keeper,
-            content=body.get("content"),
-            uri=body.get("uri"),
-            id=body.get("id"),
-            summary=body.get("summary"),
-            tags=body.get("tags"),
-            created_at=body.get("created_at"),
-            force=body.get("force", False),
+            content=req.content,
+            uri=req.uri,
+            id=req.id,
+            summary=req.summary,
+            tags=req.tags,
+            created_at=req.created_at,
+            force=req.force,
         )
         resp = _item_to_dict(item)
 
         # Watch management (after successful put) — file and url kinds only
         if watch or unwatch:
-            source = body.get("uri") or item.id
+            source = req.uri or item.id
             if unwatch:
                 removed = remove_watch(self.keeper, source)
                 resp["unwatch"] = removed
             else:
                 entry = add_watch(
                     self.keeper, source, watch_kind,
-                    tags=body.get("tags") or {},
-                    recurse=body.get("recurse", False),
-                    exclude=body.get("exclude") or [],
-                    interval=body.get("interval", "PT30S"),
+                    tags=req.tags or {},
+                    recurse=req.recurse,
+                    exclude=req.exclude,
+                    interval=req.interval,
                     max_watches=self.keeper.config.max_watches,
                 )
                 resp["watch"] = {"source": entry.source, "interval": entry.interval}
@@ -538,11 +663,9 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         self._json(200, {"deleted": deleted})
 
     def _handle_markdown_export(self, groups: dict):
-        body = self._read_body()
+        req = self._read_request(MarkdownExportRequest)
         export_keeper = self.export_keeper or self.keeper
-        if body.get("list"):
-            from .markdown_mirrors import list_markdown_mirrors
-
+        if req.list:
             entries = list_markdown_mirrors(self.keeper)
             self._json(200, {
                 "mirrors": [
@@ -563,21 +686,21 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        root = body.get("root") or body.get("output")
+        root = req.root or req.output
         if not root:
             self._json(400, {"error": "markdown export requires a root directory"})
             return
 
-        include_system = bool(body.get("include_system", False))
-        include_parts = bool(body.get("include_parts", False))
-        include_versions = bool(body.get("include_versions", False))
-        sync = bool(body.get("sync", False))
-        stop = bool(body.get("stop", False))
-        register_only = bool(body.get("register_only", False))
-        validate_only = bool(body.get("validate_only", False))
-        baseline_complete = bool(body.get("baseline_complete", False))
-        interval = str(body.get("interval") or "PT30S")
-        source_cursor = str(body.get("source_cursor") or "")
+        include_system = req.include_system
+        include_parts = req.include_parts
+        include_versions = req.include_versions
+        sync = req.sync
+        stop = req.stop
+        register_only = req.register_only
+        validate_only = req.validate_only
+        baseline_complete = req.baseline_complete
+        interval = req.interval
+        source_cursor = req.source_cursor
 
         try:
             if stop:
@@ -666,19 +789,19 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             self._json(500, {"error": "markdown export failed"})
 
     def _handle_find(self, groups: dict):
-        body = self._read_body()
+        req = self._read_request(FindRequest)
         results = flow_find_items(
             self.keeper,
-            query=body.get("query"),
-            tags=body.get("tags"),
-            similar_to=body.get("similar_to"),
-            limit=body.get("limit", 10),
-            since=body.get("since"),
-            until=body.get("until"),
-            include_self=body.get("include_self", False),
-            include_hidden=body.get("include_hidden", False),
-            deep=body.get("deep", False),
-            scope=body.get("scope"),
+            query=req.query,
+            tags=req.tags,
+            similar_to=req.similar_to,
+            limit=req.limit,
+            since=req.since,
+            until=req.until,
+            include_self=req.include_self,
+            include_hidden=req.include_hidden,
+            deep=req.deep,
+            scope=req.scope,
         )
         resp = _items_response(results)
         if hasattr(results, "deep_groups") and results.deep_groups:
@@ -689,10 +812,10 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         self._json(200, resp)
 
     def _handle_tag(self, groups: dict):
-        body = self._read_body()
-        set_tags = body.get("set", {})
-        remove_keys = body.get("remove", [])
-        remove_values = body.get("remove_values", {})
+        req = self._read_request(TagRequest)
+        set_tags = req.set
+        remove_keys = req.remove
+        remove_values = req.remove_values
         if remove_keys or remove_values:
             item = self.keeper.tag(
                 groups["id"],
@@ -708,18 +831,15 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             self._json(200, _item_to_dict(item))
 
     def _handle_flow(self, groups: dict):
-        body = self._read_body()
-        try:
-            budget = int(body["budget"]) if body.get("budget") not in (None, "") else 5
-        except (ValueError, TypeError):
-            budget = 5
+        req = self._read_request(FlowRequest)
+        budget = req.budget if req.budget is not None else 5
         result = self.keeper.run_flow(
-            state=body.get("state", ""),
-            params=body.get("params", {}),
+            state=req.state,
+            params=req.params,
             budget=budget,
-            cursor_token=body.get("cursor_token") or body.get("cursor"),
-            state_doc_yaml=body.get("state_doc_yaml"),
-            writable=body.get("writable", True),
+            cursor_token=req.cursor_token or req.cursor,
+            state_doc_yaml=req.state_doc_yaml,
+            writable=req.writable,
         )
         resp: dict = {
             "status": result.status,
@@ -730,27 +850,23 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
             "cursor": result.cursor,
             "tried_queries": result.tried_queries,
         }
-        try:
-            token_budget = int(body["token_budget"]) if "token_budget" in body else 0
-        except (ValueError, TypeError):
-            token_budget = 0
+        token_budget = req.token_budget or 0
         if token_budget > 0:
-            from .console_support import render_flow_response
             resp["rendered"] = render_flow_response(
                 result, token_budget=token_budget, keeper=self.keeper,
             )
         self._json(200, resp)
 
     def _handle_analyze(self, groups: dict):
-        body = self._read_body()
-        id = body.get("id", "")
+        req = self._read_request(AnalyzeRequest)
+        id = req.id
         if not id:
             self._json(400, {"error": "id is required"})
             return
 
-        tags = body.get("tags")
-        force = body.get("force", False)
-        foreground = body.get("foreground", False)
+        tags = req.tags
+        force = req.force
+        foreground = req.foreground
 
         if not foreground:
             try:

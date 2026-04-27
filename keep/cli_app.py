@@ -10,17 +10,52 @@ import os
 import shutil
 import sys
 import http.client
+import importlib.metadata
+import importlib.resources
+import select
+import signal
+import subprocess as sp
+import tempfile
+import time as _time
 from pathlib import Path
 from typing import Annotated, Optional
 from urllib.parse import quote
 
 import typer
 
-from .daemon_client import get_port as _daemon_get_port
+from keep.help import get_help_topic
+from keep.mcp import main as mcp_main
+from keep.types import INTERNAL_TAGS, local_date, note_display_name
+from keep.utils import _extract_markdown_frontmatter
+from keep.validate import state_doc_diagram
+
+from . import api as _api
+from . import console_support as _console_support
+from . import daemon_client as _daemon_client
+from . import markdown_import as _markdown_import
+from . import markdown_mirrors as _markdown_mirrors
+from .config import load_or_create_config
 from .daemon_client import http_request as _http
+from .daemon_client import get_port, get_port as _daemon_get_port, resolve_store_path
 from .const import DAEMON_PORT_FILE, DAEMON_TOKEN_FILE, STATE_PROMPT
+from .console_support import (
+    _format_config_with_defaults,
+    _get_config_value,
+    _get_keeper,
+    _progress_bar,
+    doctor as doctor_impl,
+    get_tool_directory,
+    print_pending_interactive,
+    print_pending_list_lightweight,
+    run_pending_daemon,
+)
+from .ignore import merge_excludes, parse_ignore_patterns
 from . import markdown_export as _markdown_export
-from .types import note_display_name
+from .markdown_import import count_markdown_import_files
+from .markdown_mirrors import run_markdown_export_once
+from .paths import get_config_dir, get_default_store_path
+from .setup_wizard import run_wizard
+from .utils import _list_directory_files
 
 _ExportCollisionError = _markdown_export._ExportCollisionError
 _MAX_FILENAME_BYTES = _markdown_export._MAX_FILENAME_BYTES
@@ -68,7 +103,6 @@ def _has_stdin_data() -> bool:
         if sys.stdin.isatty():
             return False
         # Use select to avoid hanging on socket stdin (exec sandboxes)
-        import select
         return bool(select.select([sys.stdin], [], [], 0)[0])
     except Exception:
         return False
@@ -151,8 +185,6 @@ def _read_stdin_text() -> str:
 
 
 def _get_export_host():
-    from .console_support import _get_keeper
-
     store = Path(_global_store).resolve() if _global_store else None
     return _get_keeper(store)
 
@@ -312,7 +344,6 @@ def _parse_tag_args(raw: list[str] | None) -> tuple[dict[str, str], list[str]]:
 
 def _date(tags: dict) -> str:
     """Extract display date from tags."""
-    from keep.types import local_date
     for key in ("_updated", "_created"):
         val = tags.get(key, "")
         if val:
@@ -327,7 +358,6 @@ def _flow_items(resp: dict) -> list[dict]:
 
 def _display_tags(tags: dict) -> dict:
     """Filter to user-visible tags (matches keep/types.py:INTERNAL_TAGS)."""
-    from keep.types import INTERNAL_TAGS
     return {k: v for k, v in tags.items()
             if k not in INTERNAL_TAGS
             and not k.startswith("_tk::")
@@ -541,9 +571,8 @@ def _is_full() -> bool:
 
 def _version_callback(value: bool | None):
     if value:
-        from importlib.metadata import version
         try:
-            typer.echo(version("keep-skill"))
+            typer.echo(importlib.metadata.version("keep-skill"))
         except Exception:
             typer.echo("unknown")
         raise typer.Exit()
@@ -812,7 +841,6 @@ def _put_directory(
     force: bool, json_output: bool,
 ) -> None:
     """Index files from a directory via the daemon HTTP API."""
-    from .utils import _list_directory_files
     max_dir_files = 1000
 
     # Fast local precheck so obviously ineligible directories fail before
@@ -845,12 +873,10 @@ def _put_directory(
     try:
         status, data = _daemon_request("GET", port, f"/v1/notes/{_q('.ignore')}")
         if status == 200 and data.get("summary"):
-            from .ignore import parse_ignore_patterns
             ignore_patterns = parse_ignore_patterns(data["summary"])
     except Exception:
         pass
 
-    from .ignore import merge_excludes
     combined_exclude = merge_excludes(ignore_patterns, exclude)
     files = _list_directory_files(resolved_path, recurse=recurse, exclude=combined_exclude or None)
     if not files:
@@ -1055,7 +1081,6 @@ def put(
             typer.echo("Error: --summary cannot be used with stdin (original content would be lost)", err=True)
             raise typer.Exit(1)
         # Extract YAML frontmatter as tags (CLI tags override)
-        from keep.utils import _extract_markdown_frontmatter
         body_text, fm_tags = _extract_markdown_frontmatter(content)
         if fm_tags:
             merged = {**fm_tags, **parsed_tags}
@@ -1099,7 +1124,6 @@ def put(
                 raise typer.Exit(1)
             # Directory mode — iterate locally, put each file via HTTP
             resolved_dir = Path(source).resolve()
-            from .utils import _list_directory_files
             max_dir_files = 1000
             preflight_files = _list_directory_files(
                 resolved_dir,
@@ -1141,9 +1165,6 @@ def put(
                 pass
 
         if content is not None and uri is None:
-            from .config import load_or_create_config
-            from .paths import get_config_dir
-
             config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
             cfg = load_or_create_config(config_dir)
             if len(content) > cfg.max_inline_length:
@@ -1328,8 +1349,6 @@ def now(
     port = _get_port()
     if content:
         if truncate_flag:
-            from .config import load_or_create_config
-            from .paths import get_config_dir
             config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
             cfg = load_or_create_config(config_dir)
             if len(content) > cfg.max_inline_length:
@@ -1578,9 +1597,6 @@ def edit_cmd(
         keep edit .prompt/agent/reflect      # Edit a prompt template
         keep edit now                        # Edit current intentions
     """
-    import subprocess as sp
-    import tempfile
-
     port = _get_port()
     data = _get(port, f"/v1/notes/{_q(id)}")
     content = data.get("summary", "")
@@ -1658,7 +1674,6 @@ def help_cmd(
         keep help quickstart   # CLI Quick Start guide
         keep help keep-put     # keep put reference
     """
-    from keep.help import get_help_topic
     typer.echo(get_help_topic(topic or "index", link_style="cli"))
 
 
@@ -1680,11 +1695,7 @@ def _daemon_command_impl(
     interactive: bool = True,
 ) -> None:
     if stop:
-        import signal
-        import time as _time
-
-        from .daemon_client import resolve_store_path
-        store_path = resolve_store_path(_global_store)
+        store_path = _daemon_client.resolve_store_path(_global_store)
         pid_file = store_path / "processor.pid"
         if not pid_file.exists():
             typer.echo("No daemon running.")
@@ -1721,21 +1732,16 @@ def _daemon_command_impl(
         return
 
     if list_items:
-        from .daemon_client import get_port, resolve_store_path
-        from .console_support import print_pending_list_lightweight
-        store_path = resolve_store_path(_global_store)
-        print_pending_list_lightweight(store_path)
+        store_path = _daemon_client.resolve_store_path(_global_store)
+        _console_support.print_pending_list_lightweight(store_path)
         # Ensure daemon is running so pending items get processed
-        get_port(_global_store)
+        _daemon_client.get_port(_global_store)
         return
 
-    from .daemon_client import resolve_store_path
-    from .api import Keeper
-    kp = Keeper(store_path=resolve_store_path(_global_store))
+    kp = _api.Keeper(store_path=_daemon_client.resolve_store_path(_global_store))
 
     if daemon:
-        from .console_support import run_pending_daemon
-        run_pending_daemon(
+        _console_support.run_pending_daemon(
             kp,
             bind_host=bind_host,
             advertised_url=advertised_url,
@@ -1769,13 +1775,9 @@ def _daemon_command_impl(
 
         if interactive:
             # Interactive mode: show status, ensure daemon running, tail log
-            from .console_support import print_pending_interactive
-
-            print_pending_interactive(kp)
+            _console_support.print_pending_interactive(kp)
         else:
-            from .console_support import run_pending_daemon
-
-            run_pending_daemon(
+            _console_support.run_pending_daemon(
                 kp,
                 bind_host=bind_host,
                 advertised_url=advertised_url,
@@ -1882,22 +1884,14 @@ def config(
         if not state_docs:
             typer.echo("No .state/* documents found.", err=True)
             raise typer.Exit(1)
-        from keep.validate import state_doc_diagram
         typer.echo(state_doc_diagram(state_docs))
         return
 
     if setup:
-        from .daemon_client import resolve_store_path
-        from .paths import get_config_dir
-        from .setup_wizard import run_wizard
-        store_path = resolve_store_path(_global_store)
+        store_path = _daemon_client.resolve_store_path(_global_store)
         config_dir = store_path if _global_store else get_config_dir()
         run_wizard(config_dir, store_path, restart_command="keep config --setup")
         return
-
-    from .console_support import _format_config_with_defaults, _get_config_value
-    from .config import load_or_create_config
-    from .paths import get_config_dir, get_default_store_path
 
     config_dir = Path(_global_store).resolve() if _global_store else get_config_dir()
     cfg = load_or_create_config(config_dir)
@@ -1920,9 +1914,6 @@ def config(
 
     is_json = json_output or (ctx.parent and ctx.parent.params.get("json_output", False))
     if is_json:
-        import importlib.resources
-
-        from .console_support import get_tool_directory
         result = {
             "file": str(cfg.config_path) if cfg else None,
             "tool": str(get_tool_directory()),
@@ -1948,7 +1939,6 @@ def doctor(
     use_faulthandler: Annotated[bool, typer.Option("--faulthandler", help="Enable faulthandler")] = False,
 ):
     """Diagnostic checks for debugging setup and crash issues."""
-    from .console_support import doctor as doctor_impl
     doctor_impl(log=log, use_faulthandler=use_faulthandler)
 
 
@@ -1957,7 +1947,6 @@ def mcp(ctx: typer.Context):
     """Start MCP stdio server."""
     if _global_store:
         os.environ["KEEP_STORE_PATH"] = _global_store
-    from keep.mcp import main as mcp_main
     mcp_main()
 
 
@@ -2098,20 +2087,17 @@ def data_export(
                 if status >= 400:
                     typer.echo(f"Error: {data.get('error', 'markdown sync failed')}", err=True)
                     raise SystemExit(1)
-                from .console_support import _progress_bar
-                from .markdown_mirrors import run_markdown_export_once
-
                 kp = _require_markdown_export_host()
                 is_tty = sys.stderr.isatty()
                 progress = None
                 if is_tty:
                     def progress(current: int, total: int, label: str) -> None:
                         if total > 0:
-                            _progress_bar(current, total, label, err=True)
+                            _console_support._progress_bar(current, total, label, err=True)
 
                 try:
                     try:
-                        count, _info = run_markdown_export_once(
+                        count, _info = _markdown_mirrors.run_markdown_export_once(
                             kp,
                             output,
                             include_system=include_system,
@@ -2203,7 +2189,6 @@ def data_export(
         )
         raise SystemExit(1)
 
-    from .console_support import _progress_bar
     kp = _get_export_host()
     it = kp.export_iter(include_system=include_system)
     header = next(it)
@@ -2230,7 +2215,7 @@ def data_export(
             first = False
             count += 1
             if show_progress:
-                _progress_bar(count, total, doc.get("id", ""), err=True)
+                _console_support._progress_bar(count, total, doc.get("id", ""), err=True)
         dest.write("\n  ]\n}\n")
     finally:
         if dest is not sys.stdout:
@@ -2275,7 +2260,6 @@ def _data_export_markdown(
     else:
         out_dir.mkdir(parents=True)
 
-    from .console_support import _progress_bar
     kp = _require_markdown_export_host()
 
     is_tty = sys.stderr.isatty()
@@ -2283,7 +2267,7 @@ def _data_export_markdown(
     if is_tty:
         def progress(current: int, total: int, label: str) -> None:
             if total > 0:
-                _progress_bar(current, total, label, err=True)
+                _console_support._progress_bar(current, total, label, err=True)
 
     try:
         try:
@@ -2378,9 +2362,7 @@ def data_import(
             ):
                 raise SystemExit(0)
 
-    from .daemon_client import resolve_store_path
-    from .api import Keeper
-    kp = Keeper(store_path=resolve_store_path(_global_store))
+    kp = _api.Keeper(store_path=_daemon_client.resolve_store_path(_global_store))
     try:
         if import_format == "json":
             if mode != "replace":
@@ -2395,18 +2377,15 @@ def data_import(
                 typer.echo("Error: markdown import does not support stdin", err=True)
                 raise SystemExit(1)
             assert p is not None
-            from .markdown_import import count_markdown_import_files
             show_progress = False
             progress = None
-            total_files = count_markdown_import_files(p)
+            total_files = _markdown_import.count_markdown_import_files(p)
             if total_files > 1 and sys.stderr.isatty():
-                from .console_support import _progress_bar
-
                 show_progress = True
 
                 def progress(current: int, total: int, label: str) -> None:
                     if total > 1:
-                        _progress_bar(current, total, label, err=True)
+                        _console_support._progress_bar(current, total, label, err=True)
 
             try:
                 stats = kp.import_markdown(p, mode=mode, progress=progress)

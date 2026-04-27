@@ -225,6 +225,11 @@ def _execute_flow_item(
     if not state_name:
         raise ValueError("flow work item missing state name")
 
+    # Daemon flow work can run during startup before deferred maintenance has
+    # repaired bundled state docs.  Match the public flow path and make the
+    # store-backed loader see the current .state/* docs before evaluation.
+    keeper.ensure_sysdocs()
+
     # Extract item context for item-scoped actions (summarize, analyze, etc.)
     item_id = str(input_data.get("item_id") or params.get("item_id") or "").strip() or None
     text = input_data.get("content")

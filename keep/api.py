@@ -924,8 +924,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             self._config.embed_task_reindex_done = True
             try:
                 save_config(self._config)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist embed_task_reindex_done after skipping reindex: %s",
+                    exc,
+                    exc_info=True,
+                )
             return
 
         stats = self.enqueue_reindex()
@@ -6702,73 +6706,52 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             self._reconcile_thread.join(timeout=10)
 
         # Release locked model providers (frees GPU memory + gc)
-        try:
-            self._release_embedding_provider()
-        except Exception:
-            pass
-        try:
-            self._release_summarization_provider()
-        except Exception:
-            pass
+        self._safe_close_step("embedding provider", self._release_embedding_provider)
+        self._safe_close_step("summarization provider", self._release_summarization_provider)
 
         if self._media_describer is not None:
             if hasattr(self._media_describer, 'release'):
-                try:
-                    self._media_describer.release()
-                except Exception:
-                    pass
+                self._safe_close_step("media describer", self._media_describer.release)
             self._media_describer = None
 
         if self._content_extractor is not None:
             if hasattr(self._content_extractor, 'release'):
-                try:
-                    self._content_extractor.release()
-                except Exception:
-                    pass
+                self._safe_close_step("content extractor", self._content_extractor.release)
             self._content_extractor = None
 
         # Close ChromaDB store
         if hasattr(self, '_store') and self._store is not None:
-            try:
-                self._store.close()
-            except Exception:
-                pass
+            self._safe_close_step("vector store", self._store.close)
 
         # Close document store (SQLite)
         if hasattr(self, '_document_store') and self._document_store is not None:
-            try:
-                self._document_store.close()
-            except Exception:
-                pass
+            self._safe_close_step("document store", self._document_store.close)
 
         # Close pending summary queue
         if hasattr(self, '_pending_queue'):
-            try:
-                self._pending_queue.close()
-            except Exception:
-                pass
+            self._safe_close_step("pending queue", self._pending_queue.close)
 
         # Close task delegation client
         if hasattr(self, '_task_client') and self._task_client is not None:
-            try:
-                self._task_client.close()
-            except Exception:
-                pass
+            self._safe_close_step("task client", self._task_client.close)
             self._task_client = None
 
         # Close work queue
         if hasattr(self, "_work_queue") and self._work_queue is not None:
-            try:
-                self._work_queue.close()
-            except Exception:
-                pass
+            self._safe_close_step("work queue", self._work_queue.close)
 
         # Remove ops log handler to avoid handler accumulation
         if hasattr(self, '_ops_log_handler') and self._ops_log_handler:
-            import logging
             logging.getLogger("keep").removeHandler(self._ops_log_handler)
             self._ops_log_handler.close()
             self._ops_log_handler = None
+
+    def _safe_close_step(self, label: str, close_fn) -> None:
+        """Run one close/release step without hiding failures from debug logs."""
+        try:
+            close_fn()
+        except Exception:
+            logger.debug("close: failed to release %s", label, exc_info=True)
 
     def __enter__(self):
         """Context manager entry."""
@@ -6798,7 +6781,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         handler = getattr(self, '_ops_log_handler', None)
         if handler:
             try:
-                import logging
                 logging.getLogger("keep").removeHandler(handler)
                 handler.close()
             except Exception:

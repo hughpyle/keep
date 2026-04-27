@@ -1287,6 +1287,28 @@ class TestFlowWorkItemExecution:
 
         assert result["status"] in ("done", "error")
 
+    def test_flow_execution_repairs_missing_sysdocs_before_subflow(self, kp):
+        """Daemon flow execution repairs bundled state docs before loading subflows."""
+        from keep.work_processor import _execute_flow_item
+
+        collection = kp._resolve_doc_collection()
+        kp._document_store.delete(collection, ".state/assess")
+        kp._needs_sysdoc_migration = True
+
+        result = _execute_flow_item(kp, {
+            "state": STATE_PUT,
+            "params": {
+                "id": "flow-sysdoc-repair",
+                "content": "stored after sysdoc repair",
+                "queue_background_tasks": False,
+            },
+            "budget": 4,
+        })
+
+        assert result["status"] == "done"
+        assert kp.get(".state/assess") is not None
+        assert kp.get("flow-sysdoc-repair").summary == "stored after sysdoc repair"
+
     def test_flow_item_requires_state(self):
         """Flow work item without state name raises ValueError."""
         from keep.work_processor import _execute_flow_item
