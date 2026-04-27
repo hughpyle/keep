@@ -336,7 +336,7 @@ class OllamaEmbedding:
                 json={"model": self.model_name, "prompt": attempt, "keep_alive": "30m"},
                 timeout=(10, 120),  # (connect, read) — model loading can be slow
             )
-            if response.ok:
+            if response.is_success:
                 embedding = response.json()["embedding"]
                 if self._dimension is None:
                     self._dimension = len(embedding)

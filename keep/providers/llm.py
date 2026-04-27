@@ -242,7 +242,7 @@ class OllamaSummarization:
             },
             timeout=(10, 120),  # (connect, read)
         )
-        if not response.ok:
+        if not response.is_success:
             detail = response.text[:200] if response.text else ""
             raise RuntimeError(
                 f"Ollama generate failed (model={self.model_name}): "
@@ -400,7 +400,7 @@ class OllamaMediaDescriber:
             },
             timeout=120,
         )
-        if not response.ok:
+        if not response.is_success:
             detail = response.text[:200] if response.text else ""
             raise RuntimeError(
                 f"Ollama vision failed (model={self.model_name}): "
@@ -457,7 +457,7 @@ class OllamaContentExtractor:
             },
             timeout=120,
         )
-        if not response.ok:
+        if not response.is_success:
             detail = response.text[:200] if response.text else ""
             raise RuntimeError(
                 f"Ollama OCR failed (model={self.model_name}): "

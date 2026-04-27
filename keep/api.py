@@ -946,8 +946,12 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._config.embed_task_reindex_done = True
         try:
             save_config(self._config)
-        except Exception as e:
-            logger.debug("Failed to persist embed_task_reindex_done: %s", e)
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist embed_task_reindex_done after queuing reindex: %s",
+                exc,
+                exc_info=True,
+            )
 
     def _detect_chroma_tag_marker_migration_need(
         self,

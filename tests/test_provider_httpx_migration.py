@@ -3,7 +3,8 @@
 import httpx
 import pytest
 
-from keep.providers.embeddings import VoyageEmbedding
+from keep.providers.embeddings import OllamaEmbedding, VoyageEmbedding
+from keep.providers.llm import OllamaSummarization
 from keep.providers.ollama_utils import ollama_ensure_model
 from keep.types import user_agent
 
@@ -44,6 +45,48 @@ def test_ollama_ensure_model_uses_shared_httpx_session(monkeypatch):
     ollama_ensure_model("http://localhost:11434", "nomic-embed-text")
 
     assert session.calls == [("http://localhost:11434/api/tags", 5)]
+
+
+def test_ollama_embedding_uses_httpx_success_property(monkeypatch):
+    class FakeResponse:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"embedding": [0.1, 0.2, 0.3]}
+
+    class FakeSession:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("keep.providers.ollama_utils.ollama_ensure_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("keep.providers.ollama_utils.ollama_session", lambda: FakeSession())
+
+    provider = OllamaEmbedding(model="nomic-embed-text", base_url="http://localhost:11434")
+
+    assert provider.embed("hello") == [0.1, 0.2, 0.3]
+
+
+def test_ollama_summarization_uses_httpx_success_property(monkeypatch):
+    class FakeResponse:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"message": {"content": "short summary"}}
+
+    class FakeSession:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("keep.providers.ollama_utils.ollama_ensure_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("keep.providers.ollama_utils.ollama_session", lambda: FakeSession())
+
+    provider = OllamaSummarization(model="llama3.2", base_url="http://localhost:11434")
+
+    assert provider.generate("system", "user") == "short summary"
 
 
 def test_voyage_request_errors_are_reported(monkeypatch):
