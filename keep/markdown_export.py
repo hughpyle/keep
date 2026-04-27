@@ -137,6 +137,17 @@ def _wiki_link_value(target_id: str) -> str:
     return f"[[{target_id}]]"
 
 
+def _resolve_export_destination(out_dir: Path, rel_path: Path) -> Path:
+    """Resolve an export path and verify it remains inside ``out_dir``."""
+    root = out_dir.resolve()
+    dest = (out_dir / rel_path).resolve()
+    try:
+        dest.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"markdown export path escapes output directory: {rel_path}") from exc
+    return dest
+
+
 def _rewrite_export_ref_value(
     value: str,
     export_refs: Mapping[str, str],
@@ -989,7 +1000,7 @@ def _write_markdown_export(
         )
 
     def write(rel_path: Path, text: str) -> None:
-        dest = out_dir / rel_path
+        dest = _resolve_export_destination(out_dir, rel_path)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
 

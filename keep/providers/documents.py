@@ -15,13 +15,15 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-import requests
+import httpx
 
 from ..paths import validate_path_within_home
 from ..types import file_uri_to_path, format_ref
 from .base import Document, DocumentProvider, get_registry
 from . import http as _http_mod
 from .model_files import extract_3d_metadata
+
+logger = logging.getLogger(__name__)
 
 
 # RFC 822 email header detection — matches common email headers at line start
@@ -36,6 +38,20 @@ _BASE64_BLOCK_RE = re.compile(
     r'(?:^[A-Za-z0-9+/=]{60,}\n){4,}',
     re.MULTILINE,
 )
+
+
+def _has_symlink_component(path: Path) -> bool:
+    """Return true when ``path`` or one of its parents is a symlink."""
+    current = Path(path.anchor) if path.is_absolute() else Path()
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                return True
+        except OSError:
+            return False
+    return False
 
 
 def _strip_base64_blocks(text: str) -> str:
@@ -216,7 +232,9 @@ class FileDocumentProvider:
         else:
             path_str = uri
 
-        path = Path(path_str).resolve()
+        original_path = Path(path_str).expanduser()
+        symlink_seen = _has_symlink_component(original_path)
+        path = original_path.resolve()
 
         if not path.exists():
             raise IOError(f"File not found: {path}")
@@ -229,6 +247,8 @@ class FileDocumentProvider:
             validate_path_within_home(path)
         except ValueError:
             raise IOError(f"Path traversal blocked: {path} is outside home directory")
+        if symlink_seen:
+            logger.warning("File ingest followed symlink: %s -> %s", original_path, path)
 
         # Check file size before processing
         file_size = path.stat().st_size
@@ -1238,7 +1258,7 @@ def _extract_via_file_provider(
 class HttpDocumentProvider:
     """Fetches documents from HTTP/HTTPS URLs.
 
-    Requires the `requests` library (optional dependency).
+    Uses the shared provider HTTP client.
     """
     
     def __init__(self, timeout: int = 30, max_size: int = 10_000_000):
@@ -1260,7 +1280,7 @@ class HttpDocumentProvider:
         """Check if URL targets a private/internal network address.
 
         Note: DNS resolution here is inherently TOCTOU — the hostname could
-        resolve to a different address by the time requests.get() connects.
+        resolve to a different address by the time the HTTP client connects.
         Sufficient for CLI use; a hosted service should enforce this at the
         network layer (firewall/VPC rules) rather than relying on client checks.
         """
@@ -1287,7 +1307,7 @@ class HttpDocumentProvider:
                         or addr.is_reserved or addr.is_unspecified or addr.is_multicast):
                     return True
         except socket.gaierror:
-            pass  # DNS failure will be caught by requests
+            pass  # DNS failure will be caught by the HTTP client
 
         return False
 
@@ -1300,99 +1320,106 @@ class HttpDocumentProvider:
 
         # Follow redirects manually so each hop is validated against SSRF
         target = uri
-        for _ in range(self._MAX_REDIRECTS):
-            resp = _http_mod.http_session().get(
-                target,
-                timeout=self.timeout,
-                stream=True,
-                allow_redirects=False,
-            )
-            if resp.is_redirect:
-                target = resp.headers.get("Location", "")
-                if not target.startswith(("http://", "https://")):
-                    raise IOError(f"Redirect to unsupported scheme: {target}")
-                if self._is_private_url(target):
-                    raise IOError(f"Redirect to private/internal address blocked: {target}")
-                resp.close()
-                continue
-            break
-        else:
-            raise IOError(f"Too many redirects fetching {uri}")
-
+        resp: httpx.Response | None = None
         try:
-            with resp:
-                resp.raise_for_status()
-
-                # Check declared size
-                content_length = resp.headers.get("content-length")
-                if content_length:
-                    try:
-                        if int(content_length) > self.max_size:
-                            raise IOError(f"Content too large: {content_length} bytes")
-                    except ValueError:
-                        pass  # Malformed header — enforce via iter_content below
-
-                # Read content in chunks with enforced size limit
-                chunks: list[bytes] = []
-                downloaded = 0
-                for chunk in resp.iter_content(chunk_size=65536):
-                    downloaded += len(chunk)
-                    if downloaded > self.max_size:
-                        chunks.append(chunk[:self.max_size - (downloaded - len(chunk))])
-                        break
-                    chunks.append(chunk)
-                raw = b"".join(chunks)
-
-                # Get content type
-                content_type = resp.headers.get("content-type", "text/plain")
-                if ";" in content_type:
-                    content_type = content_type.split(";")[0].strip()
-
-                # Detect content type from URL suffix as fallback
-                url_suffix = uri.lower().rsplit("?", 1)[0].rsplit(".", 1)[-1]
-                extracted_tags: dict[str, str] | None = None
-                extracted_metadata: dict[str, Any] = {}
-
-                # Extract content based on type
-                if content_type == "text/html":
-                    encoding = resp.encoding or "utf-8"
-                    content = raw.decode(encoding, errors="replace")
-                    content = extract_html_text(content)
-                elif _is_extractable_binary(content_type, url_suffix):
-                    # Binary type with text extraction support —
-                    # write to temp file and use FileDocumentProvider
-                    extracted = _extract_via_file_provider(
-                        raw, uri, content_type, url_suffix,
-                    )
-                    content = extracted.content
-                    content_type = extracted.content_type or content_type
-                    extracted_tags = extracted.tags or None
-                    extracted_metadata = dict(extracted.metadata or {})
-                elif _is_binary_content_type(content_type):
-                    # Binary type we can't extract text from —
-                    # return a placeholder instead of decoded garbage
-                    size_kb = len(raw) / 1024
-                    content = (
-                        f"[Remote binary document: {uri}, "
-                        f"type={content_type}, {size_kb:.0f}KB]"
-                    )
-                else:
-                    encoding = resp.encoding or "utf-8"
-                    content = raw.decode(encoding, errors="replace")
-
-                return Document(
-                    uri=uri,
-                    content=content,
-                    content_type=content_type,
-                    metadata={
-                        "status_code": resp.status_code,
-                        "headers": dict(resp.headers),
-                        **extracted_metadata,
-                    },
-                    tags=extracted_tags,
+            for _ in range(self._MAX_REDIRECTS):
+                session = _http_mod.http_session()
+                req = session.build_request("GET", target, timeout=self.timeout)
+                resp = session.send(
+                    req,
+                    stream=True,
+                    follow_redirects=False,
                 )
-        except requests.RequestException as e:
+                if resp.is_redirect:
+                    target = resp.headers.get("Location", "")
+                    if not target.startswith(("http://", "https://")):
+                        raise IOError(f"Redirect to unsupported scheme: {target}")
+                    if self._is_private_url(target):
+                        raise IOError(f"Redirect to private/internal address blocked: {target}")
+                    resp.close()
+                    resp = None
+                    continue
+                break
+            else:
+                raise IOError(f"Too many redirects fetching {uri}")
+
+            if resp is None:
+                raise IOError(f"Failed to fetch {uri}: no response")
+            resp.raise_for_status()
+
+            # Check declared size
+            content_length = resp.headers.get("content-length")
+            if content_length:
+                try:
+                    if int(content_length) > self.max_size:
+                        raise IOError(f"Content too large: {content_length} bytes")
+                except ValueError:
+                    pass  # Malformed header — enforce via iter_bytes below
+
+            # Read content in chunks with enforced size limit
+            chunks: list[bytes] = []
+            downloaded = 0
+            for chunk in resp.iter_bytes(chunk_size=65536):
+                downloaded += len(chunk)
+                if downloaded > self.max_size:
+                    chunks.append(chunk[:self.max_size - (downloaded - len(chunk))])
+                    break
+                chunks.append(chunk)
+            raw = b"".join(chunks)
+
+            # Get content type
+            content_type = resp.headers.get("content-type", "text/plain")
+            if ";" in content_type:
+                content_type = content_type.split(";")[0].strip()
+
+            # Detect content type from URL suffix as fallback
+            url_suffix = uri.lower().rsplit("?", 1)[0].rsplit(".", 1)[-1]
+            extracted_tags: dict[str, str] | None = None
+            extracted_metadata: dict[str, Any] = {}
+
+            # Extract content based on type
+            if content_type == "text/html":
+                encoding = resp.encoding or "utf-8"
+                content = raw.decode(encoding, errors="replace")
+                content = extract_html_text(content)
+            elif _is_extractable_binary(content_type, url_suffix):
+                # Binary type with text extraction support —
+                # write to temp file and use FileDocumentProvider
+                extracted = _extract_via_file_provider(
+                    raw, uri, content_type, url_suffix,
+                )
+                content = extracted.content
+                content_type = extracted.content_type or content_type
+                extracted_tags = extracted.tags or None
+                extracted_metadata = dict(extracted.metadata or {})
+            elif _is_binary_content_type(content_type):
+                # Binary type we can't extract text from —
+                # return a placeholder instead of decoded garbage
+                size_kb = len(raw) / 1024
+                content = (
+                    f"[Remote binary document: {uri}, "
+                    f"type={content_type}, {size_kb:.0f}KB]"
+                )
+            else:
+                encoding = resp.encoding or "utf-8"
+                content = raw.decode(encoding, errors="replace")
+
+            return Document(
+                uri=uri,
+                content=content,
+                content_type=content_type,
+                metadata={
+                    "status_code": resp.status_code,
+                    "headers": dict(resp.headers),
+                    **extracted_metadata,
+                },
+                tags=extracted_tags,
+            )
+        except httpx.HTTPError as e:
             raise IOError(f"Failed to fetch {uri}: {e}")
+        finally:
+            if resp is not None:
+                resp.close()
 
 
 class CompositeDocumentProvider:

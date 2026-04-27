@@ -5,6 +5,8 @@ import os
 import sys
 import time
 
+import httpx
+
 from .base import EmbedTask, get_registry, require_provider_param
 from .openai_client import create_openai_client
 
@@ -425,7 +427,6 @@ class VoyageEmbedding:
 
     def _request_with_retry(self, payload: dict, timeout: int) -> dict:
         """Make API request with exponential backoff retry for rate limits."""
-        import requests  # noqa: PLC0415
         from .http import http_session  # noqa: PLC0415
 
         backoff = self.INITIAL_BACKOFF
@@ -470,7 +471,7 @@ class VoyageEmbedding:
                 response.raise_for_status()
                 return response.json()
 
-            except requests.exceptions.RequestException as e:
+            except httpx.HTTPError as e:
                 last_exception = e
                 error_msg = str(e).lower()
 

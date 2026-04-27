@@ -198,7 +198,8 @@ class TestIsPrivateUrl:
         mock_resp.close = MagicMock()
 
         mock_session = MagicMock()
-        mock_session.get.return_value = mock_resp
+        mock_session.build_request.return_value = object()
+        mock_session.send.return_value = mock_resp
 
         with patch("keep.providers.http.http_session", return_value=mock_session):
             with pytest.raises(IOError, match="private"):

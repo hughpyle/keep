@@ -760,13 +760,14 @@ class TestHttpDocumentProviderExtraction:
             "content-type": "application/pdf",
             "content-length": "12",
         }
-        mock_resp.iter_content.return_value = [b"%PDF-1.7 data"]
+        mock_resp.iter_bytes.return_value = [b"%PDF-1.7 data"]
         mock_resp.raise_for_status.return_value = None
         mock_resp.__enter__.return_value = mock_resp
         mock_resp.__exit__.return_value = False
 
         mock_session = MagicMock()
-        mock_session.get.return_value = mock_resp
+        mock_session.build_request.return_value = object()
+        mock_session.send.return_value = mock_resp
 
         extracted = Document(
             uri="https://example.com/doc.pdf",

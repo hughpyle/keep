@@ -50,7 +50,10 @@ def test_assess_virustotal_marks_malicious_and_blocks(monkeypatch, tmp_path):
         calls.append((url, headers["x-apikey"], timeout))
         return _response(200, payload)
 
-    monkeypatch.setattr("keep.actions.assess_virustotal.requests.get", _fake_get)
+    monkeypatch.setattr(
+        "keep.actions.assess_virustotal.http_session",
+        lambda: SimpleNamespace(get=_fake_get),
+    )
 
     result = AssessVirusTotal().run(
         {
@@ -93,7 +96,10 @@ def test_assess_virustotal_ok_uses_cache_without_tagging(monkeypatch, tmp_path):
         calls.append((url, headers["x-apikey"], timeout))
         return _response(200, payload)
 
-    monkeypatch.setattr("keep.actions.assess_virustotal.requests.get", _fake_get)
+    monkeypatch.setattr(
+        "keep.actions.assess_virustotal.http_session",
+        lambda: SimpleNamespace(get=_fake_get),
+    )
 
     params = {
         "target_uri": "https://example.com",
@@ -125,7 +131,10 @@ def test_assess_virustotal_is_disabled_without_api_key(monkeypatch, tmp_path):
     def _unexpected_get(*args, **kwargs):
         raise AssertionError("VirusTotal HTTP lookup should not run without an API key")
 
-    monkeypatch.setattr("keep.actions.assess_virustotal.requests.get", _unexpected_get)
+    monkeypatch.setattr(
+        "keep.actions.assess_virustotal.http_session",
+        lambda: SimpleNamespace(get=_unexpected_get),
+    )
 
     result = AssessVirusTotal().run(
         {

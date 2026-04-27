@@ -24,9 +24,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import requests
+import httpx
 
 from keep.paths import get_config_dir
+from keep.providers.http import http_session
 
 from . import action
 
@@ -294,12 +295,12 @@ def _lookup_virustotal(target_url: str, api_key: str) -> dict[str, Any] | None:
         return cached
 
     try:
-        response = requests.get(
+        response = http_session().get(
             VT_URL_INFO_ENDPOINT.format(id=_url_identifier(target_url)),
             headers={"x-apikey": api_key},
             timeout=VT_HTTP_TIMEOUT_SECONDS,
         )
-    except requests.RequestException:
+    except httpx.HTTPError:
         logger.warning("VirusTotal lookup failed for %s", target_url, exc_info=True)
         return None
 

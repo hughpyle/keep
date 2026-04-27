@@ -88,6 +88,14 @@ Background work runs out-of-band on the daemon's queues.
   import/export
 - Auto-spawns the daemon on first use
 
+The CLI is intentionally thin for ordinary note operations (`put`, `get`,
+`find`, `tag`, flow execution): it resolves shell concerns, sends daemon HTTP
+requests, and renders responses. Commands that need direct process control or
+local filesystem traversal remain CLI-owned for now: setup/config discovery,
+daemon lifecycle, MCP stdio startup, bulk directory ingestion, and data
+import/export. Those commands may construct a local `Keeper` or use local graph
+helpers, but that is an explicit exception to the daemon-backed command path.
+
 **[mcp.py](keep/mcp.py)** — MCP stdio server
 - `KeepFastMCP` subclass of `FastMCP`
 - Three tools: `keep_flow`, `keep_prompt`, `keep_help`

@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 
-import requests
+import httpx
 
 from keep.providers.http import http_session as ollama_session  # back-compat alias
 from keep.providers.url_validation import _validate_provider_url
@@ -42,7 +42,7 @@ def ollama_ensure_model(base_url: str, model: str) -> None:
     try:
         resp = ollama_session().get(f"{base_url}/api/tags", timeout=5)
         resp.raise_for_status()
-    except requests.RequestException as e:
+    except httpx.HTTPError as e:
         raise RuntimeError(
             f"Cannot reach Ollama at {base_url}. "
             "Is Ollama running? Start it with: ollama serve"
@@ -60,44 +60,43 @@ def ollama_ensure_model(base_url: str, model: str) -> None:
     print(f"Pulling Ollama model '{model}' (first use)...", file=sys.stderr)
 
     try:
-        resp = ollama_session().post(
+        with ollama_session().stream(
+            "POST",
             f"{base_url}/api/pull",
             json={"name": model, "stream": True},
-            stream=True,
             timeout=600,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
+        ) as resp:
+            resp.raise_for_status()
+            last_status = ""
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                status = data.get("status", "")
+                total = data.get("total", 0)
+                completed = data.get("completed", 0)
+
+                if total and completed:
+                    pct = int(completed / total * 100)
+                    msg = f"\r  {status}: {pct}%"
+                elif status != last_status:
+                    msg = f"\n  {status}"
+                else:
+                    continue
+
+                print(msg, end="", file=sys.stderr, flush=True)
+                last_status = status
+
+                if data.get("error"):
+                    print("", file=sys.stderr)
+                    raise RuntimeError(
+                        f"Ollama pull failed for '{model}': {data['error']}"
+                    )
+    except httpx.HTTPError as e:
         raise RuntimeError(f"Failed to pull Ollama model '{model}': {e}") from e
-
-    last_status = ""
-    for line in resp.iter_lines():
-        if not line:
-            continue
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        status = data.get("status", "")
-        total = data.get("total", 0)
-        completed = data.get("completed", 0)
-
-        if total and completed:
-            pct = int(completed / total * 100)
-            msg = f"\r  {status}: {pct}%"
-        elif status != last_status:
-            msg = f"\n  {status}"
-        else:
-            continue
-
-        print(msg, end="", file=sys.stderr, flush=True)
-        last_status = status
-
-        if data.get("error"):
-            print("", file=sys.stderr)
-            raise RuntimeError(
-                f"Ollama pull failed for '{model}': {data['error']}"
-            )
 
     print(f"\n  Model '{model}' ready.", file=sys.stderr)

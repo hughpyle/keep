@@ -15,6 +15,7 @@ from keep.cli_app import (
     _render_version_markdown,
     _write_markdown_export,
 )
+from keep.markdown_export import _resolve_export_destination
 from keep.config import StoreConfig, ProviderConfig
 from keep.markdown_import import load_markdown_import
 
@@ -908,6 +909,13 @@ class TestMarkdownExport:
         # Tags are flat top-level keys, not nested under ``tags:``.
         assert meta["topic"] == "python"
         assert "About Python" in body
+
+    def test_write_markdown_export_rejects_escape_path(self, tmp_path):
+        out = tmp_path / "md-export"
+        out.mkdir()
+
+        with pytest.raises(ValueError, match="escapes output directory"):
+            _resolve_export_destination(out, Path("..") / "outside.md")
 
     def test_write_markdown_export_include_system_false(self, keeper, tmp_path):
         _seed(keeper, [
