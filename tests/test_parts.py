@@ -20,7 +20,7 @@ import pytest
 from keep.api import Keeper
 from keep.analyzers import _parse_decomposition_json
 from keep.document_store import DocumentStore, PartInfo
-from keep.types import utc_now
+from keep.types import tag_values, utc_now
 
 
 # ---------------------------------------------------------------------------
@@ -875,3 +875,159 @@ class TestFileStatFastPath:
             item2 = kp.put(uri=file_uri, tags={"project": "myproject"})
             assert item2.changed is False
             mock_fetch.assert_not_called()
+
+# ---------------------------------------------------------------------------
+
+
+class TestIsPartId:
+    """Unit tests for is_part_id helper."""
+
+    def test_internal_format(self):
+        from keep.types import is_part_id
+        assert is_part_id("doc@p3") is True
+        assert is_part_id("my-note@p12") is True
+
+    def test_display_format(self):
+        from keep.types import is_part_id
+        assert is_part_id("doc@P{3}") is True
+        assert is_part_id("my-note@P{12}") is True
+
+    def test_not_part_id(self):
+        from keep.types import is_part_id
+        assert is_part_id("doc") is False
+        assert is_part_id(".conversations") is False
+        assert is_part_id("now") is False
+        assert is_part_id("user@example.com") is False
+
+    def test_at_sign_but_not_part(self):
+        from keep.types import is_part_id
+        # @ followed by non-p character
+        assert is_part_id("doc@v3") is False
+
+
+class TestPartImmutability:
+    """Parts cannot be put, deleted, reverted, or moved."""
+
+    def test_put_rejects_part_id(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        with pytest.raises(ValueError, match="Cannot modify part directly"):
+            kp.put("content", id="doc@p3")
+
+    def test_put_rejects_display_format(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        with pytest.raises(ValueError, match="Cannot modify part directly"):
+            kp.put("content", id="doc@P{3}")
+
+    def test_delete_rejects_part_id(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        with pytest.raises(ValueError, match="Cannot delete part directly"):
+            kp.delete("doc@p3")
+
+    def test_revert_rejects_part_id(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        with pytest.raises(ValueError, match="Cannot revert part directly"):
+            kp.revert("doc@p3")
+
+    def test_move_rejects_part_name(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        # Guard fires before any source lookup
+        with pytest.raises(ValueError, match="Cannot move to a part ID"):
+            kp.move("target@p3", only_current=True)
+
+
+class TestTagPart:
+    """Tag editing on parts."""
+
+    def test_tag_part_not_found(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        kp = Keeper(store_path=tmp_path)
+        result = kp.tag_part("nonexistent", 1, tags={"topic": "test"})
+        assert result is None
+
+    def test_tag_part_updates_tags(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.document_store import PartInfo
+        kp = Keeper(store_path=tmp_path)
+
+        # Create a doc and manually insert a part
+        kp.put("test content", id="test-doc")
+        doc_coll = kp._resolve_doc_collection()
+        part = PartInfo(
+            part_num=1,
+            summary="test part",
+            tags={"topic": "original"},
+            created_at="2026-01-01T00:00:00",
+        )
+        kp._document_store.upsert_parts(doc_coll, "test-doc", [part])
+
+        # Update tags
+        result = kp.tag_part("test-doc", 1, tags={"topic": "updated", "project": "myapp"})
+        assert result is not None
+        assert set(result.tags["topic"]) == {"original", "updated"}
+        assert result.tags["project"] == "myapp"
+
+    def test_tag_part_delete_with_empty_string(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.document_store import PartInfo
+        kp = Keeper(store_path=tmp_path)
+
+        kp.put("test content", id="test-doc2")
+        doc_coll = kp._resolve_doc_collection()
+        part = PartInfo(
+            part_num=1,
+            summary="test part",
+            tags={"topic": "auth", "project": "myapp"},
+            created_at="2026-01-01T00:00:00",
+        )
+        kp._document_store.upsert_parts(doc_coll, "test-doc2", [part])
+
+        # Remove topic tag
+        result = kp.tag_part("test-doc2", 1, tags={"topic": ""})
+        assert result is not None
+        assert "topic" not in result.tags
+        assert result.tags["project"] == "myapp"
+
+    def test_tag_part_skips_system_tags(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.document_store import PartInfo
+        kp = Keeper(store_path=tmp_path)
+
+        kp.put("test content", id="test-doc3")
+        doc_coll = kp._resolve_doc_collection()
+        part = PartInfo(
+            part_num=1,
+            summary="test part",
+            tags={"_part_num": "1", "topic": "auth"},
+            created_at="2026-01-01T00:00:00",
+        )
+        kp._document_store.upsert_parts(doc_coll, "test-doc3", [part])
+
+        # Try to modify system tag — should be ignored
+        result = kp.tag_part("test-doc3", 1, tags={"_part_num": "99", "topic": "updated"})
+        assert result is not None
+        assert result.tags["_part_num"] == "1"  # unchanged
+        assert set(result.tags["topic"]) == {"auth", "updated"}
+
+    def test_tag_part_remove_single_value(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.document_store import PartInfo
+        kp = Keeper(store_path=tmp_path)
+
+        kp.put("test content", id="test-doc4")
+        doc_coll = kp._resolve_doc_collection()
+        part = PartInfo(
+            part_num=1,
+            summary="test part",
+            tags={"speaker": ["Alice", "Bob"]},
+            created_at="2026-01-01T00:00:00",
+        )
+        kp._document_store.upsert_parts(doc_coll, "test-doc4", [part])
+
+        result = kp.tag_part("test-doc4", 1, remove_values={"speaker": "Bob"})
+        assert result is not None
+        assert tag_values(result.tags, "speaker") == ["Alice"]

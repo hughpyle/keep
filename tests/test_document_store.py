@@ -943,3 +943,117 @@ class TestFindByName:
         store.upsert("default", "file:///vault/MyFoo.md", "MyFoo", {})
         results = store.find_by_name("default", "Foo")
         assert results == []
+
+# ---------------------------------------------------------------------------
+
+
+class TestDistinctTagQueries:
+    """Tests for list_distinct_tag_keys and list_distinct_tag_values using json_each."""
+
+    @pytest.fixture
+    def store(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "documents.db"
+            with DocumentStore(db_path) as store:
+                yield store
+
+    def test_list_distinct_tag_keys_basic(self, store: DocumentStore) -> None:
+        """Returns all user tag keys, sorted."""
+        store.upsert("default", "d1", "S1", {"topic": "auth", "project": "web"})
+        store.upsert("default", "d2", "S2", {"topic": "db", "status": "open"})
+
+        keys = store.list_distinct_tag_keys("default")
+        assert keys == ["project", "status", "topic"]
+
+    def test_list_distinct_tag_keys_excludes_system(self, store: DocumentStore) -> None:
+        """System tags (prefixed with _) are excluded."""
+        store.upsert("default", "d1", "S1", {
+            "topic": "auth",
+            "_created": "2026-01-01",
+            "_source": "inline",
+        })
+
+        keys = store.list_distinct_tag_keys("default")
+        assert keys == ["topic"]
+        assert "_created" not in keys
+        assert "_source" not in keys
+
+    def test_list_distinct_tag_keys_empty_collection(self, store: DocumentStore) -> None:
+        """Empty collection returns empty list."""
+        keys = store.list_distinct_tag_keys("default")
+        assert keys == []
+
+    def test_list_distinct_tag_keys_no_duplicates(self, store: DocumentStore) -> None:
+        """Same key across multiple documents appears once."""
+        store.upsert("default", "d1", "S1", {"topic": "a"})
+        store.upsert("default", "d2", "S2", {"topic": "b"})
+        store.upsert("default", "d3", "S3", {"topic": "c"})
+
+        keys = store.list_distinct_tag_keys("default")
+        assert keys.count("topic") == 1
+
+    def test_list_distinct_tag_keys_collection_isolation(self, store: DocumentStore) -> None:
+        """Keys from other collections are not included."""
+        store.upsert("coll1", "d1", "S1", {"alpha": "1"})
+        store.upsert("coll2", "d2", "S2", {"beta": "2"})
+
+        assert store.list_distinct_tag_keys("coll1") == ["alpha"]
+        assert store.list_distinct_tag_keys("coll2") == ["beta"]
+
+    def test_list_distinct_tag_values_basic(self, store: DocumentStore) -> None:
+        """Returns all distinct values for a key, sorted."""
+        store.upsert("default", "d1", "S1", {"topic": "auth"})
+        store.upsert("default", "d2", "S2", {"topic": "db"})
+        store.upsert("default", "d3", "S3", {"topic": "auth"})  # duplicate
+
+        values = store.list_distinct_tag_values("default", "topic")
+        assert values == ["auth", "db"]
+
+    def test_list_distinct_tag_values_missing_key(self, store: DocumentStore) -> None:
+        """Key not present in any document returns empty list."""
+        store.upsert("default", "d1", "S1", {"topic": "auth"})
+
+        values = store.list_distinct_tag_values("default", "nonexistent")
+        assert values == []
+
+    def test_list_distinct_tag_values_partial_key(self, store: DocumentStore) -> None:
+        """Only documents with the key contribute values."""
+        store.upsert("default", "d1", "S1", {"topic": "auth", "status": "open"})
+        store.upsert("default", "d2", "S2", {"topic": "db"})  # no status
+
+        values = store.list_distinct_tag_values("default", "status")
+        assert values == ["open"]
+
+    def test_query_by_tag_key(self, store: DocumentStore) -> None:
+        """query_by_tag_key returns documents having the specified key."""
+        store.upsert("default", "d1", "S1", {"topic": "auth"})
+        store.upsert("default", "d2", "S2", {"project": "web"})
+        store.upsert("default", "d3", "S3", {"topic": "db", "project": "api"})
+
+        results = store.query_by_tag_key("default", "topic")
+        ids = {r.id for r in results}
+        assert ids == {"d1", "d3"}
+
+    def test_query_by_id_prefix_escapes_wildcards(self, store: DocumentStore) -> None:
+        """LIKE wildcards in prefix are escaped, not treated as patterns."""
+        store.upsert("default", "normal:1", "S1", {})
+        store.upsert("default", "normal:2", "S2", {})
+        store.upsert("default", "has%wild", "S3", {})
+        store.upsert("default", "has_wild", "S4", {})
+
+        # A prefix of "%" should NOT match everything
+        results = store.query_by_id_prefix("default", "%")
+        assert len(results) == 0  # no IDs start with literal %
+
+        # A prefix of "_" should NOT match single-char wildcard
+        results = store.query_by_id_prefix("default", "_")
+        assert len(results) == 0
+
+        # Literal prefix match works
+        results = store.query_by_id_prefix("default", "normal:")
+        assert len(results) == 2
+
+        # Prefix with literal % matches the doc that has it
+        results = store.query_by_id_prefix("default", "has%")
+        assert len(results) == 1
+        assert results[0].id == "has%wild"

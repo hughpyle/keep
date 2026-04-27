@@ -458,3 +458,298 @@ def test_enqueue_migrated_part_reindex_clears_pending_migration_list(
         assert kp._pending_queue.count() == before + 1
     finally:
         kp.close()
+
+class TestLabeledRefMigration:
+    """Startup migration to canonical labeled-ref storage."""
+
+    def test_migrates_legacy_labeled_refs_in_place(self, tmp_path, capsys):
+        from keep.api import Keeper
+        from keep.config import StoreConfig
+        from keep.document_store import DocumentStore
+        from keep.types import casefold_tags_for_index
+        from tests.conftest import (
+            MockChromaStore,
+            MockDocumentProvider,
+            MockEmbeddingProvider,
+            MockPendingSummaryQueue,
+            MockSummarizationProvider,
+        )
+
+        db_path = tmp_path / "documents.db"
+        with DocumentStore(db_path) as store:
+            store.import_batch("default", [
+                {
+                    "id": ".tag/speaker",
+                    "summary": "speaker tagdoc",
+                    "tags": {"_inverse": "said"},
+                    "created_at": "2026-01-01T00:00:00",
+                    "updated_at": "2026-01-01T00:00:00",
+                    "accessed_at": "2026-01-01T00:00:00",
+                },
+                {
+                    "id": "conv1",
+                    "summary": "Conversation",
+                    "tags": {"speaker": "contact:telegram:42[[Alice]]"},
+                    "created_at": "2026-01-01T00:00:00",
+                    "updated_at": "2026-01-01T00:00:00",
+                    "accessed_at": "2026-01-01T00:00:00",
+                    "versions": [{
+                        "version": 1,
+                        "summary": "Older conversation",
+                        "tags": {"speaker": "contact:telegram:42[[Alice]]"},
+                        "content_hash": None,
+                        "created_at": "2025-12-01T00:00:00",
+                    }],
+                },
+            ])
+
+        mock_embed = MockEmbeddingProvider()
+        mock_summ = MockSummarizationProvider()
+        mock_doc = MockDocumentProvider()
+        mock_reg = MagicMock()
+        mock_reg.create_document.return_value = mock_doc
+        mock_reg.create_embedding.return_value = mock_embed
+        mock_reg.create_summarization.return_value = mock_summ
+
+        config = StoreConfig(path=tmp_path, config_dir=tmp_path)
+        doc_store = DocumentStore(db_path)
+        vector_store = MockChromaStore(tmp_path)
+        chroma_coll = "default"
+        vector_store.upsert(
+            chroma_coll,
+            "conv1",
+            mock_embed.embed("Conversation"),
+            "Conversation",
+            {"speaker": "contact:telegram:42[[Alice]]"},
+        )
+        pending_queue = MockPendingSummaryQueue(tmp_path / "pending-summaries.db")
+        with patch("keep.api.get_registry", return_value=mock_reg), \
+             patch("keep._provider_lifecycle.get_registry", return_value=mock_reg), \
+             patch("keep.api.CachingEmbeddingProvider", side_effect=lambda p, **kw: p), \
+             patch("keep._provider_lifecycle.CachingEmbeddingProvider", side_effect=lambda p, **kw: p), \
+             patch("keep.api.Keeper._spawn_processor", return_value=False), \
+             patch("keep.api.Keeper._process_edge_tags", autospec=True) as process_edges, \
+             patch("keep.api.Keeper._check_edge_backfill", autospec=True) as check_backfill:
+            kp = Keeper(
+                store_path=tmp_path,
+                config=config,
+                doc_store=doc_store,
+                vector_store=vector_store,
+                pending_queue=pending_queue,
+            )
+            try:
+                assert kp._config.labeled_ref_format_verified is True
+                assert capsys.readouterr().err == ""
+                process_edges.assert_not_called()
+                check_backfill.assert_not_called()
+                assert not any(
+                    item["id"].startswith(".backfill/")
+                    for item in pending_queue._queue
+                )
+
+                doc_coll = kp._resolve_doc_collection()
+                item = kp._document_store.get(doc_coll, "conv1")
+                assert item is not None
+                assert item.tags["speaker"] == "[[contact:telegram:42|Alice]]"
+
+                versions = kp._document_store.list_versions(doc_coll, "conv1")
+                assert versions[0].tags["speaker"] == "[[contact:telegram:42|Alice]]"
+
+                canonical_where = vector_store.build_tag_where(
+                    {"speaker": "[[contact:telegram:42|Alice]]"}
+                )
+                legacy_where = vector_store.build_tag_where(
+                    {"speaker": "contact:telegram:42[[Alice]]"}
+                )
+                assert any(
+                    hit.id == "conv1"
+                    for hit in vector_store.query_metadata(
+                        chroma_coll, canonical_where,
+                    )
+                )
+                assert not any(
+                    hit.id == "conv1"
+                    for hit in vector_store.query_metadata(
+                        chroma_coll, legacy_where,
+                    )
+                )
+                assert vector_store._data[chroma_coll]["conv1"]["tags"] == (
+                    casefold_tags_for_index(item.tags)
+                )
+
+                ctx = kp.get_context("contact:telegram:42")
+                assert "said" in ctx.edges
+                assert any(edge.source_id == "conv1" for edge in ctx.edges["said"])
+
+                inverse_versions = kp._document_store.get_inverse_version_edges(
+                    doc_coll, "contact:telegram:42",
+                )
+                assert any(
+                    source_id == "conv1"
+                    for _inverse, source_id, _created in inverse_versions
+                )
+            finally:
+                kp.close()
+
+
+# ---------------------------------------------------------------------------
+# File birthtime as created_at
+# ---------------------------------------------------------------------------
+
+
+class TestTagMarkerMigration:
+    """Legacy Chroma key/value metadata is rewritten to marker metadata."""
+
+    def test_reports_migration_start_before_completion(
+        self, mock_providers, tmp_path, monkeypatch, capsys,
+    ):
+        from keep.api import Keeper
+
+        monkeypatch.setattr(Keeper, "_check_store_consistency", lambda self: False)
+        monkeypatch.setattr(
+            Keeper,
+            "_detect_chroma_tag_marker_migration_need",
+            lambda self, _chroma_coll, _doc_coll: True,
+        )
+        monkeypatch.setattr(
+            Keeper,
+            "_migrate_chroma_tag_markers",
+            lambda self, _chroma_coll, _doc_coll: {"docs": 1, "versions": 2, "parts": 3},
+        )
+
+        kp = Keeper(store_path=tmp_path)
+        try:
+            stderr = capsys.readouterr().err
+            assert "Migrating search metadata to multivalue tag markers" in stderr
+            assert "Search metadata migrated to multivalue tag markers (1 docs, 2 versions, 3 parts)." in stderr
+        finally:
+            kp.close()
+
+    def test_persists_verified_flag_and_skips_repeat_scan(
+        self, mock_providers, tmp_path, monkeypatch,
+    ):
+        from keep.api import Keeper
+
+        calls = {"detect": 0}
+
+        def _detect_false(self, _chroma_coll, _doc_coll):
+            calls["detect"] += 1
+            return False
+
+        monkeypatch.setattr(
+            Keeper, "_detect_chroma_tag_marker_migration_need", _detect_false,
+        )
+
+        kp = Keeper(store_path=tmp_path)
+        try:
+            assert kp._config.chroma_tag_markers_verified is True
+        finally:
+            kp.close()
+
+        assert calls["detect"] == 1
+
+        def _detect_should_not_run(self, _chroma_coll, _doc_coll):
+            raise AssertionError("unexpected marker rescan")
+
+        monkeypatch.setattr(
+            Keeper,
+            "_detect_chroma_tag_marker_migration_need",
+            _detect_should_not_run,
+        )
+        kp2 = Keeper(store_path=tmp_path)
+        kp2.close()
+
+    def test_migrates_legacy_tag_metadata_in_place(self, mock_providers, tmp_path):
+        from keep.api import Keeper
+        from keep.types import casefold_tags_for_index
+
+        kp = Keeper(store_path=tmp_path)
+        try:
+            kp.put("hello world", id="doc:legacy", tags={"topic": "auth"})
+            doc_coll = kp._resolve_doc_collection()
+            chroma_coll = kp._resolve_chroma_collection()
+            doc = kp._document_store.get(doc_coll, "doc:legacy")
+            assert doc is not None
+            # Ensure a searchable row exists in the vector index.
+            kp._store.upsert(
+                chroma_coll,
+                "doc:legacy",
+                kp._get_embedding_provider().embed(doc.summary),
+                doc.summary,
+                casefold_tags_for_index(doc.tags),
+            )
+
+            # Force legacy metadata shape (no _tk::_tv:: markers).
+            legacy_meta = {"topic": "auth", "_source": "inline"}
+            kp._store._data[chroma_coll]["doc:legacy"]["metadata"] = legacy_meta
+
+            assert not kp._store.has_tag_markers(chroma_coll, "doc:legacy")
+
+            assert (
+                kp._detect_chroma_tag_marker_migration_need(chroma_coll, doc_coll)
+                is True
+            )
+            stats = kp._migrate_chroma_tag_markers(chroma_coll, doc_coll)
+            assert stats["docs"] >= 1
+            assert kp._store.has_tag_markers(chroma_coll, "doc:legacy")
+
+            # Tag-filtered semantic path should work again.
+            results = kp.find(
+                similar_to="doc:legacy",
+                tags={"topic": "auth"},
+                include_self=True,
+                limit=5,
+            )
+            assert any(r.id == "doc:legacy" for r in results)
+        finally:
+            kp.close()
+
+    def test_detects_legacy_marker_gap_on_versions_and_parts(
+        self, mock_providers, tmp_path,
+    ):
+        from keep.api import Keeper
+        from keep.document_store import PartInfo
+        from keep.types import casefold_tags_for_index, utc_now
+
+        kp = Keeper(store_path=tmp_path)
+        try:
+            # Current document has no user tags.
+            kp.put("body", id="doc:history")
+
+            doc_coll = kp._resolve_doc_collection()
+            chroma_coll = kp._resolve_chroma_collection()
+
+            # Add one indexed part with user tags and then force legacy shape.
+            part = PartInfo(
+                part_num=1,
+                summary="part summary",
+                tags={"topic": "auth"},
+                created_at=utc_now(),
+            )
+            kp._document_store.upsert_parts(doc_coll, "doc:history", [part])
+            part_id = "doc:history@p1"
+            part_tags = {"topic": "auth", "_part_num": "1", "_base_id": "doc:history"}
+            kp._store.upsert(
+                chroma_coll,
+                part_id,
+                kp._get_embedding_provider().embed(part.summary),
+                part.summary,
+                casefold_tags_for_index(part_tags),
+            )
+            kp._store._data[chroma_coll][part_id]["metadata"] = {
+                "topic": "auth",
+                "_part_num": "1",
+                "_base_id": "doc:history",
+                "_source": "inline",
+            }
+
+            # Current doc has no user tags; part row should still trigger migration.
+            current = kp.get("doc:history")
+            assert current is not None
+            assert "topic" not in current.tags
+            assert (
+                kp._detect_chroma_tag_marker_migration_need(chroma_coll, doc_coll)
+                is True
+            )
+        finally:
+            kp.close()
