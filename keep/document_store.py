@@ -16,6 +16,7 @@ import json
 import logging
 import sqlite3
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -357,18 +358,8 @@ class DocumentStore:
         """Run schema migrations using PRAGMA user_version.
 
         Uses BEGIN EXCLUSIVE to serialize migrations across concurrent
-        processes (e.g. hooks firing simultaneously).
-
-        Migrations:
-        - Version 0 → 1: Create document_versions table
-        - Version 1 → 2: Add accessed_at column
-        - Version 2 → 3: One-time hash truncation, indexes
-        - Version 3 → 4: Create document_parts table
-        - Version 6 → 7: FTS5 index + triggers (documents)
-        - Version 7 → 8: FTS5 indexes + triggers (parts, versions)
-        - Version 10 → 11: edge primary keys include target_id (multivalue)
-        - Version 13 → 14: Collapse part summary/content into summary-only storage
-        - Version 14 → 15: sync outbox table + triggers
+        processes (e.g. hooks firing simultaneously). Each migration method is
+        idempotent so partially migrated stores can safely retry on startup.
         """
         current_version = self._execute(
             "PRAGMA user_version"
@@ -383,10 +374,10 @@ class DocumentStore:
         if current_version >= SCHEMA_VERSION:
             return  # Already up to date — no writes needed
 
-        # Exclusive lock prevents two processes from racing through migrations
+        # Exclusive lock prevents two processes from racing through migrations.
         self._execute("BEGIN EXCLUSIVE")
         try:
-            # Re-read inside the lock (another process may have migrated)
+            # Re-read inside the lock (another process may have migrated).
             current_version = self._execute(
                 "PRAGMA user_version"
             ).fetchone()[0]
@@ -402,718 +393,758 @@ class DocumentStore:
                 self._conn.rollback()
                 return
 
-            if current_version < 1:
-                # Create versions table for document history
-                self._execute("""
-                    CREATE TABLE IF NOT EXISTS document_versions (
-                        id TEXT NOT NULL,
-                        collection TEXT NOT NULL,
-                        version INTEGER NOT NULL,
-                        summary TEXT NOT NULL,
-                        tags_json TEXT NOT NULL,
-                        content_hash TEXT,
-                        created_at TEXT NOT NULL,
-                        PRIMARY KEY (id, collection, version)
-                    )
-                """)
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_versions_doc
-                    ON document_versions(id, collection, version DESC)
-                """)
-
-            if current_version < 2:
-                # Add accessed_at column for last-access tracking
-                columns = {
-                    row[1] for row in
-                    self._execute("PRAGMA table_info(documents)").fetchall()
-                }
-                if "accessed_at" not in columns:
-                    self._execute(
-                        "ALTER TABLE documents ADD COLUMN accessed_at TEXT"
-                    )
-                    self._execute(
-                        "UPDATE documents SET accessed_at = updated_at "
-                        "WHERE accessed_at IS NULL"
-                    )
-                    self._execute("""
-                        CREATE INDEX IF NOT EXISTS idx_documents_accessed
-                        ON documents(accessed_at)
-                    """)
-
-            if current_version < 3:
-                # Add content_hash column if missing (very old databases)
-                columns = {
-                    row[1] for row in
-                    self._execute("PRAGMA table_info(documents)").fetchall()
-                }
-                if "content_hash" not in columns:
-                    self._execute(
-                        "ALTER TABLE documents ADD COLUMN content_hash TEXT"
-                    )
-
-                # One-time hash truncation (64-char → 10-char)
-                self._execute("""
-                    UPDATE documents SET content_hash = SUBSTR(content_hash, -10)
-                    WHERE content_hash IS NOT NULL AND LENGTH(content_hash) > 10
-                """)
-                cursor = self._execute("""
-                    SELECT id, collection, tags_json FROM documents
-                    WHERE tags_json LIKE '%bundled_hash%'
-                """)
-                for row in cursor.fetchall():
-                    tags = json.loads(row["tags_json"])
-                    bh = tags.get("bundled_hash")
-                    if bh and len(bh) > 10:
-                        tags["bundled_hash"] = bh[-10:]
-                        self._execute(
-                            "UPDATE documents SET tags_json = ? "
-                            "WHERE id = ? AND collection = ?",
-                            (json.dumps(tags), row["id"], row["collection"])
-                        )
-
-                # Create indexes (idempotent)
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_documents_collection
-                    ON documents(collection)
-                """)
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_documents_updated
-                    ON documents(updated_at)
-                """)
-
-            if current_version < 4:
-                # Create parts table for structural decomposition
-                self._execute("""
-                    CREATE TABLE IF NOT EXISTS document_parts (
-                        id TEXT NOT NULL,
-                        collection TEXT NOT NULL,
-                        part_num INTEGER NOT NULL,
-                        summary TEXT NOT NULL,
-                        tags_json TEXT NOT NULL DEFAULT '{}',
-                        created_at TEXT NOT NULL,
-                        PRIMARY KEY (id, collection, part_num)
-                    )
-                """)
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_parts_doc
-                    ON document_parts(id, collection, part_num)
-                """)
-
-            if current_version < 5:
-                # Index for content-hash dedup lookups
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_documents_content_hash
-                    ON documents(collection, content_hash)
-                    WHERE content_hash IS NOT NULL
-                """)
-
-            if current_version < 6:
-                # Full SHA256 hash for dedup content verification
-                columns = {
-                    row[1]
-                    for row in self._execute(
-                        "PRAGMA table_info(documents)"
-                    ).fetchall()
-                }
-                if "content_hash_full" not in columns:
-                    self._execute(
-                        "ALTER TABLE documents ADD COLUMN content_hash_full TEXT"
-                    )
-
-            if current_version < 7:
-                # FTS5 full-text search index on document summaries
-                try:
-                    self._execute("""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
-                        USING fts5(
-                            summary,
-                            content='documents',
-                            content_rowid='rowid',
-                            tokenize='porter unicode61'
-                        )
-                    """)
-                    # Triggers: INSERT OR REPLACE fires DELETE then INSERT,
-                    # so both triggers cover the upsert case.
-                    self._execute("""
-                        CREATE TRIGGER IF NOT EXISTS documents_fts_ai
-                        AFTER INSERT ON documents BEGIN
-                            INSERT INTO documents_fts(rowid, summary)
-                            VALUES (new.rowid, new.summary);
-                        END
-                    """)
-                    self._execute("""
-                        CREATE TRIGGER IF NOT EXISTS documents_fts_ad
-                        AFTER DELETE ON documents BEGIN
-                            INSERT INTO documents_fts(documents_fts, rowid, summary)
-                            VALUES('delete', old.rowid, old.summary);
-                        END
-                    """)
-                    self._execute("""
-                        CREATE TRIGGER IF NOT EXISTS documents_fts_au
-                        AFTER UPDATE OF summary ON documents BEGIN
-                            INSERT INTO documents_fts(documents_fts, rowid, summary)
-                            VALUES('delete', old.rowid, old.summary);
-                            INSERT INTO documents_fts(rowid, summary)
-                            VALUES (new.rowid, new.summary);
-                        END
-                    """)
-                    self._execute(
-                        "INSERT INTO documents_fts(documents_fts) VALUES('rebuild')"
-                    )
-                    self._fts_available = True
-                except sqlite3.OperationalError:
-                    logger.info("FTS5 not available, full-text search disabled")
-
-            if current_version < 8:
-                # FTS5 indexes for parts and versions
-                try:
-                    # --- Parts FTS ---
-                    self._execute("""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts
-                        USING fts5(
-                            summary,
-                            content='document_parts',
-                            content_rowid='rowid',
-                            tokenize='porter unicode61'
-                        )
-                    """)
-                    self._execute("""
-                        CREATE TRIGGER IF NOT EXISTS parts_fts_ai
-                        AFTER INSERT ON document_parts BEGIN
-                            INSERT INTO parts_fts(rowid, summary)
-                            VALUES (new.rowid, new.summary);
-                        END
-                    """)
-                    self._execute("""
-                        CREATE TRIGGER IF NOT EXISTS parts_fts_ad
-                        AFTER DELETE ON document_parts BEGIN
-                            INSERT INTO parts_fts(parts_fts, rowid, summary)
-                            VALUES('delete', old.rowid, old.summary);
-                        END
-                    """)
-                    self._execute("""
-                        CREATE TRIGGER IF NOT EXISTS parts_fts_au
-                        AFTER UPDATE OF summary ON document_parts BEGIN
-                            INSERT INTO parts_fts(parts_fts, rowid, summary)
-                            VALUES('delete', old.rowid, old.summary);
-                            INSERT INTO parts_fts(rowid, summary)
-                            VALUES (new.rowid, new.summary);
-                        END
-                    """)
-                    self._execute(
-                        "INSERT INTO parts_fts(parts_fts) VALUES('rebuild')"
-                    )
-
-                    # --- Versions FTS ---
-                    self._execute("""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS versions_fts
-                        USING fts5(
-                            summary,
-                            content='document_versions',
-                            content_rowid='rowid',
-                            tokenize='porter unicode61'
-                        )
-                    """)
-                    self._execute("""
-                        CREATE TRIGGER IF NOT EXISTS versions_fts_ai
-                        AFTER INSERT ON document_versions BEGIN
-                            INSERT INTO versions_fts(rowid, summary)
-                            VALUES (new.rowid, new.summary);
-                        END
-                    """)
-                    self._execute("""
-                        CREATE TRIGGER IF NOT EXISTS versions_fts_ad
-                        AFTER DELETE ON document_versions BEGIN
-                            INSERT INTO versions_fts(versions_fts, rowid, summary)
-                            VALUES('delete', old.rowid, old.summary);
-                        END
-                    """)
-                    self._execute("""
-                        CREATE TRIGGER IF NOT EXISTS versions_fts_au
-                        AFTER UPDATE OF summary ON document_versions BEGIN
-                            INSERT INTO versions_fts(versions_fts, rowid, summary)
-                            VALUES('delete', old.rowid, old.summary);
-                            INSERT INTO versions_fts(rowid, summary)
-                            VALUES (new.rowid, new.summary);
-                        END
-                    """)
-                    self._execute(
-                        "INSERT INTO versions_fts(versions_fts) VALUES('rebuild')"
-                    )
-                    self._fts_available = True
-                except sqlite3.OperationalError:
-                    logger.info("FTS5 not available, full-text search disabled")
-
-            # Version 8 → 9: edges and edge_backfill tables
-            if current_version < 9:
-                self._execute("""
-                    CREATE TABLE IF NOT EXISTS edges (
-                        source_id   TEXT NOT NULL,
-                        collection  TEXT NOT NULL,
-                        predicate   TEXT NOT NULL,
-                        target_id   TEXT NOT NULL,
-                        inverse     TEXT NOT NULL,
-                        created     TEXT NOT NULL,
-                        PRIMARY KEY (source_id, collection, predicate)
-                    )
-                """)
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_edges_target
-                    ON edges (target_id, collection, inverse, created)
-                """)
-                self._execute("""
-                    CREATE TABLE IF NOT EXISTS edge_backfill (
-                        collection  TEXT NOT NULL,
-                        predicate   TEXT NOT NULL,
-                        inverse     TEXT NOT NULL,
-                        completed   TEXT,
-                        PRIMARY KEY (collection, predicate)
-                    )
-                """)
-
-            # Version 9 → 10: materialized version_edges
-            if current_version < 10:
-                self._execute("""
-                    CREATE TABLE IF NOT EXISTS version_edges (
-                        collection  TEXT NOT NULL,
-                        source_id   TEXT NOT NULL,
-                        version     INTEGER NOT NULL,
-                        predicate   TEXT NOT NULL,
-                        target_id   TEXT NOT NULL,
-                        inverse     TEXT NOT NULL,
-                        created     TEXT NOT NULL,
-                        PRIMARY KEY (collection, source_id, version, predicate)
-                    )
-                """)
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_version_edges_target
-                    ON version_edges (target_id, collection, inverse, created)
-                """)
-                # One-time backfill from archived versions for currently known
-                # edge predicates (prefer tagdocs; include backfill/edges for
-                # compatibility with partially-migrated stores).
-                self._execute("""
-                    WITH predicates AS (
-                        SELECT d.collection AS collection,
-                               SUBSTR(d.id, 6) AS predicate,
-                               CAST(json_extract(d.tags_json, '$._inverse') AS TEXT) AS inverse
-                        FROM documents d
-                        WHERE d.id LIKE '.tag/%'
-                          AND INSTR(SUBSTR(d.id, 6), '/') = 0
-                          AND json_extract(d.tags_json, '$._inverse') IS NOT NULL
-                        UNION
-                        SELECT collection, predicate, inverse
-                        FROM edge_backfill
-                        UNION
-                        SELECT DISTINCT collection, predicate, inverse
-                        FROM edges
-                    )
-                    INSERT OR REPLACE INTO version_edges
-                        (collection, source_id, version, predicate, target_id, inverse, created)
-                    SELECT
-                        v.collection,
-                        v.id,
-                        v.version,
-                        j.key,
-                        CAST(vv.value AS TEXT),
-                        p.inverse,
-                        v.created_at
-                    FROM document_versions v
-                    JOIN json_each(v.tags_json) j
-                    JOIN json_each(
-                        CASE
-                            WHEN j.type = 'array' THEN j.value
-                            ELSE json_array(j.value)
-                        END
-                    ) vv
-                    JOIN predicates p
-                      ON p.collection = v.collection
-                     AND p.predicate = j.key
-                    WHERE vv.value IS NOT NULL
-                      AND TRIM(CAST(vv.value AS TEXT)) != ''
-                      AND SUBSTR(CAST(vv.value AS TEXT), 1, 1) != '.'
-                    """)
-
-            # Version 10 → 11: allow multiple targets per predicate
-            if current_version < 11:
-                self._execute("""
-                    CREATE TABLE IF NOT EXISTS edges_new (
-                        source_id   TEXT NOT NULL,
-                        collection  TEXT NOT NULL,
-                        predicate   TEXT NOT NULL,
-                        target_id   TEXT NOT NULL,
-                        inverse     TEXT NOT NULL,
-                        created     TEXT NOT NULL,
-                        PRIMARY KEY (source_id, collection, predicate, target_id)
-                    )
-                """)
-                self._execute("""
-                    INSERT OR REPLACE INTO edges_new
-                        (source_id, collection, predicate, target_id, inverse, created)
-                    SELECT source_id, collection, predicate, target_id, inverse, created
-                    FROM edges
-                """)
-                self._execute("DROP TABLE IF EXISTS edges")
-                self._execute("ALTER TABLE edges_new RENAME TO edges")
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_edges_target
-                    ON edges (target_id, collection, inverse, created)
-                """)
-
-                self._execute("""
-                    CREATE TABLE IF NOT EXISTS version_edges_new (
-                        collection  TEXT NOT NULL,
-                        source_id   TEXT NOT NULL,
-                        version     INTEGER NOT NULL,
-                        predicate   TEXT NOT NULL,
-                        target_id   TEXT NOT NULL,
-                        inverse     TEXT NOT NULL,
-                        created     TEXT NOT NULL,
-                        PRIMARY KEY (collection, source_id, version, predicate, target_id)
-                    )
-                """)
-                self._execute("""
-                    INSERT OR REPLACE INTO version_edges_new
-                        (collection, source_id, version, predicate, target_id, inverse, created)
-                    SELECT collection, source_id, version, predicate, target_id, inverse, created
-                    FROM version_edges
-                """)
-                self._execute("DROP TABLE IF EXISTS version_edges")
-                self._execute("ALTER TABLE version_edges_new RENAME TO version_edges")
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_version_edges_target
-                    ON version_edges (target_id, collection, inverse, created)
-                """)
-
-            # Version 11 → 12: planner outbox table + triggers
-            if current_version < 12:
-                self._execute("""
-                    CREATE TABLE IF NOT EXISTS planner_outbox (
-                        outbox_id    INTEGER PRIMARY KEY AUTOINCREMENT,
-                        mutation     TEXT NOT NULL,
-                        entity_id    TEXT NOT NULL,
-                        collection   TEXT NOT NULL,
-                        payload_json TEXT NOT NULL DEFAULT '{}',
-                        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
-                        claimed_by   TEXT,
-                        claimed_at   TEXT,
-                        attempts     INTEGER DEFAULT 0
-                    )
-                """)
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_planner_outbox_unclaimed
-                    ON planner_outbox (claimed_by) WHERE claimed_by IS NULL
-                """)
-
-                # --- Document triggers ---
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS planner_outbox_doc_ai
-                    AFTER INSERT ON documents BEGIN
-                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('doc_insert', new.id, new.collection,
-                                json_object('tags_json', new.tags_json));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS planner_outbox_doc_au
-                    AFTER UPDATE OF tags_json ON documents BEGIN
-                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('doc_update', new.id, new.collection,
-                                json_object('old_tags_json', old.tags_json,
-                                            'new_tags_json', new.tags_json));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS planner_outbox_doc_ad
-                    AFTER DELETE ON documents BEGIN
-                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('doc_delete', old.id, old.collection,
-                                json_object('tags_json', old.tags_json));
-                    END
-                """)
-
-                # --- Edge triggers ---
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS planner_outbox_edge_ai
-                    AFTER INSERT ON edges BEGIN
-                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('edge_insert', new.source_id, new.collection,
-                                json_object('predicate', new.predicate,
-                                            'target_id', new.target_id));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS planner_outbox_edge_ad
-                    AFTER DELETE ON edges BEGIN
-                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('edge_delete', old.source_id, old.collection,
-                                json_object('predicate', old.predicate,
-                                            'target_id', old.target_id));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS planner_outbox_edge_au
-                    AFTER UPDATE ON edges BEGIN
-                        INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('edge_update', new.source_id, new.collection,
-                                json_object('predicate', new.predicate,
-                                            'target_id', new.target_id,
-                                            'old_target_id', old.target_id));
-                    END
-                """)
-
-            if current_version < 14:
-                columns = {
-                    row[1]
-                    for row in self._execute(
-                        "PRAGMA table_info(document_parts)"
-                    ).fetchall()
-                }
-                if "content" in columns:
-                    changed_rows = self._execute("""
-                        SELECT id, collection, part_num, summary, tags_json,
-                               CASE
-                                   WHEN COALESCE(content, '') != '' THEN content
-                                   ELSE summary
-                               END AS migrated_summary
-                        FROM document_parts
-                        WHERE CASE
-                                  WHEN COALESCE(content, '') != '' THEN content
-                                  ELSE summary
-                              END != summary
-                    """).fetchall()
-                    self.migrated_parts_for_reindex = [
-                        {
-                            "id": row["id"],
-                            "collection": row["collection"],
-                            "part_num": row["part_num"],
-                            "summary": row["migrated_summary"],
-                            "tags": json.loads(row["tags_json"]),
-                        }
-                        for row in changed_rows
-                    ]
-
-                    self._execute("DROP TRIGGER IF EXISTS parts_fts_ai")
-                    self._execute("DROP TRIGGER IF EXISTS parts_fts_ad")
-                    self._execute("DROP TRIGGER IF EXISTS parts_fts_au")
-                    self._execute("DROP TABLE IF EXISTS parts_fts")
-
-                    self._execute("""
-                        CREATE TABLE document_parts_new (
-                            id TEXT NOT NULL,
-                            collection TEXT NOT NULL,
-                            part_num INTEGER NOT NULL,
-                            summary TEXT NOT NULL,
-                            tags_json TEXT NOT NULL DEFAULT '{}',
-                            created_at TEXT NOT NULL,
-                            PRIMARY KEY (id, collection, part_num)
-                        )
-                    """)
-                    self._execute("""
-                        INSERT INTO document_parts_new
-                            (id, collection, part_num, summary, tags_json, created_at)
-                        SELECT
-                            id,
-                            collection,
-                            part_num,
-                            CASE
-                                WHEN COALESCE(content, '') != '' THEN content
-                                ELSE summary
-                            END,
-                            tags_json,
-                            created_at
-                        FROM document_parts
-                    """)
-                    self._execute("DROP TABLE document_parts")
-                    self._execute(
-                        "ALTER TABLE document_parts_new RENAME TO document_parts"
-                    )
-                    self._execute("""
-                        CREATE INDEX IF NOT EXISTS idx_parts_doc
-                        ON document_parts(id, collection, part_num)
-                    """)
-
-            if current_version < 15:
-                self._execute("""
-                    CREATE TABLE IF NOT EXISTS sync_outbox (
-                        outbox_id    INTEGER PRIMARY KEY AUTOINCREMENT,
-                        mutation     TEXT NOT NULL,
-                        entity_id    TEXT NOT NULL,
-                        collection   TEXT NOT NULL,
-                        payload_json TEXT NOT NULL DEFAULT '{}',
-                        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
-                        claimed_by   TEXT,
-                        claimed_at   TEXT,
-                        attempts     INTEGER DEFAULT 0
-                    )
-                """)
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_sync_outbox_unclaimed
-                    ON sync_outbox (claimed_by) WHERE claimed_by IS NULL
-                """)
-
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_doc_ai
-                    AFTER INSERT ON documents
-                    WHEN new.id != '.markdown-mirrors'
-                    BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('doc_insert', new.id, new.collection,
-                                json_object('tags_json', new.tags_json));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_doc_au
-                    AFTER UPDATE OF summary, tags_json, content_hash, content_hash_full, updated_at
-                    ON documents
-                    WHEN new.id != '.markdown-mirrors'
-                    BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('doc_update', new.id, new.collection,
-                                json_object('old_tags_json', old.tags_json,
-                                            'new_tags_json', new.tags_json,
-                                            'old_summary', old.summary,
-                                            'new_summary', new.summary,
-                                            'old_content_hash', old.content_hash,
-                                            'new_content_hash', new.content_hash,
-                                            'old_content_hash_full', old.content_hash_full,
-                                            'new_content_hash_full', new.content_hash_full));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_doc_ad
-                    AFTER DELETE ON documents
-                    WHEN old.id != '.markdown-mirrors'
-                    BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('doc_delete', old.id, old.collection,
-                                json_object('tags_json', old.tags_json));
-                    END
-                """)
-
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_part_ai
-                    AFTER INSERT ON document_parts BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('part_insert', new.id, new.collection,
-                                json_object('part_num', new.part_num));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_part_au
-                    AFTER UPDATE OF summary, tags_json ON document_parts BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('part_update', new.id, new.collection,
-                                json_object('part_num', new.part_num));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_part_ad
-                    AFTER DELETE ON document_parts BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('part_delete', old.id, old.collection,
-                                json_object('part_num', old.part_num));
-                    END
-                """)
-
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_ai
-                    AFTER INSERT ON document_versions BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('version_insert', new.id, new.collection,
-                                json_object('version', new.version));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_au
-                    AFTER UPDATE OF summary, tags_json, content_hash ON document_versions BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('version_update', new.id, new.collection,
-                                json_object('version', new.version));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_ad
-                    AFTER DELETE ON document_versions BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('version_delete', old.id, old.collection,
-                                json_object('version', old.version));
-                    END
-                """)
-
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_edge_ai
-                    AFTER INSERT ON edges BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('edge_insert', new.source_id, new.collection,
-                                json_object('predicate', new.predicate,
-                                            'target_id', new.target_id));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_edge_au
-                    AFTER UPDATE ON edges BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('edge_update', new.source_id, new.collection,
-                                json_object('predicate', new.predicate,
-                                            'target_id', new.target_id,
-                                            'old_target_id', old.target_id));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_edge_ad
-                    AFTER DELETE ON edges BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('edge_delete', old.source_id, old.collection,
-                                json_object('predicate', old.predicate,
-                                            'target_id', old.target_id));
-                    END
-                """)
-
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_edge_ai
-                    AFTER INSERT ON version_edges BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('version_edge_insert', new.source_id, new.collection,
-                                json_object('version', new.version,
-                                            'predicate', new.predicate,
-                                            'target_id', new.target_id));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_edge_au
-                    AFTER UPDATE ON version_edges BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('version_edge_update', new.source_id, new.collection,
-                                json_object('version', new.version,
-                                            'predicate', new.predicate,
-                                            'target_id', new.target_id,
-                                            'old_target_id', old.target_id));
-                    END
-                """)
-                self._execute("""
-                    CREATE TRIGGER IF NOT EXISTS sync_outbox_version_edge_ad
-                    AFTER DELETE ON version_edges BEGIN
-                        INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
-                        VALUES ('version_edge_delete', old.source_id, old.collection,
-                                json_object('version', old.version,
-                                            'predicate', old.predicate,
-                                            'target_id', old.target_id));
-                    END
-                """)
-
-            # Version 15 → 16: index for inverse-edge find queries
-            if current_version < 16:
-                self._execute("""
-                    CREATE INDEX IF NOT EXISTS idx_edges_inverse_source
-                    ON edges (collection, inverse, source_id)
-                """)
+            for target_version, migration in self._schema_migrations():
+                if current_version < target_version:
+                    migration()
 
             self._execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
         except Exception:
             self._conn.rollback()
             raise
+
+    def _schema_migrations(self) -> tuple[tuple[int, Callable[[], None]], ...]:
+        """Return ordered schema migrations keyed by target user_version."""
+        return (
+            (1, self._migrate_to_v1),
+            (2, self._migrate_to_v2),
+            (3, self._migrate_to_v3),
+            (4, self._migrate_to_v4),
+            (5, self._migrate_to_v5),
+            (6, self._migrate_to_v6),
+            (7, self._migrate_to_v7),
+            (8, self._migrate_to_v8),
+            (9, self._migrate_to_v9),
+            (10, self._migrate_to_v10),
+            (11, self._migrate_to_v11),
+            (12, self._migrate_to_v12),
+            (13, self._migrate_to_v13),
+            (14, self._migrate_to_v14),
+            (15, self._migrate_to_v15),
+            (16, self._migrate_to_v16),
+        )
+
+    def _migrate_to_v1(self) -> None:
+        """Apply schema migration to user_version 1."""
+        # Create versions table for document history
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS document_versions (
+                id TEXT NOT NULL,
+                collection TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                content_hash TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (id, collection, version)
+            )
+        """)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_versions_doc
+            ON document_versions(id, collection, version DESC)
+        """)
+
+    def _migrate_to_v2(self) -> None:
+        """Apply schema migration to user_version 2."""
+        # Add accessed_at column for last-access tracking
+        columns = {
+            row[1] for row in
+            self._execute("PRAGMA table_info(documents)").fetchall()
+        }
+        if "accessed_at" not in columns:
+            self._execute(
+                "ALTER TABLE documents ADD COLUMN accessed_at TEXT"
+            )
+            self._execute(
+                "UPDATE documents SET accessed_at = updated_at "
+                "WHERE accessed_at IS NULL"
+            )
+            self._execute("""
+                CREATE INDEX IF NOT EXISTS idx_documents_accessed
+                ON documents(accessed_at)
+            """)
+
+    def _migrate_to_v3(self) -> None:
+        """Apply schema migration to user_version 3."""
+        # Add content_hash column if missing (very old databases)
+        columns = {
+            row[1] for row in
+            self._execute("PRAGMA table_info(documents)").fetchall()
+        }
+        if "content_hash" not in columns:
+            self._execute(
+                "ALTER TABLE documents ADD COLUMN content_hash TEXT"
+            )
+
+        # One-time hash truncation (64-char → 10-char)
+        self._execute("""
+            UPDATE documents SET content_hash = SUBSTR(content_hash, -10)
+            WHERE content_hash IS NOT NULL AND LENGTH(content_hash) > 10
+        """)
+        cursor = self._execute("""
+            SELECT id, collection, tags_json FROM documents
+            WHERE tags_json LIKE '%bundled_hash%'
+        """)
+        for row in cursor.fetchall():
+            tags = json.loads(row["tags_json"])
+            bh = tags.get("bundled_hash")
+            if bh and len(bh) > 10:
+                tags["bundled_hash"] = bh[-10:]
+                self._execute(
+                    "UPDATE documents SET tags_json = ? "
+                    "WHERE id = ? AND collection = ?",
+                    (json.dumps(tags), row["id"], row["collection"])
+                )
+
+        # Create indexes (idempotent)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_collection
+            ON documents(collection)
+        """)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_updated
+            ON documents(updated_at)
+        """)
+
+    def _migrate_to_v4(self) -> None:
+        """Apply schema migration to user_version 4."""
+        # Create parts table for structural decomposition
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS document_parts (
+                id TEXT NOT NULL,
+                collection TEXT NOT NULL,
+                part_num INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                tags_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (id, collection, part_num)
+            )
+        """)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_parts_doc
+            ON document_parts(id, collection, part_num)
+        """)
+
+    def _migrate_to_v5(self) -> None:
+        """Apply schema migration to user_version 5."""
+        # Index for content-hash dedup lookups
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_content_hash
+            ON documents(collection, content_hash)
+            WHERE content_hash IS NOT NULL
+        """)
+
+    def _migrate_to_v6(self) -> None:
+        """Apply schema migration to user_version 6."""
+        # Full SHA256 hash for dedup content verification
+        columns = {
+            row[1]
+            for row in self._execute(
+                "PRAGMA table_info(documents)"
+            ).fetchall()
+        }
+        if "content_hash_full" not in columns:
+            self._execute(
+                "ALTER TABLE documents ADD COLUMN content_hash_full TEXT"
+            )
+
+    def _migrate_to_v7(self) -> None:
+        """Apply schema migration to user_version 7."""
+        # FTS5 full-text search index on document summaries
+        try:
+            self._execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
+                USING fts5(
+                    summary,
+                    content='documents',
+                    content_rowid='rowid',
+                    tokenize='porter unicode61'
+                )
+            """)
+            # Triggers: INSERT OR REPLACE fires DELETE then INSERT,
+            # so both triggers cover the upsert case.
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS documents_fts_ai
+                AFTER INSERT ON documents BEGIN
+                    INSERT INTO documents_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS documents_fts_ad
+                AFTER DELETE ON documents BEGIN
+                    INSERT INTO documents_fts(documents_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS documents_fts_au
+                AFTER UPDATE OF summary ON documents BEGIN
+                    INSERT INTO documents_fts(documents_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                    INSERT INTO documents_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute(
+                "INSERT INTO documents_fts(documents_fts) VALUES('rebuild')"
+            )
+            self._fts_available = True
+        except sqlite3.OperationalError:
+            logger.info("FTS5 not available, full-text search disabled")
+
+    def _migrate_to_v8(self) -> None:
+        """Apply schema migration to user_version 8."""
+        # FTS5 indexes for parts and versions
+        try:
+            # --- Parts FTS ---
+            self._execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts
+                USING fts5(
+                    summary,
+                    content='document_parts',
+                    content_rowid='rowid',
+                    tokenize='porter unicode61'
+                )
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS parts_fts_ai
+                AFTER INSERT ON document_parts BEGIN
+                    INSERT INTO parts_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS parts_fts_ad
+                AFTER DELETE ON document_parts BEGIN
+                    INSERT INTO parts_fts(parts_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS parts_fts_au
+                AFTER UPDATE OF summary ON document_parts BEGIN
+                    INSERT INTO parts_fts(parts_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                    INSERT INTO parts_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute(
+                "INSERT INTO parts_fts(parts_fts) VALUES('rebuild')"
+            )
+
+            # --- Versions FTS ---
+            self._execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS versions_fts
+                USING fts5(
+                    summary,
+                    content='document_versions',
+                    content_rowid='rowid',
+                    tokenize='porter unicode61'
+                )
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS versions_fts_ai
+                AFTER INSERT ON document_versions BEGIN
+                    INSERT INTO versions_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS versions_fts_ad
+                AFTER DELETE ON document_versions BEGIN
+                    INSERT INTO versions_fts(versions_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                END
+            """)
+            self._execute("""
+                CREATE TRIGGER IF NOT EXISTS versions_fts_au
+                AFTER UPDATE OF summary ON document_versions BEGIN
+                    INSERT INTO versions_fts(versions_fts, rowid, summary)
+                    VALUES('delete', old.rowid, old.summary);
+                    INSERT INTO versions_fts(rowid, summary)
+                    VALUES (new.rowid, new.summary);
+                END
+            """)
+            self._execute(
+                "INSERT INTO versions_fts(versions_fts) VALUES('rebuild')"
+            )
+            self._fts_available = True
+        except sqlite3.OperationalError:
+            logger.info("FTS5 not available, full-text search disabled")
+
+    def _migrate_to_v9(self) -> None:
+        """Version 8 → 9: edges and edge_backfill tables."""
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS edges (
+                source_id   TEXT NOT NULL,
+                collection  TEXT NOT NULL,
+                predicate   TEXT NOT NULL,
+                target_id   TEXT NOT NULL,
+                inverse     TEXT NOT NULL,
+                created     TEXT NOT NULL,
+                PRIMARY KEY (source_id, collection, predicate)
+            )
+        """)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_edges_target
+            ON edges (target_id, collection, inverse, created)
+        """)
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS edge_backfill (
+                collection  TEXT NOT NULL,
+                predicate   TEXT NOT NULL,
+                inverse     TEXT NOT NULL,
+                completed   TEXT,
+                PRIMARY KEY (collection, predicate)
+            )
+        """)
+
+    def _migrate_to_v10(self) -> None:
+        """Version 9 → 10: materialized version_edges."""
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS version_edges (
+                collection  TEXT NOT NULL,
+                source_id   TEXT NOT NULL,
+                version     INTEGER NOT NULL,
+                predicate   TEXT NOT NULL,
+                target_id   TEXT NOT NULL,
+                inverse     TEXT NOT NULL,
+                created     TEXT NOT NULL,
+                PRIMARY KEY (collection, source_id, version, predicate)
+            )
+        """)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_version_edges_target
+            ON version_edges (target_id, collection, inverse, created)
+        """)
+        # One-time backfill from archived versions for currently known
+        # edge predicates (prefer tagdocs; include backfill/edges for
+        # compatibility with partially-migrated stores).
+        self._execute("""
+            WITH predicates AS (
+                SELECT d.collection AS collection,
+                       SUBSTR(d.id, 6) AS predicate,
+                       CAST(json_extract(d.tags_json, '$._inverse') AS TEXT) AS inverse
+                FROM documents d
+                WHERE d.id LIKE '.tag/%'
+                  AND INSTR(SUBSTR(d.id, 6), '/') = 0
+                  AND json_extract(d.tags_json, '$._inverse') IS NOT NULL
+                UNION
+                SELECT collection, predicate, inverse
+                FROM edge_backfill
+                UNION
+                SELECT DISTINCT collection, predicate, inverse
+                FROM edges
+            )
+            INSERT OR REPLACE INTO version_edges
+                (collection, source_id, version, predicate, target_id, inverse, created)
+            SELECT
+                v.collection,
+                v.id,
+                v.version,
+                j.key,
+                CAST(vv.value AS TEXT),
+                p.inverse,
+                v.created_at
+            FROM document_versions v
+            JOIN json_each(v.tags_json) j
+            JOIN json_each(
+                CASE
+                    WHEN j.type = 'array' THEN j.value
+                    ELSE json_array(j.value)
+                END
+            ) vv
+            JOIN predicates p
+              ON p.collection = v.collection
+             AND p.predicate = j.key
+            WHERE vv.value IS NOT NULL
+              AND TRIM(CAST(vv.value AS TEXT)) != ''
+              AND SUBSTR(CAST(vv.value AS TEXT), 1, 1) != '.'
+            """)
+
+    def _migrate_to_v11(self) -> None:
+        """Version 10 → 11: allow multiple targets per predicate."""
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS edges_new (
+                source_id   TEXT NOT NULL,
+                collection  TEXT NOT NULL,
+                predicate   TEXT NOT NULL,
+                target_id   TEXT NOT NULL,
+                inverse     TEXT NOT NULL,
+                created     TEXT NOT NULL,
+                PRIMARY KEY (source_id, collection, predicate, target_id)
+            )
+        """)
+        self._execute("""
+            INSERT OR REPLACE INTO edges_new
+                (source_id, collection, predicate, target_id, inverse, created)
+            SELECT source_id, collection, predicate, target_id, inverse, created
+            FROM edges
+        """)
+        self._execute("DROP TABLE IF EXISTS edges")
+        self._execute("ALTER TABLE edges_new RENAME TO edges")
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_edges_target
+            ON edges (target_id, collection, inverse, created)
+        """)
+
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS version_edges_new (
+                collection  TEXT NOT NULL,
+                source_id   TEXT NOT NULL,
+                version     INTEGER NOT NULL,
+                predicate   TEXT NOT NULL,
+                target_id   TEXT NOT NULL,
+                inverse     TEXT NOT NULL,
+                created     TEXT NOT NULL,
+                PRIMARY KEY (collection, source_id, version, predicate, target_id)
+            )
+        """)
+        self._execute("""
+            INSERT OR REPLACE INTO version_edges_new
+                (collection, source_id, version, predicate, target_id, inverse, created)
+            SELECT collection, source_id, version, predicate, target_id, inverse, created
+            FROM version_edges
+        """)
+        self._execute("DROP TABLE IF EXISTS version_edges")
+        self._execute("ALTER TABLE version_edges_new RENAME TO version_edges")
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_version_edges_target
+            ON version_edges (target_id, collection, inverse, created)
+        """)
+
+    def _migrate_to_v12(self) -> None:
+        """Version 11 → 12: planner outbox table + triggers."""
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS planner_outbox (
+                outbox_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                mutation     TEXT NOT NULL,
+                entity_id    TEXT NOT NULL,
+                collection   TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+                claimed_by   TEXT,
+                claimed_at   TEXT,
+                attempts     INTEGER DEFAULT 0
+            )
+        """)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_planner_outbox_unclaimed
+            ON planner_outbox (claimed_by) WHERE claimed_by IS NULL
+        """)
+
+        # --- Document triggers ---
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS planner_outbox_doc_ai
+            AFTER INSERT ON documents BEGIN
+                INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('doc_insert', new.id, new.collection,
+                        json_object('tags_json', new.tags_json));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS planner_outbox_doc_au
+            AFTER UPDATE OF tags_json ON documents BEGIN
+                INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('doc_update', new.id, new.collection,
+                        json_object('old_tags_json', old.tags_json,
+                                    'new_tags_json', new.tags_json));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS planner_outbox_doc_ad
+            AFTER DELETE ON documents BEGIN
+                INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('doc_delete', old.id, old.collection,
+                        json_object('tags_json', old.tags_json));
+            END
+        """)
+
+        # --- Edge triggers ---
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS planner_outbox_edge_ai
+            AFTER INSERT ON edges BEGIN
+                INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('edge_insert', new.source_id, new.collection,
+                        json_object('predicate', new.predicate,
+                                    'target_id', new.target_id));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS planner_outbox_edge_ad
+            AFTER DELETE ON edges BEGIN
+                INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('edge_delete', old.source_id, old.collection,
+                        json_object('predicate', old.predicate,
+                                    'target_id', old.target_id));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS planner_outbox_edge_au
+            AFTER UPDATE ON edges BEGIN
+                INSERT INTO planner_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('edge_update', new.source_id, new.collection,
+                        json_object('predicate', new.predicate,
+                                    'target_id', new.target_id,
+                                    'old_target_id', old.target_id));
+            END
+        """)
+
+
+    def _migrate_to_v13(self) -> None:
+        """Reserved version; no schema changes were required."""
+        return
+
+    def _migrate_to_v14(self) -> None:
+        """Apply schema migration to user_version 14."""
+        columns = {
+            row[1]
+            for row in self._execute(
+                "PRAGMA table_info(document_parts)"
+            ).fetchall()
+        }
+        if "content" in columns:
+            changed_rows = self._execute("""
+                SELECT id, collection, part_num, summary, tags_json,
+                       CASE
+                           WHEN COALESCE(content, '') != '' THEN content
+                           ELSE summary
+                       END AS migrated_summary
+                FROM document_parts
+                WHERE CASE
+                          WHEN COALESCE(content, '') != '' THEN content
+                          ELSE summary
+                      END != summary
+            """).fetchall()
+            self.migrated_parts_for_reindex = [
+                {
+                    "id": row["id"],
+                    "collection": row["collection"],
+                    "part_num": row["part_num"],
+                    "summary": row["migrated_summary"],
+                    "tags": json.loads(row["tags_json"]),
+                }
+                for row in changed_rows
+            ]
+
+            self._execute("DROP TRIGGER IF EXISTS parts_fts_ai")
+            self._execute("DROP TRIGGER IF EXISTS parts_fts_ad")
+            self._execute("DROP TRIGGER IF EXISTS parts_fts_au")
+            self._execute("DROP TABLE IF EXISTS parts_fts")
+
+            self._execute("""
+                CREATE TABLE document_parts_new (
+                    id TEXT NOT NULL,
+                    collection TEXT NOT NULL,
+                    part_num INTEGER NOT NULL,
+                    summary TEXT NOT NULL,
+                    tags_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (id, collection, part_num)
+                )
+            """)
+            self._execute("""
+                INSERT INTO document_parts_new
+                    (id, collection, part_num, summary, tags_json, created_at)
+                SELECT
+                    id,
+                    collection,
+                    part_num,
+                    CASE
+                        WHEN COALESCE(content, '') != '' THEN content
+                        ELSE summary
+                    END,
+                    tags_json,
+                    created_at
+                FROM document_parts
+            """)
+            self._execute("DROP TABLE document_parts")
+            self._execute(
+                "ALTER TABLE document_parts_new RENAME TO document_parts"
+            )
+            self._execute("""
+                CREATE INDEX IF NOT EXISTS idx_parts_doc
+                ON document_parts(id, collection, part_num)
+            """)
+
+    def _migrate_to_v15(self) -> None:
+        """Apply schema migration to user_version 15."""
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS sync_outbox (
+                outbox_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                mutation     TEXT NOT NULL,
+                entity_id    TEXT NOT NULL,
+                collection   TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now')),
+                claimed_by   TEXT,
+                claimed_at   TEXT,
+                attempts     INTEGER DEFAULT 0
+            )
+        """)
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_sync_outbox_unclaimed
+            ON sync_outbox (claimed_by) WHERE claimed_by IS NULL
+        """)
+
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_doc_ai
+            AFTER INSERT ON documents
+            WHEN new.id != '.markdown-mirrors'
+            BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('doc_insert', new.id, new.collection,
+                        json_object('tags_json', new.tags_json));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_doc_au
+            AFTER UPDATE OF summary, tags_json, content_hash, content_hash_full, updated_at
+            ON documents
+            WHEN new.id != '.markdown-mirrors'
+            BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('doc_update', new.id, new.collection,
+                        json_object('old_tags_json', old.tags_json,
+                                    'new_tags_json', new.tags_json,
+                                    'old_summary', old.summary,
+                                    'new_summary', new.summary,
+                                    'old_content_hash', old.content_hash,
+                                    'new_content_hash', new.content_hash,
+                                    'old_content_hash_full', old.content_hash_full,
+                                    'new_content_hash_full', new.content_hash_full));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_doc_ad
+            AFTER DELETE ON documents
+            WHEN old.id != '.markdown-mirrors'
+            BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('doc_delete', old.id, old.collection,
+                        json_object('tags_json', old.tags_json));
+            END
+        """)
+
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_part_ai
+            AFTER INSERT ON document_parts BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('part_insert', new.id, new.collection,
+                        json_object('part_num', new.part_num));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_part_au
+            AFTER UPDATE OF summary, tags_json ON document_parts BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('part_update', new.id, new.collection,
+                        json_object('part_num', new.part_num));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_part_ad
+            AFTER DELETE ON document_parts BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('part_delete', old.id, old.collection,
+                        json_object('part_num', old.part_num));
+            END
+        """)
+
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_version_ai
+            AFTER INSERT ON document_versions BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('version_insert', new.id, new.collection,
+                        json_object('version', new.version));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_version_au
+            AFTER UPDATE OF summary, tags_json, content_hash ON document_versions BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('version_update', new.id, new.collection,
+                        json_object('version', new.version));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_version_ad
+            AFTER DELETE ON document_versions BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('version_delete', old.id, old.collection,
+                        json_object('version', old.version));
+            END
+        """)
+
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_edge_ai
+            AFTER INSERT ON edges BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('edge_insert', new.source_id, new.collection,
+                        json_object('predicate', new.predicate,
+                                    'target_id', new.target_id));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_edge_au
+            AFTER UPDATE ON edges BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('edge_update', new.source_id, new.collection,
+                        json_object('predicate', new.predicate,
+                                    'target_id', new.target_id,
+                                    'old_target_id', old.target_id));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_edge_ad
+            AFTER DELETE ON edges BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('edge_delete', old.source_id, old.collection,
+                        json_object('predicate', old.predicate,
+                                    'target_id', old.target_id));
+            END
+        """)
+
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_version_edge_ai
+            AFTER INSERT ON version_edges BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('version_edge_insert', new.source_id, new.collection,
+                        json_object('version', new.version,
+                                    'predicate', new.predicate,
+                                    'target_id', new.target_id));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_version_edge_au
+            AFTER UPDATE ON version_edges BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('version_edge_update', new.source_id, new.collection,
+                        json_object('version', new.version,
+                                    'predicate', new.predicate,
+                                    'target_id', new.target_id,
+                                    'old_target_id', old.target_id));
+            END
+        """)
+        self._execute("""
+            CREATE TRIGGER IF NOT EXISTS sync_outbox_version_edge_ad
+            AFTER DELETE ON version_edges BEGIN
+                INSERT INTO sync_outbox (mutation, entity_id, collection, payload_json)
+                VALUES ('version_edge_delete', old.source_id, old.collection,
+                        json_object('version', old.version,
+                                    'predicate', old.predicate,
+                                    'target_id', old.target_id));
+            END
+        """)
+
+    def _migrate_to_v16(self) -> None:
+        """Version 15 → 16: index for inverse-edge find queries."""
+        self._execute("""
+            CREATE INDEX IF NOT EXISTS idx_edges_inverse_source
+            ON edges (collection, inverse, source_id)
+        """)
 
     def _recover_malformed(self) -> None:
         """Attempt to recover a malformed SQLite database.

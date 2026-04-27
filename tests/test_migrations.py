@@ -150,6 +150,16 @@ def _get_indexes(conn, table: str) -> set[str]:
     }
 
 
+def test_schema_migration_registry_covers_every_version(tmp_path):
+    db = DocumentStore(tmp_path / "registry.db")
+    try:
+        versions = [version for version, _migration in db._schema_migrations()]
+    finally:
+        db.close()
+
+    assert versions == list(range(1, SCHEMA_VERSION + 1))
+
+
 class TestMigrationV0ToV3:
     """Fresh v0 database → should migrate to v3 with all features."""
 
