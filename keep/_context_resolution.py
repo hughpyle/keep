@@ -121,7 +121,11 @@ class ContextResolutionMixin:
                 try:
                     part_num = int(suffix)
                 except ValueError:
-                    pass
+                    logger.debug(
+                        "Failed to parse part number from flow result id %s",
+                        rid,
+                        exc_info=True,
+                    )
             refs.append(PartRef(
                 part_num=part_num,
                 summary=r.get("summary", ""),

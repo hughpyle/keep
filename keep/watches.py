@@ -224,7 +224,11 @@ def _upsert_watches_doc(ds: Any, doc_id: str, entries: list[dict], now_ts: str) 
         try:
             ds.delete(_DOC_COLLECTION, doc_id)
         except Exception:
-            pass
+            logger.debug(
+                "Failed to delete empty watch override doc %s",
+                doc_id,
+                exc_info=True,
+            )
         return
     content = yaml.safe_dump(entries, default_flow_style=False) if entries else ""
     content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
@@ -510,7 +514,7 @@ def _read_git_head(git_dir: Path) -> str:
                 if _is_git_oid(ref_value):
                     return ref_value
         except OSError:
-            pass
+            logger.debug("Failed to read git ref %s", ref_path, exc_info=True)
         return _read_packed_ref(git_dir, ref_name)
     return head if _is_git_oid(head) else ""
 

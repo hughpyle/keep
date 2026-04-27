@@ -31,12 +31,8 @@ def test_cli_app_has_no_inline_imports():
     assert nested == []
 
 
-def test_api_close_does_not_inline_import_logging():
-    """Shutdown cleanup uses module-level logging so the policy stays pinned."""
+def test_api_has_no_inline_imports():
+    """The core API should keep imports visible at module level."""
     nested = _nested_imports(ROOT / "keep" / "api.py")
 
-    assert not any(
-        isinstance(node, ast.Import)
-        and any(alias.name == "logging" for alias in node.names)
-        for node in nested
-    )
+    assert nested == []

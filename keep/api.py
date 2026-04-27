@@ -6,15 +6,21 @@ This is the minimal working implementation focused on:
 - get(): retrieve by ID
 """
 
-import json
+import difflib
+import hashlib
 import inspect
+import json
 import logging
+import os
 import re
+import sys
 import threading
 import time
 import uuid
-from dataclasses import replace
+import warnings
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone, timedelta
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
@@ -39,10 +45,17 @@ from .utils import (
     _MARKDOWN_EXTENSIONS,
 )
 
-import os
-import sys
-
+from .analyzers import (
+    TagClassifier,
+    _estimate_tokens,
+    _extract_line_ranges,
+    _find_best_passage,
+    _parse_parts,
+    extract_prompt_section,
+)
+from .backend import NullPendingQueue, create_stores
 from .config import load_or_create_config, save_config, StoreConfig, EmbeddingIdentity
+from .console_support import expand_prompt
 from .markdown_import import load_markdown_import
 from .markdown_sync import (
     DOC_STRUCTURAL_MUTATIONS,
@@ -63,10 +76,12 @@ from .body_policy import (
     resolve_body_authority,
 )
 from .paths import get_config_dir, get_default_store_path
+from .planner_stats import PlannerStatsStore, build_scope_key
 from .provider_identity import provider_model_name
 from .protocol import DocumentStoreProtocol, VectorStoreProtocol, PendingQueueProtocol
 from .providers import get_registry
 from .providers.base import (
+    AnalysisChunk,
     Document,
     DocumentProvider,
     EmbedTask,
@@ -74,9 +89,10 @@ from .providers.base import (
     MediaDescriber,
     SummarizationProvider,
 )
+from .providers.documents import CompositeDocumentProvider, FileDocumentProvider
 from .providers.embedding_cache import CachingEmbeddingProvider
 from .recovery import is_malformed_db_error
-from .document_store import PartInfo, VersionInfo
+from .document_store import DocumentStore, PartInfo, VersionInfo
 from .types import (
     Item, ItemContext, EdgeRef, TagMap,
     build_item_context, eval_when_predicate,
@@ -102,6 +118,9 @@ from .flow_client import (
     tag_item as flow_tag_item,
 )
 from .flow_env import LocalFlowEnvironment
+from .ignore import match_ignore, parse_ignore_patterns, uri_pattern_prefixes
+from .logging_config import configure_ops_log
+from .markdown_mirrors import path_inside_markdown_mirror
 from .tracing import get_tracer as _get_tracer
 from .tracing import init_tracing as _init_tracing
 from ._background_processing import BackgroundProcessingMixin
@@ -123,6 +142,29 @@ class FindResults(list):
         self.deep_groups: dict[str, list[Item]] = deep_groups or {}
 
 
+@dataclass
+class _PutContext:
+    """Explicit body-resolution inputs for one put() mutation."""
+
+    id: str
+    content: str
+    summary: str | None
+    tags: dict[str, Any]
+    existing_doc: Any
+    restored_version: Any
+    content_unchanged: bool
+    tags_changed: bool
+    new_hash: str
+
+
+@dataclass(frozen=True)
+class _ResolvedBodySummary:
+    """Resolved body text plus the authority that selected it."""
+
+    summary: str
+    body_authority: str
+
+
 # Default max length for truncated placeholder summaries
 TRUNCATE_LENGTH = 500
 
@@ -134,11 +176,24 @@ from .system_docs import (
     SYSTEM_DOC_DIR,
     SYSTEM_DOC_IDS,
     _load_frontmatter,
+    migrate_system_documents,
+    reset_system_documents,
+    system_doc_migration_needed,
 )
 
 from .dependencies import NoteDependencyService
 from .markdown_export import _get_export_bundle
-from .processors import _content_hash, _content_hash_full
+from .processors import _content_hash, _content_hash_full, process_analyze
+from .state_doc import parse_state_doc
+from .state_doc_runtime import (
+    FlowResult,
+    decode_cursor,
+    make_action_runner,
+    make_state_doc_loader,
+    run_flow,
+)
+from .task_client import TaskClient
+from .task_workflows import _apply_mutations
 
 
 # -------------------------------------------------------------------------
@@ -240,20 +295,17 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         self._store_path.mkdir(parents=True, exist_ok=True)
 
         # --- Persistent operations log ---
-        from .logging_config import configure_ops_log
         self._ops_log_handler = configure_ops_log(self._store_path)
 
         # --- Storage backends (injected or factory-created) ---
         if doc_store is not None and vector_store is not None:
             # Fully injected (tests, custom setups)
-            from .backend import NullPendingQueue
             self._document_store = doc_store
             self._store = vector_store
             self._pending_queue = pending_queue or NullPendingQueue()
             self._is_local = False
         else:
             # Factory-based creation from config
-            from .backend import create_stores
             bundle = create_stores(self._config)
             self._document_store = bundle.doc_store
             self._store = bundle.vector_store
@@ -281,14 +333,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # and therefore call ensure_sysdocs(). Initialize this sentinel before
         # any migration step that might create stubs or otherwise re-enter the
         # public state-doc surface.
-        from .system_docs import system_doc_migration_needed
-
         self._needs_sysdoc_migration = system_doc_migration_needed(self)
 
         # If cosine migration fired (L2→cosine), auto-enqueue reindex
         if getattr(self._store, "migrated_to_cosine", False):
             logger.info("Cosine migration detected — enqueuing reindex")
-            import sys
             try:
                 stats = self.enqueue_reindex()
                 print(
@@ -354,7 +403,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # --- Task delegation client (for hosted processing) ---
         self._task_client = None
         if self._config.remote:
-            from .task_client import TaskClient
             try:
                 self._task_client = TaskClient(
                     self._config.remote.api_url,
@@ -367,7 +415,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # --- Planner stats (precomputed priors for flow discriminators) ---
         self._planner_stats = None
         if self._is_local:
-            from .planner_stats import PlannerStatsStore
             try:
                 self._planner_stats = PlannerStatsStore(
                     self._store_path / "planner_stats.db"
@@ -391,7 +438,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
     def _apply_file_size_limit(self, provider: DocumentProvider) -> None:
         """Apply max_file_size config to file-based providers."""
-        from .providers.documents import FileDocumentProvider, CompositeDocumentProvider
         max_size = self._config.max_file_size
         if isinstance(provider, FileDocumentProvider):
             provider.max_size = max_size
@@ -917,8 +963,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         based on the task parameter.  Symmetric providers and models
         without task-prompt support are skipped.
         """
-        import sys
-
         if not self._config_uses_embed_task():
             logger.debug("Skipping embed-task reindex: provider is symmetric")
             self._config.embed_task_reindex_done = True
@@ -1094,8 +1138,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             self._detect_chroma_tag_marker_migration_need,
         )
         if marker_migration_state is True:
-            import sys
-
             try:
                 print(
                     "Migrating search metadata to multivalue tag markers "
@@ -1135,8 +1177,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 return
 
             if self._is_local and hasattr(self._document_store, "_db_path"):
-                from .document_store import DocumentStore
-
                 startup_doc_store = DocumentStore(self._document_store._db_path)
 
             chroma_coll = self._resolve_chroma_collection()
@@ -1238,7 +1278,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # The main thread may be running find() concurrently, and Python's
         # sqlite3 module crashes (segfault) on concurrent access to the
         # same Connection object from multiple threads.
-        from .document_store import DocumentStore
         recon_ds = DocumentStore(self._document_store._db_path)
         try:
             result = self.reconcile(fix=True, _doc_store=recon_ds)
@@ -1262,7 +1301,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
     def _migrate_system_documents(self, progress=None) -> dict:
         """Migrate system documents to stable IDs and current version."""
-        from .system_docs import migrate_system_documents
         result = migrate_system_documents(self, progress=progress)
         self._tagdoc_cache.clear()  # tagdocs may have changed
         self._cel_cache.clear()
@@ -1327,9 +1365,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         Returns:
             Prompt text from the best-matching doc, or None.
         """
-        from .analyzers import extract_prompt_section
-        from fnmatch import fnmatch
-
         doc_coll = self._resolve_doc_collection()
         prompt_docs = self._document_store.query_by_id_prefix(
             doc_coll, f".prompt/{prefix}/"
@@ -1419,8 +1454,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         required: bool = False,
     ) -> str | None:
         """Load a prompt doc by exact ID and return its ``## Prompt`` section."""
-        from .analyzers import extract_prompt_section
-
         doc_coll = self._resolve_doc_collection()
         rec = self._document_store.get(doc_coll, doc_id)
         if rec is None or not getattr(rec, "summary", None):
@@ -1568,7 +1601,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                     except Exception as e:
                         logger.warning("Could not drop search index: %s", e)
                 # Enqueue reindex tasks for pending queue
-                import sys
                 try:
                     stats = self.enqueue_reindex()
                     logger.info(
@@ -2121,11 +2153,9 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
     def _load_ignore_patterns(self) -> list[str]:
         """Load and cache ``.ignore`` patterns from the store (60s TTL)."""
-        import time as _time
-        now = _time.monotonic()
+        now = time.monotonic()
         if self._ignore_patterns is not None and (now - self._ignore_patterns_ts) < 60:
             return self._ignore_patterns
-        from .ignore import parse_ignore_patterns
         doc_coll = self._resolve_doc_collection()
         rec = self._document_store.get(doc_coll, ".ignore")
         if rec and rec.summary:
@@ -2148,8 +2178,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         and URI-scheme patterns like ``git://x-access-token/*``.
         Returns ``{"deleted": int, "cancelled": int}``.
         """
-        from .ignore import match_ignore, uri_pattern_prefixes
-
         doc_coll = self._resolve_doc_collection()
 
         # Always query file:// items (for path-glob patterns).
@@ -2324,8 +2352,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             tags = parent.tags if parent else None
             if tags is None:
                 try:
-                    from .system_docs import SYSTEM_DOC_DIR, SYSTEM_DOC_IDS, _load_frontmatter
-
                     tagdoc_id = f".tag/{key}"
                     rel_path = next(
                         (rel for rel, doc_id in SYSTEM_DOC_IDS.items() if doc_id == tagdoc_id),
@@ -2823,60 +2849,53 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
     def _resolve_note_body_summary(
         self,
-        *,
-        id: str,
-        content: str,
-        summary: str | None,
-        merged_tags: dict[str, Any],
-        existing_doc: Any,
-        restored_version: Any,
-        content_unchanged: bool,
-        tags_changed: bool,
-        new_hash: str,
-    ) -> tuple[str, str]:
+        ctx: _PutContext,
+    ) -> _ResolvedBodySummary:
         """Choose the stored note body/summary from the centralized policy.
 
-        Mutates ``merged_tags`` in place when the chosen body means the note
-        should be treated as already summarized.
+        Mutates ``ctx.tags`` in place when the chosen body means the note
+        should be treated as already summarized.  Keeping these inputs in a
+        named context makes that mutation and its authority explicit at the
+        call site.
         """
         max_len = self._config.max_summary_length
-        is_system_doc = is_system_id(id)
-        body_authority = resolve_body_authority(merged_tags)
+        is_system_doc = is_system_id(ctx.id)
+        body_authority = resolve_body_authority(ctx.tags)
 
-        if summary is not None:
+        if ctx.summary is not None:
+            summary = ctx.summary
             if (
                 body_authority != BODY_AUTHORITY_MARKDOWN
                 and not is_system_doc
                 and len(summary) > max_len
             ):
-                import warnings
                 warnings.warn(
                     f"Summary exceeds max_summary_length ({len(summary)} > {max_len}), truncating",
                     UserWarning,
                     stacklevel=3,
                 )
                 summary = summary[:max_len]
-            return summary, body_authority
+            return _ResolvedBodySummary(summary, body_authority)
 
         if is_system_doc:
-            return content, body_authority
+            return _ResolvedBodySummary(ctx.content, body_authority)
 
-        if restored_version is not None:
-            return restored_version.summary, body_authority
+        if ctx.restored_version is not None:
+            return _ResolvedBodySummary(ctx.restored_version.summary, body_authority)
 
-        if content_unchanged and tags_changed:
-            logger.debug("Tags changed for %s", id)
-            return existing_doc.summary, body_authority
+        if ctx.content_unchanged and ctx.tags_changed:
+            logger.debug("Tags changed for %s", ctx.id)
+            return _ResolvedBodySummary(ctx.existing_doc.summary, body_authority)
 
         if body_authority == BODY_AUTHORITY_MARKDOWN:
-            merged_tags["_summarized_hash"] = new_hash
-            return content, body_authority
+            ctx.tags["_summarized_hash"] = ctx.new_hash
+            return _ResolvedBodySummary(ctx.content, body_authority)
 
-        if len(content) <= max_len:
-            merged_tags["_summarized_hash"] = new_hash
-            return content, body_authority
+        if len(ctx.content) <= max_len:
+            ctx.tags["_summarized_hash"] = ctx.new_hash
+            return _ResolvedBodySummary(ctx.content, body_authority)
 
-        return content[:max_len] + "...", body_authority
+        return _ResolvedBodySummary(ctx.content[:max_len] + "...", body_authority)
 
     def _apply_summary_mutation(
         self,
@@ -3104,17 +3123,20 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 )
             return _record_to_item(existing_doc, changed=False)
 
-        final_summary, effective_body_authority = self._resolve_note_body_summary(
+        body_context = _PutContext(
             id=id,
             content=content,
             summary=summary,
-            merged_tags=merged_tags,
+            tags=merged_tags,
             existing_doc=existing_doc,
             restored_version=restored_version,
             content_unchanged=content_unchanged,
             tags_changed=tags_changed,
             new_hash=new_hash,
         )
+        resolved_body = self._resolve_note_body_summary(body_context)
+        final_summary = resolved_body.summary
+        effective_body_authority = resolved_body.body_authority
         is_system_doc = is_system_id(id)
         max_len = self._config.max_summary_length
 
@@ -3515,8 +3537,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             )
 
         if uri is not None and (uri.startswith("file://") or uri.startswith("/")):
-            from .markdown_mirrors import path_inside_markdown_mirror
-
             file_path = Path(file_uri_to_path(uri)).resolve()
             if path_inside_markdown_mirror(self, file_path):
                 raise ValueError(
@@ -3550,7 +3570,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                             and existing.tags.get("_file_size") == str(st.st_size)):
                         # Backfill _content_type for items stored before it was tracked
                         if "_content_type" not in existing.tags:
-                            from .providers.documents import FileDocumentProvider
                             ct = FileDocumentProvider.EXTENSION_TYPES.get(fpath.suffix.lower())
                             if ct:
                                 self._document_store.patch_head_tags(
@@ -4336,8 +4355,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # by keyword overlap in the source file. Only runs for URI items
         # when a query string is available.
         if query:
-            from .analyzers import _find_best_passage
-
             for idx, item in enumerate(items):
                 if item.tags.get("_focus_part"):
                     continue  # already has a part match
@@ -5236,8 +5253,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if cur_emb is not None:
             cur_tags = dict(newest.tags)
             cur_tags["_saved_from"] = source_id
-            from .types import utc_now as _utc_now
-            cur_tags["_saved_at"] = _utc_now()
+            cur_tags["_saved_at"] = utc_now()
             target_ids.append(name)
             target_embeddings.append(cur_emb)
             target_summaries.append(newest.summary)
@@ -5258,8 +5274,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         if saved_doc:
             saved_tags = dict(saved_doc.tags)
             saved_tags["_saved_from"] = source_id
-            from .types import utc_now as _utc_now2
-            saved_tags["_saved_at"] = _utc_now2()
+            saved_tags["_saved_at"] = utc_now()
             self._document_store.update_tags(doc_coll, name, saved_tags)
 
         # If source was fully emptied and is 'now', recreate with defaults
@@ -5277,7 +5292,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
     def reset_system_documents(self) -> dict:
         """Force reload all system documents from bundled content."""
-        from .system_docs import reset_system_documents
         return reset_system_documents(self)
 
     def _tag_direct(
@@ -5628,9 +5642,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         Returns:
             List of PartInfo for the created parts (empty list if skipped)
         """
-        from .processors import process_analyze
-        from .task_workflows import _apply_mutations
-
         id = normalize_id(id)
         doc_coll = self._resolve_doc_collection()
 
@@ -5695,7 +5706,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             # context version, the change is too trivial to re-analyze.
             diff_threshold = self._config.analyze_diff_threshold
             if diff_threshold < 1.0 and context_chunks and target_chunks:
-                import difflib
                 prev_text = context_chunks[-1].get("content", "")
                 curr_text = target_chunks[-1].get("content", "")
                 ratio = difflib.SequenceMatcher(
@@ -5728,7 +5738,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         tag_specs = None
         try:
-            from .analyzers import TagClassifier
             classifier = TagClassifier(
                 provider=self._get_summarization_provider(),
             )
@@ -5754,13 +5763,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
         if incremental and context_chunks is not None and target_chunks is not None:
             # Incremental path: single-window LLM call with context + targets
-            from .analyzers import (
-                INCREMENTAL_ANALYSIS_PROMPT,
-                _estimate_tokens,
-                _parse_parts,
-                extract_prompt_section,
-            )
-
             incremental_prompt = self._load_prompt_doc(
                 ".prompt/analyze/incremental", required=True,
             )
@@ -5834,7 +5836,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         # Full analysis path
         if analyzer is not None:
             # Custom analyzer: call directly (not through process_analyze)
-            from .providers.base import AnalysisChunk
             analysis_chunks = [
                 AnalysisChunk(
                     content=c["content"], tags=c.get("tags", {}),
@@ -5872,7 +5873,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             and chunk_dicts 
             and len(chunk_dicts) == 1):
             try:
-                from .analyzers import _extract_line_ranges
                 source_content = chunk_dicts[0]["content"]
                 raw_parts = _extract_line_ranges(source_content, raw_parts)
                 analyze_result["parts"] = raw_parts
@@ -5918,8 +5918,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         new_parts: list[dict],
     ) -> None:
         """Append new analysis parts without deleting existing ones."""
-        from .document_store import PartInfo
-
         chroma_coll = self._resolve_chroma_collection()
         max_part = self._document_store.max_part_num(doc_coll, id)
         embed = self._get_embedding_provider()
@@ -6308,7 +6306,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 "staleness": {"stats_age_s": None, "fallback_mode": True},
             }
 
-        from .planner_stats import build_scope_key
         if scope_key is None:
             scope_key = build_scope_key()
 
@@ -6376,13 +6373,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         Returns:
             FlowResult with terminal status and accumulated bindings.
         """
-        from .state_doc_runtime import (
-            FlowResult,
-            make_action_runner,
-            make_state_doc_loader,
-            run_flow,
-        )
-
         self.ensure_sysdocs()
         env = LocalFlowEnvironment(self)
         if query_embedding is not None:
@@ -6447,14 +6437,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         Returns:
             FlowResult with status, bindings, cursor (if stopped), etc.
         """
-        from .state_doc_runtime import (
-            FlowResult,
-            decode_cursor,
-            make_action_runner,
-            make_state_doc_loader,
-            run_flow,
-        )
-
         # Prompt rendering: render_prompt + expand_prompt as a flow command
         if state == STATE_PROMPT:
             p = params or {}
@@ -6484,14 +6466,11 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
                 return FlowResult(status="error", data={"error": str(e)})
             if result is None:
                 return FlowResult(status="error", data={"error": f"prompt not found: {name}"})
-            from .console_support import expand_prompt
             expanded = expand_prompt(result, self)
             data: dict[str, Any] = {"text": expanded}
             if result.context:
                 data["context"] = result.context.to_dict()
             return FlowResult(status="done", data=data, ticks=1)
-
-        from .state_doc import parse_state_doc
 
         if budget is None:
             budget = self._config.budget_per_flow
@@ -6507,7 +6486,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
             def runner(action_name: str, action_params: dict[str, Any]) -> dict[str, Any]:
                 output = base_runner(action_name, action_params)
                 if isinstance(output, dict) and output.get("mutations"):
-                    from .task_workflows import _apply_mutations
                     _apply_mutations(self, collection, output)
                 return output
         else:
@@ -6581,7 +6559,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
     def _store_cursor(self, cursor_token: str) -> str:
         """Store a self-contained cursor as a system note, return short ID."""
-        import hashlib
         cursor_id = hashlib.sha256(cursor_token.encode()).hexdigest()[:12]
         note_id = f".cursor/{cursor_id}"
         self.put(cursor_token, id=note_id)
@@ -6589,7 +6566,6 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
     def _load_cursor(self, cursor_id: str) -> "Optional[FlowCursor]":
         """Load a server-side cursor by short ID, delete after loading."""
-        from .state_doc_runtime import decode_cursor
         note_id = f".cursor/{cursor_id}"
         item = self.get(note_id)
         if item is None:
