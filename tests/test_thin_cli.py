@@ -7,11 +7,13 @@ import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
+from click.exceptions import Exit
 import pytest
 
 from keep.api import Keeper
 from keep.daemon_server import DaemonServer
 from keep.cli_app import (
+    _post,
     _render_context,
     _render_find,
     _render_item_line,
@@ -97,6 +99,19 @@ def test_render_item_line_prefers_name_then_title():
     assert "Fallback summary" not in named_line
     assert "Current" in titled_line
     assert "Fallback summary" not in titled_line
+
+
+def test_post_error_includes_daemon_request_id(capsys):
+    with patch(
+        "keep.cli_app._daemon_request",
+        return_value=(500, {"error": "internal server error", "request_id": "req-123"}),
+    ):
+        with pytest.raises(Exit):
+            _post(1234, "/v1/notes", {})
+
+    captured = capsys.readouterr()
+    assert "internal server error" in captured.err
+    assert "request_id=req-123" in captured.err
 
 
 def test_render_context_minimal():

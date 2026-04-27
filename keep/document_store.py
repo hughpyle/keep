@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 16
 
 
+def _sql_operation(sql: str) -> str:
+    """Return a low-cardinality SQL operation name for tracing."""
+    stripped = sql.lstrip()
+    if not stripped:
+        return "UNKNOWN"
+    return stripped.split(None, 1)[0].upper()
+
+
 @dataclass
 class VersionInfo:
     """Information about a document version.
@@ -121,13 +129,34 @@ class DocumentStore:
         threads (``check_same_thread=False`` only disables the Python-level
         check).  This helper serialises all access through ``self._lock``.
         """
-        with self._lock:
-            return self._conn.execute(sql, params)
+        # Keep SQL text out of traces; statements can contain note content.
+        with get_tracer("document_store").start_as_current_span(
+            "document_store.execute",
+            attributes={
+                "db.system": "sqlite",
+                "db.operation": _sql_operation(sql),
+                "db.params_count": len(params),
+            },
+        ):
+            with self._lock:
+                return self._conn.execute(sql, params)
 
     def _executemany(self, sql: str, params_seq) -> sqlite3.Cursor:
         """Like _execute but for executemany."""
-        with self._lock:
-            return self._conn.executemany(sql, params_seq)
+        attributes: dict[str, str | int] = {
+            "db.system": "sqlite",
+            "db.operation": _sql_operation(sql),
+        }
+        try:
+            attributes["db.batch_size"] = len(params_seq)
+        except TypeError:
+            pass
+        with get_tracer("document_store").start_as_current_span(
+            "document_store.executemany",
+            attributes=attributes,
+        ):
+            with self._lock:
+                return self._conn.executemany(sql, params_seq)
 
     def _init_db(self) -> None:
         """Initialize the SQLite database."""

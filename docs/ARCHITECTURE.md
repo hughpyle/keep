@@ -141,6 +141,12 @@ helpers, but that is an explicit exception to the daemon-backed command path.
   descriptors so remote clients can negotiate support explicitly
 - Request handlers refuse new work while shutdown is in progress
 - OpenTelemetry trace context is propagated from CLI/MCP into daemon spans
+- Daemon error payloads include a `request_id`; CLI and remote clients include
+  it in surfaced errors so an operator can correlate a failure with daemon logs
+- Set `KEEP_TRACE=1` on the daemon to emit timing-tree traces. Storage spans
+  cover SQLite document-store operations and ChromaDB embedding/metadata
+  queries with low-cardinality attributes only; note content and raw SQL are
+  intentionally omitted from trace attributes.
 
 **[daemon_client.py](keep/daemon_client.py)** — Daemon discovery and HTTP
 - `get_port()`: locate or auto-spawn the daemon for a store

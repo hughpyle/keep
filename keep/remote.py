@@ -90,24 +90,59 @@ class RemoteKeeper:
     def _get(self, path: str, **params: Any) -> dict:
         filtered = {k: v for k, v in params.items() if v is not None}
         resp = self._client.get(path, params=filtered)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.json()
 
     def _post(self, path: str, json: dict) -> dict:
         filtered = {k: v for k, v in json.items() if v is not None}
         resp = self._client.post(path, json=filtered)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.json()
 
     def _patch(self, path: str, json: dict) -> dict:
         resp = self._client.patch(path, json=json)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.json()
 
     def _delete(self, path: str) -> dict:
         resp = self._client.delete(path)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.json()
+
+    @staticmethod
+    def _daemon_error_detail(resp: httpx.Response) -> str:
+        """Extract daemon error text and request_id without exposing bodies."""
+        try:
+            if not resp.is_closed and not resp.is_stream_consumed:
+                resp.read()
+            data = resp.json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, httpx.ResponseNotRead):
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        error = data.get("error")
+        request_id = data.get("request_id")
+        parts: list[str] = []
+        if error:
+            parts.append(str(error))
+        if request_id:
+            parts.append(f"request_id={request_id}")
+        return " ".join(parts)
+
+    @classmethod
+    def _raise_for_status(cls, resp: httpx.Response) -> None:
+        """Raise HTTP errors with daemon request_id preserved in the message."""
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = cls._daemon_error_detail(resp)
+            if not detail:
+                raise
+            raise httpx.HTTPStatusError(
+                f"{exc} ({detail})",
+                request=exc.request,
+                response=exc.response,
+            ) from exc
 
     @staticmethod
     def _to_item(data: dict) -> Item:
@@ -156,7 +191,7 @@ class RemoteKeeper:
                 "stream": "ndjson",
             },
         ) as resp:
-            resp.raise_for_status()
+            self._raise_for_status(resp)
             content_type = (resp.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
             if content_type == "application/x-ndjson":
                 for line in resp.iter_lines():
@@ -207,7 +242,7 @@ class RemoteKeeper:
         )
         if resp.status_code == 404:
             return None
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         data = resp.json()
         if not isinstance(data, dict):
             raise ValueError(f"Expected dict export bundle payload, got {type(data).__name__}")
@@ -226,7 +261,7 @@ class RemoteKeeper:
                 "limit": str(limit),
             },
         )
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         data = resp.json()
         if not isinstance(data, dict):
             raise ValueError(f"Expected dict export changes payload, got {type(data).__name__}")
@@ -366,7 +401,7 @@ class RemoteKeeper:
         resp = self._client.get(f"/v1/notes/{self._q(id)}/context", params=params)
         if resp.status_code == 404:
             return None
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return ItemContext.from_dict(resp.json())
 
     def get_now(self, *, scope: Optional[str] = None) -> Item:
@@ -407,7 +442,7 @@ class RemoteKeeper:
         if self._server_info_cache is not None and not refresh:
             return dict(self._server_info_cache)
         resp = self._client.get("/v1/ready")
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         data = resp.json()
         if not isinstance(data, dict):
             raise ValueError(f"Expected dict server info payload, got {type(data).__name__}")

@@ -837,27 +837,37 @@ class ChromaStore:
         Returns:
             List of matching results (no particular order)
         """
-        with self._state_lock:
-            self._check_freshness()
-            coll = self._get_collection(collection)
+        with get_tracer("store").start_as_current_span(
+            "store.query_metadata",
+            attributes={
+                "collection": collection,
+                "limit": limit,
+                "offset": offset,
+                "where": bool(where),
+            },
+        ) as span:
+            with self._state_lock:
+                self._check_freshness()
+                coll = self._get_collection(collection)
 
-            normalized_where = self._normalize_where(where)
-            result = coll.get(
-                where=normalized_where,
-                limit=limit,
-                offset=offset,
-                include=["documents", "metadatas"],
-            )
+                normalized_where = self._normalize_where(where)
+                result = coll.get(
+                    where=normalized_where,
+                    limit=limit,
+                    offset=offset,
+                    include=["documents", "metadatas"],
+                )
 
-            results = []
-            for i, id in enumerate(result["ids"]):
-                results.append(StoreResult(
-                    id=id,
-                    summary=result["documents"][i] or "",
-                    tags=self._metadata_to_tags(result["metadatas"][i]),
-                ))
+                results = []
+                for i, id in enumerate(result["ids"]):
+                    results.append(StoreResult(
+                        id=id,
+                        summary=result["documents"][i] or "",
+                        tags=self._metadata_to_tags(result["metadatas"][i]),
+                    ))
 
-            return results
+                span.set_attribute("result_count", len(results))
+                return results
     
     # -------------------------------------------------------------------------
     # Collection Management

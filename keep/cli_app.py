@@ -217,13 +217,22 @@ def _require_markdown_export_host():
     raise SystemExit(1)
 
 
+def _daemon_error_message(body: dict, default: str = "unknown") -> str:
+    """Format daemon errors with request_id so users can correlate logs."""
+    message = str(body.get("error", default))
+    request_id = body.get("request_id")
+    if request_id:
+        return f"{message} (request_id={request_id})"
+    return message
+
+
 def _get(port: int, path: str) -> dict:
     status, body = _daemon_request("GET", port, path)
     if status == 404:
         typer.echo(f"Not found", err=True)
         raise typer.Exit(1)
     if status != 200:
-        typer.echo(f"Error: {body.get('error', 'unknown')}", err=True)
+        typer.echo(f"Error: {_daemon_error_message(body)}", err=True)
         raise typer.Exit(1)
     return body
 
@@ -231,7 +240,7 @@ def _get(port: int, path: str) -> dict:
 def _post(port: int, path: str, body: dict) -> dict:
     status, result = _daemon_request("POST", port, path, body)
     if status != 200:
-        typer.echo(f"Error: {result.get('error', 'unknown')}", err=True)
+        typer.echo(f"Error: {_daemon_error_message(result)}", err=True)
         raise typer.Exit(1)
     return result
 
@@ -239,7 +248,7 @@ def _post(port: int, path: str, body: dict) -> dict:
 def _patch(port: int, path: str, body: dict) -> dict:
     status, result = _daemon_request("PATCH", port, path, body)
     if status != 200:
-        typer.echo(f"Error: {result.get('error', 'unknown')}", err=True)
+        typer.echo(f"Error: {_daemon_error_message(result)}", err=True)
         raise typer.Exit(1)
     return result
 
@@ -247,7 +256,7 @@ def _patch(port: int, path: str, body: dict) -> dict:
 def _delete(port: int, path: str) -> dict:
     status, result = _daemon_request("DELETE", port, path)
     if status != 200:
-        typer.echo(f"Error: {result.get('error', 'unknown')}", err=True)
+        typer.echo(f"Error: {_daemon_error_message(result)}", err=True)
         raise typer.Exit(1)
     return result
 
@@ -718,7 +727,7 @@ def _get_one_item(
         typer.echo(f"Not found: {item_id}", err=True)
         return None
     if status != 200:
-        typer.echo(f"Error: {data.get('error', 'unknown')}", err=True)
+        typer.echo(f"Error: {_daemon_error_message(data)}", err=True)
         return None
     if _is_json(json_output):
         return json.dumps(data, indent=2)
@@ -913,7 +922,7 @@ def _put_directory(
                 else:
                     typer.echo(f"[{i}/{total}] {rel} ok", err=True)
             else:
-                errors.append(f"{rel}: {data.get('error', 'unknown')}")
+                errors.append(f"{rel}: {_daemon_error_message(data)}")
                 if not is_tty:
                     typer.echo(f"[{i}/{total}] {rel} error", err=True)
         except Exception as e:
@@ -964,7 +973,7 @@ def _put_directory(
                     else:
                         typer.echo(f"not watching: {resolved_path}/", err=True)
             else:
-                err = data.get("error") if isinstance(data, dict) else str(data)
+                err = _daemon_error_message(data) if isinstance(data, dict) else str(data)
                 typer.echo(
                     f"Warning: watch registration failed: {err or 'unknown error'}",
                     err=True,
@@ -985,7 +994,7 @@ def _put_directory(
                 if data.get("git", {}).get("queued"):
                     typer.echo("git: changelog ingest queued", err=True)
             else:
-                err = data.get("error") if isinstance(data, dict) else str(data)
+                err = _daemon_error_message(data) if isinstance(data, dict) else str(data)
                 typer.echo(
                     f"Warning: git ingest enqueue failed: {err or 'unknown error'}",
                     err=True,
@@ -1497,7 +1506,7 @@ def prompt(
     }})
     flow_data = data.get("data", {})
     if data.get("status") == "error":
-        typer.echo(f"Error: {flow_data.get('error', 'unknown')}", err=True)
+        typer.echo(f"Error: {_daemon_error_message(flow_data)}", err=True)
         raise typer.Exit(1)
     if _is_json(json_output):
         typer.echo(json.dumps(flow_data, indent=2))
@@ -2014,7 +2023,7 @@ def data_export(
                 typer.echo("No markdown sync directories.")
             return
         if status >= 400:
-            typer.echo(f"Error: {data.get('error', 'markdown sync list failed')}", err=True)
+            typer.echo(f"Error: {_daemon_error_message(data, 'markdown sync list failed')}", err=True)
             raise SystemExit(1)
         mirrors = data.get("mirrors", [])
         if _is_json(False):
@@ -2085,7 +2094,7 @@ def data_export(
                     },
                 )
                 if status >= 400:
-                    typer.echo(f"Error: {data.get('error', 'markdown sync failed')}", err=True)
+                    typer.echo(f"Error: {_daemon_error_message(data, 'markdown sync failed')}", err=True)
                     raise SystemExit(1)
                 kp = _require_markdown_export_host()
                 is_tty = sys.stderr.isatty()
@@ -2148,7 +2157,7 @@ def data_export(
                 },
             )
             if status >= 400:
-                typer.echo(f"Error: {data.get('error', 'markdown sync failed')}", err=True)
+                typer.echo(f"Error: {_daemon_error_message(data, 'markdown sync failed')}", err=True)
                 raise SystemExit(1)
             if stop:
                 if data.get("stopped"):

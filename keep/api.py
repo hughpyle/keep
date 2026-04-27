@@ -3821,6 +3821,15 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         force: bool = False,
     ) -> Item:
         """Store content in memory via the flow host interface."""
+        logger.debug(
+            "Keeper.put id=%s uri=%s content=%s summary=%s tags=%d force=%s",
+            id or "",
+            uri or "",
+            content is not None,
+            summary is not None,
+            len(tags or {}),
+            force,
+        )
         return flow_put_item(
             self,
             content=content,
@@ -4513,6 +4522,15 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
         scope: Optional[str] = None,
     ) -> list[Item]:
         """Find items via the flow host interface."""
+        logger.debug(
+            "Keeper.find query=%s tags=%d similar_to=%s limit=%s deep=%s scope=%s",
+            bool(query),
+            len(tags or {}),
+            similar_to or "",
+            limit,
+            deep,
+            scope or "",
+        )
         return flow_find_items(
             self,
             query,
@@ -4701,6 +4719,7 @@ class Keeper(ProviderLifecycleMixin, BackgroundProcessingMixin, SearchAugmentati
 
     def get(self, id: str) -> Optional[Item]:
         """Retrieve a specific item via the flow host interface."""
+        logger.debug("Keeper.get id=%s", id)
         return flow_get_item(self, id)
 
     def peek(self, id: str) -> Optional[Item]:
