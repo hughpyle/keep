@@ -55,6 +55,53 @@ def _is_readonly_sql(sql: str) -> bool:
     return operation in {"SELECT", "EXPLAIN"}
 
 
+def _load_tags_json(
+    raw: Any,
+    *,
+    table: str = "documents",
+    doc_id: str = "",
+    collection: str = "",
+) -> dict[str, Any]:
+    """Decode a stored ``tags_json`` value, tolerating NULL or malformed JSON.
+
+    The schema declares ``tags_json TEXT NOT NULL DEFAULT '{}'`` for every
+    table that stores tags, so the only way ``raw`` can be ``None`` or a
+    non-JSON string is if a row predates a schema constraint, was written by
+    something bypassing the helpers, or got corrupted.  Reads should not
+    propagate a JSON decode error to callers because every read path treats a
+    missing tag map as benign — it's better to log once and continue with an
+    empty mapping than to break ``get`` for a single bad row.
+    """
+    if raw is None or raw == "":
+        logger.warning(
+            "%s.tags_json is empty for %s/%s; treating as empty tag map",
+            table,
+            collection or "?",
+            doc_id or "?",
+        )
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.warning(
+            "%s.tags_json is invalid JSON for %s/%s (%s); treating as empty",
+            table,
+            collection or "?",
+            doc_id or "?",
+            exc,
+        )
+        return {}
+    if not isinstance(decoded, dict):
+        logger.warning(
+            "%s.tags_json is not an object for %s/%s; treating as empty",
+            table,
+            collection or "?",
+            doc_id or "?",
+        )
+        return {}
+    return decoded
+
+
 @dataclass
 class VersionInfo:
     """Information about a document version.
@@ -594,7 +641,7 @@ class DocumentStore:
             WHERE tags_json LIKE '%bundled_hash%'
         """)
         for row in cursor.fetchall():
-            tags = json.loads(row["tags_json"])
+            tags = _load_tags_json(row["tags_json"])
             bh = tags.get("bundled_hash")
             if bh and len(bh) > 10:
                 tags["bundled_hash"] = bh[-10:]
@@ -1032,7 +1079,7 @@ class DocumentStore:
                     "collection": row["collection"],
                     "part_num": row["part_num"],
                     "summary": row["migrated_summary"],
-                    "tags": json.loads(row["tags_json"]),
+                    "tags": _load_tags_json(row["tags_json"]),
                 }
                 for row in changed_rows
             ]
@@ -1364,7 +1411,7 @@ class DocumentStore:
             id=row["id"],
             collection=row["collection"],
             summary=row["summary"],
-            tags=json.loads(row["tags_json"]),
+            tags=_load_tags_json(row["tags_json"], doc_id=row["id"], collection=row["collection"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             content_hash=row["content_hash"],
@@ -1656,7 +1703,7 @@ class DocumentStore:
         # targets can now be labeled refs. We have to parse_ref() each value in
         # Python before storing the canonical target_id.
         for row in rows:
-            tags = json.loads(row["tags_json"]) if row["tags_json"] else {}
+            tags = _load_tags_json(row["tags_json"])
             for key in tags:
                 if key.startswith("_"):
                     continue
@@ -1815,7 +1862,7 @@ class DocumentStore:
 
                 version = row["version"]
                 summary = row["summary"]
-                tags = normalize_tag_map(json.loads(row["tags_json"]))
+                tags = normalize_tag_map(_load_tags_json(row["tags_json"]))
                 content_hash = row["content_hash"]
                 created_at = row["created_at"]
 
@@ -1951,7 +1998,7 @@ class DocumentStore:
         return VersionInfo(
             version=row["version"],
             summary=row["summary"],
-            tags=json.loads(row["tags_json"]) if row["tags_json"] else {},
+            tags=_load_tags_json(row["tags_json"]),
             created_at=row["created_at"],
             content_hash=row["content_hash"],
         )
@@ -2116,7 +2163,7 @@ class DocumentStore:
                     all_versions.append(VersionInfo(
                         version=row["version"],
                         summary=row["summary"],
-                        tags=json.loads(row["tags_json"]),
+                        tags=_load_tags_json(row["tags_json"]),
                         created_at=row["created_at"],
                         content_hash=row["content_hash"],
                     ))
@@ -2283,7 +2330,7 @@ class DocumentStore:
             id=row["id"],
             collection=row["collection"],
             summary=row["summary"],
-            tags=json.loads(row["tags_json"]),
+            tags=_load_tags_json(row["tags_json"], doc_id=row["id"], collection=row["collection"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             content_hash=row["content_hash"],
@@ -2332,7 +2379,7 @@ class DocumentStore:
         return VersionInfo(
             version=row["version"],
             summary=row["summary"],
-            tags=json.loads(row["tags_json"]),
+            tags=_load_tags_json(row["tags_json"]),
             created_at=row["created_at"],
             content_hash=row["content_hash"],
         )
@@ -2355,7 +2402,7 @@ class DocumentStore:
         return VersionInfo(
             version=row["version"],
             summary=row["summary"],
-            tags=json.loads(row["tags_json"]),
+            tags=_load_tags_json(row["tags_json"]),
             created_at=row["created_at"],
             content_hash=row["content_hash"],
         )
@@ -2393,7 +2440,7 @@ class DocumentStore:
             versions.append(VersionInfo(
                 version=row["version"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]),
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 content_hash=row["content_hash"],
             ))
@@ -2426,7 +2473,7 @@ class DocumentStore:
             versions_by_id.setdefault(row["id"], []).append(VersionInfo(
                 version=row["version"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]),
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 content_hash=row["content_hash"],
             ))
@@ -2456,7 +2503,7 @@ class DocumentStore:
         return [VersionInfo(
             version=row["version"],
             summary=row["summary"],
-            tags=json.loads(row["tags_json"]),
+            tags=_load_tags_json(row["tags_json"]),
             created_at=row["created_at"],
             content_hash=row["content_hash"],
         ) for row in rows]
@@ -2500,7 +2547,7 @@ class DocumentStore:
                     result["prev"] = [VersionInfo(
                         version=row["version"],
                         summary=row["summary"],
-                        tags=json.loads(row["tags_json"]),
+                        tags=_load_tags_json(row["tags_json"]),
                         created_at=row["created_at"],
                         content_hash=row["content_hash"],
                     )]
@@ -2515,7 +2562,7 @@ class DocumentStore:
                 result["next"] = [VersionInfo(
                     version=row["version"],
                     summary=row["summary"],
-                    tags=json.loads(row["tags_json"]),
+                    tags=_load_tags_json(row["tags_json"]),
                     created_at=row["created_at"],
                     content_hash=row["content_hash"],
                 )]
@@ -2614,7 +2661,7 @@ class DocumentStore:
                 id=row["id"],
                 collection=row["collection"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]),
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
@@ -2696,7 +2743,7 @@ class DocumentStore:
                 id=row["id"],
                 collection=row["collection"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]),
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
@@ -2778,7 +2825,7 @@ class DocumentStore:
                 id=row["id"],
                 collection=row["collection"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]),
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
@@ -2831,7 +2878,7 @@ class DocumentStore:
 
         records = []
         for row in cursor:
-            tags = json.loads(row["tags_json"])
+            tags = _load_tags_json(row["tags_json"])
             offset = row["version_offset"]
             if offset > 0:
                 tags["_version"] = str(offset)
@@ -2912,7 +2959,7 @@ class DocumentStore:
                 id=row["id"],
                 collection=row["collection"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]) if row["tags_json"] else {},
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
@@ -3303,7 +3350,7 @@ class DocumentStore:
                 id=row["id"],
                 collection=row["collection"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]),
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
@@ -3365,7 +3412,7 @@ class DocumentStore:
                 id=row["id"],
                 collection=row["collection"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]) if row["tags_json"] else {},
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
@@ -3486,7 +3533,7 @@ class DocumentStore:
         return PartInfo(
             part_num=row["part_num"],
             summary=row["summary"],
-            tags=json.loads(row["tags_json"]),
+            tags=_load_tags_json(row["tags_json"]),
             created_at=row["created_at"],
         )
 
@@ -3515,7 +3562,7 @@ class DocumentStore:
             PartInfo(
                 part_num=row["part_num"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]),
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
             )
             for row in rows
@@ -3543,7 +3590,7 @@ class DocumentStore:
             parts_by_id.setdefault(row["id"], []).append(PartInfo(
                 part_num=row["part_num"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]),
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
             ))
 
@@ -3738,7 +3785,7 @@ class DocumentStore:
                 id=row["id"],
                 collection=row["collection"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]),
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
@@ -3792,7 +3839,7 @@ class DocumentStore:
                 id=row["id"],
                 collection=row["collection"],
                 summary=row["summary"],
-                tags=json.loads(row["tags_json"]) if row["tags_json"] else {},
+                tags=_load_tags_json(row["tags_json"]),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 content_hash=row["content_hash"],
@@ -4201,7 +4248,7 @@ class DocumentStore:
                 ).fetchall()
                 inserted = 0
                 for row in rows:
-                    tags = json.loads(row["tags_json"]) if row["tags_json"] else {}
+                    tags = _load_tags_json(row["tags_json"])
 
                     # Evaluate _when condition against this version's tags
                     if when_source:

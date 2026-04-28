@@ -1,12 +1,13 @@
 """Tests for the document store module."""
 
 import json
+import logging
 import sqlite3
 import pytest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from keep.document_store import DocumentStore, DocumentRecord
+from keep.document_store import DocumentStore, DocumentRecord, _load_tags_json
 
 
 class TestSchemaCompatibility:
@@ -27,6 +28,76 @@ class TestSchemaCompatibility:
 
             with pytest.raises(sqlite3.DatabaseError, match="newer than supported"):
                 DocumentStore(db_path)
+
+
+class TestLoadTagsJsonHelper:
+    """Defensive decoding for stored ``tags_json`` values."""
+
+    def test_returns_empty_for_none(self, caplog) -> None:
+        caplog.set_level(logging.WARNING, logger="keep.document_store")
+        assert _load_tags_json(None, doc_id=".state/put", collection="default") == {}
+        assert "is empty for default/.state/put" in caplog.text
+
+    def test_returns_empty_for_blank_string(self, caplog) -> None:
+        caplog.set_level(logging.WARNING, logger="keep.document_store")
+        assert _load_tags_json("", doc_id="x") == {}
+        assert "is empty" in caplog.text
+
+    def test_returns_empty_for_invalid_json(self, caplog) -> None:
+        caplog.set_level(logging.WARNING, logger="keep.document_store")
+        assert _load_tags_json("{not-json", doc_id="x") == {}
+        assert "invalid JSON" in caplog.text
+
+    def test_returns_empty_for_non_object(self, caplog) -> None:
+        caplog.set_level(logging.WARNING, logger="keep.document_store")
+        assert _load_tags_json("[1, 2, 3]", doc_id="x") == {}
+        assert "is not an object" in caplog.text
+
+    def test_returns_decoded_object(self) -> None:
+        assert _load_tags_json('{"topic": "auth"}', doc_id="x") == {"topic": "auth"}
+
+    def test_get_tolerates_null_tags_json_in_storage(self, tmp_path, caplog) -> None:
+        """A NULL tags_json column should not break DocumentStore.get.
+
+        Schema enforcement won't let us write NULL through the public API, so
+        construct a documents table without the NOT NULL constraint and run
+        DocumentStore over the resulting database.
+        """
+        db_path = tmp_path / "tolerant.db"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE documents (
+                    id TEXT NOT NULL,
+                    collection TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    tags_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    content_hash TEXT,
+                    content_hash_full TEXT,
+                    PRIMARY KEY (id, collection)
+                );
+                INSERT INTO documents
+                    (id, collection, summary, tags_json, created_at, updated_at)
+                VALUES
+                    ('.state/put', 'default', 'summary', NULL,
+                     '2026-04-28T00:00:00', '2026-04-28T00:00:00');
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        caplog.set_level(logging.WARNING, logger="keep.document_store")
+        with DocumentStore(db_path) as store:
+            record = store.get("default", ".state/put")
+
+        assert record is not None
+        assert record.tags == {}
+        assert "is empty for default/.state/put" in caplog.text
 
 
 class TestDocumentStoreBasics:
