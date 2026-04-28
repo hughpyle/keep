@@ -82,6 +82,34 @@ def test_daemon_entrypoint_uses_deferred_startup_maintenance(tmp_path):
     assert daemon_run["trusted_proxy"] is False
 
 
+def test_daemon_entrypoint_exits_before_keeper_when_processor_locked(tmp_path):
+    constructed = False
+
+    class DummyKeeper:
+        def __init__(self, *args, **kwargs):
+            nonlocal constructed
+            constructed = True
+
+    from keep.model_lock import ModelLock
+
+    lock = ModelLock(tmp_path / ".processor.lock")
+    assert lock.acquire(blocking=False) is True
+    try:
+        with (
+            patch("keep.api.Keeper", DummyKeeper),
+            patch("keep.console_support.run_pending_daemon") as run_pending,
+            patch.object(sys, "argv", ["python", "--store", str(tmp_path)]),
+        ):
+            from keep import daemon
+
+            daemon.main()
+
+        assert constructed is False
+        run_pending.assert_not_called()
+    finally:
+        lock.release()
+
+
 def test_daemon_script_entrypoint_supports_direct_python_execution(tmp_path):
     captured: dict[str, object] = {}
     daemon_run: dict[str, object] = {}

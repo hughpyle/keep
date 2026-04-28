@@ -14,7 +14,8 @@ def _load_daemon_runtime():
     try:
         from .api import Keeper
         from .console_support import run_pending_daemon
-        return Keeper, run_pending_daemon
+        from .model_lock import ModelLock
+        return Keeper, run_pending_daemon, ModelLock
     except ImportError:
         if __package__ not in (None, ""):
             raise
@@ -24,7 +25,8 @@ def _load_daemon_runtime():
             sys.path.insert(0, repo_root_str)
         from keep.api import Keeper
         from keep.console_support import run_pending_daemon
-        return Keeper, run_pending_daemon
+        from keep.model_lock import ModelLock
+        return Keeper, run_pending_daemon, ModelLock
 
 
 def main():
@@ -43,14 +45,23 @@ def main():
     )
     args = parser.parse_args()
 
-    Keeper, run_pending_daemon = _load_daemon_runtime()
-    kp = Keeper(store_path=args.store, defer_startup_maintenance=True)
-    run_pending_daemon(
-        kp,
-        bind_host=args.bind,
-        advertised_url=args.advertised_url,
-        trusted_proxy=args.trusted_proxy,
-    )
+    Keeper, run_pending_daemon, ModelLock = _load_daemon_runtime()
+    store_path = Path(args.store).expanduser().resolve()
+    processor_lock = ModelLock(store_path / ".processor.lock")
+    if not processor_lock.acquire(blocking=False):
+        return
+
+    try:
+        kp = Keeper(store_path=args.store, defer_startup_maintenance=True)
+        run_pending_daemon(
+            kp,
+            processor_lock=processor_lock,
+            bind_host=args.bind,
+            advertised_url=args.advertised_url,
+            trusted_proxy=args.trusted_proxy,
+        )
+    finally:
+        processor_lock.release()
 
 
 if __name__ == "__main__":

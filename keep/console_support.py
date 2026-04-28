@@ -1393,6 +1393,7 @@ def _format_config_with_defaults(cfg, store_path: Path) -> str:
 def run_pending_daemon(
     kp,
     *,
+    processor_lock=None,
     bind_host: str | None = None,
     advertised_url: str | None = None,
     trusted_proxy: bool | None = None,
@@ -1411,7 +1412,9 @@ def run_pending_daemon(
 
     _daemon_logger = logging.getLogger("keep.console_support.daemon")
     pid_path = kp._processor_pid_path
-    processor_lock = ModelLock(kp._store_path / ".processor.lock")
+    processor_lock_acquired_here = processor_lock is None
+    if processor_lock is None:
+        processor_lock = ModelLock(kp._store_path / ".processor.lock")
     flow_worker_id = f"pending-daemon:{os.getpid()}"
     shutdown_requested = False
     export_keeper = kp
@@ -1427,10 +1430,11 @@ def run_pending_daemon(
             project=remote_store.project,
         )
 
-    if not processor_lock.acquire(blocking=False):
-        _daemon_logger.info("Daemon: another processor already running, exiting")
-        kp.close()
-        return
+    if processor_lock_acquired_here:
+        if not processor_lock.acquire(blocking=False):
+            _daemon_logger.info("Daemon: another processor already running, exiting")
+            kp.close()
+            return
 
     _ver = _daemon_version()
     _daemon_logger.info(

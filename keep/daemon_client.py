@@ -302,17 +302,16 @@ def get_port(store_override: str | None = None) -> int:
             if check_health(existing_port):
                 return existing_port
 
-        # A replacement daemon writes new discovery files at startup
+        # A replacement daemon writes new discovery files once its query server
+        # is published. Do not return that port until /v1/ready succeeds; early
+        # requests can otherwise race startup migrations and create lock storms.
         _load_token(store_override, force=True)
         if port_file.exists():
             try:
                 port = int(port_file.read_text().strip())
                 if port != existing_port:
-                    # Fresh discovery files mean a replacement daemon has
-                    # claimed the store. Return its port immediately so the
-                    # caller's real request can perform the next retry even if
-                    # /v1/ready is not answering yet.
-                    return port
+                    if check_health(port):
+                        return port
             except (ValueError, OSError):
                 pass
         time.sleep(0.3)

@@ -10,6 +10,7 @@ import json
 import multiprocessing
 import sqlite3
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,41 @@ def _worker_open_and_migrate(db_path: str, worker_id: int):
 
 class TestConcurrentWrites:
     """Test multiple processes writing to the same DocumentStore."""
+
+    def test_threads_use_distinct_connections(self, tmp_path):
+        """One DocumentStore must not share a sqlite connection across threads."""
+        from keep.document_store import DocumentStore
+
+        store = DocumentStore(tmp_path / "test.db")
+        main_conn_id = id(store._conn)
+        worker_conn_ids = []
+        errors = []
+
+        def worker(worker_id: int):
+            try:
+                worker_conn_ids.append(id(store._conn))
+                store.upsert(
+                    "default",
+                    f"thread:{worker_id}",
+                    f"thread summary {worker_id}",
+                    {"worker": str(worker_id)},
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=worker, args=(i,))
+            for i in range(4)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert errors == []
+        assert len(set(worker_conn_ids)) == len(worker_conn_ids)
+        assert main_conn_id not in worker_conn_ids
+        assert store.count("default") == 4
 
     def test_parallel_upserts_no_data_loss(self, tmp_path):
         """8 workers each write unique docs — all must be present after."""

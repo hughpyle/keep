@@ -106,13 +106,8 @@ class TestGetPortNoFileStranding:
 
         assert port == 5555
 
-    def test_new_discovery_files_allow_port_return_before_ready_probe(self, tmp_path):
-        """Fresh daemon discovery files should unblock the first real request.
-
-        The daemon may publish a new port/token before /v1/ready answers
-        successfully. In that case get_port() should return the fresh port and
-        let the caller's actual request perform the next retry.
-        """
+    def test_new_discovery_files_wait_for_ready_probe(self, tmp_path):
+        """Fresh daemon discovery files are not enough until /v1/ready succeeds."""
         store = tmp_path / "store"
         store.mkdir()
         port_file = store / DAEMON_PORT_FILE
@@ -122,9 +117,16 @@ class TestGetPortNoFileStranding:
             port_file.write_text("5555")
             token_file.write_text("new-token")
 
+        health_calls = 0
+
+        def mock_health(port):
+            nonlocal health_calls
+            health_calls += 1
+            return health_calls >= 2
+
         with (
             patch("keep.daemon_client.resolve_store_path", return_value=store),
-            patch("keep.daemon_client.check_health", return_value=False),
+            patch("keep.daemon_client.check_health", side_effect=mock_health),
             patch("keep.daemon_client.start_daemon", side_effect=mock_start),
             patch("keep.daemon_client._load_token"),
         ):
@@ -132,6 +134,7 @@ class TestGetPortNoFileStranding:
             port = get_port(str(store))
 
         assert port == 5555
+        assert health_calls == 2
 
 
 class TestLoadTokenCacheScoping:

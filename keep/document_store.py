@@ -109,7 +109,10 @@ class DocumentStore:
         store_path: Path to SQLite database file.
         """
         self._db_path = store_path
-        self._conn: Optional[sqlite3.Connection] = None
+        self._local = threading.local()
+        self._connections: set[sqlite3.Connection] = set()
+        self._connections_lock = threading.RLock()
+        self._closed = False
         self._lock = threading.RLock()
         self._fts_available = False
         self._stopwords: Optional[frozenset[str]] = None
@@ -122,6 +125,60 @@ class DocumentStore:
                 self._recover_malformed()
             else:
                 raise
+
+    def _open_connection(self) -> sqlite3.Connection:
+        """Open a SQLite connection for the current thread."""
+        conn = sqlite3.connect(
+            str(self._db_path),
+            check_same_thread=False,
+            isolation_level=None,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        return conn
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """Thread-local SQLite connection.
+
+        The daemon serves requests from multiple threads. Python's sqlite3
+        connection object is not safe for concurrent use, even when
+        ``check_same_thread`` is disabled, so each thread gets its own handle.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            if self._closed:
+                raise sqlite3.ProgrammingError("DocumentStore is closed")
+            conn = self._open_connection()
+            self._local.conn = conn
+            with self._connections_lock:
+                self._connections.add(conn)
+        return conn
+
+    @_conn.setter
+    def _conn(self, conn: Optional[sqlite3.Connection]) -> None:
+        old = getattr(self._local, "conn", None)
+        if old is not None:
+            with self._connections_lock:
+                self._connections.discard(old)
+        self._local.conn = conn
+        if conn is not None:
+            with self._connections_lock:
+                self._connections.add(conn)
+
+    def _close_all_connections(self, *, mark_closed: bool) -> None:
+        with self._connections_lock:
+            connections = list(self._connections)
+            self._connections.clear()
+        for conn in connections:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._local.conn = None
+        if mark_closed:
+            self._closed = True
     
     def _execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Execute SQL with thread-safety via the instance lock.
@@ -162,13 +219,8 @@ class DocumentStore:
     def _init_db(self) -> None:
         """Initialize the SQLite database."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False, isolation_level=None)
-        self._conn.row_factory = sqlite3.Row
-
-        # Enable WAL mode for better concurrent access across processes
-        self._execute("PRAGMA journal_mode=WAL")
-        # Wait up to 5 seconds for locks instead of failing immediately
-        self._execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        self._closed = False
+        self._conn = self._open_connection()
 
         self._execute("""
             CREATE TABLE IF NOT EXISTS documents (
@@ -1159,13 +1211,8 @@ class DocumentStore:
         db_path = str(self._db_path)
         corrupt_path = db_path + ".corrupt"
 
-        # Close any existing connection
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
+        # Close any existing per-thread connections before moving files.
+        self._close_all_connections(mark_closed=False)
 
         # Try to dump data from the corrupt database
         try:
@@ -1214,19 +1261,18 @@ class DocumentStore:
         """
         with self._lock:
             try:
-                if self._conn is not None:
-                    try:
-                        result = self._conn.execute("PRAGMA quick_check").fetchone()
-                    except sqlite3.DatabaseError as quick_check_err:
-                        if not is_malformed_db_error(quick_check_err):
-                            raise
-                    else:
-                        if result and result[0] == "ok":
-                            logger.info(
-                                "Runtime recovery skipped; database already healthy: %s",
-                                self._db_path,
-                            )
-                            return True
+                try:
+                    result = self._conn.execute("PRAGMA quick_check").fetchone()
+                except sqlite3.DatabaseError as quick_check_err:
+                    if not is_malformed_db_error(quick_check_err):
+                        raise
+                else:
+                    if result and result[0] == "ok":
+                        logger.info(
+                            "Runtime recovery skipped; database already healthy: %s",
+                            self._db_path,
+                        )
+                        return True
 
                 logger.warning(
                     "Runtime database malformation detected, attempting recovery: %s",
@@ -4644,11 +4690,9 @@ class DocumentStore:
     # -------------------------------------------------------------------------
     
     def close(self) -> None:
-        """Close the database connection."""
+        """Close all thread-local database connections owned by this store."""
         with self._lock:
-            if self._conn is not None:
-                self._conn.close()
-                self._conn = None
+            self._close_all_connections(mark_closed=True)
     
     def __enter__(self):
         return self

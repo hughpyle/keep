@@ -389,6 +389,7 @@ def test_thin_cli_context_round_trip(daemon):
 def test_get_one_item_retries_after_connection_refused():
     """The command app delegates daemon retry behavior to daemon_client."""
     with (
+        patch("keep.cli_app._global_store", None),
         patch("keep.cli_app._daemon_client.http_request_with_discovery_retry") as request,
     ):
         request.return_value = (200, {
