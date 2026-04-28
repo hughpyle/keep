@@ -158,6 +158,7 @@ class DocumentStore:
 
     @_conn.setter
     def _conn(self, conn: Optional[sqlite3.Connection]) -> None:
+        """Replace or discard only this thread's connection handle."""
         old = getattr(self._local, "conn", None)
         if old is not None:
             with self._connections_lock:
@@ -175,7 +176,11 @@ class DocumentStore:
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to close SQLite connection for %s",
+                    self._db_path,
+                    exc_info=True,
+                )
         self._local.conn = None
         if mark_closed:
             self._closed = True
