@@ -108,6 +108,32 @@ class TestConcurrentWrites:
         assert main_conn_id not in worker_conn_ids
         assert store.count("default") == 4
 
+    def test_readers_do_not_wait_for_store_write_lock(self, tmp_path):
+        """Pure SELECT reads can proceed while another thread holds _lock."""
+        from keep.document_store import DocumentStore
+
+        store = DocumentStore(tmp_path / "test.db")
+        store.upsert("default", "seed", "seed summary", {})
+
+        finished = threading.Event()
+        errors = []
+
+        def reader():
+            try:
+                assert store.count("default") == 1
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        with store._lock:
+            thread = threading.Thread(target=reader)
+            thread.start()
+            assert finished.wait(timeout=1.0)
+
+        thread.join(timeout=1.0)
+        assert errors == []
+
     def test_parallel_upserts_no_data_loss(self, tmp_path):
         """8 workers each write unique docs — all must be present after."""
         db_path = str(tmp_path / "test.db")
