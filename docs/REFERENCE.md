@@ -24,7 +24,7 @@
 | `keep flow` | Run or inspect a state-machine flow | — |
 | `keep data export` | Export store to JSON (default) or markdown directory (`--format md`) | [KEEP-DATA.md](KEEP-DATA.md) |
 | `keep data import` | Import documents from JSON export file | [KEEP-DATA.md](KEEP-DATA.md) |
-| `keep daemon` | Run or manage the background daemon and its work queues | `keep pending` (hidden compatibility alias) |
+| `keep daemon` | Run or manage the background daemon and its work queues | [KEEP-DAEMON.md](KEEP-DAEMON.md) |
 
 ## Global Flags
 

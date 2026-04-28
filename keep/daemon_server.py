@@ -25,6 +25,7 @@ import re
 import secrets
 import threading
 import uuid
+from datetime import date, datetime
 from importlib.metadata import version
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -88,6 +89,15 @@ def _items_response(items) -> dict:
     return {"notes": [_item_to_dict(i) for i in items]}
 
 
+def _daemon_json_default(value: Any) -> str:
+    """Encode non-JSON daemon response values without masking unknown types."""
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, Path | uuid.UUID):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Routes
@@ -120,11 +130,11 @@ _COMPILED_ROUTES = [
 class _RequestBody(BaseModel):
     """Base model for daemon JSON payloads.
 
-    Extra fields are allowed to preserve the previous "ignore unknown keys"
-    behavior while still rejecting wrong shapes at the request boundary.
+    Unknown fields are ignored to preserve the legacy boundary behavior
+    without retaining unvalidated payload data on the model.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
 
 class PutRequest(_RequestBody):
@@ -357,7 +367,11 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
     # --- Helpers ---
 
     def _json(self, status: int, data: Any):
-        body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+        body = json.dumps(
+            data,
+            ensure_ascii=False,
+            default=_daemon_json_default,
+        ).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -372,7 +386,11 @@ class DaemonRequestHandler(BaseHTTPRequestHandler):
         self.close_connection = True
         try:
             for row in rows:
-                line = json.dumps(row, ensure_ascii=False, default=str).encode("utf-8")
+                line = json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    default=_daemon_json_default,
+                ).encode("utf-8")
                 self.wfile.write(line + b"\n")
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):

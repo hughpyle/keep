@@ -134,6 +134,16 @@ keep daemon --retry             # Reset them to pending
 keep daemon                     # Reprocess
 ```
 
+### Troubleshooting daemon request errors
+
+Unexpected daemon request failures are returned with a `request_id`. The same
+ID is written to the daemon log line for the exception, so operators can grep
+the ops log for the matching failure without exposing note content in the
+client-facing error.
+
+Storage tracing records operation names and low-cardinality metadata only; it
+does not attach raw SQL or note content to trace attributes.
+
 ### Restarting the daemon
 
 ```bash

@@ -8,13 +8,16 @@ import json
 import os
 import socket
 import subprocess
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 import pytest
 
 from keep.api import Keeper
-from keep.daemon_server import DaemonServer
+from keep.daemon_server import DaemonServer, PutRequest, _daemon_json_default
 
 
 @pytest.fixture
@@ -722,6 +725,32 @@ def test_http_compat_routes_delegate_to_run_flow(daemon):
         assert calls == [("delete", False)]
     finally:
         client.close()
+
+
+def test_request_models_ignore_unknown_fields():
+    """Daemon request models accept but do not retain unknown payload keys."""
+    req = PutRequest.model_validate({
+        "content": "test note",
+        "id": "extra-field-test",
+        "unexpected": "ignored",
+    })
+
+    assert req.content == "test note"
+    assert req.model_extra is None
+    assert not hasattr(req, "unexpected")
+
+
+def test_daemon_json_default_encodes_only_known_types():
+    """Daemon JSON fallback is explicit instead of converting every object."""
+    assert _daemon_json_default(datetime(2026, 4, 27, tzinfo=timezone.utc)) == (
+        "2026-04-27T00:00:00+00:00"
+    )
+    assert _daemon_json_default(Path("/tmp/keep")) == "/tmp/keep"
+    generated = uuid.uuid4()
+    assert _daemon_json_default(generated) == str(generated)
+
+    with pytest.raises(TypeError):
+        _daemon_json_default(object())
 
 
 # --- Flow ---
